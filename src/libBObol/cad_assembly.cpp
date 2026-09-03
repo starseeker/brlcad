@@ -92,19 +92,6 @@ cad_batch_collect_sources(SoNode *node,
 	cad_batch_collect_sources(group->getChild(i), sources);
 }
 
-static uint64_t
-cad_batch_instance_state_signature(const std::vector<Obol::InstanceId> &ids)
-{
-    uint64_t signature = 1469598103934665603ULL;
-    for (const Obol::InstanceId &id : ids) {
-	signature ^= id.w0;
-	signature *= 1099511628211ULL;
-	signature ^= id.w1;
-	signature *= 1099511628211ULL;
-    }
-    return signature ? signature : 1;
-}
-
 SoBRLCadAssembly::SoBRLCadAssembly(void) :
     presentationDrawModeValue(Obol::CadDrawMode::Wireframe),
     presentationPickModeValue(Obol::CadPickMode::Automatic)
@@ -277,13 +264,6 @@ SoBRLCadAssembly::createPickDetail(
 SoBRLCadRenderBatch::SoBRLCadRenderBatch(void) :
     assembly(new SoBRLCadAssembly),
     sourceRoot(NULL),
-    cachedSourceSignature(0),
-    cachedStructureSignature(0),
-    cachedStyleSignature(0),
-    cachedSemanticSignature(0),
-    cachedHiddenSignature(0),
-    cachedSelectedSignature(0),
-    cachedUnpickableSignature(0),
     batchValid(FALSE),
     softwareWireMode(SoCADViewState::SOFTWARE_WIRE_AUTO)
 {
@@ -314,13 +294,7 @@ SoBRLCadRenderBatch::setBatchSourceRoot(SoNode *root)
     if (this->sourceRoot)
 	this->sourceRoot->unref();
     this->sourceRoot = root;
-    this->cachedSourceSignature = 0;
-    this->cachedStructureSignature = 0;
-    this->cachedStyleSignature = 0;
-    this->cachedSemanticSignature = 0;
-    this->cachedHiddenSignature = 0;
-    this->cachedSelectedSignature = 0;
-    this->cachedUnpickableSignature = 0;
+    this->cachedSourceStamps.clear();
     this->batchValid = FALSE;
     this->batchedSources.clear();
 }
@@ -348,60 +322,22 @@ SoBRLCadRenderBatch::syncBatch(const BObolViewLodState *viewState)
      * many independently compiled sources; decide that before collecting or
      * copying any part geometry. */
     if (sources.size() < 32) {
-	this->cachedSourceSignature = 0;
-	this->cachedStructureSignature = 0;
-	this->cachedStyleSignature = 0;
-	this->cachedSemanticSignature = 0;
-	this->cachedHiddenSignature = 0;
-	this->cachedSelectedSignature = 0;
-	this->cachedUnpickableSignature = 0;
+	this->cachedSourceStamps.clear();
 	this->batchValid = FALSE;
 	this->batchedSources.clear();
 	return FALSE;
     }
-    uint64_t signature = 1469598103934665603ULL;
-    uint64_t structureSignature = signature;
-    uint64_t styleSignature = signature;
-    uint64_t semanticSignature = signature;
+    std::vector<SourceStamp> sourceStamps;
+    sourceStamps.reserve(sources.size());
     for (SoBRLDatabaseSource *source : sources) {
-	signature ^= static_cast<uint64_t>(reinterpret_cast<uintptr_t>(source));
-	signature *= 1099511628211ULL;
-	signature ^= source->cadBatchRevisionGet();
-	signature *= 1099511628211ULL;
-	structureSignature ^=
-	    source ? source->cadBatchStructureSignature() : 0;
-	structureSignature *= 1099511628211ULL;
-	styleSignature ^=
-	    source ? source->cadBatchStyleSignature() : 0;
-	styleSignature *= 1099511628211ULL;
-	semanticSignature ^=
-	    source ? source->cadBatchSemanticSignature() : 0;
-	semanticSignature *= 1099511628211ULL;
 	const BObolViewLodState::CadPayload *payload =
 	    viewState ? viewState->findCad(source) : NULL;
-	signature ^= payload ? 1ULL : 0ULL;
-	signature *= 1099511628211ULL;
-	structureSignature ^= payload ? 1ULL : 0ULL;
-	structureSignature *= 1099511628211ULL;
-	styleSignature ^= payload ? 1ULL : 0ULL;
-	styleSignature *= 1099511628211ULL;
-	semanticSignature ^= payload ? 1ULL : 0ULL;
-	semanticSignature *= 1099511628211ULL;
+	sourceStamps.push_back(
+	    {source, source ? source->cadBatchRevisionGet() : 0,
+		payload != NULL});
     }
-    signature ^= static_cast<uint64_t>(sources.size());
-    structureSignature ^= static_cast<uint64_t>(sources.size());
-    styleSignature ^= static_cast<uint64_t>(sources.size());
-    semanticSignature ^= static_cast<uint64_t>(sources.size());
-    if (signature == this->cachedSourceSignature)
+    if (sourceStamps == this->cachedSourceStamps)
 	return this->batchValid;
-
-    const SbBool structureChanged = !this->batchValid ||
-	structureSignature != this->cachedStructureSignature;
-    const SbBool styleChanged = !this->batchValid ||
-	styleSignature != this->cachedStyleSignature;
-    const SbBool semanticChanged = !this->batchValid ||
-	semanticSignature != this->cachedSemanticSignature;
-    const SbBool includeSemantics = structureChanged || semanticChanged;
 
     BObolCadBatchBuildState state;
     state.parts.reserve(sources.size());
@@ -411,8 +347,7 @@ SoBRLCadRenderBatch::syncBatch(const BObolViewLodState *viewState)
     for (SoBRLDatabaseSource *source : sources) {
 	if (viewState && viewState->findCad(source))
 	    continue;
-	if (source && source->appendCadRenderBatch(&state, structureChanged,
-		includeSemantics))
+	if (source && source->appendCadRenderBatch(&state, TRUE, TRUE))
 	    this->batchedSources.insert(source);
     }
     if (!state.valid) {
@@ -420,75 +355,36 @@ SoBRLCadRenderBatch::syncBatch(const BObolViewLodState *viewState)
 	this->batchValid = FALSE;
 	return FALSE;
     }
-    std::vector<Obol::InstanceStyleUpdate> styles;
-    if (!structureChanged && styleChanged) {
-	styles.reserve(state.instances.size());
-	for (const Obol::InstanceUpdate &instance : state.instances) {
-	    Obol::InstanceStyleUpdate style;
-	    style.instance = instance.instance;
-	    style.style = instance.record.style;
-	    styles.push_back(style);
-	}
-    }
-    if ((structureChanged &&
-	    (!bobol_cad_validate_shared_parts(state.parts,
-		"CAD render batch preflight") ||
-	     !bobol_cad_validate_instances(state.instances,
-		"CAD render batch preflight"))) ||
-	(!structureChanged && styleChanged &&
-	 !bobol_cad_validate_styles(styles, "CAD style batch preflight"))) {
+    if (!bobol_cad_validate_shared_parts(state.parts,
+	    "CAD render batch preflight") ||
+	!bobol_cad_validate_instances(state.instances,
+	    "CAD render batch preflight")) {
 	this->batchedSources.clear();
 	this->batchValid = FALSE;
 	return FALSE;
     }
-    std::optional<SoCADAssembly::UpdateScope> updateScope;
-    if (structureChanged) {
-	updateScope.emplace(this->assembly->batchUpdate());
-	if (!bobol_cad_replace_scene(this->assembly, state.parts,
-		state.instances, "CAD render batch replacement")) {
-	    this->batchedSources.clear();
-	    this->batchValid = FALSE;
-	    return FALSE;
-	}
-	this->assembly->clearSemanticMap();
-	for (const auto &semantic : state.semantics)
-	    this->assembly->setInstanceSemantic(
-		semantic.first, semantic.second);
-    } else if (styleChanged) {
-	if (!bobol_cad_publish_styles(this->assembly, styles,
-		"CAD style batch publication")) {
-	    this->batchValid = FALSE;
-	    return FALSE;
-	}
+    std::optional<SoCADAssembly::UpdateScope> updateScope(
+	this->assembly->batchUpdate());
+    if (!bobol_cad_replace_scene(this->assembly, state.parts,
+	    state.instances, "CAD render batch replacement")) {
+	this->batchedSources.clear();
+	this->batchValid = FALSE;
+	return FALSE;
     }
-    const uint64_t hiddenSignature =
-	cad_batch_instance_state_signature(state.hiddenInstances);
-    if (structureChanged || hiddenSignature != this->cachedHiddenSignature)
-	this->assembly->setHiddenInstances(state.hiddenInstances);
-    const uint64_t selectedSignature =
-	cad_batch_instance_state_signature(state.selectedInstances);
-    if (structureChanged || selectedSignature != this->cachedSelectedSignature)
-	this->assembly->setSelectedInstances(state.selectedInstances);
-    const uint64_t unpickableSignature =
-	cad_batch_instance_state_signature(state.unpickableInstances);
-    if (structureChanged ||
-	unpickableSignature != this->cachedUnpickableSignature)
-	this->assembly->setUnpickableInstances(state.unpickableInstances);
+    this->assembly->clearSemanticMap();
+    for (const auto &semantic : state.semantics)
+	this->assembly->setInstanceSemantic(semantic.first, semantic.second);
+    this->assembly->setHiddenInstances(state.hiddenInstances);
+    this->assembly->setSelectedInstances(state.selectedInstances);
+    this->assembly->setUnpickableInstances(state.unpickableInstances);
     Obol::CadDrawMode drawMode = Obol::CadDrawMode::Wireframe;
     if (state.shadedCount > 0 && state.wireCount > 0)
 	drawMode = Obol::CadDrawMode::ShadedWithEdges;
     else if (state.shadedCount > 0)
 	drawMode = Obol::CadDrawMode::Shaded;
     this->assembly->setPresentationDrawMode(drawMode);
-    if (updateScope)
-	updateScope->finish();
-    this->cachedSourceSignature = signature;
-    this->cachedStructureSignature = structureSignature;
-    this->cachedStyleSignature = styleSignature;
-    this->cachedSemanticSignature = semanticSignature;
-    this->cachedHiddenSignature = hiddenSignature;
-    this->cachedSelectedSignature = selectedSignature;
-    this->cachedUnpickableSignature = unpickableSignature;
+    updateScope->finish();
+    this->cachedSourceStamps = std::move(sourceStamps);
     this->batchValid = this->batchedSources.size() >= 32 &&
 	this->assembly->instanceCount() > 0 ? TRUE : FALSE;
     return this->batchValid;

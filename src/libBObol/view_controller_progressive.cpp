@@ -82,12 +82,13 @@ BObolViewController::registerProgressiveProvider(
     void *userData,
     BObolProgressiveUserDataFreeCallback userDataFree)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     if (!callback)
 	return 0;
 
-    uint64_t token = this->d->progressiveProviderNextToken++;
-    if (token == 0)
-	token = this->d->progressiveProviderNextToken++;
+    const uint64_t token = bobol_nonzero_identity_take(
+	this->d->progressiveProviderNextToken);
 
     BObolProgressiveProviderRecord record;
     record.token = token;
@@ -107,6 +108,8 @@ BObolViewController::registerProgressiveProvider(
 void
 BObolViewController::unregisterProgressiveProvider(uint64_t token)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     if (!token)
 	return;
 
@@ -133,6 +136,8 @@ BObolViewController::unregisterProgressiveProvider(uint64_t token)
 void
 BObolViewController::clearProgressiveProviders(void)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     for (const BObolProgressiveProviderRecord &record :
 	 this->d->progressiveProviders)
 	if (record.userDataFree)
@@ -179,6 +184,8 @@ void
 BObolViewController::setDefaultProgressiveOptions(
     const BObolProgressiveOptions *options)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     if (options)
 	this->d->defaultProgressiveOptions = *options;
     else
@@ -198,6 +205,7 @@ BObolViewController::advanceProgressiveWork(
     const BObolProgressiveOptions *options,
     BObolProgressiveStatus *status)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     const uint64_t advanceStarted = this->beginRenderTiming();
 
     const bool controllerOwnedDefault = options == NULL;
@@ -1202,13 +1210,19 @@ BObolViewController::advanceProgressiveWork(
 void
 BObolViewController::markProgressiveWorkPending(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
+    this->publishProgressiveWorkPending();
+}
+
+void
+BObolViewController::publishProgressiveWorkPending(void)
+{
     SbBool wakeEndpoint = FALSE;
     {
 	std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
 	if (!this->d->progressiveWorkPending) {
 	    this->d->progressiveWorkPending = TRUE;
-	    if (++this->d->hostWorkRevision == 0)
-		++this->d->hostWorkRevision;
+	    bobol_identity_advance(this->d->hostWorkRevision);
 	    wakeEndpoint = TRUE;
 	}
     }
@@ -1219,17 +1233,18 @@ BObolViewController::markProgressiveWorkPending(void)
 void
 BObolViewController::clearProgressiveWorkPending(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
     if (!this->d->progressiveWorkPending)
 	return;
     this->d->progressiveWorkPending = FALSE;
-    if (++this->d->hostWorkRevision == 0)
-	++this->d->hostWorkRevision;
+    bobol_identity_advance(this->d->hostWorkRevision);
 }
 
 void
 BObolViewController::synchronizeProgressiveWorkPending(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     const auto workPending = [this]() {
 	const bool servicePending = this->d->lodService &&
 	    (this->d->lodService->pendingTaskCountForGeneration(

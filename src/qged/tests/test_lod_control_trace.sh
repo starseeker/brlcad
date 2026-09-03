@@ -89,7 +89,102 @@ make_report()
             lod_interactive: false,
             action: "wait"
           };
-        if $scenario == "valid" then
+        def transition($after; $before; $serial; $event):
+          $after + {
+            transition_observation: ($serial - 1),
+            transition_serial: $serial,
+            transition_controller: 0,
+            transition_controller_serial: $serial,
+            transition_event: $event,
+            transition_prior_fact_mask: $before.lod_control_fact_mask,
+            transition_prior_obligation_mask:
+              $before.lod_control_obligation_mask,
+            transition_prior_owner: $before.lod_control_owner,
+            transition_prior_inventory_revision:
+              $before.lod_inventory_revision,
+            transition_prior_availability_revision:
+              $before.lod_availability_revision,
+            transition_prior_visibility_revision:
+              $before.lod_visibility_revision,
+            transition_prior_view_revision:
+              $before.lod_control_view_revision,
+            transition_prior_policy_revision:
+              $before.lod_control_policy_revision,
+            transition_prior_capacity_revision:
+              $before.lod_capacity_revision,
+            transition_prior_allocation_plan_serial:
+              $before.lod_allocation_plan_serial,
+            transition_prior_transaction_serial:
+              $before.lod_presentation_transaction_serial,
+            transition_prior_outcome: $before.lod_convergence_outcome,
+            transition_prior_renderer_preparation_target_signature:
+              $before.lod_renderer_preparation_target_signature,
+            transition_prior_renderer_preparation_remaining_units:
+              $before.lod_renderer_preparation_remaining_units
+          };
+        if $scenario == "complete-valid" then
+          (sample(1; 5; 7; false)) as $initial |
+          (sample(0; 0; 7; true)) as $terminal |
+          {
+            samples: [$terminal],
+            control_transition_trace_complete: true,
+            control_transitions: [
+              transition($initial; $initial; 1; "initial"),
+              transition($terminal; $initial; 2; "planning")
+            ]
+          }
+        elif $scenario == "complete-multi-controller" then
+          (sample(1; 5; 7; false)) as $initial |
+          (sample(0; 0; 7; true)) as $terminal |
+          {
+            samples: [$terminal],
+            control_transition_trace_complete: true,
+            control_transitions: [
+              transition($initial; $initial; 1; "initial"),
+              (transition($initial; $initial; 2; "initial") |
+                .transition_controller = 1 |
+                .transition_controller_serial = 1),
+              (transition($terminal; $initial; 3; "planning") |
+                .transition_controller_serial = 2),
+              (transition($terminal; $initial; 4; "planning") |
+                .transition_controller = 1 |
+                .transition_controller_serial = 2)
+            ]
+          }
+        elif $scenario == "complete-unnamed" then
+          (sample(1; 5; 7; false)) as $initial |
+          (sample(0; 0; 7; true)) as $terminal |
+          {
+            samples: [$terminal],
+            control_transition_trace_complete: true,
+            control_transitions: [
+              transition($initial; $initial; 1; "initial"),
+              transition($terminal; $initial; 2; "unnamed")
+            ]
+          }
+        elif $scenario == "complete-discontinuous" then
+          (sample(1; 5; 7; false)) as $initial |
+          (sample(0; 0; 7; true)) as $terminal |
+          {
+            samples: [$terminal],
+            control_transition_trace_complete: true,
+            control_transitions: [
+              transition($initial; $initial; 1; "initial"),
+              transition($terminal; $terminal; 2; "planning")
+            ]
+          }
+        elif $scenario == "complete-owner-mismatch" then
+          (sample(1; 5; 7; false)) as $initial |
+          (sample(0; 0; 7; true)) as $terminal |
+          {
+            samples: [$terminal],
+            control_transition_trace_complete: true,
+            control_transitions: [
+              transition($initial; $initial; 1; "initial"),
+              transition($terminal; $initial; 2; "presentation")
+            ]
+          }
+        elif $scenario == "valid" then
           {samples: [sample(1; 5; 7; false), sample(0; 0; 7; true)]}
         elif $scenario == "cycle" then
           {samples: [
@@ -276,6 +371,8 @@ expect_reject()
 }
 
 expect_accept valid
+expect_accept complete-valid
+expect_accept complete-multi-controller
 expect_accept input-reopen
 expect_accept progress-cycle
 expect_accept preparation-progress-cycle
@@ -296,6 +393,9 @@ expect_reject invalid-preparation
 expect_reject invalid-capacity-rank
 expect_reject orphaned-selective-scope
 expect_reject terminal-reopen
+expect_reject complete-unnamed
+expect_reject complete-discontinuous
+expect_reject complete-owner-mismatch
 
 # Every concrete fact and every owner-precedence boundary is an independent
 # part of the C++/TLA+ refinement map.  Keep this table explicit so changing a

@@ -52,6 +52,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -92,54 +93,75 @@ static const uint64_t controller_structural_repair_deadline_multiplier = 2;
  * even at the minimum mesh cut.  Bound the one-shot census to 2.5 FPS rather
  * than restarting it forever at the normal 10 FPS hard limit. */
 static const uint64_t controller_point_census_deadline_multiplier = 4;
-static const uint64_t controller_structural_frontier_hash_offset =
-    UINT64_C(1469598103934665603);
-static const uint64_t controller_structural_frontier_hash_prime =
-    UINT64_C(1099511628211);
-static void
-controller_hash_structural_frontier_u64(uint64_t &hash, uint64_t value)
-{
-    for (size_t byte = 0; byte < sizeof(value); ++byte) {
-	hash ^= (value >> (byte * CHAR_BIT)) & UINT64_C(0xff);
-	hash *= controller_structural_frontier_hash_prime;
-    }
-}
 
-static void
-controller_hash_structural_frontier_string(uint64_t &hash, const char *value)
-{
-    if (value) {
-	for (const unsigned char *byte =
-		 reinterpret_cast<const unsigned char *>(value); *byte; ++byte) {
-	    hash ^= *byte;
-	    hash *= controller_structural_frontier_hash_prime;
+struct ControllerStructuralFrontierIdentity {
+    struct SourcePlan {
+	uint64_t routingId = 0;
+	uint64_t populationEpoch = 0;
+	std::vector<size_t> entries;
+
+	bool operator==(const SourcePlan &other) const
+	{
+	    return this->routingId == other.routingId &&
+		this->populationEpoch == other.populationEpoch &&
+		this->entries == other.entries;
 	}
+    };
+
+    size_t visibleCount = 0;
+    std::array<size_t,
+	BObolViewLodState::CadStructuralProjectionHistogram::BucketCount>
+	cumulativeCount = {};
+    std::vector<SourcePlan> plans;
+
+    bool operator==(const ControllerStructuralFrontierIdentity &other) const
+    {
+	return this->visibleCount == other.visibleCount &&
+	    this->cumulativeCount == other.cumulativeCount &&
+	    this->plans == other.plans;
     }
-    /* Preserve field boundaries: {"ab", "c"} and {"a", "bc"} are not the
-     * same source identity. */
-    hash *= controller_structural_frontier_hash_prime;
-}
+};
 
 static uint64_t
-controller_structural_frontier_digest(
+controller_structural_frontier_identity(
     const BObolViewLodState::CadStructuralProjectionHistogram &projection,
     const std::vector<std::pair<SoBRLDatabaseSource *, std::vector<size_t>>>
 	&plans)
 {
-    uint64_t hash = controller_structural_frontier_hash_offset;
-    controller_hash_structural_frontier_u64(
-	hash, static_cast<uint64_t>(projection.visibleCount));
-    for (const size_t count : projection.cumulativeCount)
-	controller_hash_structural_frontier_u64(
-	    hash, static_cast<uint64_t>(count));
+    ControllerStructuralFrontierIdentity identity;
+    identity.visibleCount = projection.visibleCount;
+    identity.cumulativeCount = projection.cumulativeCount;
+    identity.plans.reserve(plans.size());
     for (const auto &plan : plans) {
-	controller_hash_structural_frontier_string(
-	    hash, plan.first ? plan.first->path.getValue().getString() : NULL);
-	for (const size_t entry : plan.second)
-	    controller_hash_structural_frontier_u64(
-		hash, static_cast<uint64_t>(entry));
+	ControllerStructuralFrontierIdentity::SourcePlan source;
+	source.routingId = plan.first ?
+	    plan.first->getCompactSourceRoutingId() : 0;
+	source.populationEpoch = plan.first ?
+	    plan.first->getCompactPopulationEpoch() : 0;
+	source.entries = plan.second;
+	identity.plans.push_back(std::move(source));
     }
-    return hash ? hash : 1;
+
+    struct Record {
+	uint64_t token = 0;
+	ControllerStructuralFrontierIdentity identity;
+    };
+    static constexpr size_t retainedIdentityLimit = 64;
+    static std::mutex registryMutex;
+    static std::deque<Record> registry;
+    static uint64_t nextToken = 1;
+    std::lock_guard<std::mutex> lock(registryMutex);
+    for (const Record &record : registry) {
+	if (record.identity == identity)
+	    return record.token;
+    }
+    Record record;
+    record.identity = std::move(identity);
+    record.token = bobol_nonzero_identity_take(nextToken);
+    registry.push_back(std::move(record));
+    if (registry.size() > retainedIdentityLimit)
+	registry.pop_front();
+    return registry.back().token;
 }
 
 enum class ControllerStructuralSelectionMode {
@@ -250,6 +272,7 @@ BObolViewController::renderPending(SbBool clearWindow,
 				     SbBool clearZBuffer,
 				     SbString *reason)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     /* The caller owns and binds the render context.  In particular, an idle
      * poll must not advance work which can enqueue a frame and then enter Coin
      * on a context-free caller.  Progressive providers publish their own
@@ -326,14 +349,10 @@ BObolViewController::renderPending(SbBool clearWindow,
     else if (clearZBuffer)
 	glClear(GL_DEPTH_BUFFER_BIT);
     const uint64_t backgroundCompleted = this->beginRenderTiming();
-    const uint64_t cadExecutionBefore = presentationState ?
-	presentationState->cadPresentationExecutionSerial() : 0;
     if (presentationState)
 	presentationState->beginCadPresentationFrame();
     this->d->renderManager->render(static_cast<SbBool>(FALSE), static_cast<SbBool>(FALSE));
     const uint64_t sceneCompleted = this->beginRenderTiming();
-    const uint64_t cadExecutionAfter = presentationState ?
-	presentationState->cadPresentationExecutionSerial() : 0;
     if (presentationState)
 	presentationState->refreshCadPresentationFrameStatus();
     const BObolCadPreparationProgress cadPreparation = presentationState ?
@@ -365,7 +384,8 @@ BObolViewController::renderPending(SbBool clearWindow,
 	lodPlanningRelevant ?
 	    BObolLodPlanningRelevance::RELEVANT :
 	    BObolLodPlanningRelevance::EXCLUDED,
-	cadExecutionAfter != cadExecutionBefore ?
+	presentationState &&
+	    presentationState->lastCadPresentationFrameExecuted() ?
 	    BObolCadPresentationExecution::EXECUTED :
 	    BObolCadPresentationExecution::NOT_EXECUTED,
 	cadPreparation,
@@ -394,6 +414,8 @@ void
 BObolViewController::setPresentationFrameDeadlines(
     uint64_t interactiveNanoseconds, uint64_t stableNanoseconds)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     if (this->d->interactivePresentationFrameDeadlineNanoseconds ==
 	    interactiveNanoseconds &&
 	this->d->stablePresentationFrameDeadlineNanoseconds ==
@@ -586,6 +608,7 @@ BObolViewController::notePresentationRenderInterrupted(
     uint64_t elapsedNanoseconds,
     const BObolPresentationTimingContext &context)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     if (context.cadPresentationCompleteness ==
 	    BObolCadPresentationCompleteness::INCOMPLETE) {
 	/* Population producers may supersede this target, but none may erase the
@@ -609,7 +632,9 @@ BObolViewController::notePresentationRenderInterrupted(
 
     if (!elapsedNanoseconds)
 	return;
-    this->d->interruptedPresentationFrameCount++;
+    BObolRenderClaimCompletionScope claimedRenderCompletion(this);
+    bobol_saturating_counter_advance(
+	this->d->interruptedPresentationFrameCount);
     this->d->lastInterruptedPresentationTimeNanoseconds =
 	elapsedNanoseconds;
     if (!lodCapacityRelevant) {
@@ -622,7 +647,8 @@ BObolViewController::notePresentationRenderInterrupted(
 	    this->requestPresentationRender("render-presentation-replay");
 	return;
     }
-    this->d->consecutiveInterruptedPresentationFrames++;
+    bobol_saturating_counter_advance(
+	this->d->consecutiveInterruptedPresentationFrames);
     const BObolViewLodState *state = this->d->viewAttachment ?
 	this->d->viewAttachment->getViewLodState() : NULL;
     const SbBool interactive = this->d->lodInteractionSession.active();
@@ -858,7 +884,7 @@ BObolViewController::notePresentationRenderInterrupted(
 		this->d->lodAdmissionEvidence.capacity().
 		    capacitySearchMinimumBudget(interruptedMinimumCost,
 			allocationCertificate.protectedFloorBudget,
-			allocationCertificate.protectedFloorSignature);
+			allocationCertificate.protectedFloorIdentity);
 	    miss.searchKey = BObolLodCapacitySearchCertificate::keyFor(
 		this->d->admissionRevisionStamp(), preferredTargetNanoseconds,
 		this->d->prominentQualityPresentationDeadline(),
@@ -971,14 +997,14 @@ BObolViewController::notePresentationRenderInterrupted(
 	allocationCertificate.selectsProtectedFloor() &&
 	allocationCertificate.protectedFloorBudget ==
 	    this->d->lodAdmissionEvidence.capacity().retainedQualityFloorBudget() &&
-	allocationCertificate.protectedFloorSignature ==
-	    this->d->lodAdmissionEvidence.capacity().retainedQualityFloorSignature();
+	allocationCertificate.protectedFloorIdentity ==
+	    this->d->lodAdmissionEvidence.capacity().retainedQualityFloorIdentity();
     if (exactProtectedFloorMiss &&
 	this->d->lodAdmissionEvidence.capacity().retainedQualityFloorActive()) {
 	const size_t floorBudget =
 	    this->d->lodAdmissionEvidence.capacity().retainedQualityFloorBudget();
 	const uint64_t floorSignature =
-	    this->d->lodAdmissionEvidence.capacity().retainedQualityFloorSignature();
+	    this->d->lodAdmissionEvidence.capacity().retainedQualityFloorIdentity();
 	const unsigned int missesBefore =
 	    this->d->lodAdmissionEvidence.capacity().retainedQualityFloorMissCount();
 	const bool rejected =
@@ -1280,6 +1306,7 @@ BObolViewController::getLastInterruptedPresentationTimeNanoseconds(void) const
 void
 BObolViewController::requestStructuralPointAdmissionFrame(const char *reason)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     /* A structural classifier frame and a stable mesh-quality sample cannot
      * own the same presentation.  In particular, stable calibration may
      * pause an already installed CAD assembly while structural admission is
@@ -1294,6 +1321,7 @@ BObolViewController::requestStructuralPointAdmissionFrame(const char *reason)
 void
 BObolViewController::armStableLodHeadroomProbeIfReady(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     if (!this->automaticLodControlEnabled())
 	return;
 
@@ -1774,8 +1802,8 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	structuralRepairSelection.totalOccurrenceCount ==
 	    presentedStructuralBoxes &&
 	structuralRepairSelection.totalOccurrenceCount > 0;
-    const uint64_t structuralFrontierDigest =
-	controller_structural_frontier_digest(
+    const uint64_t structuralFrontierIdentity =
+	controller_structural_frontier_identity(
 	    structuralProjection, structuralRepairSelection.plans);
     BObolLodStructuralAdmissionEvidence::Decision structuralAdmission;
     bool terminalProxyRepair = false;
@@ -1792,7 +1820,7 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	BObolLodStructuralAdmissionEvidence::Inputs inputs;
 	inputs.viewRevision = this->d->lodViewRevision.value();
 	inputs.policyRevision = this->d->lodPolicyRevision.value();
-	inputs.frontierDigest = structuralFrontierDigest;
+	inputs.frontierIdentity = structuralFrontierIdentity;
 	inputs.unresolvedCount = unresolvedStructuralCount;
 	inputs.activeCost = activePopulationCost;
 	inputs.currentBudget = this->d->lodAdmissionEvidence.capacity().currentBudget();
@@ -2845,6 +2873,7 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 void
 BObolViewController::finishLodRetainedRecovery(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     if (!this->automaticLodControlEnabled())
 	return;
 
@@ -2881,6 +2910,7 @@ BObolViewController::finishLodRetainedRecovery(void)
 SbBool
 BObolViewController::completePointTriangleRecoveryIfReady(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     if (!this->automaticLodControlEnabled() ||
 	!this->d->lodPointQualityPhase.triangleRecoveryPending() ||
 	this->d->lodInteractionSession.active() ||
@@ -2953,6 +2983,7 @@ void
 BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	const BObolPresentationTimingContext &context)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     const SbBool lodCapacityRelevant =
 	context.lodCapacityRelevance == BObolLodCapacityRelevance::RELEVANT ?
 	    TRUE : FALSE;
@@ -2972,6 +3003,7 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
     const uint64_t elapsed = now - startedNanoseconds;
     if (elapsed >= 30000000000ULL)
 	return;
+    BObolRenderClaimCompletionScope claimedRenderCompletion(this);
 
     if (context.cadPresentationCompleteness ==
 	    BObolCadPresentationCompleteness::EXACT)
@@ -3317,7 +3349,7 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 		floorAllocation.viewRevision(), floorAllocation.policyRevision(),
 		floorAllocation.fixedCadPresentationCost);
 	this->d->recordRetainedQualityFloorMet(
-	    exactProtectedFloor, floorAllocation.protectedFloorSignature,
+	    exactProtectedFloor, floorAllocation.protectedFloorIdentity,
 	    activeCalibrationCost);
     }
     /* activeRenderCost is retained demand, not necessarily work submitted by
@@ -4326,8 +4358,10 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 		capacitySearch.candidateBudget();
 	    const BObolRetainedAllocationResult &capacityAllocation =
 		this->d->lodRetainedAllocationCertificate;
-	    inputs.populationSignature =
-		capacityAllocation.selectedPopulationSignature;
+	    inputs.populationDigest =
+		capacityAllocation.selectedPopulationDigest;
+	    inputs.populationIdentity =
+		capacityAllocation.selectedPopulationIdentity;
 	    inputs.populationMinimumBudget =
 		capacityAllocation.selectedPresentationCost;
 	    inputs.nextDistinctPopulationBudget =
@@ -4344,10 +4378,11 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	    const BObolLodAdmissionRevisionStamp currentRevision =
 		this->d->admissionRevisionStamp();
 	    const bool capacitySearchRevisionCurrent =
-		capacitySearch.key().inventory == currentRevision.inventory &&
-		capacitySearch.key().availability == currentRevision.availability &&
-		capacitySearch.key().view == currentRevision.view &&
-		capacitySearch.key().policy == currentRevision.policy;
+		capacitySearch.key().inventory == currentRevision.inventory() &&
+		capacitySearch.key().availability ==
+		    currentRevision.availability() &&
+		capacitySearch.key().view == currentRevision.view() &&
+		capacitySearch.key().policy == currentRevision.policy();
 	    const bool exactCapacityPopulation =
 		BObolLodAdmissionPlanner::capacitySamplePopulationReady(
 		    haveCadPresentationAssemblies != FALSE,
@@ -4438,7 +4473,7 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 		       validCapacitySample ? 1 : 0,
 		       inputs.presentedCost,
 		       static_cast<unsigned long long>(
-			   inputs.populationSignature),
+			   inputs.populationDigest),
 		       inputs.observedNanoseconds / 1000000.0,
 		       searchSamplesBefore,
 		       capacitySearch.samplesRemaining(),
@@ -4466,10 +4501,10 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 			   capacitySearch.key().view.value()),
 		       static_cast<unsigned long long>(
 			   capacitySearch.key().policy.value()),
-		       static_cast<unsigned long long>(currentRevision.inventory.value()),
-		       static_cast<unsigned long long>(currentRevision.availability.value()),
-		       static_cast<unsigned long long>(currentRevision.view.value()),
-		       static_cast<unsigned long long>(currentRevision.policy.value()),
+		       static_cast<unsigned long long>(currentRevision.inventory().value()),
+		       static_cast<unsigned long long>(currentRevision.availability().value()),
+		       static_cast<unsigned long long>(currentRevision.view().value()),
+		       static_cast<unsigned long long>(currentRevision.policy().value()),
 		       static_cast<unsigned long long>(
 			   capacityAllocation.allocationPlanSerial),
 		       static_cast<unsigned long long>(calibrationState ?
@@ -4790,6 +4825,7 @@ void
 BObolViewController::completePresentationBarrier(uint64_t elapsedNanoseconds,
 	SbBool exactFrame, size_t provenRenderCost)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     const BObolViewLodState *initialPresentationState =
 	this->d->viewAttachment ?
 	    this->d->viewAttachment->getViewLodState() : NULL;
@@ -4797,10 +4833,8 @@ BObolViewController::completePresentationBarrier(uint64_t elapsedNanoseconds,
 	this->d->retainedAllocationPresentationRealized(
 	    initialPresentationState);
     const uint64_t capacityRevisionBeforeBarrier =
-	this->d->admissionRevisionStamp().capacity.value();
-    this->d->renderCompletionSerial++;
-    if (this->d->renderCompletionSerial == 0)
-	this->d->renderCompletionSerial++;
+	this->d->admissionRevisionStamp().capacity().value();
+    bobol_identity_advance(this->d->renderCompletionSerial);
 
     const size_t reconciliationBudget =
 	BObolLodQualityPolicy::staticPresentationRenderCostLimit(
@@ -4917,7 +4951,7 @@ BObolViewController::completePresentationBarrier(uint64_t elapsedNanoseconds,
 		   static_cast<unsigned long long>(
 		       capacityRevisionBeforeBarrier),
 		   static_cast<unsigned long long>(
-		       this->d->admissionRevisionStamp().capacity.value()),
+		       this->d->admissionRevisionStamp().capacity().value()),
 		   this->d->retainedAllocationPresentationRealized(
 		       initialPresentationState) ? 1 : 0);
     }
@@ -4937,6 +4971,7 @@ BObolViewController::completePresentationBarrier(uint64_t elapsedNanoseconds,
 void
 BObolViewController::beginSceneWideCapacitySubmission(SbBool active)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     /* Capacity evidence and retained-allocation certificates describe the
      * complete current occurrence population.  A selective source delta is a
      * latency optimization for inventory or structural repair and cannot
@@ -4952,6 +4987,7 @@ void
 BObolViewController::restartLodCapacitySubmission(
 	SbBool capacityCandidateChanged)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     if (capacityCandidateChanged) {
 	(void)this->d->lodAvailabilityLedger.
 	    transferResidentGrowthToCapacityCandidate();
@@ -4974,6 +5010,7 @@ BObolViewController::restartLodCapacitySubmission(
 SbBool
 BObolViewController::scheduleCapacityCandidateAllocationIfReady(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     if (!this->automaticLodControlEnabled() || !this->d->lodService ||
 	!this->d->lodAdmissionEvidence.capacity().capacityAllocationPending() ||
 	this->d->lodSubmissionPass.active() ||
@@ -4999,6 +5036,7 @@ BObolViewController::scheduleCapacityCandidateAllocationIfReady(void)
 SbBool
 BObolViewController::schedulePendingLodHandoffAllocationIfReady(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     if (!this->automaticLodControlEnabled())
 	return FALSE;
 
@@ -5046,6 +5084,7 @@ BObolViewController::schedulePendingLodHandoffAllocationIfReady(void)
 void
 BObolViewController::scheduleLodRefinementFrame(const char *reason)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     if (!this->automaticLodControlEnabled())
 	return;
 
@@ -5078,6 +5117,7 @@ BObolViewController::scheduleLodRefinementFrame(const char *reason)
 void
 BObolViewController::scheduleResidentGrowthReallocationIfReady(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     if (!this->automaticLodControlEnabled() ||
 	!this->d->lodService ||
 	!this->d->lodAvailabilityLedger.residentGrowthPending())
@@ -5250,10 +5290,10 @@ BObolViewController::getLastPresentationSyncTimeNanoseconds(void) const
 void
 BObolViewController::noteFramePresented(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     const uint64_t now = this->beginRenderTiming();
     std::lock_guard<std::mutex> lock(this->d->presentationTimingMutex);
-    if (this->d->presentedFrameSerial != UINT64_MAX)
-	this->d->presentedFrameSerial++;
+    bobol_saturating_counter_advance(this->d->presentedFrameSerial);
     uint64_t generalDisplaySample = 0;
     const auto updateDisplayedCadence = [this](uint64_t interval) {
 	uint64_t &displayed =
@@ -5497,14 +5537,10 @@ BObolViewController::renderToImage(unsigned char **image,
     const uint64_t started = this->beginRenderTiming();
     const BObolViewLodState *presentationState = this->d->viewAttachment ?
 	this->d->viewAttachment->getViewLodState() : NULL;
-    const uint64_t cadExecutionBefore = presentationState ?
-	presentationState->cadPresentationExecutionSerial() : 0;
     if (presentationState)
 	presentationState->beginCadPresentationFrame();
     const SbBool rendered = renderer->render(this->getRenderRoot());
     const uint64_t completed = this->beginRenderTiming();
-    const uint64_t cadExecutionAfter = presentationState ?
-	presentationState->cadPresentationExecutionSerial() : 0;
     if (presentationState)
 	presentationState->refreshCadPresentationFrameStatus();
     const BObolCadPreparationProgress cadPreparation = presentationState ?
@@ -5512,8 +5548,8 @@ BObolViewController::renderToImage(unsigned char **image,
 	BOBOL_CAD_PREPARATION_NONE;
     const SbBool cadFrameIncomplete = presentationState &&
 	!presentationState->lastCadPresentationFrameExact();
-    const BObolCadPresentationExecution cadExecution =
-	cadExecutionAfter != cadExecutionBefore ?
+    const BObolCadPresentationExecution cadExecution = presentationState &&
+	presentationState->lastCadPresentationFrameExecuted() ?
 	    BObolCadPresentationExecution::EXECUTED :
 	    BObolCadPresentationExecution::NOT_EXECUTED;
     if (!rendered) {

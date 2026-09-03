@@ -206,18 +206,25 @@ protected:
     void GLRenderBelowPath(SoGLRenderAction *action) override;
 
 private:
+    struct SourceStamp {
+	const SoBRLDatabaseSource *source = NULL;
+	uint64_t revision = 0;
+	bool viewPayload = false;
+
+	bool operator==(const SourceStamp &other) const
+	{
+	    return this->source == other.source &&
+		this->revision == other.revision &&
+		this->viewPayload == other.viewPayload;
+	}
+    };
+
     void renderBatch(SoGLRenderAction *action);
     SbBool syncBatch(const BObolViewLodState *viewState);
 
     SoBRLCadAssembly *assembly;
     SoNode *sourceRoot;
-    uint64_t cachedSourceSignature;
-    uint64_t cachedStructureSignature;
-    uint64_t cachedStyleSignature;
-    uint64_t cachedSemanticSignature;
-    uint64_t cachedHiddenSignature;
-    uint64_t cachedSelectedSignature;
-    uint64_t cachedUnpickableSignature;
+    std::vector<SourceStamp> cachedSourceStamps;
     SbBool batchValid;
     int softwareWireMode;
     std::unordered_set<const SoBRLDatabaseSource *> batchedSources;

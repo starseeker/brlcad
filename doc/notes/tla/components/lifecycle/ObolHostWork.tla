@@ -285,6 +285,31 @@ CloseProducers == /\ ~producersClosed
                                   exactFrameRequired, exactPumpPending,
                                   capturedExactFrameRequired>>
 
+\* Losing the endpoint is stronger than an orderly producer close.  There is
+\* no host left to drain a notification, timer, pending request, or claimed
+\* frame, so the close transaction cancels every such owner atomically.
+CloseEndpoint ==
+    /\ ~producersClosed
+    /\ producersClosed' = TRUE
+    /\ pumpPending' = FALSE
+    /\ controllerPumpPending' = FALSE
+    /\ renderPending' = FALSE
+    /\ renderCapacity' = FALSE
+    /\ notificationPending' = FALSE
+    /\ hostLoopScheduled' = FALSE
+    /\ renderInFlight' = FALSE
+    /\ capturedRenderCapacity' = FALSE
+    /\ providerRegistered' = FALSE
+    /\ providerPending' = FALSE
+    /\ sourceInputsPending' = FALSE
+    /\ exactFrameRequired' = FALSE
+    /\ exactPumpPending' = FALSE
+    /\ capturedExactFrameRequired' = FALSE
+    /\ publicationState' = "idle"
+    /\ capturedPublicationFrame' = FALSE
+    /\ UNCHANGED <<renderRevision, capturedRenderRevision,
+                    acknowledgedRenderRevision>>
+
 \* The toolkit callback never performs work recursively.  It coalesces onto
 \* one owner-thread loop and releases the callback edge.
 DispatchNotification == /\ notificationPending
@@ -565,6 +590,7 @@ Next == \/ PublishPump
         \/ RequireExactFrame
         \/ UnregisterProvider
         \/ CloseProducers
+        \/ CloseEndpoint
         \/ DispatchNotification
         \/ QueuePublicationFrame
         \/ Pump
@@ -635,6 +661,9 @@ Terminal ==
     /\ ~providerRegistered
     /\ ~providerPending
     /\ ~sourceInputsPending
+
+\* Action-level postcondition exported to the lifecycle composition contract.
+EndpointClosureRetiresAllWork == CloseEndpoint => Terminal'
 
 DeadlockOnlyAtTerminal == ~ENABLED <<Next>>_vars => Terminal
 

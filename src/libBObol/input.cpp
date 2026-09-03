@@ -9,6 +9,7 @@
 
 #include "BObol/BInput.h"
 #include "BObol/BDisplayEndpoint.h"
+#include "identity_counter_private.h"
 #include "bv.h"
 
 #include <algorithm>
@@ -137,9 +138,7 @@ BObolInputContext::setActionLayer(const BObolInputActionLayer *layer,
 	layer->bindings + layer->bindingCount);
     target->handler = layer->handler;
     target->handlerData = userData;
-    target->order = this->nextLayerOrder++;
-    if (!this->nextLayerOrder)
-	this->nextLayerOrder = 1;
+    target->order = bobol_nonzero_identity_take(this->nextLayerOrder);
     return 1;
 }
 

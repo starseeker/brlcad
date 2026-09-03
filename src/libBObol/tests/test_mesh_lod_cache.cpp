@@ -23,6 +23,7 @@
 #include "BObol/BDrawCache.h"
 #include "BObol/BLodRealization.h"
 #include "BObol/BMeshLodCache.h"
+#include "transaction_fault_test_private.h"
 
 #include <Obol/cad/SoCADAssembly.h>
 
@@ -868,13 +869,86 @@ main(int argc, char *argv[])
 	}
     }
 
+    {
+	int refreshStatus = BRLCAD_OK;
+	{
+	    ScopedTransactionFault fault(
+		BObolTransactionFaultPoint::DURABLE_CACHE_COMMIT);
+	    refreshStatus = bobol_mesh_lod_cache_refresh(
+		dbip, objname, &cacheStatus);
+	}
+	struct BObolMeshLod *failed = bobol_mesh_lod_get(dbip, objname);
+	if (refreshStatus != BRLCAD_ERROR ||
+	    bobol_mesh_lod_cache_status(dbip, objname, &cacheStatus) !=
+		BRLCAD_OK ||
+	    cacheStatus.has_cache_key || cacheStatus.has_cached_payload ||
+	    failed) {
+	    printf("FAIL: denied durable-cache commit became discoverable "
+		   "status=%d key=%d payload=%d lod=%p\n", refreshStatus,
+		   cacheStatus.has_cache_key, cacheStatus.has_cached_payload,
+		   static_cast<void *>(failed));
+	    if (failed)
+		bobol_mesh_lod_destroy(failed);
+	    ret = 1;
+	    goto cleanup;
+	}
+    }
+
     if (check_oriented_proxy_cache_round_trip(dbip, meshObjname)) {
 	ret = 1;
 	goto cleanup;
     }
-    if (check_oriented_proxy_cache_round_trip(dbip, objname) ||
-	bobol_mesh_lod_cache_invalidate(dbip, objname, &cacheStatus) !=
-	    BRLCAD_OK) {
+    if (check_oriented_proxy_cache_round_trip(dbip, objname)) {
+	ret = 1;
+	goto cleanup;
+    }
+
+    {
+	struct BObolMeshLodCacheStatus before =
+	    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+	struct BObolMeshLodCacheStatus denied =
+	    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+	struct BObolMeshLodCacheStatus after =
+	    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+	if (bobol_mesh_lod_cache_status(dbip, objname, &before) !=
+		BRLCAD_OK ||
+	    !before.has_cache_key || !before.has_cached_payload) {
+	    printf("FAIL: durable-cache denial fixture was not published\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+
+	int refreshStatus = BRLCAD_OK;
+	{
+	    ScopedTransactionFault fault(
+		BObolTransactionFaultPoint::DURABLE_CACHE_COMMIT);
+	    refreshStatus = bobol_mesh_lod_cache_refresh(
+		dbip, objname, &denied);
+	}
+	struct BObolMeshLod *preserved = bobol_mesh_lod_get(dbip, objname);
+	if (refreshStatus != BRLCAD_ERROR ||
+	    denied.cache_key != before.cache_key ||
+	    !denied.has_cached_payload ||
+	    bobol_mesh_lod_cache_status(dbip, objname, &after) !=
+		BRLCAD_OK ||
+	    after.cache_key != before.cache_key ||
+	    !after.has_cached_payload || !preserved ||
+	    first_available_cut(preserved) < 0) {
+	    printf("FAIL: denied durable-cache replacement did not preserve "
+		   "the prior hierarchy old=%llu denied=%llu after=%llu "
+		   "refresh=%d lod=%p\n",
+		   before.cache_key, denied.cache_key, after.cache_key,
+		   refreshStatus, static_cast<void *>(preserved));
+	    if (preserved)
+		bobol_mesh_lod_destroy(preserved);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(preserved);
+    }
+
+    if (bobol_mesh_lod_cache_invalidate(dbip, objname, &cacheStatus) !=
+	BRLCAD_OK) {
 	ret = 1;
 	goto cleanup;
     }

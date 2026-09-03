@@ -15,6 +15,7 @@
 #include "BObol/BMeshShape.h"
 #include "BObol/BViewLod.h"
 #include "BObol/BVListShape.h"
+#include "identity_counter_private.h"
 
 #include "bu/path.h"
 
@@ -1540,7 +1541,7 @@ SoBRLExportAction::appendLine(const SbString &path, const SbString &sourceName,
 
     this->lineCount++;
     LineRecord record;
-    record.sequence = this->recordSequence++;
+    record.sequence = bobol_identity_take(this->recordSequence);
     record.path = path;
     record.sourceName = sourceName;
     record.sourceType = sourceType;
@@ -1598,7 +1599,7 @@ SoBRLExportAction::appendPoint(const SbString &path, const SbString &sourceName,
 
     this->pointCount++;
     PointRecord record;
-    record.sequence = this->recordSequence++;
+    record.sequence = bobol_identity_take(this->recordSequence);
     record.path = path;
     record.sourceName = sourceName;
     record.sourceType = sourceType;
@@ -1667,7 +1668,7 @@ SoBRLExportAction::appendTriangle(const SbString &path,
 
     this->triangleCount++;
     TriangleRecord record;
-    record.sequence = this->recordSequence++;
+    record.sequence = bobol_identity_take(this->recordSequence);
     record.path = path;
     record.sourceName = sourceName;
     record.sourceType = sourceType;

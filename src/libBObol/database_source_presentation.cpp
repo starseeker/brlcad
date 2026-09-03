@@ -19,6 +19,7 @@
 #include "cad_normals_private.h"
 #include "cad_publication_private.h"
 #include "compact_presentation_staging_private.h"
+#include "transaction_fault_private.h"
 #include "compact_occurrence_registry_private.h"
 #include "database_source_private.h"
 #include "database_source_presentation_private.h"
@@ -1021,26 +1022,27 @@ cad_compact_payload_part_id(
     return Obol::CadIdBuilder::partId(partKey);
 }
 
-static uint64_t
-cad_compact_layer_signature(
+static void
+cad_compact_append_layer_identity(
+    std::string &key,
     const std::vector<BObolLodPresentationLayer> &layers)
 {
-    uint64_t signature = 1469598103934665603ULL;
+    key += ":layers=";
+    key += std::to_string(layers.size());
     for (const BObolLodPresentationLayer &layer : layers) {
-	const char *key = layer.layerKey.getString();
+	const char *layerKey = layer.layerKey.getString();
 	const size_t length = static_cast<size_t>(layer.layerKey.getLength());
-	for (size_t i = 0; i < length; ++i) {
-	    signature ^= static_cast<unsigned char>(key[i]);
-	    signature *= 1099511628211ULL;
-	}
-	signature ^= layer.geometryRevision;
-	signature *= 1099511628211ULL;
-	signature ^= static_cast<uint64_t>(layer.activeCut + 1);
-	signature *= 1099511628211ULL;
-	signature ^= layer.coverage ? 1u : 0u;
-	signature *= 1099511628211ULL;
+	key += ':';
+	key += std::to_string(length);
+	key += '#';
+	key.append(layerKey, length);
+	key += ':';
+	key += std::to_string(layer.geometryRevision);
+	key += ':';
+	key += std::to_string(layer.activeCut);
+	key += ':';
+	key += layer.coverage ? '1' : '0';
     }
-    return signature ? signature : 1;
 }
 
 static void
@@ -1475,14 +1477,9 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    payloadKey += std::to_string(normalCreaseAngle);
 	    const bool layeredPresentation =
 		!payload->presentationLayers.empty();
-	    if (layeredPresentation) {
-		payloadKey += ":layers=";
-		payloadKey += std::to_string(
-		    payload->presentationLayers.size());
-		payloadKey += ':';
-		payloadKey += std::to_string(cad_compact_layer_signature(
-		    payload->presentationLayers));
-	    }
+	    if (layeredPresentation)
+		cad_compact_append_layer_identity(
+		    payloadKey, payload->presentationLayers);
 	    const Obol::PartId expectedPayloadPart =
 		cad_compact_payload_part_id(
 		    *payload, occurrenceKey, payloadKey, sourceDrawMode);
@@ -2034,6 +2031,13 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	 * whole journal can be rejected before any live state changes. */
 	if (!bobol_cad_validate_mutation(assembly, layerMutation,
 		"compact layer preflight"))
+	    return assembly;
+	/* Everything above is private staging.  A resource denial must not open
+	 * the outer update scope: even an empty scope has a notification edge. */
+	if (bobol_transaction_fault_requested(
+		BObolTransactionFaultPoint::RETAINED_SCENE_COMMIT) ||
+	    bobol_transaction_fault_requested(
+		BObolTransactionFaultPoint::PRESENTATION_COMMIT))
 	    return assembly;
 
 	SoCADAssembly::UpdateScope updateScope = assembly->batchUpdate();

@@ -2052,6 +2052,343 @@ test_asset_producer_coalescing(void)
     return 0;
 }
 
+struct SharedProducerLeaseState {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool started = false;
+    bool release = false;
+    size_t calls = 0;
+};
+
+struct SharedProducerLeaseFixture {
+    SharedProducerLeaseState state;
+    BObolLodService service;
+
+    ~SharedProducerLeaseFixture(void)
+    {
+	{
+	    std::lock_guard<std::mutex> lock(state.mutex);
+	    state.release = true;
+	}
+	state.cv.notify_all();
+	service.stop();
+    }
+};
+
+static BObolLodResult
+shared_producer_lease_task(const BObolLodRequest &request, void *userData)
+{
+    SharedProducerLeaseState *state =
+	static_cast<SharedProducerLeaseState *>(userData);
+    {
+	std::unique_lock<std::mutex> lock(state->mutex);
+	state->started = true;
+	++state->calls;
+	state->cv.notify_all();
+	state->cv.wait(lock, [state] { return state->release; });
+    }
+
+    BObolLodResult result;
+    result.request = request;
+    result.cacheKey = bobol_lod_cache_key(request);
+    result.resultKind = BOBOL_LOD_RESULT_AABB;
+    result.qualityTier = request.qualityTier;
+    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
+    result.terminal = TRUE;
+    result.counts.faceCount = 17;
+    result.bounds = request.bounds;
+    return result;
+}
+
+static BObolLodTask
+shared_producer_lease_task_for(SharedProducerLeaseFixture &fixture,
+	uint64_t generation, const char *occurrence)
+{
+    BObolLodTask task;
+    task.generation = generation;
+    task.request = make_request("/shared-producer-lease.bot");
+    task.request.occurrenceKey = occurrence;
+    task.request.coalesceAssetProducer = TRUE;
+    task.realize = shared_producer_lease_task;
+    task.realizeData = &fixture.state;
+    return task;
+}
+
+static int
+wait_for_shared_producer_started(SharedProducerLeaseFixture &fixture,
+	const char *scenario)
+{
+    std::unique_lock<std::mutex> lock(fixture.state.mutex);
+    if (fixture.state.cv.wait_for(lock, std::chrono::seconds(2),
+	    [&fixture] { return fixture.state.started; }))
+	return 0;
+    printf("FAIL: shared producer did not start (%s)\n", scenario);
+    return 1;
+}
+
+static void
+release_shared_producer(SharedProducerLeaseFixture &fixture)
+{
+    {
+	std::lock_guard<std::mutex> lock(fixture.state.mutex);
+	fixture.state.release = true;
+    }
+    fixture.state.cv.notify_all();
+}
+
+static int
+check_shared_producer_clean(BObolLodService &service,
+	const char *scenario)
+{
+    if (service.inFlightCount() == 0 &&
+	service.queuedResultCountForDiagnostics() == 0 &&
+	service.activeRequestCountForDiagnostics() == 0 &&
+	service.sharedProducerCountForDiagnostics() == 0 &&
+	service.sharedProducerLeaseCountForDiagnostics() == 0)
+	return 0;
+    printf("FAIL: shared producer retained ownership (%s): "
+	   "in_flight=%zu results=%zu requests=%zu producers=%zu leases=%zu\n",
+	   scenario, service.inFlightCount(),
+	   service.queuedResultCountForDiagnostics(),
+	   service.activeRequestCountForDiagnostics(),
+	   service.sharedProducerCountForDiagnostics(),
+	   service.sharedProducerLeaseCountForDiagnostics());
+    return 1;
+}
+
+static int
+check_shared_consumer_result(const std::vector<BObolLodResult> &results,
+	uint64_t generation, const BObolLodRequest &request,
+	int expectedStatus, const char *scenario)
+{
+    if (results.size() == 1 && results.front().generation == generation &&
+	bobol_lod_result_matches_request(results.front(), request) &&
+	results.front().providerStatus == expectedStatus)
+	return 0;
+    printf("FAIL: shared producer consumer result (%s): count=%zu\n",
+	   scenario, results.size());
+    return 1;
+}
+
+static int
+test_shared_producer_two_generation_delivery(void)
+{
+    SharedProducerLeaseFixture fixture;
+    if (!fixture.service.start(1, FALSE))
+	return 1;
+    const uint64_t firstGeneration = fixture.service.beginGeneration();
+    const uint64_t secondGeneration = fixture.service.beginGeneration();
+    BObolLodTask first = shared_producer_lease_task_for(
+	fixture, firstGeneration, "/lease/first");
+    BObolLodTask second = shared_producer_lease_task_for(
+	fixture, secondGeneration, "/lease/second");
+    if (!fixture.service.submitIfNotActive(first) ||
+	fixture.service.submitIfNotActive(second) != 0 ||
+	fixture.service.sharedProducerCountForDiagnostics() != 1 ||
+	fixture.service.sharedProducerLeaseCountForDiagnostics() != 2 ||
+	fixture.service.sharedProducerLeaseCountForGeneration(
+	    firstGeneration) != 1 ||
+	fixture.service.sharedProducerLeaseCountForGeneration(
+	    secondGeneration) != 1) {
+	printf("FAIL: two-generation shared producer lease acquisition\n");
+	return 1;
+    }
+    release_shared_producer(fixture);
+    if (wait_for_settled(fixture.service, 2))
+	return 1;
+
+    std::vector<BObolLodResult> firstResults;
+    std::vector<BObolLodResult> secondResults;
+    fixture.service.drainGenerationResults(firstResults, firstGeneration);
+    fixture.service.drainGenerationResults(secondResults, secondGeneration);
+    if (check_shared_consumer_result(firstResults, firstGeneration,
+	    first.request, BOBOL_LOD_PROVIDER_READY, "producer delivery") ||
+	check_shared_consumer_result(secondResults, secondGeneration,
+	    second.request, BOBOL_LOD_PROVIDER_SUPERSEDED,
+	    "secondary replay") ||
+	fixture.state.calls != 1 ||
+	check_shared_producer_clean(fixture.service,
+	    "two-generation delivery"))
+	return 1;
+    return 0;
+}
+
+static int
+test_shared_producer_first_consumer_cancellation(void)
+{
+    SharedProducerLeaseFixture fixture;
+    if (!fixture.service.start(1, FALSE))
+	return 1;
+    const uint64_t firstGeneration = fixture.service.beginGeneration();
+    const uint64_t secondGeneration = fixture.service.beginGeneration();
+    BObolLodTask first = shared_producer_lease_task_for(
+	fixture, firstGeneration, "/lease/cancelled-first");
+    BObolLodTask second = shared_producer_lease_task_for(
+	fixture, secondGeneration, "/lease/survivor");
+    if (!fixture.service.submitIfNotActive(first) ||
+	wait_for_shared_producer_started(fixture, "cancel first") ||
+	!fixture.service.updateActiveRequestDemand(
+	    second.request, secondGeneration))
+	return 1;
+    fixture.service.cancelGeneration(firstGeneration);
+    if (!fixture.service.isGenerationCancelled(firstGeneration) ||
+	fixture.service.isProducerCancelled(
+	    firstGeneration, first.request) ||
+	fixture.service.sharedProducerLeaseCountForDiagnostics() != 1) {
+	printf("FAIL: surviving lease did not retain cancelled owner's producer\n");
+	return 1;
+    }
+    release_shared_producer(fixture);
+    if (wait_for_settled(fixture.service, 1))
+	return 1;
+    std::vector<BObolLodResult> cancelledResults;
+    std::vector<BObolLodResult> survivorResults;
+    fixture.service.drainGenerationResults(
+	cancelledResults, firstGeneration);
+    fixture.service.drainGenerationResults(
+	survivorResults, secondGeneration);
+    if (!cancelledResults.empty() ||
+	check_shared_consumer_result(survivorResults, secondGeneration,
+	    second.request, BOBOL_LOD_PROVIDER_SUPERSEDED,
+	    "survivor replay") ||
+	fixture.state.calls != 1 ||
+	check_shared_producer_clean(fixture.service,
+	    "first consumer cancellation"))
+	return 1;
+    return 0;
+}
+
+static int
+test_shared_producer_late_join_during_build(void)
+{
+    SharedProducerLeaseFixture fixture;
+    if (!fixture.service.start(1, FALSE))
+	return 1;
+    const uint64_t firstGeneration = fixture.service.beginGeneration();
+    BObolLodTask first = shared_producer_lease_task_for(
+	fixture, firstGeneration, "/lease/build-owner");
+    if (!fixture.service.submitIfNotActive(first) ||
+	wait_for_shared_producer_started(fixture, "late build join"))
+	return 1;
+    const uint64_t lateGeneration = fixture.service.beginGeneration();
+    BObolLodTask late = shared_producer_lease_task_for(
+	fixture, lateGeneration, "/lease/build-late");
+    if (!fixture.service.updateActiveRequestDemand(
+	    late.request, lateGeneration) ||
+	fixture.service.sharedProducerLeaseCountForDiagnostics() != 2) {
+	printf("FAIL: late consumer did not join building producer\n");
+	return 1;
+    }
+    release_shared_producer(fixture);
+    if (wait_for_settled(fixture.service, 2))
+	return 1;
+    std::vector<BObolLodResult> ownerResults;
+    std::vector<BObolLodResult> lateResults;
+    fixture.service.drainGenerationResults(ownerResults, firstGeneration);
+    fixture.service.drainGenerationResults(lateResults, lateGeneration);
+    if (check_shared_consumer_result(ownerResults, firstGeneration,
+	    first.request, BOBOL_LOD_PROVIDER_READY, "build owner") ||
+	check_shared_consumer_result(lateResults, lateGeneration,
+	    late.request, BOBOL_LOD_PROVIDER_SUPERSEDED,
+	    "late build replay") ||
+	fixture.state.calls != 1 ||
+	check_shared_producer_clean(fixture.service, "late build join"))
+	return 1;
+    return 0;
+}
+
+static int
+test_shared_producer_late_join_while_result_queued(void)
+{
+    SharedProducerLeaseFixture fixture;
+    if (!fixture.service.start(1, FALSE))
+	return 1;
+    const uint64_t firstGeneration = fixture.service.beginGeneration();
+    BObolLodTask first = shared_producer_lease_task_for(
+	fixture, firstGeneration, "/lease/result-owner");
+    if (!fixture.service.submitIfNotActive(first) ||
+	wait_for_shared_producer_started(fixture, "late result join"))
+	return 1;
+    release_shared_producer(fixture);
+    if (wait_for_settled(fixture.service, 1))
+	return 1;
+
+    const uint64_t lateGeneration = fixture.service.beginGeneration();
+    BObolLodTask late = shared_producer_lease_task_for(
+	fixture, lateGeneration, "/lease/result-late");
+    if (fixture.service.submitIfNotActive(late) != 0 ||
+	fixture.service.queuedResultCountForDiagnostics() != 2 ||
+	fixture.service.sharedProducerLeaseCountForDiagnostics() != 2) {
+	printf("FAIL: late consumer did not lease queued shared result\n");
+	return 1;
+    }
+    std::vector<BObolLodResult> lateResults;
+    std::vector<BObolLodResult> ownerResults;
+    fixture.service.drainGenerationResults(lateResults, lateGeneration);
+    fixture.service.drainGenerationResults(ownerResults, firstGeneration);
+    if (check_shared_consumer_result(lateResults, lateGeneration,
+	    late.request, BOBOL_LOD_PROVIDER_SUPERSEDED,
+	    "late queued-result replay") ||
+	check_shared_consumer_result(ownerResults, firstGeneration,
+	    first.request, BOBOL_LOD_PROVIDER_READY,
+	    "queued-result owner") ||
+	fixture.state.calls != 1 ||
+	check_shared_producer_clean(fixture.service,
+	    "late queued-result join"))
+	return 1;
+    return 0;
+}
+
+static int
+test_shared_producer_final_consumer_cancellation_during_build(void)
+{
+    SharedProducerLeaseFixture fixture;
+    if (!fixture.service.start(1, FALSE))
+	return 1;
+    const uint64_t generation = fixture.service.beginGeneration();
+    BObolLodTask task = shared_producer_lease_task_for(
+	fixture, generation, "/lease/final-build");
+    if (!fixture.service.submitIfNotActive(task) ||
+	wait_for_shared_producer_started(fixture, "final build cancel"))
+	return 1;
+    fixture.service.cancelGeneration(generation);
+    if (!fixture.service.isProducerCancelled(generation, task.request) ||
+	fixture.service.sharedProducerLeaseCountForDiagnostics() != 0) {
+	printf("FAIL: final build lease cancellation did not cancel producer\n");
+	return 1;
+    }
+    release_shared_producer(fixture);
+    if (wait_for_settled(fixture.service, 0) ||
+	fixture.state.calls != 1 ||
+	check_shared_producer_clean(fixture.service,
+	    "final cancellation during build"))
+	return 1;
+    return 0;
+}
+
+static int
+test_shared_producer_final_consumer_cancellation_with_result(void)
+{
+    SharedProducerLeaseFixture fixture;
+    if (!fixture.service.start(1, FALSE))
+	return 1;
+    const uint64_t generation = fixture.service.beginGeneration();
+    BObolLodTask task = shared_producer_lease_task_for(
+	fixture, generation, "/lease/final-result");
+    if (!fixture.service.submitIfNotActive(task) ||
+	wait_for_shared_producer_started(fixture, "final result cancel"))
+	return 1;
+    release_shared_producer(fixture);
+    if (wait_for_settled(fixture.service, 1))
+	return 1;
+    fixture.service.cancelGeneration(generation);
+    if (fixture.state.calls != 1 ||
+	check_shared_producer_clean(fixture.service,
+	    "final cancellation with queued result"))
+	return 1;
+    return 0;
+}
+
 static int
 test_batch_submission(void)
 {
@@ -5027,6 +5364,20 @@ main(int argc, char **argv)
     if (runIsolated(test_active_request_duplicate_suppression))
 	return 1;
     if (runIsolated(test_asset_producer_coalescing))
+	return 1;
+    if (runIsolated(test_shared_producer_two_generation_delivery))
+	return 1;
+    if (runIsolated(test_shared_producer_first_consumer_cancellation))
+	return 1;
+    if (runIsolated(test_shared_producer_late_join_during_build))
+	return 1;
+    if (runIsolated(test_shared_producer_late_join_while_result_queued))
+	return 1;
+    if (runIsolated(
+	    test_shared_producer_final_consumer_cancellation_during_build))
+	return 1;
+    if (runIsolated(
+	    test_shared_producer_final_consumer_cancellation_with_result))
 	return 1;
     if (runIsolated(test_batch_submission))
 	return 1;

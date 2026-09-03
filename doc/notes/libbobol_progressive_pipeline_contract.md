@@ -448,9 +448,11 @@ tests above:
 These are architecture acceptance criteria, not aspirations.  Capacity and
 admission evidence is now controller-read-only, and the bounded execution
 cursor is a separate allocation-free value.  Plans and cursors now carry the
-exact six-domain revision stamp.  Inventory, availability, visibility, and
-capacity edges advance through one typed coordinator operation; view and
-policy advance at
+exact six-domain revision stamp.  The C++ value requires all six typed
+arguments, exposes no mutable domain fields, and reserves its named
+administrative sentinel for inactive holders.  Inventory, availability,
+visibility, and capacity edges advance through one typed coordinator
+operation; view and policy advance at
 their existing sole owners.  Each operation retires the preceding cursor, and
 commit rejects a certified plan whose stamp no longer matches.  Thus no cursor
 or plan can survive a superseding input, and an unchanged tuple cannot
@@ -605,15 +607,20 @@ point-recovery inputs because both map only to the planning obligation; its 20
 fact classes are checked with both terminal-error values.  It proves that fair
 owner service strictly decreases and eventually retires the finite work set
 (4,194,302 generated / 2,097,152 distinct states).  This projection is not a
-second scheduler and does not
-satisfy the final reducer requirement by itself; each following migration
-must move one production effect writer behind the typed boundary and delete
-the superseded path.
+second scheduler.  The typed transition scopes and bounded journal now supply
+the complementary execution relation: every observable endpoint change is
+named by external input or the selected owner, and an unmapped writer becomes
+an explicit failing record rather than a silently sampled gap.
 
-The first runtime trace acceptance boundary is also executable.  The qged
-diagnostic snapshot records the complete six-domain revision tuple, current
+The complete runtime trace acceptance boundary is executable.  The controller
+owns an opt-in bounded journal whose immutable endpoints record the complete
+six-domain revision tuple, current
 retained allocation plan, presentation transaction and required frame, and
-committed-frame serial.  It also records the complete 29-fact concrete mask.
+committed-frame serial.  They also record the complete 29-fact concrete mask,
+host work, and renderer-preparation target signature and remaining-unit rank.
+A finite external-input plus nine-owner event alphabet names each effect
+boundary; an observable change outside one emits `unnamed`, and buffer loss is
+reported rather than overwritten.
 A standalone checker independently projects that mask to the nine obligations
 and fixed-precedence owner, then rejects a concrete/abstract mismatch, sampled
 revision or serial regression, more than one nonzero plan for an unchanged
@@ -623,10 +630,16 @@ mask in cycle identity prevents two planning or presentation aliases from
 collapsing to the same abstract owner and hiding a concrete A/B/A cycle.  It
 intentionally accepts an unchanged state while finite worker/cache work is
 active and recognizes an explicit host command before its owner-thread
-revision synchronization.  The checker is observational test code and cannot
-schedule work.  This closes the sampled-state refinement gate, not the final
-requirement above to name and record every production reducer transition with
-its finite remaining-work measure.
+revision synchronization.  It additionally rejects unnamed/unknown events,
+missing or discontinuous endpoints, noncontiguous transition serials, event/
+owner disagreement, and truncation.  The checker is observational test code
+and cannot schedule work.
+
+The first complete graphical trace found the concrete host-claim seam already
+represented by `ObolHostWork.renderInFlight`: consuming a queued render
+removed the only exported presentation witness before exact-frame completion.
+`BObolHostWorkSnapshot` now carries a typed claimed-frame level, and the
+presentation refinement retains that witness until completion or interruption.
 
 Numeric allocation remains a separate proof obligation.  Its pure snapshot-to-
 plan function is checked against an independent oracle and property tests for
@@ -1212,6 +1225,14 @@ event alphabet merely to describe an implementation latch.  A counterexample
 which cannot map back to inventory, availability, demand, planning,
 presentation, or resource release is architectural debt and stops
 implementation until ownership is clarified.
+
+Durable completion is a publication transaction, not merely a true marker.
+Content-addressed hierarchy records may be staged independently, but an
+existing name mapping remains authoritative until the complete replacement's
+mapping commits.  Resource denial at any record or mapping commit leaves that
+predecessor discoverable.  The asset model carries the baseline/candidate
+mapping explicitly; filesystem crash consistency remains an external process-
+kill gate.
 
 Every formal action requires an executable production refinement test.  The
 deadline model correctly transferred ownership from render replay to a live

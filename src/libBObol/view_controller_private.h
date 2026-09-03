@@ -13,6 +13,7 @@
 #include "BObol/BViewAttachment.h"
 #include "BObol/BViewController.h"
 #include "BObol/BViewStore.h"
+#include "identity_counter_private.h"
 #include "view_lod_coordinator_state_private.h"
 #include "bv.h"
 
@@ -166,6 +167,68 @@ public:
 private:
     Kind kindValue = Kind::NONE;
     SbString reasonValue;
+};
+
+/* Diagnostic RAII boundary around one production effect writer.  An owner
+ * scope derives its event from the currently selected refinement owner;
+ * explicit scopes are reserved for external input publication.  Nested
+ * scopes are segmented by BObolViewController so their transitions remain
+ * ordered rather than collapsing into one sampled state change. */
+class BObolLodControlTransitionScope {
+public:
+    explicit BObolLodControlTransitionScope(BObolViewController *controller) :
+	controllerValue(controller),
+	tokenValue(controller ? controller->beginLodControlTransition(
+		BOBOL_LOD_CONTROL_TRANSITION_UNNAMED, TRUE) : 0)
+    {
+    }
+
+    BObolLodControlTransitionScope(BObolViewController *controller,
+	BObolLodControlTransitionEvent event) :
+	controllerValue(controller),
+	tokenValue(controller ? controller->beginLodControlTransition(
+		event, FALSE) : 0)
+    {
+    }
+
+    ~BObolLodControlTransitionScope()
+    {
+	if (this->controllerValue && this->tokenValue != 0)
+	    this->controllerValue->endLodControlTransition(this->tokenValue);
+    }
+
+    BObolLodControlTransitionScope(
+	const BObolLodControlTransitionScope &) = delete;
+    BObolLodControlTransitionScope &operator=(
+	const BObolLodControlTransitionScope &) = delete;
+
+private:
+    BObolViewController *controllerValue;
+    uint64_t tokenValue;
+};
+
+/* Retire the host's in-flight frame witness immediately before the enclosing
+ * completed/interrupted-frame transition is recorded. */
+class BObolRenderClaimCompletionScope {
+public:
+    explicit BObolRenderClaimCompletionScope(
+	BObolViewController *controller) : controllerValue(controller)
+    {
+    }
+
+    ~BObolRenderClaimCompletionScope()
+    {
+	if (this->controllerValue)
+	    this->controllerValue->retireClaimedRender();
+    }
+
+    BObolRenderClaimCompletionScope(
+	const BObolRenderClaimCompletionScope &) = delete;
+    BObolRenderClaimCompletionScope &operator=(
+	const BObolRenderClaimCompletionScope &) = delete;
+
+private:
+    BObolViewController *controllerValue;
 };
 
 /* Uninstalled state shared by the responsibility-specific controller units.
@@ -332,6 +395,15 @@ struct BObolViewController::Impl : BObolLodCoordinator {
     static constexpr float POINT_PROXY_PIXEL_THRESHOLD_MINIMUM = 1.0f;
     static constexpr float POINT_PROXY_PIXEL_THRESHOLD_MAXIMUM = 64.0f;
 
+    struct LodControlTransitionFrame {
+	uint64_t token = 0;
+	BObolLodControlTransitionEvent event =
+	    BOBOL_LOD_CONTROL_TRANSITION_UNNAMED;
+	SbBool ownerEvent = FALSE;
+	SbBool suppressed = FALSE;
+	BObolLodControlTraceState state;
+    };
+
     BObolSceneController sceneController;
     SoViewport *viewport = new SoViewport;
     BObolViewController *controller = NULL;
@@ -380,6 +452,7 @@ struct BObolViewController::Impl : BObolLodCoordinator {
     mutable std::mutex renderRequestMutex;
     SbBool progressiveWorkPending = FALSE;
     BObolRenderRequestState renderRequest;
+    SbBool renderClaimed = FALSE;
     uint64_t hostWorkRevision = 0;
     uint64_t renderRequestSerial = 0;
     std::mutex frameRequestMutex;
@@ -388,6 +461,23 @@ struct BObolViewController::Impl : BObolLodCoordinator {
     mutable std::mutex presentationSyncMutex;
     BObolPresentationSyncCallback presentationSyncCallback = NULL;
     void *presentationSyncUserData = NULL;
+    /* Owner-thread diagnostic journal.  It is allocation-free and untouched
+     * while disabled; the explicit record limit bounds opt-in test runs. */
+    SbBool lodControlTransitionTracing = FALSE;
+    size_t lodControlTransitionRecordLimit =
+	BOBOL_LOD_CONTROL_TRACE_DEFAULT_RECORD_LIMIT;
+    uint64_t lodControlTransitionNextToken = 1;
+    uint64_t lodControlTransitionNextSerial = 1;
+    uint64_t lodControlTransitionDropped = 0;
+    SbBool lodControlTransitionHasEndpoint = FALSE;
+    BObolLodControlTraceState lodControlTransitionEndpoint;
+    std::vector<LodControlTransitionFrame> lodControlTransitionFrames;
+    std::vector<BObolLodControlTransitionRecord> lodControlTransitionRecords;
+    /* Worker callbacks cannot inspect Coin/controller state.  They publish
+     * only the finite event kind; the owner thread captures both endpoints at
+     * its next journal boundary. */
+    std::atomic<int> lodControlPendingExternalEvent {
+	BOBOL_LOD_CONTROL_TRANSITION_UNNAMED};
     BObolFeatureStore *featureStore;
     BObolPolygonStore *polygonStore;
     BObolSelectionStore *selectionStore;

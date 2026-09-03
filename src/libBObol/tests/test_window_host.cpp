@@ -13,7 +13,9 @@
 
 #include "BObol.h"
 #include "BObol/BImageSource.h"
+#include "BObol/BLodService.h"
 #include "BObol/BViewportImage.h"
+#include "../view_controller_private.h"
 
 #include "bu/log.h"
 #include "bu/malloc.h"
@@ -40,9 +42,11 @@
 #include <chrono>
 #include <condition_variable>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #define CHECK(_expr, _msg) do { \
     if (!(_expr)) { \
@@ -55,6 +59,136 @@ static int
 float_equal(float a, float b)
 {
     return fabs((double)a - (double)b) <= 1.0e-6;
+}
+
+static int
+test_control_transition_journal(void)
+{
+    BObolViewController controller;
+    controller.setLodControlTransitionTracing(TRUE, 64);
+
+    std::vector<BObolLodControlTransitionRecord> records;
+    CHECK(controller.drainLodControlTransitions(records) == 1 &&
+	records.size() == 1 && records[0].serial == 1 &&
+	records[0].event == BOBOL_LOD_CONTROL_TRANSITION_INITIAL,
+	"control journal starts with one explicit initial endpoint");
+    CHECK(records[0].before.convergence.controlFactMask ==
+	records[0].after.convergence.controlFactMask &&
+	records[0].before.convergence.rendererPreparationRemainingUnits ==
+	records[0].after.convergence.rendererPreparationRemainingUnits,
+	"initial control endpoint carries the finite preparation rank");
+
+    records.clear();
+    controller.setLodPolicyRevision(
+	controller.getLodPolicyRevision() + 1);
+    controller.markProgressiveWorkPending();
+    CHECK(controller.drainLodControlTransitions(records) >= 2,
+	"nested controller effects retain distinct journal transitions");
+    uint64_t precedingSerial = 1;
+    for (const BObolLodControlTransitionRecord &record : records) {
+	CHECK(record.serial == precedingSerial + 1,
+	    "control transition serials are contiguous");
+	CHECK(record.event != BOBOL_LOD_CONTROL_TRANSITION_UNNAMED,
+	    "typed controller effects never fall through the audit sentinel");
+	precedingSerial = record.serial;
+    }
+    CHECK(records.front().event ==
+	BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT &&
+	records.front().before.convergence.policyRevision !=
+	    records.front().after.convergence.policyRevision,
+	"policy publication is a named external-input transition");
+
+    static constexpr unsigned int randomizedTransitionCount = 512;
+    static constexpr uint32_t randomizedSeedMultiplier = 1664525u;
+    static constexpr uint32_t randomizedSeedIncrement = 1013904223u;
+    controller.setLodControlTransitionTracing(FALSE);
+    controller.setLodControlTransitionTracing(TRUE, 4096);
+    records.clear();
+    controller.drainLodControlTransitions(records);
+    uint32_t seed = 0x714ce2u;
+    for (unsigned int i = 0; i < randomizedTransitionCount; ++i) {
+	seed = seed * randomizedSeedMultiplier + randomizedSeedIncrement;
+	switch (seed % 5u) {
+	    case 0:
+		controller.setLodPolicyRevision(
+		    controller.getLodPolicyRevision() + 1);
+		break;
+	    case 1:
+		controller.markProgressiveWorkPending();
+		break;
+	    case 2:
+		controller.clearProgressiveWorkPending();
+		break;
+	    case 3:
+		controller.requestPresentationRender("trace-randomized");
+		break;
+	    default:
+		(void)controller.consumeRenderRequest();
+		break;
+	}
+    }
+    records.clear();
+    controller.drainLodControlTransitions(records);
+    CHECK(!records.empty() &&
+	controller.getDroppedLodControlTransitionCount() == 0,
+	"randomized control trace remains complete and bounded");
+    for (size_t i = 0; i < records.size(); ++i) {
+	CHECK(records[i].event != BOBOL_LOD_CONTROL_TRANSITION_UNNAMED,
+	    "randomized controller effects all use the finite event alphabet");
+	if (i == 0)
+	    continue;
+	CHECK(records[i].serial == records[i - 1].serial + 1 &&
+	    records[i].before.convergence.controlFactMask ==
+		records[i - 1].after.convergence.controlFactMask &&
+	    records[i].before.convergence.controlObligationMask ==
+		records[i - 1].after.convergence.controlObligationMask &&
+	    records[i].before.convergence.controlOwner ==
+		records[i - 1].after.convergence.controlOwner &&
+	    records[i].before.convergence.rendererPreparationRemainingUnits ==
+		records[i - 1].after.convergence.
+		    rendererPreparationRemainingUnits,
+	    "randomized control transitions preserve exact endpoint continuity");
+    }
+
+    controller.setLodControlTransitionTracing(FALSE);
+    controller.setLodControlTransitionTracing(TRUE, 1);
+    controller.setLodPolicyRevision(
+	controller.getLodPolicyRevision() + 1);
+    records.clear();
+    CHECK(controller.drainLodControlTransitions(records) == 1 &&
+	controller.getDroppedLodControlTransitionCount() > 0,
+	"control journal reports rather than overwrites bounded trace loss");
+    controller.setLodControlTransitionTracing(FALSE);
+    return 0;
+}
+
+static int
+test_control_transition_session_identity(void)
+{
+    BObolViewController controller;
+    controller.setLodControlTransitionTracing(TRUE, 8);
+    std::unique_ptr<BObolLodControlTransitionScope> abandonedScope(
+	new BObolLodControlTransitionScope(&controller,
+	    BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT));
+    controller.setLodControlTransitionTracing(FALSE);
+
+    controller.setLodControlTransitionTracing(TRUE, 8);
+    std::unique_ptr<BObolLodControlTransitionScope> currentScope(
+	new BObolLodControlTransitionScope(&controller,
+	    BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT));
+    abandonedScope.reset();
+
+    std::vector<BObolLodControlTransitionRecord> records;
+    CHECK(controller.drainLodControlTransitions(records) == 2 &&
+	records[0].event == BOBOL_LOD_CONTROL_TRANSITION_INITIAL &&
+	records[1].event == BOBOL_LOD_CONTROL_TRANSITION_UNNAMED,
+	"a late prior-session scope cannot authenticate as the current scope");
+    CHECK(records[1].serial == records[0].serial + 1,
+	"trace serial identity remains monotonic across trace sessions");
+
+    currentScope.reset();
+    controller.setLodControlTransitionTracing(FALSE);
+    return 0;
 }
 
 static SoClipPlane *
@@ -865,11 +999,14 @@ test_host_work_snapshot_contract(void)
 
     /* Claiming the pending level starts the frame.  Work published after the
      * claim is necessarily a distinct successor transaction. */
+    const uint64_t frameStarted = controller.beginRenderTiming();
     SbBool capacityRelevant = FALSE;
     SbBool planningRelevant = FALSE;
     CHECK(controller.consumeRenderRequest(NULL, &capacityRelevant,
 	&planningRelevant) && capacityRelevant && planningRelevant,
 	"the host claims the capacity transaction before traversal");
+    CHECK(controller.getHostWorkSnapshot().frameClaimed(),
+	"a claimed render remains a typed in-flight progress witness");
     controller.requestPresentationRender("host-work-during-frame");
     const BObolHostWorkSnapshot newer = controller.getHostWorkSnapshot();
     CHECK(newer.renderPending() &&
@@ -883,8 +1020,18 @@ test_host_work_snapshot_contract(void)
 	&planningRelevant) && !capacityRelevant && !planningRelevant,
 	"the host can claim the successor transaction");
     work = controller.getHostWorkSnapshot();
-    CHECK(work.pumpPending() && !work.renderPending(),
+
+    CHECK(work.pumpPending() && !work.renderPending() && work.frameClaimed(),
 	"render retirement preserves independent pump work");
+    const BObolPresentationTimingContext completedPresentation(
+	BObolLodCapacityRelevance::EXCLUDED,
+	BObolLodPlanningRelevance::EXCLUDED,
+	BObolCadPresentationExecution::NOT_EXECUTED,
+	BOBOL_CAD_PREPARATION_NONE,
+	BObolCadPresentationCompleteness::EXACT);
+    controller.completeRenderTiming(frameStarted, completedPresentation);
+    CHECK(!controller.getHostWorkSnapshot().frameClaimed(),
+	"completed frame retires the in-flight progress witness");
     controller.clearProgressiveWorkPending();
     CHECK(controller.getHostWorkSnapshot().flags == BOBOL_HOST_WORK_NONE,
 	"host levels drain to one observable terminal state");
@@ -1834,6 +1981,205 @@ test_frame_request_callback_teardown(void)
     CHECK(clear_waited && clear_finished && state.returned,
 	  "callback teardown waits for an in-flight progressive dispatch");
     controller.clearProgressiveWorkPending();
+    return 0;
+}
+
+struct BlockingPresentationSync {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool entered = false;
+    bool release = false;
+    bool returned = false;
+};
+
+static void
+blocking_presentation_sync(void *data)
+{
+    BlockingPresentationSync *state =
+	static_cast<BlockingPresentationSync *>(data);
+    std::unique_lock<std::mutex> lock(state->mutex);
+    state->entered = true;
+    state->cv.notify_all();
+    state->cv.wait(lock, [state]() {
+	return state->release;
+    });
+    state->returned = true;
+    state->cv.notify_all();
+}
+
+static int
+test_presentation_sync_callback_teardown(void)
+{
+    BObolViewController controller;
+    BlockingPresentationSync state;
+    controller.setPresentationSyncCallback(blocking_presentation_sync, &state);
+
+    std::thread dispatch([&controller]() {
+	controller.synchronizePresentation();
+    });
+    {
+	std::unique_lock<std::mutex> lock(state.mutex);
+	const bool entered = state.cv.wait_for(lock, std::chrono::seconds(2),
+	    [&state]() { return state.entered; });
+	if (!entered) {
+	    state.release = true;
+	    state.cv.notify_all();
+	    lock.unlock();
+	    dispatch.join();
+	    CHECK(false, "presentation callback dispatch starts");
+	}
+    }
+
+    std::future<void> clear = std::async(std::launch::async, [&controller,
+	&state]() {
+	controller.clearPresentationSyncCallback(&state);
+    });
+    const bool clearWaited = clear.wait_for(std::chrono::milliseconds(100)) ==
+	std::future_status::timeout;
+    {
+	std::lock_guard<std::mutex> lock(state.mutex);
+	state.release = true;
+    }
+    state.cv.notify_all();
+    dispatch.join();
+    const bool clearFinished = clear.wait_for(std::chrono::seconds(2)) ==
+	std::future_status::ready;
+    if (clearFinished)
+	clear.get();
+
+    CHECK(clearWaited && clearFinished && state.returned,
+	"presentation callback teardown drains an in-flight dispatch");
+    return 0;
+}
+
+struct ReentrantCallbackState {
+    BObolViewController *controller = NULL;
+    int calls = 0;
+};
+
+static void
+reentrant_frame_request(void *data, const char *UNUSED(reason))
+{
+    ReentrantCallbackState *state =
+	static_cast<ReentrantCallbackState *>(data);
+    state->calls++;
+    state->controller->clearFrameRequestCallback(state);
+}
+
+static void
+reentrant_presentation_sync(void *data)
+{
+    ReentrantCallbackState *state =
+	static_cast<ReentrantCallbackState *>(data);
+    state->calls++;
+    state->controller->clearPresentationSyncCallback(state);
+}
+
+struct NestedCallbackState {
+    BObolViewController *controller = NULL;
+    int frameCalls = 0;
+    int presentationCalls = 0;
+};
+
+static void
+nested_frame_request(void *data, const char *UNUSED(reason))
+{
+    NestedCallbackState *state = static_cast<NestedCallbackState *>(data);
+    state->frameCalls++;
+    state->controller->synchronizePresentation();
+}
+
+static void
+nested_presentation_sync(void *data)
+{
+    NestedCallbackState *state = static_cast<NestedCallbackState *>(data);
+    state->presentationCalls++;
+    state->controller->clearFrameRequestCallback(state);
+}
+
+static int
+test_reentrant_callback_teardown(void)
+{
+    BObolViewController controller;
+    controller.clearRenderRequest();
+    controller.clearProgressiveWorkPending();
+
+    ReentrantCallbackState frameState;
+    frameState.controller = &controller;
+    controller.setFrameRequestCallback(reentrant_frame_request, &frameState);
+    controller.markProgressiveWorkPending();
+    controller.clearProgressiveWorkPending();
+    controller.markProgressiveWorkPending();
+    CHECK(frameState.calls == 1,
+	"frame callback may unsubscribe itself without deadlock or redispatch");
+
+    ReentrantCallbackState presentationState;
+    presentationState.controller = &controller;
+    controller.setPresentationSyncCallback(reentrant_presentation_sync,
+	&presentationState);
+    controller.synchronizePresentation();
+    controller.synchronizePresentation();
+    CHECK(presentationState.calls == 1,
+	"presentation callback may unsubscribe itself without use after free");
+
+    controller.clearProgressiveWorkPending();
+    NestedCallbackState nestedState;
+    nestedState.controller = &controller;
+    controller.setPresentationSyncCallback(nested_presentation_sync,
+	&nestedState);
+    controller.setFrameRequestCallback(nested_frame_request, &nestedState);
+    controller.markProgressiveWorkPending();
+    controller.clearProgressiveWorkPending();
+    controller.markProgressiveWorkPending();
+    CHECK(nestedState.frameCalls == 1 && nestedState.presentationCalls == 1,
+	"nested callback may unsubscribe an outer dispatch without deadlock");
+    controller.clearPresentationSyncCallback(&nestedState);
+    controller.clearProgressiveWorkPending();
+    return 0;
+}
+
+static int
+test_endpoint_loss_retires_controller_work(void)
+{
+    BObolLodService service;
+    CHECK(service.start(1, FALSE),
+	"endpoint-loss test starts one cancellable worker domain");
+
+    BObolViewController controller;
+    controller.setLodAutoSubmit(TRUE);
+    controller.setLodService(&service);
+    CHECK(controller.beginLodGeneration() != 0,
+	"endpoint-loss test opens a worker generation");
+    controller.beginLodInteraction();
+    CHECK(controller.isLodGestureActive() &&
+	controller.isLodInteractionActive(),
+	"endpoint-loss test opens a gesture interaction");
+    controller.requestLodCapacityRender("endpoint-loss-claimed-frame");
+    CHECK(controller.consumeRenderRequest(NULL, NULL, NULL) &&
+	controller.getHostWorkSnapshot().frameClaimed(),
+	"endpoint-loss test claims a renderer-capacity frame");
+
+    bobol_display_endpoint_t *endpoint =
+	bobol_display_endpoint_create(&controller, 0);
+    CHECK(endpoint != NULL, "borrowed-controller endpoint creates");
+    bobol_display_endpoint_destroy(endpoint);
+
+    const BObolHostWorkSnapshot hostWork = controller.getHostWorkSnapshot();
+    BObolLodConvergenceStatus status;
+    controller.getLodConvergenceStatus(status);
+    CHECK(!controller.isLodGestureActive() &&
+	!controller.isLodInteractionActive(),
+	"endpoint loss cancels both gesture and debounce interaction phases");
+    CHECK(hostWork.flags == BOBOL_HOST_WORK_NONE,
+	"endpoint loss retires pending, claimed, and progressive host work");
+    CHECK(status.activeGeneration == 0 && status.controlFactMask == 0 &&
+	status.controlObligationMask == 0 &&
+	status.controlOwner == BOBOL_LOD_CONTROL_OWNER_NONE &&
+	status.capacitySearchPhase == BOBOL_LOD_CAPACITY_SEARCH_INACTIVE,
+	"endpoint loss retires worker, controller, and frame-derived capacity owners");
+
+    controller.setLodService(NULL);
+    service.stop();
     return 0;
 }
 
@@ -2982,6 +3328,10 @@ main(int ac, char **av)
 	return 1;
     if (test_progressive_status_contract())
 	return 1;
+    if (test_control_transition_journal())
+	return 1;
+    if (test_control_transition_session_identity())
+	return 1;
     if (test_progressive_frame_wakeup_contract())
 	return 1;
     if (test_host_work_snapshot_contract())
@@ -2999,6 +3349,12 @@ main(int ac, char **av)
     if (test_host_factory_reattach())
 	return 1;
     if (test_frame_request_callback_teardown())
+	return 1;
+    if (test_presentation_sync_callback_teardown())
+	return 1;
+    if (test_reentrant_callback_teardown())
+	return 1;
+    if (test_endpoint_loss_retires_controller_work())
 	return 1;
     if (test_factory_endpoint_close_during_frame_request())
 	return 1;

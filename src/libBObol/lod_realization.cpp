@@ -13,6 +13,7 @@
 
 #include "BObol/BLodRealization.h"
 #include "cad_publication_private.h"
+#include "identity_counter_private.h"
 
 #include <Obol/cad/CadGeometryValidation.h>
 #include <Obol/cad/CadProjectedProxy.h>
@@ -342,10 +343,7 @@ static uint64_t
 bobol_next_progressive_lineage(void)
 {
     static std::atomic<uint64_t> next(1);
-    uint64_t lineage = next.fetch_add(1, std::memory_order_relaxed);
-    if (!lineage)
-	lineage = next.fetch_add(1, std::memory_order_relaxed);
-    return lineage ? lineage : 1;
+    return bobol_atomic_nonzero_identity_take(next);
 }
 
 struct BObolLodProgressiveMeshPrivate {
@@ -512,8 +510,7 @@ bobol_lod_oriented_bounds_valid(
 
 static std::optional<std::array<SbVec3f, 8>>
 bobol_lod_oriented_bounds(
-    const struct BObolMeshLodHierarchyInfo &hierarchy,
-    const SbBox3f &geometryBounds)
+    const struct BObolMeshLodHierarchyInfo &hierarchy)
 {
     if (hierarchy.oriented_bounds_valid != 1 ||
 	!bobol_lod_oriented_bounds_valid(hierarchy))
@@ -525,14 +522,12 @@ bobol_lod_oriented_bounds(
 	    static_cast<float>(hierarchy.oriented_bounds[corner][Y]),
 	    static_cast<float>(hierarchy.oriented_bounds[corner][Z]));
 
-    /* The persistent cache certifies double-precision corners against its
-     * quantization domain.  Renderer geometry has independently conservative
-     * float bounds, and the conversion above can also contract a boundary.
-     * Reuse Obol's producer-boundary invariant before attaching this optional
-     * optimization: an unusable OBB must fall back to the authoritative AABB,
-     * never reject otherwise valid mesh geometry. */
+    /* Validate the corner representation after narrowing to renderer floats.
+     * Do not use the geometry's axis-aligned bounds as oriented-volume
+     * evidence: a useful rotated box normally excludes corners of its AABB.
+     * Admission below checks the actual renderer positions and discards this
+     * optional optimization if they do not fit. */
     Obol::PartGeometryBuilder proxy;
-    proxy.conservativeBounds = geometryBounds;
     proxy.aggregateProxyCorners = corners;
     if (!Obol::cadValidatePartGeometry(proxy))
 	return std::nullopt;
@@ -711,8 +706,7 @@ progressive_generation_from_data(
 	static_cast<float>(hierarchy.quantization_max[X]),
 	static_cast<float>(hierarchy.quantization_max[Y]),
 	static_cast<float>(hierarchy.quantization_max[Z]));
-    generation->aggregateProxyCorners = bobol_lod_oriented_bounds(
-	hierarchy, generation->bounds);
+    generation->aggregateProxyCorners = bobol_lod_oriented_bounds(hierarchy);
     generation->shadedCullBackfaces = shadedCullBackfaces;
     generation->revision = revision ? revision : 1;
 
@@ -863,7 +857,8 @@ progressive_generation_from_data(
     geometry->subpixelProxyEligible = true;
     geometry->aggregateProxyCorners = generation->aggregateProxyCorners;
     const std::shared_ptr<const Obol::PartGeometry> completed =
-	bobol_cad_build_geometry(std::move(*geometry), "PoP generation");
+	bobol_cad_build_geometry_with_optional_proxy(
+	    std::move(*geometry), "PoP generation");
     if (!completed)
 	return fail("CAD geometry admission");
     generation->shadedGeometry = completed;
@@ -982,8 +977,7 @@ progressive_generation_from_chunks(
 	static_cast<float>(hierarchy.quantization_max[Z]));
     generation->bounds = SbBox3f(
 	generation->quantizationMinimum, generation->quantizationMaximum);
-    generation->aggregateProxyCorners = bobol_lod_oriented_bounds(
-	hierarchy, generation->bounds);
+    generation->aggregateProxyCorners = bobol_lod_oriented_bounds(hierarchy);
     generation->cuts.assign(hierarchy.cuts,
 	hierarchy.cuts + hierarchy.cut_count);
     for (uint32_t cut = 0; cut < hierarchy.cut_count; ++cut) {
@@ -1117,12 +1111,13 @@ progressive_generation_from_chunks(
 	}
     }
     geometry->shaded = std::move(mesh);
-    geometry->conservativeBounds = generation->bounds;
+    if (!generation->aggregateProxyCorners)
+	geometry->conservativeBounds = generation->bounds;
     geometry->shadedCullBackfaces = shadedCullBackfaces ? true : false;
     geometry->subpixelProxyEligible = true;
     geometry->aggregateProxyCorners = generation->aggregateProxyCorners;
     const std::shared_ptr<const Obol::PartGeometry> completed =
-	bobol_cad_build_geometry(
+	bobol_cad_build_geometry_with_optional_proxy(
 	    std::move(*geometry), "spatial PoP generation");
     if (!completed)
 	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
@@ -1229,7 +1224,8 @@ progressive_generation_prefix(
 	std::copy(source.cuts.begin(), source.cuts.end(), hierarchy.cuts);
 	bobol_lod_set_oriented_bounds(hierarchy, source.aggregateProxyCorners);
 	return progressive_generation_from_chunks(hierarchy, resident,
-	    source.shadedCullBackfaces, source.revision + 1, 0);
+	    source.shadedCullBackfaces,
+	    bobol_identity_successor_or_terminate(source.revision), 0);
     }
     const size_t indexCount = source.faceCount[cut] * 3;
     const Obol::TriMesh *sourceMesh =
@@ -1256,9 +1252,8 @@ progressive_generation_prefix(
     generation->minimumCut = source.minimumCut;
     generation->maximumCut = source.maximumCut;
     generation->residentCut = cut;
-    generation->revision = source.revision + 1;
-    if (!generation->revision)
-	generation->revision = 1;
+    generation->revision =
+	bobol_identity_successor_or_terminate(source.revision);
     generation->shadedCullBackfaces = source.shadedCullBackfaces;
     std::shared_ptr<Obol::PartGeometryBuilder> geometry(
 	new Obol::PartGeometryBuilder);
@@ -1322,7 +1317,7 @@ progressive_generation_prefix(
     geometry->subpixelProxyEligible = true;
     geometry->aggregateProxyCorners = generation->aggregateProxyCorners;
     const std::shared_ptr<const Obol::PartGeometry> completed =
-	bobol_cad_build_geometry(
+	bobol_cad_build_geometry_with_optional_proxy(
 	    std::move(*geometry), "trimmed PoP generation");
     if (!completed)
 	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
@@ -1452,9 +1447,8 @@ BObolLodProgressiveMesh::update(
     std::lock_guard<std::mutex> updateLock(this->p->updateMutex);
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> prior =
 	progressive_generation_load(this->p);
-    uint64_t revision = prior ? prior->revision + 1 : 1;
-    if (!revision)
-	revision = 1;
+    const uint64_t revision = prior ?
+	bobol_identity_successor_or_terminate(prior->revision) : 1;
     const char *failureReason = NULL;
     const std::shared_ptr<BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_from_data(data, hierarchy, residentCut,
@@ -1600,9 +1594,8 @@ BObolLodProgressiveMesh::updateChunksFromCache(
 		 resident[chunkId]->indices.size()))
 	    return fail("incomplete cache read");
     }
-    uint64_t revision = prior ? prior->revision + 1 : 1;
-    if (!revision)
-	revision = 1;
+    const uint64_t revision = prior ?
+	bobol_identity_successor_or_terminate(prior->revision) : 1;
 
     const int64_t packStarted = verboseTiming ? bu_gettime() : 0;
     const std::shared_ptr<BObolLodProgressiveMeshGeneration> generation =
@@ -1729,9 +1722,8 @@ BObolLodProgressiveMesh::extendFromCache(
     generation->minimumCut = prior->minimumCut;
     generation->maximumCut = prior->maximumCut;
     generation->residentCut = residentCut;
-    generation->revision = prior->revision + 1;
-    if (!generation->revision)
-	generation->revision = 1;
+    generation->revision =
+	bobol_identity_successor_or_terminate(prior->revision);
     generation->shadedCullBackfaces = prior->shadedCullBackfaces;
 
     std::shared_ptr<Obol::PartGeometryBuilder> geometry(
@@ -1810,7 +1802,7 @@ BObolLodProgressiveMesh::extendFromCache(
     geometry->subpixelProxyEligible = true;
     geometry->aggregateProxyCorners = generation->aggregateProxyCorners;
     const std::shared_ptr<const Obol::PartGeometry> completed =
-	bobol_cad_build_geometry(
+	bobol_cad_build_geometry_with_optional_proxy(
 	    std::move(*geometry), "extended PoP generation");
     if (!completed)
 	return FALSE;
@@ -3506,7 +3498,7 @@ BObolLodProgressiveMesh::prepareCadGeometry(
     geometry->aggregateProxyCorners = generation->aggregateProxyCorners;
 
     std::shared_ptr<const Obol::PartGeometry> prepared =
-	bobol_cad_build_geometry(
+	bobol_cad_build_geometry_with_optional_proxy(
 	    std::move(*geometry), "combined PoP presentation");
     if (!prepared)
 	return std::shared_ptr<const Obol::PartGeometry>();

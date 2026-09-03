@@ -1,6 +1,6 @@
 # libBObol engineering lessons
 
-Last reviewed: 2026-09-01
+Last reviewed: 2026-09-03
 
 This document preserves durable lessons from the Obol drawing migration and
 production shake-down.  It is not a chronological status log.  Each entry
@@ -120,6 +120,21 @@ Rule: all lazy non-trivial globals reachable by process-lifetime workers are
 constructed before those workers start.  Reverse destruction must join workers
 first.  Regress with an active cache callback across return from `main`, and
 test the normal shared-library stack rather than a duplicate static harness.
+
+### Callback removal is a lifetime transaction
+
+A presentation hook copied its callback and raw endpoint pointer under a
+mutex, then invoked them after releasing the lock.  Endpoint destruction could
+clear the hook and free its state while an already-dispatched callback still
+used that pointer.  The frame hook tracked active dispatches, but removal from
+inside its own callback waited for itself and deadlocked; a nested callback
+could create the same cycle while removing an enclosing dispatch.
+
+Rule: callback registration owns a dispatch state, not just a function and raw
+pointer.  External removal closes registration and waits for every acquired
+dispatch.  Removal from any active frame on the current callback stack defers
+storage deletion until that frame unwinds.  Test blocking external removal,
+self-removal, nested cross-removal, and endpoint destruction during dispatch.
 
 ### External node ABI changes require consumer rebuilds
 
@@ -1706,6 +1721,92 @@ was attached exactly once and the controller state was correct.
 
 Rule: validate a feature's owned node by identity and occurrence count.  Do not
 infer exclusive ownership from a shared scene-layer child count.
+
+### A replacement is not atomic if its predecessor is removed during staging
+
+The mesh-LoD cache used immutable content-addressed payloads and published a
+small name-to-content mapping last, but forced refresh deleted the old mapping
+before it began generating the candidate.  A later allocation or cache-write
+failure therefore left no partial new hierarchy discoverable—while also making
+the complete old hierarchy unreachable.  The usual “publish marker last” rule
+had protected first publication but not replacement.
+
+The retained-scene path exposed the notification version of the same mistake.
+A denied compact mutation changed no scene data, yet it entered and closed an
+outer update scope before rejection; observers saw a new node identity for the
+old scene.
+
+Rule: a transaction includes its discoverability and notification identity.
+Stage the replacement while the predecessor remains authoritative, perform
+resource admission before opening any observable update scope, and commit the
+payload/map or scene/notification pair together.  Failure tests must start
+with a known-good predecessor and compare that predecessor after denial; an
+empty-state test alone cannot expose destructive replacement.
+
+### Skipping zero is still wraparound
+
+Several asynchronous identities incremented an unsigned integer and replaced
+zero with one.  That preserved a sentinel but eventually reissued every old
+nonzero credential.  A separate trace path reset tokens when diagnostics were
+re-enabled, creating the same ABA risk without numeric overflow: a late RAII
+scope could close a new frame carrying the recycled token.
+
+Rule: classify every increasing value by authority.  Authentication,
+ordering, and ownership credentials use one checked successor and fail-stop
+before reuse; clearing a journal does not reset the lifetime of its tokens.
+Observation-only totals saturate and must never enter an authorization
+comparison.  Test both the representation boundary and lifecycle reset paths,
+because either can reissue an apparently current identity.
+
+### An AABB cannot certify an oriented volume
+
+A producer-side precheck required a PCA-oriented proxy to contain every corner
+of the geometry's axis-aligned bounds.  That test rejects nearly every useful
+rotated box: an AABB contains empty space outside the tighter OBB.  Removing the
+precheck without a replacement would have created the opposite failure, where
+a structurally valid but non-conservative OBB could reject the whole mesh at
+the renderer boundary.
+
+Rule: validate oriented containment against authoritative renderer positions,
+not the corners of an axis-aligned envelope.  Keep strict admission as the
+default, but let a producer explicitly classify the proxy as optional so only
+`InvalidAggregateProxy` falls back to ordinary bounds.  Test both directions:
+a tight rotated OBB must survive, and a well-formed OBB which excludes a real
+vertex must be discarded without losing the mesh.
+
+### A digest is not an evidence stamp
+
+Several renderer and controller caches folded multiple revisions or a variable
+input list into a 64-bit hash and reused work when the hash matched.  The
+inputs were valid and the hashes were well distributed, but neither fact makes
+equality a proof: a collision can authenticate stale colors, visibility, draw
+representation, progressive geometry, capacity evidence, a structural
+frontier, or compact-source presentation state.
+
+Rule: authorization compares the complete typed tuple.  Hashes may select a
+candidate bucket only when exact equality follows.  For bounded variable input,
+retain and compare the canonical vector rather than inventing a stronger claim
+for its digest.  This is the implementation analogue of a TLA+ record: omitting
+or folding one field changes the state relation, even if the failure is hard to
+reproduce statistically.  When an allocation-free scalar must cross a hot
+policy boundary, issue a checked non-reused token only after the owner compares
+the exact value.  A bounded exact-interner eviction may cause redundant work;
+it must never allow a token to name a different retained value.
+
+### Aggregate serials are identities, not arithmetic
+
+Combining per-object monotonic serials by hashing fixed one collision mode but
+left probabilistic equality; combining them by addition avoided ordinary
+collisions but could saturate while each source remained live.  Using the
+object address as the source component added a separate ABA path when an
+allocator reused a retired node's storage.  All three are invalid when the
+aggregate controls frame classification or measurement deduplication.
+
+Rule: give each source a non-reused lifetime identity, compare the canonical
+set of `(source identity, source serial)` records exactly, and issue a checked
+non-reused aggregate token only when that set changes.  Retire the current set
+when evidence is absent; otherwise `A -> absent -> A` can silently reuse the
+old aggregate identity even though no numeric counter wrapped.
 
 - Run actual graphical clients.  Headless scene assertions cannot detect GL
   flashes, camera jumps, wrong lighting, mouse-coordinate errors, or retained

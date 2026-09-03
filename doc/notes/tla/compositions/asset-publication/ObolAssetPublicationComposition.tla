@@ -9,7 +9,8 @@
 \* satisfy current-demand completion.  Whole-object coverage remains visible
 \* until the complete hierarchy is available.  Durable cache discovery is
 \* permitted only after every page is complete, independently of which pages
-\* happened to be presented during cold construction.
+\* happened to be presented during cold construction.  A replacement name
+\* mapping is one atomic publication: resource denial retains its predecessor.
 
 EXTENDS Naturals, FiniteSets, TLC
 
@@ -19,6 +20,7 @@ Pages == {"first", "second"}
 Demands == 0..MaxDemand
 NoneDemand == MaxDemand + 1
 OptionalDemand == 0..NoneDemand
+CacheMappings == {"none", "prior", "candidate"}
 ProducerStates ==
     {"building", "complete", "constrained", "failed", "cancelled"}
 
@@ -31,12 +33,16 @@ VARIABLES inputOpen,
           finalPresentedDemand,
           coverage,
           cacheMarked,
+          cacheMapping,
+          baselineCacheMapping,
+          cacheUnavailable,
           constraintDemand,
           failureDemand,
           framePending
 
 vars == <<inputOpen, demand, producer, readyPages, pageDemand,
           finalGeometry, finalPresentedDemand, coverage, cacheMarked,
+          cacheMapping, baselineCacheMapping, cacheUnavailable,
           constraintDemand, failureDemand, framePending>>
 
 TypeOK ==
@@ -49,6 +55,9 @@ TypeOK ==
     /\ finalPresentedDemand \in OptionalDemand
     /\ coverage \in BOOLEAN
     /\ cacheMarked \in BOOLEAN
+    /\ cacheMapping \in CacheMappings
+    /\ baselineCacheMapping \in {"none", "prior"}
+    /\ cacheUnavailable \in BOOLEAN
     /\ constraintDemand \in OptionalDemand
     /\ failureDemand \in OptionalDemand
     /\ framePending \in BOOLEAN
@@ -63,6 +72,9 @@ Init ==
     /\ finalPresentedDemand = NoneDemand
     /\ coverage = TRUE
     /\ cacheMarked = FALSE
+    /\ cacheMapping \in {"none", "prior"}
+    /\ baselineCacheMapping = cacheMapping
+    /\ cacheUnavailable = FALSE
     /\ constraintDemand = NoneDemand
     /\ failureDemand = NoneDemand
     /\ framePending = FALSE
@@ -76,6 +88,7 @@ MoveDemand ==
     /\ UNCHANGED <<inputOpen, producer, readyPages, pageDemand,
                     finalGeometry, finalPresentedDemand, coverage,
                     cacheMarked, framePending>>
+    /\ UNCHANGED <<cacheMapping, baselineCacheMapping, cacheUnavailable>>
 
 \* A terminal outcome belongs to the request which observed it, not to
 \* immutable pages already completed by the asset producer.  Once a newer
@@ -89,6 +102,7 @@ RestartConstrained ==
                     finalGeometry, finalPresentedDemand, coverage,
                     cacheMarked, constraintDemand, failureDemand,
                     framePending>>
+    /\ UNCHANGED <<cacheMapping, baselineCacheMapping, cacheUnavailable>>
 
 RestartFailed ==
     /\ producer = "failed"
@@ -98,6 +112,7 @@ RestartFailed ==
                     finalGeometry, finalPresentedDemand, coverage,
                     cacheMarked, constraintDemand, failureDemand,
                     framePending>>
+    /\ UNCHANGED <<cacheMapping, baselineCacheMapping, cacheUnavailable>>
 
 CloseInput ==
     /\ inputOpen
@@ -106,6 +121,7 @@ CloseInput ==
                     finalGeometry, finalPresentedDemand, coverage,
                     cacheMarked, constraintDemand, failureDemand,
                     framePending>>
+    /\ UNCHANGED <<cacheMapping, baselineCacheMapping, cacheUnavailable>>
 
 CompletePage(page) ==
     /\ producer = "building"
@@ -115,6 +131,7 @@ CompletePage(page) ==
                     finalGeometry, finalPresentedDemand, coverage,
                     cacheMarked, constraintDemand, failureDemand,
                     framePending>>
+    /\ UNCHANGED <<cacheMapping, baselineCacheMapping, cacheUnavailable>>
 
 \* Binding is a current owner-thread act.  It does not mutate immutable page
 \* bytes and an old binding cannot become a failure for a newer demand.
@@ -126,6 +143,7 @@ PublishPage(page) ==
     /\ UNCHANGED <<inputOpen, demand, producer, readyPages,
                     finalGeometry, finalPresentedDemand, coverage,
                     cacheMarked, constraintDemand, failureDemand>>
+    /\ UNCHANGED <<cacheMapping, baselineCacheMapping, cacheUnavailable>>
 
 FinalizeAsset ==
     /\ producer = "building"
@@ -135,6 +153,7 @@ FinalizeAsset ==
     /\ UNCHANGED <<inputOpen, demand, readyPages, pageDemand,
                     finalPresentedDemand, coverage, cacheMarked,
                     constraintDemand, failureDemand, framePending>>
+    /\ UNCHANGED <<cacheMapping, baselineCacheMapping, cacheUnavailable>>
 
 \* The complete hierarchy is globally representative; binding it to the
 \* newest demand may retire temporary whole-object coverage without replaying
@@ -148,15 +167,29 @@ PublishFinal ==
     /\ UNCHANGED <<inputOpen, demand, producer, readyPages, pageDemand,
                     finalGeometry, cacheMarked, constraintDemand,
                     failureDemand>>
+    /\ UNCHANGED <<cacheMapping, baselineCacheMapping, cacheUnavailable>>
 
 MarkCache ==
     /\ producer = "complete"
     /\ finalGeometry
     /\ readyPages = Pages
-    /\ ~cacheMarked
+    /\ ~cacheMarked /\ ~cacheUnavailable
     /\ cacheMarked' = TRUE
+    /\ cacheMapping' = "candidate"
     /\ UNCHANGED <<inputOpen, demand, producer, readyPages, pageDemand,
                     finalGeometry, finalPresentedDemand, coverage,
+                    constraintDemand, failureDemand, framePending,
+                    baselineCacheMapping, cacheUnavailable>>
+
+DenyCacheCommit ==
+    /\ producer = "complete"
+    /\ finalGeometry
+    /\ readyPages = Pages
+    /\ ~cacheMarked /\ ~cacheUnavailable
+    /\ cacheUnavailable' = TRUE
+    /\ UNCHANGED <<inputOpen, demand, producer, readyPages, pageDemand,
+                    finalGeometry, finalPresentedDemand, coverage,
+                    cacheMarked, cacheMapping, baselineCacheMapping,
                     constraintDemand, failureDemand, framePending>>
 
 Constrain ==
@@ -167,6 +200,7 @@ Constrain ==
     /\ UNCHANGED <<inputOpen, demand, readyPages, pageDemand,
                     finalGeometry, finalPresentedDemand, coverage,
                     cacheMarked, failureDemand>>
+    /\ UNCHANGED <<cacheMapping, baselineCacheMapping, cacheUnavailable>>
 
 \* Invalid geometry or an unrecoverable provider error is not a quality or
 \* resource constraint.  It carries independent current-demand evidence and
@@ -179,6 +213,7 @@ Fail ==
     /\ UNCHANGED <<inputOpen, demand, readyPages, pageDemand,
                     finalGeometry, finalPresentedDemand, coverage,
                     cacheMarked, constraintDemand>>
+    /\ UNCHANGED <<cacheMapping, baselineCacheMapping, cacheUnavailable>>
 
 Cancel ==
     /\ producer = "building"
@@ -187,6 +222,7 @@ Cancel ==
                     finalGeometry, finalPresentedDemand, coverage,
                     cacheMarked, constraintDemand, failureDemand,
                     framePending>>
+    /\ UNCHANGED <<cacheMapping, baselineCacheMapping, cacheUnavailable>>
 
 CompleteFrame ==
     /\ framePending
@@ -194,6 +230,7 @@ CompleteFrame ==
     /\ UNCHANGED <<inputOpen, demand, producer, readyPages, pageDemand,
                     finalGeometry, finalPresentedDemand, coverage,
                     cacheMarked, constraintDemand, failureDemand>>
+    /\ UNCHANGED <<cacheMapping, baselineCacheMapping, cacheUnavailable>>
 
 Quiescent ==
     /\ ~inputOpen
@@ -211,6 +248,7 @@ Next ==
     \/ FinalizeAsset
     \/ PublishFinal
     \/ MarkCache
+    \/ DenyCacheCommit
     \/ Constrain
     \/ Fail
     \/ Cancel
@@ -237,11 +275,23 @@ CacheRequiresCompleteAsset ==
         /\ producer = "complete"
         /\ finalGeometry
         /\ readyPages = Pages
+        /\ cacheMapping = "candidate"
+        /\ ~cacheUnavailable
+
+UnpublishedCacheMappingIsStable ==
+    ~cacheMarked => cacheMapping = baselineCacheMapping
+
+DeniedCacheCommitPreservesMapping ==
+    cacheUnavailable =>
+        /\ ~cacheMarked
+        /\ cacheMapping = baselineCacheMapping
 
 CoverageRetiresOnlyForFinalGeometry == ~coverage => finalGeometry
 
 BuildingHasNoTerminalArtifact ==
-    producer = "building" => ~finalGeometry /\ ~cacheMarked
+    producer = "building" =>
+        /\ ~finalGeometry /\ ~cacheMarked
+        /\ ~cacheUnavailable
 
 CurrentConstraintOnly ==
     constraintDemand = NoneDemand \/ constraintDemand = demand

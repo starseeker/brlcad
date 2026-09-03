@@ -20,6 +20,7 @@
 class QgEdApp;
 class BObolViewController;
 struct BObolLodConvergenceStatus;
+struct BObolLodControlTraceState;
 
 BObolViewController *qged_progressive_event_controller(
     QgEdApp &app, const QgTestEvent &event);
@@ -33,6 +34,8 @@ BObolViewController *qged_progressive_event_controller(
 void qged_append_progressive_control_diagnostics(
     QJsonObject &sample, const BObolViewController &controller,
     const BObolLodConvergenceStatus &status);
+void qged_append_progressive_control_diagnostics(
+    QJsonObject &sample, const BObolLodControlTraceState &state);
 
 /**
  * Collect one progressive-display diagnostic sample.  Kept separate from the

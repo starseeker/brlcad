@@ -1,6 +1,6 @@
 # libBObol formal model catalog
 
-Last reviewed: 2026-09-01
+Last reviewed: 2026-09-02
 
 The authoritative suite index, proof-flow graph, shared vocabulary, and
 verification policy are in `tla/README.md`, `tla/models.json`,
@@ -11,6 +11,9 @@ are not alternate implementations, workload-specific controllers, or proofs
 of visual quality, floating-point projection, memory use, or elapsed time.
 All state counts retained in this narrative are dated historical observations;
 the sole current result source is `tla/baselines/tlc-2.19.json`.
+`libbobol_tla_conformance.md` is the implementation-facing ledger which maps
+these proof obligations to production enforcement, executable evidence, and
+open nonconformances.
 Representation-only metadata such as cached PCA OBB corners therefore does
 not add a state variable: runtime validation proves its geometric contract,
 and renderer tests prove equivalent shaded/wire batching.  If proxy shape ever
@@ -76,11 +79,11 @@ behavior, and a passing composition model is not production clearance.
 | Model | Contract boundary | Primary implementation |
 |---|---|---|
 | `ObolProgressivePipeline` | sole owner, finite work ledger, terminal outcome | `lod_control_private.h`, `view_controller_progressive.cpp` |
-| `ObolControlRefinement` | concrete facts to finite obligations | `lod_control_private.h`, `QgProgressiveDiagnostics.cpp` |
+| `ObolControlRefinement` | concrete facts to finite obligations and complete typed execution endpoints | `lod_control_private.h`, controller transition journal, `QgProgressiveDiagnostics.cpp`, and `lod_control_trace.jq` |
 | `ObolLodComposition` | admission/growth/presentation/capacity/structural/point/static seam ownership and terminality | controller typed policies and `view_controller.cpp`, `view_controller_render.cpp` effect executors |
 | `ObolTerminalConvergenceComposition` | finite cross-owner progress after inputs close, including visibility-census-to-exact-frame ordering, exact-target renderer preparation, static-to-capacity re-entry, local reconciliation, retained-ceiling constraint, and subordinate compaction | `BObolLodPlanningObligations`, `BObolLodExactPresentationFrame`, `CadPresentationPreparation`, `BObolLodStaticQualityTrial`, `BObolLodPresentationPolicy`, `BObolLodTerminalQualityReducer`, capacity search and compaction policies, plus their controller effect executors |
 | `ObolControlLifecycleComposition` | policy/provider/demand/host/exact-frame composition, semantic-only exact presentation, first-deadline recovery ownership, and derived terminal status | `view_controller.cpp`, `view_controller_progressive.cpp`, `view_controller_host.cpp`, `view_controller_render.cpp` |
-| `ObolHostWork` | level-triggered host/controller wakeup, including registered-versus-pending providers and exact/publication pump-to-render ownership | `view_controller_host.cpp`, `view_controller_progressive.cpp`, `window_host.cpp`, and qtcad's exact-frame delivery path |
+| `ObolHostWork` | level-triggered host/controller wakeup, including registered-versus-pending providers, queued-to-claimed frame ownership, exact/publication pump-to-render ownership, and atomic endpoint-loss cancellation | `BObolHostWorkSnapshot`, the claimed-frame presentation witness, `BObolViewController::retireDisplayEndpointWork`, `view_controller_host.cpp`, `view_controller_progressive.cpp`, `display_endpoint.cpp`, and qtcad's exact-frame delivery path |
 | `ObolSemanticPresentation` | selection/style revision through an exact successor frame which is neither capacity nor LoD-planning evidence, including mutation during an in-flight predecessor and recovery only when no successor already owns the stale presentation | `BObolLodExactPresentationFrame`, the independent capacity/planning render classifications, `BObolViewController::requestExactCadPresentationRender`, `bobol_display_endpoint_request_presentation_frame`, libged selection publication, and qged manipulator presentation |
 | `ObolInteractionSession` | gesture/debounce/quiet lifecycle and interrupted-replay retirement at the quiet boundary | `BObolLodInteractionSession`, `BObolViewController::notePresentationRenderInterrupted` |
 | `ObolLodPolicyDisable` | atomic retirement of automatic owners while retaining presentation and provider work | `BObolViewController::synchronizeAutomaticLodControl`, `BObolLodCoordinator::retireAutomaticLodControl` |
@@ -105,8 +108,9 @@ behavior, and a passing composition model is not production clearance.
 | `ObolResidentGrowth` | coalesced resident suffix drain, coverage transfer, and reallocation | availability ledger and planning obligations |
 | `ObolResidentCompaction` | revision-safe background memory reclamation | `view_controller_residency.cpp`, `BLodService` |
 | `ObolActiveProducerDemand` | superseding demand for a stable asset producer | `BLodService`, mesh submission action |
-| `ObolResultAuthentication` | population-, demand-, and route-authenticated asynchronous result acceptance | `BLodService`, compact-population lookup, mesh result reducer |
-| `ObolSharedAssetLease` | multi-view producer lifetime, late join, and final-consumer cancellation | `BLodService` coalescing and consumer subscription lifecycle |
+| `ObolResultAuthentication` | population-, demand-, and route-authenticated asynchronous publish/failure/retry disposition | `BLodService`, `BObolLodResultAuthenticationContract`, controller publication gate, and view-state reducer |
+| `ObolIdentityExhaustion` | fixed-width successor publication, no credential reuse, and fail-stop quiescence at exhaustion | `BObolLodStrongUInt64`, libBObol `identity_counter_private.h`, Obol `CadIdentityCounter.h` and its retained-plan/classifier/preparation/resource identities, and controller transition-token lifetime |
+| `ObolSharedAssetLease` | multi-view producer lifetime, late join, queued-result retention, and final-consumer cancellation | `BLodService` typed shared-producer records, generation leases, producer-aware cancellation, and payload/replay drains |
 | `ObolAssetPublicationComposition` | producer demand, typed constraint/failure, additive live pages, final hierarchy, and durable cache publication | `BLodService`, source presentation staging, mesh LoD cache |
 | `ObolPresentationPreparation` | finite renderer-side preparation | Obol `CadPresentationPreparation`, controller render executor |
 | `ObolCadViewPublication` | exact-view preparation/report acceptance | Obol `SoCADAssembly`, libBObol view attachment |
@@ -158,7 +162,7 @@ with no invariant, deadlock, or temporal-property failure.
   `ObolControlLifecycleComposition`, the controller off/on/off test, and the
   System GL/OSMesa LoD-off matrix.
 - Change provider registration/pending semantics, exact-frame host ownership,
-  or terminal-status projection in `ObolHostWork`,
+  endpoint retirement/resumption, or terminal-status projection in `ObolHostWork`,
   `ObolControlLifecycleComposition`, and the host/controller tests.
 - Change selection/highlight presentation ownership or exact-frame
   supersession in both `ObolSemanticPresentation` and
@@ -382,6 +386,17 @@ must be complete before the final hierarchy/cache marker, but every page need
 not have been independently presented first.  Presentation remains bounded
 and optional; cache completeness remains authoritative.
 
+The transaction-boundary audit then found that the Boolean cache marker could
+not express replacement of an already valid name mapping.  Production had
+been deleting that mapping before forced regeneration, so resource failure
+could make a complete predecessor undiscoverable without violating the old
+formula.  `ObolLiveSpatialPublication` and the asset composition now retain a
+baseline mapping until one atomic candidate-map commit.  Their required
+`DenyCacheCommit` action records a failed attempt without changing the
+baseline, and `DeniedCacheCommitPreservesMapping` is checked in both scopes.
+The matching cache regression begins with a reopenable hierarchy, denies the
+replacement commit, and proves that the same key and payload remain live.
+
 The submission-pass boundary was extended after the 150k draw-metadata
 migration found a terminal framebuffer coexisting with an active coverage
 census and an idle cursor.  Compaction then owned the only reported obligation
@@ -472,8 +487,14 @@ and rejects certificate reuse.  Point-versus-box raster arithmetic remains a
 renderer/property-test concern rather than a useful TLA+ state dimension.
 
 The C++ refinement now puts the complete six-domain stamp in every retained
-allocation input, cache key, transaction, and result.  Its executable contract
-also distinguishes the current certified plan from an older committed plan
+allocation input, cache key, transaction, and result.  The stamp cannot be
+default-constructed or edited field by field: active values require all six
+typed domains, while inactive holders name an explicit administrative
+sentinel.  All six domains independently stale plan, cursor, and allocation
+identity.  Renderer-capacity evidence uses the one named four-domain
+projection described below rather than an open-coded partial comparison.  Its
+executable contract also distinguishes the current certified plan from an
+older committed plan
 which remains visible while replacement planning is in progress.  An
 otherwise identical capacity-revision fixture proves that the older plan is
 not current, cannot be reused as the new certificate, and is replaced by one

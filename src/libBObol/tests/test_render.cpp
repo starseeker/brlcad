@@ -743,7 +743,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	directWork.positionCount != 8 || directWork.occurrenceCount != 1 ||
 	!directResources.frameSerial)
 	FAIL("direct OSMesa executor should publish exact completed CAD work");
-    if (!directLodState.lastCadPresentationFrameExact())
+    if (!directLodState.lastCadPresentationFrameExact() ||
+	!directLodState.lastCadPresentationFrameExecuted())
 	FAIL("matching CAD presentation controls should produce an exact frame");
 
     /* Renderer controls are part of the frame certificate.  A preceding work

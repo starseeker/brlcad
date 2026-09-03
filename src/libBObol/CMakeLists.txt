@@ -22,6 +22,7 @@ set(
   edit_manipulator.cpp
   edit_preview.cpp
   evaluated_points.cpp
+  exact_sample_identity_private.h
   export_action.cpp
   framebuffer.cpp
   grid.cpp
@@ -31,6 +32,7 @@ set(
   image_display_util.cpp
   image_plane.cpp
   image_source.cpp
+  identity_counter_private.h
   input.cpp
   init.cpp
   line_layer_overlay.cpp
@@ -40,7 +42,9 @@ set(
   lod_coordinator_private.h
   lod_delivery_policy_private.h
   lod_presentation_policy_private.h
+  lod_population_identity_private.h
   lod_quiet_successor_private.h
+  lod_result_authentication_private.h
   lod_scene_evidence_private.h
   lod_terminal_quality_private.h
   lod_visual_importance_private.h
@@ -71,6 +75,7 @@ set(
   serialized_bot_source.cpp
   snap_action.cpp
   source_realization.cpp
+  transaction_fault_private.h
   view_attachment.cpp
   view_controller.cpp
   view_controller_host.cpp
@@ -199,6 +204,7 @@ cmakefiles(
   edit_manipulator.cpp
   edit_preview.cpp
   evaluated_points.cpp
+  exact_sample_identity_private.h
   export_action.cpp
   framebuffer.cpp
   grid.cpp
@@ -209,6 +215,7 @@ cmakefiles(
   image_display_util.h
   image_plane.cpp
   image_source.cpp
+  identity_counter_private.h
   input.cpp
   init.cpp
   line_layer_overlay.cpp
@@ -218,9 +225,11 @@ cmakefiles(
   lod_coordinator_private.h
   lod_delivery_policy_private.h
   lod_presentation_policy_private.h
+  lod_population_identity_private.h
   lod_presentation_policy.cpp
   lod_admission_policy.cpp
   lod_quiet_successor_private.h
+  lod_result_authentication_private.h
   lod_scene_evidence_private.h
   lod_terminal_quality_private.h
   lod_visual_importance_private.h
@@ -248,6 +257,7 @@ cmakefiles(
   scene_group.cpp
   snap_action.cpp
   source_realization.cpp
+  transaction_fault_private.h
   view_attachment.cpp
   view_controller.cpp
   view_controller_host.cpp

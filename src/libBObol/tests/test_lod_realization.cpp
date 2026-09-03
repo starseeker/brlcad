@@ -382,10 +382,10 @@ test_optional_oriented_bounds_fall_back_to_aabb(void)
     data.point_count = 3;
     data.points_orig = points;
     data.point_orig_count = 3;
-    /* Source bounds may conservatively exceed the occupied quantization
-     * domain.  That makes an otherwise well-formed cached OBB unsuitable for
-     * this immutable renderer generation, but does not invalidate the mesh. */
-    VSET(data.bmin, -0.25, 0.0, 0.0);
+    /* This well-formed diagonal box has an axis-aligned envelope covering the
+     * quantization domain, but excludes one real vertex.  Renderer admission
+     * must discard the optional OBB without rejecting the valid mesh. */
+    VSET(data.bmin, 0.0, 0.0, 0.0);
     VSET(data.bmax, 1.0, 1.0, 1.0);
 
     struct BObolMeshLodHierarchyInfo hierarchy =
@@ -398,11 +398,19 @@ test_optional_oriented_bounds_fall_back_to_aabb(void)
     VSET(hierarchy.quantization_min, 0.0, 0.0, 0.0);
     VSET(hierarchy.quantization_max, 1.0, 1.0, 1.0);
     hierarchy.oriented_bounds_valid = 1;
-    for (size_t corner = 0; corner < 8; ++corner)
-	VSET(hierarchy.oriented_bounds[corner],
-	    (corner & 1u) ? 1.0 : 0.0,
-	    (corner & 2u) ? 1.0 : 0.0,
-	    (corner & 4u) ? 1.0 : 0.0);
+    const vect_t orientedAxes[3] = {
+	{1.0, 1.0, 0.0},
+	{0.1, -0.1, 0.0},
+	{0.0, 0.0, 1.0}
+    };
+    const point_t orientedOrigin = {-0.05, 0.05, 0.0};
+    for (size_t corner = 0; corner < 8; ++corner) {
+	VMOVE(hierarchy.oriented_bounds[corner], orientedOrigin);
+	for (size_t axis = 0; axis < 3; ++axis)
+	    if (corner & (1u << axis))
+		VADD2(hierarchy.oriented_bounds[corner],
+		    hierarchy.oriented_bounds[corner], orientedAxes[axis]);
+    }
     complete_test_hierarchy(hierarchy);
 
     if (!bobol_mesh_lod_oriented_bounds_validate(&hierarchy)) {

@@ -11,6 +11,7 @@
 #include "common.h"
 
 #include "BObol/BMeshLodCache.h"
+#include "identity_counter_private.h"
 #include "lod_revision_private.h"
 #include "lod_view_snapshot_private.h"
 
@@ -516,9 +517,8 @@ public:
 	    this->phaseValue = Phase::DEBOUNCING;
 	this->lastViewChangeMicrosecondsValue = nowMicroseconds;
 	this->releaseCutFloorActiveValue = false;
-	this->settleAfterRenderSerialValue = renderCompletionSerial + 1;
-	if (this->settleAfterRenderSerialValue == 0)
-	    this->settleAfterRenderSerialValue = 1;
+	this->settleAfterRenderSerialValue =
+	    bobol_identity_successor_or_terminate(renderCompletionSerial);
     }
 
     bool noteMotionFrameCompleted(uint64_t renderCompletionSerial,
@@ -702,7 +702,8 @@ public:
 
     struct Constraint {
 	ConstraintReason reason = ConstraintReason::NONE;
-	BObolLodAdmissionRevisionStamp revisionStamp;
+	BObolLodAdmissionRevisionStamp revisionStamp =
+	    BObolLodAdmissionRevisionStamp::administrative();
 	int committedCeiling = -1;
 	float committedNextFraction = 0.0f;
 	int candidateCeiling = -1;
@@ -734,7 +735,8 @@ public:
     };
 
     struct Acceptance {
-	BObolLodAdmissionRevisionStamp revisionStamp;
+	BObolLodAdmissionRevisionStamp revisionStamp =
+	    BObolLodAdmissionRevisionStamp::administrative();
 	int ceiling = -1;
 	float nextFraction = 0.0f;
 	size_t presentedCost = 0;
@@ -927,9 +929,7 @@ public:
 	/* The completed frame may itself advance the capacity ledger.  Geometry,
 	 * availability, camera, or policy changes alter the represented
 	 * population and must obtain a new constraint proof. */
-	return rejected.inventory == stamp.inventory &&
-	    rejected.availability == stamp.availability &&
-	    rejected.view == stamp.view && rejected.policy == stamp.policy;
+	return rejected.sameRendererCapacityProblem(stamp);
     }
 
     /* An occurrence-local allocation cannot always reproduce a renderer-wide
@@ -966,9 +966,7 @@ public:
 	/* Completed-frame capacity remains valid when the capacity ledger records
 	 * that very frame.  Inventory, availability, view, or policy changes alter
 	 * the submitted population and must obtain a new proof. */
-	return accepted.inventory == stamp.inventory &&
-	    accepted.availability == stamp.availability &&
-	    accepted.view == stamp.view && accepted.policy == stamp.policy ?
+	return accepted.sameRendererCapacityProblem(stamp) ?
 		this->acceptanceValue.presentedCost : 0;
     }
 

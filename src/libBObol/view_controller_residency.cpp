@@ -70,6 +70,8 @@ BObolViewController::setMeshResidencyBudget(
     size_t maxBytes,
     SbBool evictDisplayPayloads)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     this->d->meshResidencyBudgetEnabled = TRUE;
     this->d->maxResidentMeshBytes = maxBytes;
     this->d->meshResidencyEvictDisplayPayloads =
@@ -79,6 +81,8 @@ BObolViewController::setMeshResidencyBudget(
 void
 BObolViewController::clearMeshResidencyBudget(void)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     this->d->meshResidencyBudgetEnabled = FALSE;
     this->d->maxResidentMeshBytes = 0;
     this->d->meshResidencyEvictDisplayPayloads = TRUE;
@@ -107,6 +111,7 @@ BObolViewController::evictMeshPayloadsToBudget(
     size_t maxBytes,
     SbBool evictDisplayPayloads)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     this->d->lastMeshBudgetInitialResidentBytes = 0;
     this->d->lastMeshBudgetFinalResidentBytes = 0;
     this->d->lastMeshBudgetFreedFullDetailBytes = 0;
@@ -186,6 +191,7 @@ BObolViewController::evictMeshPayloadsToBudget(
 size_t
 BObolViewController::enforceMeshResidencyBudget(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     if (!this->d->meshResidencyBudgetEnabled)
 	return 0;
 

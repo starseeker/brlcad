@@ -9,19 +9,24 @@
 \* they cannot replace coverage individually.  Presentation is not a cache
 \* construction prerequisite: only a complete final hierarchy may retire
 \* coverage and publish the durable cache marker, even when some completed
-\* live pages were never independently presented.
+\* live pages were never independently presented.  Durable replacement also
+\* retains an already-published name mapping until the complete candidate's
+\* mapping commits; a denied commit leaves that predecessor discoverable.
 
 EXTENDS FiniteSets, TLC
 
 Pages == {"first", "second", "third"}
+CacheMappings == {"none", "prior", "candidate"}
 
 VARIABLES partitioned, readyPages, publishedPages, coverage, finalGeometry,
           cacheMarked, cancelled, constrained, framePending,
-          cancelledReadyPages, cancelledPublishedPages, cancelledFinalGeometry
+          cancelledReadyPages, cancelledPublishedPages, cancelledFinalGeometry,
+          cacheMapping, baselineCacheMapping, cacheUnavailable
 
 vars == <<partitioned, readyPages, publishedPages, coverage, finalGeometry,
           cacheMarked, cancelled, constrained, framePending,
-          cancelledReadyPages, cancelledPublishedPages, cancelledFinalGeometry>>
+          cancelledReadyPages, cancelledPublishedPages, cancelledFinalGeometry,
+          cacheMapping, baselineCacheMapping, cacheUnavailable>>
 
 TypeOK ==
     /\ partitioned \in BOOLEAN
@@ -36,6 +41,9 @@ TypeOK ==
     /\ cancelledReadyPages \subseteq Pages
     /\ cancelledPublishedPages \subseteq Pages
     /\ cancelledFinalGeometry \in BOOLEAN
+    /\ cacheMapping \in CacheMappings
+    /\ baselineCacheMapping \in {"none", "prior"}
+    /\ cacheUnavailable \in BOOLEAN
 
 Init ==
     /\ partitioned = FALSE
@@ -50,6 +58,9 @@ Init ==
     /\ cancelledReadyPages = {}
     /\ cancelledPublishedPages = {}
     /\ cancelledFinalGeometry = FALSE
+    /\ cacheMapping \in {"none", "prior"}
+    /\ baselineCacheMapping = cacheMapping
+    /\ cacheUnavailable = FALSE
 
 Partition ==
     /\ ~partitioned /\ ~cancelled /\ ~constrained
@@ -57,7 +68,8 @@ Partition ==
     /\ UNCHANGED <<readyPages, publishedPages, coverage, finalGeometry,
                     cacheMarked, cancelled, constrained, framePending,
                     cancelledReadyPages, cancelledPublishedPages,
-                    cancelledFinalGeometry>>
+                    cancelledFinalGeometry, cacheMapping,
+                    baselineCacheMapping, cacheUnavailable>>
 
 CompletePage(page) ==
     /\ page \in Pages
@@ -67,7 +79,8 @@ CompletePage(page) ==
     /\ UNCHANGED <<partitioned, publishedPages, coverage, finalGeometry,
                     cacheMarked, cancelled, constrained, framePending,
                     cancelledReadyPages, cancelledPublishedPages,
-                    cancelledFinalGeometry>>
+                    cancelledFinalGeometry, cacheMapping,
+                    baselineCacheMapping, cacheUnavailable>>
 
 PublishPage(page) ==
     /\ page \in readyPages \ publishedPages
@@ -77,7 +90,8 @@ PublishPage(page) ==
     /\ UNCHANGED <<partitioned, readyPages, coverage, finalGeometry,
                     cacheMarked, cancelled, constrained,
                     cancelledReadyPages, cancelledPublishedPages,
-                    cancelledFinalGeometry>>
+                    cancelledFinalGeometry, cacheMapping,
+                    baselineCacheMapping, cacheUnavailable>>
 
 Finalize ==
     /\ partitioned /\ readyPages = Pages
@@ -87,15 +101,27 @@ Finalize ==
     /\ framePending' = TRUE
     /\ UNCHANGED <<partitioned, readyPages, publishedPages, cacheMarked,
                     cancelled, constrained, cancelledReadyPages,
-                    cancelledPublishedPages, cancelledFinalGeometry>>
+                    cancelledPublishedPages, cancelledFinalGeometry,
+                    cacheMapping, baselineCacheMapping, cacheUnavailable>>
 
 MarkCache ==
-    /\ finalGeometry /\ ~cancelled /\ ~cacheMarked
+    /\ finalGeometry /\ ~cancelled /\ ~cacheMarked /\ ~cacheUnavailable
     /\ cacheMarked' = TRUE
+    /\ cacheMapping' = "candidate"
     /\ UNCHANGED <<partitioned, readyPages, publishedPages, coverage,
                     finalGeometry, cancelled, constrained, framePending,
                     cancelledReadyPages, cancelledPublishedPages,
-                    cancelledFinalGeometry>>
+                    cancelledFinalGeometry, baselineCacheMapping,
+                    cacheUnavailable>>
+
+DenyCacheCommit ==
+    /\ finalGeometry /\ ~cancelled /\ ~cacheMarked /\ ~cacheUnavailable
+    /\ cacheUnavailable' = TRUE
+    /\ UNCHANGED <<partitioned, readyPages, publishedPages, coverage,
+                    finalGeometry, cacheMarked, cancelled, constrained,
+                    framePending, cancelledReadyPages,
+                    cancelledPublishedPages, cancelledFinalGeometry,
+                    cacheMapping, baselineCacheMapping>>
 
 Constrain ==
     /\ ~finalGeometry /\ ~cancelled /\ ~constrained
@@ -104,7 +130,8 @@ Constrain ==
     /\ UNCHANGED <<partitioned, readyPages, publishedPages, coverage,
                     finalGeometry, cacheMarked, cancelled,
                     cancelledReadyPages, cancelledPublishedPages,
-                    cancelledFinalGeometry>>
+                    cancelledFinalGeometry, cacheMapping,
+                    baselineCacheMapping, cacheUnavailable>>
 
 Cancel ==
     /\ ~cacheMarked /\ ~cancelled
@@ -114,6 +141,7 @@ Cancel ==
     /\ cancelledFinalGeometry' = finalGeometry
     /\ UNCHANGED <<partitioned, readyPages, publishedPages, coverage,
                     finalGeometry, cacheMarked, constrained, framePending>>
+    /\ UNCHANGED <<cacheMapping, baselineCacheMapping, cacheUnavailable>>
 
 CompleteFrame ==
     /\ framePending
@@ -121,7 +149,8 @@ CompleteFrame ==
     /\ UNCHANGED <<partitioned, readyPages, publishedPages, coverage,
                     finalGeometry, cacheMarked, cancelled, constrained,
                     cancelledReadyPages, cancelledPublishedPages,
-                    cancelledFinalGeometry>>
+                    cancelledFinalGeometry, cacheMapping,
+                    baselineCacheMapping, cacheUnavailable>>
 
 Next ==
     \/ Partition
@@ -129,6 +158,7 @@ Next ==
     \/ \E page \in Pages: PublishPage(page)
     \/ Finalize
     \/ MarkCache
+    \/ DenyCacheCommit
     \/ Constrain
     \/ Cancel
     \/ CompleteFrame
@@ -154,7 +184,18 @@ FinalRequiresCompletePageSet ==
     finalGeometry => readyPages = Pages
 
 CacheMarkerRequiresFinalHierarchy ==
-    cacheMarked => finalGeometry /\ readyPages = Pages
+    cacheMarked =>
+        /\ finalGeometry /\ readyPages = Pages
+        /\ cacheMapping = "candidate"
+        /\ ~cacheUnavailable
+
+UnpublishedCacheMappingIsStable ==
+    ~cacheMarked => cacheMapping = baselineCacheMapping
+
+DeniedCacheCommitPreservesMapping ==
+    cacheUnavailable =>
+        /\ ~cacheMarked
+        /\ cacheMapping = baselineCacheMapping
 
 CancellationNeverPublishesCacheMarker == cancelled => ~cacheMarked
 
@@ -168,7 +209,7 @@ AlwaysDisplayable == coverage \/ finalGeometry \/ publishedPages # {}
 
 Stable ==
     /\ ~framePending
-    /\ (cancelled \/ constrained \/ cacheMarked)
+    /\ (cancelled \/ constrained \/ cacheMarked \/ cacheUnavailable)
 
 DeadlockOnlyAtTerminal == ~ENABLED <<Next>>_vars => Stable
 

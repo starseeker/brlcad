@@ -53,13 +53,19 @@ static const double controller_camera_far_scale = 100.0;
 static const double controller_camera_minimum_distance = 1.0;
 static const double controller_camera_minimum_near_distance = 1.0e-6;
 
-struct ControllerFrameRequestState {
-    ControllerFrameRequestState(BObolFrameRequestCallback callback_in,
-	void *user_data_in) :
-	callback(callback_in),
-	userData(user_data_in),
+struct ControllerCallbackDispatchState;
+struct ControllerCallbackDispatchFrame {
+    ControllerCallbackDispatchState *state;
+    ControllerCallbackDispatchFrame *previous;
+};
+static thread_local ControllerCallbackDispatchFrame *
+    controllerActiveCallbackDispatch = NULL;
+
+struct ControllerCallbackDispatchState {
+    ControllerCallbackDispatchState(void) :
 	dispatches(0),
-	closing(false)
+	closing(false),
+	deleteAfterDispatch(false)
     {
     }
 
@@ -72,29 +78,92 @@ struct ControllerFrameRequestState {
 	return true;
     }
 
-    void finishDispatch(void)
+    bool finishDispatch(void)
     {
 	std::lock_guard<std::mutex> lock(this->mutex);
 	this->dispatches--;
 	if (!this->dispatches)
 	    this->cv.notify_all();
+	return !this->dispatches && this->deleteAfterDispatch;
     }
 
-    void close(void)
+    bool close(void)
     {
 	std::unique_lock<std::mutex> lock(this->mutex);
 	this->closing = true;
+	ControllerCallbackDispatchFrame *frame =
+	    controllerActiveCallbackDispatch;
+	while (frame && frame->state != this)
+	    frame = frame->previous;
+	if (frame) {
+	    /* A callback may unsubscribe itself.  Its dispatch reference remains
+	     * live until the callback returns, so waiting here would deadlock and
+	     * deleting here would make finishDispatch use freed storage. */
+	    this->deleteAfterDispatch = true;
+	    return false;
+	}
 	this->cv.wait(lock, [this]() {
 	    return this->dispatches == 0;
 	});
+	return true;
     }
 
-    BObolFrameRequestCallback callback;
-    void *userData;
     std::mutex mutex;
     std::condition_variable cv;
     unsigned int dispatches;
     bool closing;
+    bool deleteAfterDispatch;
+};
+
+struct ControllerFrameRequestState : ControllerCallbackDispatchState {
+    ControllerFrameRequestState(BObolFrameRequestCallback callback_in,
+	void *user_data_in) :
+	callback(callback_in),
+	userData(user_data_in)
+    {
+    }
+
+    BObolFrameRequestCallback callback;
+    void *userData;
+};
+
+struct ControllerPresentationSyncState : ControllerCallbackDispatchState {
+    ControllerPresentationSyncState(
+	BObolPresentationSyncCallback callback_in, void *user_data_in) :
+	callback(callback_in),
+	userData(user_data_in)
+    {
+    }
+
+    BObolPresentationSyncCallback callback;
+    void *userData;
+};
+
+template <typename State>
+class ControllerCallbackDispatchScope {
+public:
+    explicit ControllerCallbackDispatchScope(State *state_in) :
+	state(state_in),
+	frame {state_in, controllerActiveCallbackDispatch}
+    {
+	controllerActiveCallbackDispatch = &this->frame;
+    }
+
+    ~ControllerCallbackDispatchScope()
+    {
+	controllerActiveCallbackDispatch = this->frame.previous;
+	if (this->state->finishDispatch())
+	    delete this->state;
+    }
+
+    ControllerCallbackDispatchScope(
+	const ControllerCallbackDispatchScope &) = delete;
+    ControllerCallbackDispatchScope &operator=(
+	const ControllerCallbackDispatchScope &) = delete;
+
+private:
+    State *state;
+    ControllerCallbackDispatchFrame frame;
 };
 
 static void
@@ -347,10 +416,8 @@ BObolViewController::~BObolViewController(void)
 	this->d->frameRequestCallback = NULL;
 	this->d->frameRequestUserData = NULL;
     }
-    if (frameRequestState) {
-	frameRequestState->close();
+    if (frameRequestState && frameRequestState->close())
 	delete frameRequestState;
-    }
     delete this->d->imageRenderer;
     this->d->imageRenderer = NULL;
     this->d->imageRendererManager = NULL;
@@ -959,6 +1026,8 @@ BObolViewController::getLastDiagnostics(void) const
 void
 BObolViewController::setEndpointGraphicalRenderingEnabled(SbBool enabled)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int requested = enabled ? 1 : 0;
     if (this->d->endpointGraphicalRenderingEnabled.exchange(requested,
 	    std::memory_order_acq_rel) == requested)
@@ -973,6 +1042,8 @@ BObolViewController::setEndpointGraphicalRenderingEnabled(SbBool enabled)
 void
 BObolViewController::invalidateRendererPerformanceHistory(void)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     /* Renderer capacity is part of an exact-view quality proof even though it
 	* is deliberately not part of camera identity.  Retain immutable scene
 	* residency and the coherent currently presented cut, but invalidate every
@@ -1033,6 +1104,7 @@ BObolViewController::requestExactCadPresentationRender(const char *reason)
 void
 BObolViewController::retireLodCapacityRenderRequest(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
     if (!this->d->renderRequest.retireCapacity())
 	return;
@@ -1040,16 +1112,15 @@ BObolViewController::retireLodCapacityRenderRequest(void)
     /* The repaint remains necessary, but LoD-off has no capacity contract
      * which could consume its timing.  Preserve the existing host wakeup and
      * downgrade only its evidence class. */
-    if (++this->d->hostWorkRevision == 0)
-	++this->d->hostWorkRevision;
-    if (++this->d->renderRequestSerial == 0)
-	++this->d->renderRequestSerial;
+    bobol_identity_advance(this->d->hostWorkRevision);
+    bobol_identity_advance(this->d->renderRequestSerial);
 }
 
 void
 BObolViewController::requestRenderImpl(const char *reason,
 	RenderRequestIntent intent)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     /* Callers request a repaint and may additionally classify its timing as
      * LoD capacity evidence.  The current view policy is authoritative: a
      * camera, viewport, lighting, or renderer change while LoD is disabled
@@ -1081,11 +1152,9 @@ BObolViewController::requestRenderImpl(const char *reason,
 	wakeEndpoint = decision.wakeEndpoint ? TRUE : FALSE;
 	changed = decision.changed ? TRUE : FALSE;
 	if (changed) {
-	    if (++this->d->hostWorkRevision == 0)
-		++this->d->hostWorkRevision;
-	    requestSerial = ++this->d->renderRequestSerial;
-	    if (requestSerial == 0)
-		requestSerial = ++this->d->renderRequestSerial;
+	    bobol_identity_advance(this->d->hostWorkRevision);
+	    bobol_identity_advance(this->d->renderRequestSerial);
+	    requestSerial = this->d->renderRequestSerial;
 	}
     }
 
@@ -1125,10 +1194,8 @@ BObolViewController::setFrameRequestCallback(
 	this->d->frameRequestCallback = callback;
 	this->d->frameRequestUserData = replacement;
     }
-    if (previous) {
-	previous->close();
+    if (previous && previous->close())
 	delete previous;
-    }
 
     /*
      * Installing a host is a level-triggered attachment, not an edge-only
@@ -1160,42 +1227,72 @@ BObolViewController::clearFrameRequestCallback(void *userData)
 	this->d->frameRequestCallback = NULL;
 	this->d->frameRequestUserData = NULL;
     }
-    state->close();
-    delete state;
+    if (state->close())
+	delete state;
 }
 
 void
 BObolViewController::setPresentationSyncCallback(
     BObolPresentationSyncCallback callback, void *userData)
 {
-    std::lock_guard<std::mutex> lock(this->d->presentationSyncMutex);
-    this->d->presentationSyncCallback = callback;
-    this->d->presentationSyncUserData = callback ? userData : NULL;
+    ControllerPresentationSyncState *replacement = callback ?
+	new (std::nothrow) ControllerPresentationSyncState(
+	    callback, userData) : NULL;
+    if (callback && !replacement)
+	return;
+
+    ControllerPresentationSyncState *previous = NULL;
+    {
+	std::lock_guard<std::mutex> lock(this->d->presentationSyncMutex);
+	previous = static_cast<ControllerPresentationSyncState *>(
+	    this->d->presentationSyncUserData);
+	this->d->presentationSyncCallback = callback;
+	this->d->presentationSyncUserData = replacement;
+    }
+    if (previous && previous->close())
+	delete previous;
 }
 
 void
 BObolViewController::clearPresentationSyncCallback(void *userData)
 {
-    std::lock_guard<std::mutex> lock(this->d->presentationSyncMutex);
-    if (this->d->presentationSyncUserData != userData)
-	return;
-    this->d->presentationSyncCallback = NULL;
-    this->d->presentationSyncUserData = NULL;
+    ControllerPresentationSyncState *state = NULL;
+    {
+	std::lock_guard<std::mutex> lock(this->d->presentationSyncMutex);
+	state = static_cast<ControllerPresentationSyncState *>(
+	    this->d->presentationSyncUserData);
+	if (!state || state->userData != userData)
+	    return;
+	this->d->presentationSyncCallback = NULL;
+	this->d->presentationSyncUserData = NULL;
+    }
+    if (state->close())
+	delete state;
 }
 
 void
 BObolViewController::synchronizePresentation(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     const uint64_t started = this->beginRenderTiming();
     BObolPresentationSyncCallback callback = NULL;
     void *userData = NULL;
+    ControllerPresentationSyncState *state = NULL;
     {
 	std::lock_guard<std::mutex> lock(this->d->presentationSyncMutex);
-	callback = this->d->presentationSyncCallback;
-	userData = this->d->presentationSyncUserData;
+	state = static_cast<ControllerPresentationSyncState *>(
+	    this->d->presentationSyncUserData);
+	if (this->d->presentationSyncCallback && state &&
+	    state->beginDispatch()) {
+	    callback = state->callback;
+	    userData = state->userData;
+	}
     }
-    if (callback)
+    if (callback) {
+	ControllerCallbackDispatchScope<ControllerPresentationSyncState>
+	    dispatchScope(state);
 	(*callback)(userData);
+    }
     controller_synchronize_compact_cad_presentations(this);
     /* Presentation-only hierarchy edits do not enqueue provider work.  They
      * still change the exact LoD visibility denominator, so rendering their
@@ -1234,8 +1331,9 @@ BObolViewController::notifyFrameRequest(const char *reason)
     if (!callback)
 	return;
 
+    ControllerCallbackDispatchScope<ControllerFrameRequestState>
+	dispatchScope(state);
     (*callback)(userData, reason ? reason : "");
-    state->finishDispatch();
 }
 
 BObolHostWorkSnapshot
@@ -1252,21 +1350,22 @@ BObolViewController::getHostWorkSnapshot(void) const
 	if (this->d->renderRequest.capacityRelevant())
 	    snapshot.flags |= BOBOL_HOST_WORK_CAPACITY_SAMPLE;
     }
+    if (this->d->renderClaimed)
+	snapshot.flags |= BOBOL_HOST_WORK_FRAME_CLAIMED;
     return snapshot;
 }
 
 void
 BObolViewController::clearRenderRequest(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     SbBool exactRequestRetired = FALSE;
     {
 	std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
 	const SbBool changed = this->d->renderRequest.clear() ? TRUE : FALSE;
 	if (changed) {
-	    if (++this->d->hostWorkRevision == 0)
-		++this->d->hostWorkRevision;
-	    if (++this->d->renderRequestSerial == 0)
-		++this->d->renderRequestSerial;
+	    bobol_identity_advance(this->d->hostWorkRevision);
+	    bobol_identity_advance(this->d->renderRequestSerial);
 	    if (this->d->lodExactPresentationFrame.framePending()) {
 		this->d->lodExactPresentationFrame.noteRequestRetired();
 		exactRequestRetired = TRUE;
@@ -1281,16 +1380,72 @@ SbBool
 BObolViewController::consumeRenderRequest(SbString *reason,
 	SbBool *lodCapacityRelevant, SbBool *lodPlanningRelevant)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
     const SbBool ret = this->d->renderRequest.consume(
 	reason, lodCapacityRelevant, lodPlanningRelevant) ? TRUE : FALSE;
     if (ret) {
-	if (++this->d->hostWorkRevision == 0)
-	    ++this->d->hostWorkRevision;
-	if (++this->d->renderRequestSerial == 0)
-	    ++this->d->renderRequestSerial;
+	this->d->renderClaimed = TRUE;
+	bobol_identity_advance(this->d->hostWorkRevision);
+	bobol_identity_advance(this->d->renderRequestSerial);
     }
     return ret;
+}
+
+void
+BObolViewController::retireClaimedRender(void)
+{
+    std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+    if (!this->d->renderClaimed)
+	return;
+    this->d->renderClaimed = FALSE;
+    bobol_identity_advance(this->d->hostWorkRevision);
+}
+
+void
+BObolViewController::retireDisplayEndpointWork(void)
+{
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
+
+    /* Endpoint loss is a cancellation outcome, not a completed frame.  Reset
+     * renderer-dependent presentation controls before the retirement
+     * transaction so those setters cannot reopen exact-frame debt afterward. */
+    this->d->resetCadPresentationLimits();
+    this->resetDiscoveryPointProxyFloor(FALSE);
+    this->d->publishCadCameraMotionFrameReuse(FALSE);
+    this->d->retireAutomaticLodControl();
+
+    {
+	std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+	const bool renderRetired = this->d->renderRequest.clear();
+	const bool frameRetired = renderRetired || this->d->renderClaimed;
+	const bool changed = frameRetired || this->d->progressiveWorkPending;
+	this->d->renderClaimed = FALSE;
+	this->d->progressiveWorkPending = FALSE;
+	if (changed) {
+	    bobol_identity_advance(this->d->hostWorkRevision);
+	    if (frameRetired)
+		bobol_identity_advance(this->d->renderRequestSerial);
+	}
+    }
+
+    BU_ASSERT(this->d->automaticLodControlRetired() &&
+	this->getHostWorkSnapshot().flags == BOBOL_HOST_WORK_NONE);
+}
+
+void
+BObolViewController::resumeDisplayEndpointWork(void)
+{
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
+
+    /* Retirement preserves immutable residency and the user's policy.  A new
+     * endpoint therefore starts a fresh coverage/capacity transaction while
+     * retaining reusable payloads.  Independent providers are included by
+     * the shared level projection below. */
+    (void)this->synchronizeAutomaticLodControl();
+    this->synchronizeProgressiveWorkPending();
 }
 
 uint64_t

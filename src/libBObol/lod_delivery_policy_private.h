@@ -9,6 +9,7 @@
 #define LIBBOBOL_LOD_DELIVERY_POLICY_PRIVATE_H
 
 #include "common.h"
+#include "identity_counter_private.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -314,8 +315,8 @@ public:
 	if (this->barrierPendingValue)
 	    return false;
 	this->barrierPendingValue = true;
-	this->requiredRenderSerialValue = completedRenderSerial == UINT64_MAX ?
-	    UINT64_MAX : completedRenderSerial + 1;
+	this->requiredRenderSerialValue =
+	    bobol_identity_successor_or_terminate(completedRenderSerial);
 	return true;
     }
 
@@ -518,8 +519,7 @@ private:
 	    return;
 	this->viewEpochValue = viewEpoch;
 	this->policyEpochValue = policyEpoch;
-	if (++this->sequenceValue == 0)
-	    ++this->sequenceValue;
+	bobol_identity_advance(this->sequenceValue);
     }
 
     void clear(void)

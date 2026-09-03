@@ -31,6 +31,7 @@
 #include "database_source_mesh_geometry_private.h"
 #include "database_source_presentation_private.h"
 #include "database_source_realization.h"
+#include "identity_counter_private.h"
 #include "performance_private.h"
 #include "serialized_bot_source_private.h"
 
@@ -144,10 +145,9 @@ static std::atomic<uint64_t> database_source_next_handle_id(1);
 uint64_t
 database_source_handle_id(void)
 {
-    uint64_t id = database_source_next_handle_id.fetch_add(1);
-    if (id == 0)
-	id = database_source_next_handle_id.fetch_add(1);
-    return id;
+    return bobol_atomic_nonzero_identity_take(
+	database_source_next_handle_id, std::memory_order_seq_cst,
+	std::memory_order_seq_cst);
 }
 
 int
@@ -753,23 +753,27 @@ source_effective_instance_key(const SoBRLDatabaseSource *source)
 static uint64_t
 source_stable_compact_handle_id(const SoBRLDatabaseSource *source)
 {
-    uint64_t hash = 1469598103934665603ULL;
+    if (!source)
+	return 0;
     const uintptr_t databaseIdentity = reinterpret_cast<uintptr_t>(
-	source ? source->getDatabase() : NULL);
-    const unsigned char *dbBytes = reinterpret_cast<const unsigned char *>(
-	&databaseIdentity);
-    for (size_t i = 0; i < sizeof(databaseIdentity); i++) {
-	hash ^= dbBytes[i];
-	hash *= 1099511628211ULL;
-    }
+	source->getDatabase());
     const SbString key = source_effective_instance_key(source);
-    const unsigned char *bytes = reinterpret_cast<const unsigned char *>(
-	key.getString());
-    for (int i = 0; i < key.getLength(); i++) {
-	hash ^= bytes[i];
-	hash *= 1099511628211ULL;
-    }
-    return hash ? hash : 1;
+    const std::pair<uintptr_t, std::string> exactKey(
+	databaseIdentity, key.getString());
+
+    /* Public compact handles need a stable scalar, but a digest cannot be
+     * their authorization boundary.  Intern the exact database/path tuple
+     * and allocate a process-lifetime token which is never recycled. */
+    static std::mutex registryMutex;
+    static std::map<std::pair<uintptr_t, std::string>, uint64_t> registry;
+    static uint64_t nextIdentity = 1;
+    std::lock_guard<std::mutex> lock(registryMutex);
+    const auto found = registry.find(exactKey);
+    if (found != registry.end())
+	return found->second;
+    const uint64_t identity = bobol_nonzero_identity_take(nextIdentity);
+    registry.emplace(exactKey, identity);
+    return identity;
 }
 
 SbString
@@ -7932,7 +7936,7 @@ cad_shape_color(const SbBool selected,
 uint64_t
 compact_next_revision(uint64_t revision)
 {
-    return revision == UINT64_MAX ? 1 : revision + 1;
+    return bobol_identity_successor_or_terminate(revision);
 }
 
 bool
@@ -7947,6 +7951,32 @@ compact_style_equal(const Obol::InstanceStyle &a,
 	!database_source_float_different(a.lineWidth, b.lineWidth) &&
 	a.linePattern == b.linePattern &&
 	a.linePatternFactor == b.linePatternFactor;
+}
+
+bool
+compact_semantic_equal(const SoBRLCadAssembly::InstanceSemantic &a,
+    const SoBRLCadAssembly::InstanceSemantic &b)
+{
+    return a.path == b.path &&
+	a.sourceInstanceKey == b.sourceInstanceKey &&
+	a.sourceName == b.sourceName &&
+	a.sourceType == b.sourceType &&
+	a.materialShader == b.materialShader &&
+	a.editIntentId == b.editIntentId &&
+	a.editIntentRole == b.editIntentRole &&
+	a.sourceId == b.sourceId && a.regionId == b.regionId &&
+	a.airCode == b.airCode && a.materialId == b.materialId &&
+	a.los == b.los &&
+	a.materialColorValid == b.materialColorValid &&
+	(!a.materialColorValid ||
+	 database_source_color_equal(a.materialColor, b.materialColor)) &&
+	a.primitiveKind == b.primitiveKind;
+}
+
+void
+compact_note_semantic_change(BObolCompactInstanceEntry &entry)
+{
+    entry.semanticRevision = compact_next_revision(entry.semanticRevision);
 }
 
 Obol::InstanceStyle
@@ -9372,6 +9402,9 @@ compact_merge_runtime_state(const BObolCompactInstanceIndex *current,
 	    entry.visibilityRevision = previous.visibilityRevision;
 	    entry.selectionRevision = previous.selectionRevision;
 	    entry.appearanceRevision = previous.appearanceRevision;
+	    entry.semanticRevision = previous.semanticRevision;
+	    if (!compact_semantic_equal(entry.semantic, previous.semantic))
+		compact_note_semantic_change(entry);
 	    if (replacesOverview &&
 		(entry.visible != previous.visible ||
 		 entry.selectable != previous.selectable))
@@ -10154,6 +10187,7 @@ SoBRLDatabaseSource::retargetCompactOccurrencePaths(
 	if (database_source_db_path_without_instance_suffixes(
 		entry.semantic.sourceName.getString()) == oldComponent)
 	    entry.semantic.sourceName = newComponent.c_str();
+	compact_note_semantic_change(entry);
 	if (entry.sourceMeshRequestValid) {
 	    std::string requestPath =
 		entry.sourceMeshRequest.path.getString();
@@ -10282,19 +10316,6 @@ compact_semantic_signature(const BObolCompactInstanceIndex *index)
     return signature ? signature : 1;
 }
 
-static uint64_t
-compact_state_signature(const std::vector<Obol::InstanceId> &instances)
-{
-    uint64_t signature = 1469598103934665603ULL;
-    for (const Obol::InstanceId &instance : instances) {
-	signature ^= instance.w0;
-	signature *= 1099511628211ULL;
-	signature ^= instance.w1;
-	signature *= 1099511628211ULL;
-    }
-    return signature ? signature : 1;
-}
-
 /* The retained assembly owns a copy of every instance style.  Track the
  * compact revisions which can change that copy so an unrelated source-node
  * notification (for example, a camera redraw) does not republish every style
@@ -10355,6 +10376,70 @@ SoBRLDatabaseSource::cadBatchSemanticSignature(void) const
 	compact_semantic_signature(this->d->compactIndex) : 0;
 }
 
+static std::vector<BObolCadPresentationBridgeState::CompactStamp>
+compact_presentation_stamps(const BObolCompactInstanceIndex *index)
+{
+    std::vector<BObolCadPresentationBridgeState::CompactStamp> stamps;
+    if (!index)
+	return stamps;
+    stamps.reserve(index->entries.size());
+    for (const BObolCompactInstanceEntry &entry : index->entries) {
+	BObolCadPresentationBridgeState::CompactStamp stamp;
+	stamp.instance = entry.instance;
+	stamp.part = entry.part;
+	stamp.geometryRevision = entry.geometryRevision;
+	stamp.placementRevision = entry.placementRevision;
+	stamp.appearanceRevision = entry.appearanceRevision;
+	stamp.visibilityRevision = entry.visibilityRevision;
+	stamp.selectionRevision = entry.selectionRevision;
+	stamp.semanticRevision = entry.semanticRevision;
+	stamps.push_back(stamp);
+    }
+    return stamps;
+}
+
+static bool
+compact_structure_stamps_equal(
+    const std::vector<BObolCadPresentationBridgeState::CompactStamp> &a,
+    const std::vector<BObolCadPresentationBridgeState::CompactStamp> &b)
+{
+    if (a.size() != b.size())
+	return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+	if (!a[i].sameStructure(b[i]))
+	    return false;
+    }
+    return true;
+}
+
+static bool
+compact_style_stamps_equal(
+    const std::vector<BObolCadPresentationBridgeState::CompactStamp> &a,
+    const std::vector<BObolCadPresentationBridgeState::CompactStamp> &b)
+{
+    if (a.size() != b.size())
+	return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+	if (!a[i].sameStyle(b[i]))
+	    return false;
+    }
+    return true;
+}
+
+static bool
+compact_semantic_stamps_equal(
+    const std::vector<BObolCadPresentationBridgeState::CompactStamp> &a,
+    const std::vector<BObolCadPresentationBridgeState::CompactStamp> &b)
+{
+    if (a.size() != b.size())
+	return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+	if (!a[i].sameSemantic(b[i]))
+	    return false;
+    }
+    return true;
+}
+
 int
 SoBRLDatabaseSource::syncCompiledAssembly(void)
 {
@@ -10377,12 +10462,7 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	 (this->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
 	  this->needsRealization())) ||
 	source_has_auxiliary_children(this)) {
-	this->d->compiledCompactStructureSignature = 0;
-	this->d->compiledCompactStyleSignature = 0;
-	this->d->compiledCompactSemanticSignature = 0;
-	this->d->compiledCompactHiddenSignature = 0;
-	this->d->compiledCompactSelectedSignature = 0;
-	this->d->compiledCompactUnpickableSignature = 0;
+	this->d->clearCompiledCompactEvidence();
 	this->d->compiledAssemblyNodeId = sourceNodeId;
 	this->d->compiledAssemblyDirty = FALSE;
 	return 0;
@@ -10393,18 +10473,22 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	this->d->compiledAssembly->ref();
     }
 
-    const uint64_t structureSignature = hasCompactPayload ?
-	compact_structure_signature(this->d->compactIndex) : 0;
-    const uint64_t semanticSignature = hasCompactPayload ?
-	compact_semantic_signature(this->d->compactIndex) : 0;
-    const uint64_t styleSignature = hasCompactPayload ?
-	compact_style_signature(this->d->compactIndex) : 0;
-    if (hasCompactPayload && this->d->compiledCompactStructureSignature != 0 &&
-	this->d->compiledCompactStructureSignature == structureSignature &&
+    const std::vector<BObolCadPresentationBridgeState::CompactStamp>
+	compactStamps = hasCompactPayload ?
+	    compact_presentation_stamps(this->d->compactIndex) :
+	    std::vector<BObolCadPresentationBridgeState::CompactStamp>();
+    const bool structureCurrent = hasCompactPayload &&
+	this->d->compiledCompactPartCount ==
+	    this->d->compactIndex->parts.size() &&
+	compact_structure_stamps_equal(
+	    this->d->compiledCompactStamps, compactStamps) &&
 	this->d->compiledAssembly->instanceCount() ==
 	    this->d->compactIndex->instances.size() &&
-	this->d->compiledAssembly->partCount() == this->d->compactIndex->parts.size()) {
-	if (this->d->compiledCompactStyleSignature != styleSignature) {
+	this->d->compiledAssembly->partCount() ==
+	    this->d->compactIndex->parts.size();
+    if (structureCurrent) {
+	if (!compact_style_stamps_equal(
+		this->d->compiledCompactStamps, compactStamps)) {
 	    std::vector<Obol::InstanceStyleUpdate> styles;
 	    styles.reserve(this->d->compactIndex->instances.size());
 	for (const Obol::InstanceUpdate &instance :
@@ -10419,38 +10503,38 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 		!bobol_cad_publish_styles(this->d->compiledAssembly, styles,
 		    "compiled CAD style publication"))
 		return rejectPublication();
-	    this->d->compiledCompactStyleSignature = styleSignature;
 	}
-	const uint64_t hiddenSignature = compact_state_signature(
-	    this->d->compactIndex->hiddenInstances);
-	if (this->d->compiledCompactHiddenSignature != hiddenSignature) {
+	if (this->d->compiledCompactHidden !=
+		this->d->compactIndex->hiddenInstances) {
 	    this->d->compiledAssembly->setHiddenInstances(
 		this->d->compactIndex->hiddenInstances);
-	    this->d->compiledCompactHiddenSignature = hiddenSignature;
 	}
-	const uint64_t selectedSignature = compact_state_signature(
-	    this->d->compactIndex->selectedInstances);
-	if (this->d->compiledCompactSelectedSignature != selectedSignature) {
+	if (this->d->compiledCompactSelected !=
+		this->d->compactIndex->selectedInstances) {
 	    this->d->compiledAssembly->setSelectedInstances(
 		this->d->compactIndex->selectedInstances);
-	    this->d->compiledCompactSelectedSignature = selectedSignature;
 	}
-	const uint64_t unpickableSignature = compact_state_signature(
-	    this->d->compactIndex->unpickableInstances);
-	if (this->d->compiledCompactUnpickableSignature != unpickableSignature) {
+	if (this->d->compiledCompactUnpickable !=
+		this->d->compactIndex->unpickableInstances) {
 	    this->d->compiledAssembly->setUnpickableInstances(
 		this->d->compactIndex->unpickableInstances);
-	    this->d->compiledCompactUnpickableSignature = unpickableSignature;
 	}
-	if (this->d->compiledCompactSemanticSignature != semanticSignature) {
+	if (!compact_semantic_stamps_equal(
+		this->d->compiledCompactStamps, compactStamps)) {
 	    for (const BObolCompactInstanceEntry &entry :
 		 this->d->compactIndex->entries) {
 		SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
 		semantic.sourceInstanceKey = compact_instance_identity(entry);
 		this->d->compiledAssembly->setInstanceSemantic(entry.instance, semantic);
 	    }
-	    this->d->compiledCompactSemanticSignature = semanticSignature;
 	}
+	this->d->compiledCompactStamps = compactStamps;
+	this->d->compiledCompactHidden =
+	    this->d->compactIndex->hiddenInstances;
+	this->d->compiledCompactSelected =
+	    this->d->compactIndex->selectedInstances;
+	this->d->compiledCompactUnpickable =
+	    this->d->compactIndex->unpickableInstances;
 	compact_assembly_draw_mode(this->d->compiledAssembly, this,
 	    this->d->compactIndex);
 	this->d->compiledAssemblyActive = TRUE;
@@ -10486,12 +10570,6 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	    this->d->compactIndex->selectedInstances);
 	this->d->compiledAssembly->setUnpickableInstances(
 	    this->d->compactIndex->unpickableInstances);
-	this->d->compiledCompactHiddenSignature = compact_state_signature(
-	    this->d->compactIndex->hiddenInstances);
-	this->d->compiledCompactSelectedSignature = compact_state_signature(
-	    this->d->compactIndex->selectedInstances);
-	this->d->compiledCompactUnpickableSignature = compact_state_signature(
-	    this->d->compactIndex->unpickableInstances);
 	for (size_t i = 0; i < this->d->compactIndex->entries.size(); i++) {
 	    const BObolCompactInstanceEntry &entry =
 		this->d->compactIndex->entries[i];
@@ -10502,9 +10580,15 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	compact_assembly_draw_mode(this->d->compiledAssembly, this,
 	    this->d->compactIndex);
 	this->d->compiledAssemblyActive = TRUE;
-	this->d->compiledCompactStructureSignature = structureSignature;
-	this->d->compiledCompactStyleSignature = styleSignature;
-	this->d->compiledCompactSemanticSignature = semanticSignature;
+	this->d->compiledCompactStamps = compactStamps;
+	this->d->compiledCompactPartCount =
+	    this->d->compactIndex->parts.size();
+	this->d->compiledCompactHidden =
+	    this->d->compactIndex->hiddenInstances;
+	this->d->compiledCompactSelected =
+	    this->d->compactIndex->selectedInstances;
+	this->d->compiledCompactUnpickable =
+	    this->d->compactIndex->unpickableInstances;
 	this->ensureCompiledAssemblyChild();
 	this->d->compiledAssemblyNodeId = this->getNodeId();
 	this->d->compiledAssemblyDirty = FALSE;
@@ -10512,12 +10596,7 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
     }
 
     /* The retained compact signature has no meaning for a child-graph build. */
-    this->d->compiledCompactStructureSignature = 0;
-    this->d->compiledCompactStyleSignature = 0;
-    this->d->compiledCompactSemanticSignature = 0;
-    this->d->compiledCompactHiddenSignature = 0;
-    this->d->compiledCompactSelectedSignature = 0;
-    this->d->compiledCompactUnpickableSignature = 0;
+    this->d->clearCompiledCompactEvidence();
     cad_build_data data;
     data.source = this;
     data.ordinal = 0;
@@ -10958,12 +11037,7 @@ SoBRLDatabaseSource::clearCompiledAssembly(void)
     this->d->compiledAssemblyDirty = TRUE;
     this->d->compiledAssemblyActive = FALSE;
     this->d->compiledAssemblyNodeId = 0;
-    this->d->compiledCompactStructureSignature = 0;
-    this->d->compiledCompactStyleSignature = 0;
-    this->d->compiledCompactSemanticSignature = 0;
-    this->d->compiledCompactHiddenSignature = 0;
-    this->d->compiledCompactSelectedSignature = 0;
-    this->d->compiledCompactUnpickableSignature = 0;
+    this->d->clearCompiledCompactEvidence();
     this->markCadBatchDirty();
 }
 
@@ -10985,8 +11059,7 @@ SoBRLDatabaseSource::markCompiledAssemblyDirty(void)
 void
 SoBRLDatabaseSource::markCadBatchDirty(void)
 {
-    if (++this->d->cadBatchRevision == 0)
-	this->d->cadBatchRevision = 1;
+    bobol_identity_advance(this->d->cadBatchRevision);
     this->d->cadBatchDeltas.clear();
     this->d->cadBatchDeltaEntryCount = 0;
     this->d->cadBatchDeltaFloorRevision =
@@ -10999,8 +11072,7 @@ SoBRLDatabaseSource::markCadBatchDirty(
 {
     if (entryIndices.empty())
 	return;
-    if (++this->d->cadBatchRevision == 0)
-	this->d->cadBatchRevision = 1;
+    bobol_identity_advance(this->d->cadBatchRevision);
 
     Impl::CadBatchDelta delta;
     delta.revision = this->d->cadBatchRevision;
@@ -11056,8 +11128,7 @@ SoBRLDatabaseSource::getCadBatchChangedEntries(
 void
 SoBRLDatabaseSource::markDisplayMeshLodDirty(void)
 {
-    if (++this->d->displayMeshLodRevision == 0)
-	this->d->displayMeshLodRevision = 1;
+    bobol_identity_advance(this->d->displayMeshLodRevision);
     this->d->displayMeshLodDeltas.clear();
     this->d->displayMeshLodDeltaEntryCount = 0;
     this->d->displayMeshLodDeltaFloorRevision =
@@ -11076,8 +11147,7 @@ database_source_record_display_mesh_lod_delta(
 {
     if (entryIndices.empty())
 	return;
-    if (++revision == 0)
-	revision = 1;
+    bobol_identity_advance(revision);
 
     Delta delta;
     delta.revision = revision;
@@ -11143,8 +11213,7 @@ SoBRLDatabaseSource::clearCompactInstanceIndex(void)
 	this->d->previousCompactIndex = this->d->compactIndex;
     }
     this->d->compactIndex = NULL;
-    if (++this->d->compactPopulationEpoch == 0)
-	this->d->compactPopulationEpoch = 1;
+    bobol_identity_advance(this->d->compactPopulationEpoch);
     this->d->compactExpectedInstanceCount = 0;
     this->d->compactExpectedInstanceCountCertified = FALSE;
     this->d->compactOverviewState =
@@ -11164,8 +11233,7 @@ SoBRLDatabaseSource::discardCompactInstanceHistory(void)
 {
     delete this->d->compactIndex;
     this->d->compactIndex = NULL;
-    if (++this->d->compactPopulationEpoch == 0)
-	this->d->compactPopulationEpoch = 1;
+    bobol_identity_advance(this->d->compactPopulationEpoch);
     this->d->compactExpectedInstanceCount = 0;
     this->d->compactExpectedInstanceCountCertified = FALSE;
     this->d->compactOverviewState =
@@ -11710,6 +11778,7 @@ SoBRLDatabaseSource::refreshMaterialColorFromDatabase(
 	    entry.semantic.materialColorValid = TRUE;
 	    entry.semantic.materialColor = resolved.color;
 	    entry.semantic.materialShader = shader;
+	    compact_note_semantic_change(entry);
 	    entry.appearanceRevision = compact_next_revision(
 		entry.appearanceRevision);
 	    changed = 1;
@@ -12996,9 +13065,11 @@ SoBRLDatabaseSource::retargetDatabaseSourceInstance(
 			    !BU_STR_EQUAL(oldPath, stableSourcePath.c_str());
     const int instanceChanged = !oldInstanceKey ||
 				!BU_STR_EQUAL(oldInstanceKey, effectiveInstanceKey);
-    if (revision == 0)
-	revision = this->sourceRevision.getValue() +
-		   ((pathChanged || instanceChanged) ? 1 : 0);
+    if (revision == 0) {
+	revision = this->sourceRevision.getValue();
+	if (pathChanged || instanceChanged)
+	    revision = bobol_identity_successor_or_terminate(revision);
+    }
     const int revisionChanged = this->sourceRevision.getValue() != revision;
     if (!pathChanged && !instanceChanged && !revisionChanged)
 	return 0;
@@ -16977,9 +17048,13 @@ compact_sync_entry_from_source(BObolCompactInstanceEntry &entry,
     if (source->materialColorValid.getValue() &&
 	(source->materialPolicy.getValue() !=
 	 SoBRLDatabaseSource::MATERIAL_DATABASE ||
-	 !entry.semantic.materialColorValid)) {
+	 !entry.semantic.materialColorValid) &&
+	(!entry.semantic.materialColorValid ||
+	 !database_source_color_equal(entry.semantic.materialColor,
+	     source->materialColor.getValue()))) {
 	entry.semantic.materialColorValid = TRUE;
 	entry.semantic.materialColor = source->materialColor.getValue();
+	compact_note_semantic_change(entry);
     }
 
     BObolRealizedShapeSummary &summary = entry.shapeSummary;
@@ -17021,7 +17096,11 @@ SoBRLDatabaseSource::rebuildCompactInstanceDisplayState(
 	    entry.highlightedStyle;
 	if (syncSourceState)
 	    compact_sync_entry_from_source(entry, this);
-	entry.semantic.sourceInstanceKey = compact_instance_identity(entry);
+	const SbString &sourceInstanceKey = compact_instance_identity(entry);
+	if (entry.semantic.sourceInstanceKey != sourceInstanceKey) {
+	    entry.semantic.sourceInstanceKey = sourceInstanceKey;
+	    compact_note_semantic_change(entry);
+	}
 
 	if (entry.visible != previousVisible ||
 	    entry.selectable != previousSelectable)
@@ -17707,7 +17786,7 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 
 	const uint32_t previousRevision = this->sourceRevision.getValue();
 	const uint32_t revision = nextSourceRevision ? nextSourceRevision :
-	    previousRevision + 1;
+	    bobol_identity_successor_or_terminate(previousRevision);
 	this->detachFieldSensors();
 	this->sourceRevision = revision;
 	this->attachFieldSensors();
@@ -17829,7 +17908,8 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
     if (sharedMesh)
 	sharedMesh->ref();
     const uint32_t revision = nextSourceRevision ? nextSourceRevision :
-	this->sourceRevision.getValue() + 1;
+	bobol_identity_successor_or_terminate(
+	    this->sourceRevision.getValue());
     if (sharedWire)
 	assign_shared_geometry_identity(sharedWire, objectName, typeLabel,
 	    revision, "line");
@@ -17984,6 +18064,7 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	    this->d->compactIndex->displayLodTargetCount++;
 	entry.geometryRevision = compact_next_revision(entry.geometryRevision);
 	entry.semantic.sourceId = revision;
+	compact_note_semantic_change(entry);
 	compact_sync_shape_summary(entry);
 	if (entry.sourceMeshRequestValid) {
 	    compact_source_mesh_request_sync(entry.sourceMeshRequest,

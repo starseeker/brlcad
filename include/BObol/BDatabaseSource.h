@@ -1570,6 +1570,8 @@ private:
 	struct BObolCompactInstanceIndex *index,
 	SbBool occurrenceRegistry);
     int syncCompiledAssembly(void);
+    /* Diagnostic digests for trace and change inspection only.  Compiled
+     * presentation reuse compares the corresponding exact stamp vectors. */
     uint64_t cadBatchStructureSignature(void) const;
     uint64_t cadBatchStyleSignature(void) const;
     uint64_t cadBatchSemanticSignature(void) const;

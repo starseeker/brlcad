@@ -44,6 +44,7 @@ set(
   notes/live_spatial_publication.md
   notes/libbobol_platform_threading_matrix.md
   notes/libbobol_progressive_pipeline_contract.md
+  notes/libbobol_tla_conformance.md
   notes/obol_production_readiness.md
   notes/obol_endpoint_lifecycle.md
   notes/obol_framebuffer_protocol.txt

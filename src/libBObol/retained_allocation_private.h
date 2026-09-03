@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "lod_revision_private.h"
+#include "lod_population_identity_private.h"
 
 class BObolRetainedAllocationTransaction;
 class BObolViewLodState;
@@ -36,7 +37,8 @@ struct BObolRetainedAllocationInputKey {
     size_t sceneBudget = 0;
     size_t maximumMarginalBudget = 0;
     size_t maximumProtectedBudget = 0;
-    BObolLodAdmissionRevisionStamp revisionStamp;
+    BObolLodAdmissionRevisionStamp revisionStamp =
+	BObolLodAdmissionRevisionStamp::administrative();
     /* Provider-memory denials are valid only for the admission epoch which
      * observed them.  Allocation identity must include that epoch so a
      * reclaimed-capacity edge can reopen richer resident candidates. */
@@ -69,18 +71,19 @@ struct BObolRetainedAllocationInputs {
     size_t maximumMarginalBudget = 0;
     bool allowProtectedFloor = false;
     size_t maximumProtectedBudget = 0;
-    BObolLodAdmissionRevisionStamp revisionStamp;
+    BObolLodAdmissionRevisionStamp revisionStamp =
+	BObolLodAdmissionRevisionStamp::administrative();
     uint64_t residentAdmissionRevision = 0;
     float pointProxyPixelThreshold = 0.0f;
 
     uint64_t viewRevision(void) const
     {
-	return this->revisionStamp.view.value();
+	return this->revisionStamp.view().value();
     }
 
     uint64_t policyRevision(void) const
     {
-	return this->revisionStamp.policy.value();
+	return this->revisionStamp.policy().value();
     }
 
     /* Inactive policy inputs are not evidence.  Timing calibration may keep
@@ -125,12 +128,14 @@ struct BObolRetainedAllocationResult {
 	std::numeric_limits<double>::infinity();
     double visualImportanceDebt = 0.0;
     size_t protectedFloorBudget = 0;
-    uint64_t protectedFloorSignature = 0;
-    /* Ephemeral identity of the complete occurrence representation selected
-     * by this transaction.  It is valid only inside the semantic revision
-     * tuple below and lets capacity search recognize different numeric
-     * budgets which map to the same discrete PoP population. */
-    uint64_t selectedPopulationSignature = 0;
+    uint64_t protectedFloorIdentity = 0;
+    /* Compact diagnostic digest of the selected occurrence representation.
+     * It is never authorization evidence; capacity search uses the exact
+     * interned identity below. */
+    uint64_t selectedPopulationDigest = 0;
+    /* Collision-free token assigned by comparing the complete population in
+     * the owning view's exact interning registry. */
+    uint64_t selectedPopulationIdentity = 0;
     /* The selected PoP population is discrete even though capacity search is
      * expressed in numeric render-cost units.  When known, this is the least
      * budget which can select a strictly richer population.  A zero value with
@@ -156,7 +161,8 @@ struct BObolRetainedAllocationResult {
     uint64_t allocationPlanSerial = 0;
     uint64_t cadRevision = 0;
     uint64_t residentDemandRevision = 0;
-    BObolLodAdmissionRevisionStamp revisionStamp;
+    BObolLodAdmissionRevisionStamp revisionStamp =
+	BObolLodAdmissionRevisionStamp::administrative();
     uint64_t residentAdmissionRevision = 0;
     float pointProxyPixelThreshold = 0.0f;
     size_t requestedSceneBudget = 0;
@@ -190,12 +196,12 @@ struct BObolRetainedAllocationResult {
 
     uint64_t viewRevision(void) const
     {
-	return this->revisionStamp.view.value();
+	return this->revisionStamp.view().value();
     }
 
     uint64_t policyRevision(void) const
     {
-	return this->revisionStamp.policy.value();
+	return this->revisionStamp.policy().value();
     }
 
     /** Return the plan only while it certifies the current control problem.

@@ -294,6 +294,12 @@ public:
 			    finishSlice();
 			    return BOBOL_RETAINED_ALLOCATION_FAILED;
 			}
+			/* The plan serial is a checked, non-reused certificate identity.
+			 * It is therefore the exact credential for this plan's protected
+			 * floor; a lossy population digest must never authorize deadline
+			 * evidence. */
+			this->protectedFloorIdentity =
+			    this->allocationPlanSerial;
 			transition(FLOOR);
 			break;
 		    case PROTECTION_COMPARE:
@@ -336,8 +342,6 @@ public:
 				this->optionalPointCandidateMeshCost == SIZE_MAX ?
 				    SIZE_MAX : this->protectedCandidateCost -
 				    this->optionalPointCandidateMeshCost;
-			    this->protectedFloorSignature ^=
-				this->optionalPointCandidateSignature;
 			}
 			const size_t protectedPresentationCost =
 			    this->useOptionalPointCandidates ?
@@ -346,12 +350,6 @@ public:
 				this->protectedCandidateCost;
 			this->protectedFloorCost = bobol_saturating_size_add(
 			    this->fixedCost, protectedPresentationCost);
-			this->protectedFloorSignature ^=
-			    static_cast<uint64_t>(this->candidates.size()) *
-				0x9e3779b97f4a7c15ULL;
-			this->protectedFloorSignature ^=
-			    static_cast<uint64_t>(this->protectedFloorCost) *
-				0x517cc1b727220a95ULL;
 			const size_t protectedBudget = std::max(
 			    this->sceneBudget, this->maximumProtectedBudget);
 			const size_t trialBudget =
@@ -542,6 +540,15 @@ public:
 			transition(PROTECTION_COMPARE);
 			break;
 		    case COMMIT:
+			if (!this->selectedPopulationIdentity) {
+			    const BObolLodPopulationIdentity identity =
+				this->makePopulationIdentity();
+			    this->selectedPopulationIdentity =
+				this->viewState->internCadPopulationIdentity(
+				    identity, this->cadRevision,
+				    this->residentDemandRevision,
+				    this->viewRevision(), this->policyRevision());
+			}
 			if (!this->matches(inputs) ||
 			    !this->viewState->commitCadAllocationPlan(
 				this->allocationPlanSerial, this->cadRevision,
@@ -608,8 +615,10 @@ public:
 	    this->maximumPresentedPixelError :
 	    std::numeric_limits<double>::infinity();
 	result.protectedFloorBudget = this->allocationBudget;
-	result.protectedFloorSignature = this->protectedFloorSignature;
-	result.selectedPopulationSignature = this->populationSignature();
+	result.protectedFloorIdentity = this->protectedFloorIdentity;
+	result.selectedPopulationDigest = this->populationDigest();
+	result.selectedPopulationIdentity =
+	    this->selectedPopulationIdentity;
 	result.nextDistinctPresentationBudget =
 	    this->nextDistinctPresentationBudget;
 	result.nextDistinctPresentationBudgetKnown =
@@ -696,7 +705,7 @@ private:
 	}
     }
 
-    uint64_t populationSignature(void) const
+    uint64_t populationDigest(void) const
     {
 	static constexpr uint64_t offset = UINT64_C(1469598103934665603);
 	uint64_t hash = offset;
@@ -728,6 +737,32 @@ private:
 	}
 	/* Zero denotes an unavailable identity at the policy boundary. */
 	return hash ? hash : UINT64_C(1);
+    }
+
+    BObolLodPopulationIdentity makePopulationIdentity(void) const
+    {
+	BObolLodPopulationIdentity identity;
+	identity.fixedPresentationCost = this->fixedCadPresentationCost;
+	identity.members.reserve(
+	    this->fixedPointAllocations.size() + this->candidates.size());
+	for (const FixedPointAllocation &fixed : this->fixedPointAllocations) {
+	    BObolLodPopulationMember member;
+	    member.payload = reinterpret_cast<uintptr_t>(fixed.payload);
+	    member.cut = fixed.cut;
+	    member.drawMode = fixed.drawMode;
+	    member.pointProxy = true;
+	    identity.members.push_back(member);
+	}
+	for (size_t i = 0; i < this->candidates.size(); ++i) {
+	    BObolLodPopulationMember member;
+	    member.payload = reinterpret_cast<uintptr_t>(
+		this->candidates[i].payload);
+	    member.cut = this->finalCuts[i];
+	    member.drawMode = this->candidates[i].drawMode;
+	    member.pointProxy = this->finalPointProxies[i];
+	    identity.members.push_back(member);
+	}
+	return identity;
     }
 
     /* A feature below this footprint is normally either small hardware or a
@@ -1087,24 +1122,11 @@ private:
 	this->protectedCandidateCost = protectedCost >
 	    SIZE_MAX - this->protectedCandidateCost ? SIZE_MAX :
 	    this->protectedCandidateCost + protectedCost;
-	uint64_t token = static_cast<uint64_t>(
-	    reinterpret_cast<uintptr_t>(candidate.payload));
-	token ^= static_cast<uint64_t>(
-	    static_cast<uint32_t>(candidate.protectedCut)) << 32;
-	token ^= static_cast<uint64_t>(
-	    static_cast<uint32_t>(candidate.drawMode)) << 16;
-	token ^= candidate.hasNormals ? 0xd6e8feb86659fd93ULL : 0;
-	token += 0x9e3779b97f4a7c15ULL;
-	token = (token ^ (token >> 30)) * 0xbf58476d1ce4e5b9ULL;
-	token = (token ^ (token >> 27)) * 0x94d049bb133111ebULL;
-	token ^= token >> 31;
-	this->protectedFloorSignature ^= token;
 	if (candidate.pointProxyEligible) {
 	    this->optionalPointCandidateMeshCost = bobol_saturating_size_add(
 		this->optionalPointCandidateMeshCost, protectedCost);
 	    this->optionalPointProxyCost = bobol_saturating_size_add(
 		this->optionalPointProxyCost, candidate.pointProxyCost);
-	    this->optionalPointCandidateSignature ^= token;
 	}
 	this->candidates.push_back(std::move(candidate));
 	this->hasOptionalPointCandidates =
@@ -1276,15 +1298,16 @@ private:
     size_t pixelDemandPresentationCost = 0;
     uint64_t viewRevision(void) const
     {
-	return this->revisionStamp.view.value();
+	return this->revisionStamp.view().value();
     }
 
     uint64_t policyRevision(void) const
     {
-	return this->revisionStamp.policy.value();
+	return this->revisionStamp.policy().value();
     }
 
-    BObolLodAdmissionRevisionStamp revisionStamp;
+    BObolLodAdmissionRevisionStamp revisionStamp =
+	BObolLodAdmissionRevisionStamp::administrative();
     uint64_t residentAdmissionRevision = 0;
     uint64_t cadRevision = 0;
     uint64_t residentDemandRevision = 0;
@@ -1310,8 +1333,8 @@ private:
     size_t protectedCandidateCost = 0;
     size_t optionalPointCandidateMeshCost = 0;
     size_t optionalPointProxyCost = 0;
-    uint64_t protectedFloorSignature = 0;
-    uint64_t optionalPointCandidateSignature = 0;
+    uint64_t protectedFloorIdentity = 0;
+    uint64_t selectedPopulationIdentity = 0;
     double maximumPresentedPixelError = 0.0;
     bool havePresentedErrorProof = false;
     size_t protectedFloorCost = 0;

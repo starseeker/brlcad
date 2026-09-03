@@ -18,6 +18,7 @@
 #include "BObol/BSceneController.h"
 #include "BObol/BSceneGroup.h"
 #include "BObol/BVListShape.h"
+#include "identity_counter_private.h"
 #include "performance_private.h"
 
 #include "raytrace.h"
@@ -1685,16 +1686,10 @@ BObolSceneController::endSceneMutationBatch(void)
     this->d->mutationBatchFrameRevisionPending = FALSE;
 
     if (structuralChanged) {
-	this->d->structuralRevision++;
-	if (this->d->structuralRevision == 0)
-	    this->d->structuralRevision++;
-	this->d->frameRevision++;
-	if (this->d->frameRevision == 0)
-	    this->d->frameRevision++;
+	bobol_identity_advance(this->d->structuralRevision);
+	bobol_identity_advance(this->d->frameRevision);
     } else if (frameChanged) {
-	this->d->frameRevision++;
-	if (this->d->frameRevision == 0)
-	    this->d->frameRevision++;
+	bobol_identity_advance(this->d->frameRevision);
     }
 }
 
@@ -2722,7 +2717,8 @@ BObolSceneController::publishDatabaseSourceInstance(
 
     uint32_t sourceRevision = state.sourceRevision;
     if (!state.sourceRevisionValid || sourceRevision == 0)
-	sourceRevision = source->sourceRevision.getValue() + 1;
+	sourceRevision = bobol_identity_successor_or_terminate(
+	    source->sourceRevision.getValue());
 
     const char *effectiveInstanceKey =
 	(sourceInstanceKey && sourceInstanceKey[0]) ?
@@ -3372,7 +3368,7 @@ BObolSceneController::markDatabaseSourceInstanceStale(
     uint32_t nextSourceRevision = source->sourceRevision.getValue();
     if (staleReason & (SoBRLDatabaseSource::STALE_SOURCE |
 		       SoBRLDatabaseSource::STALE_DATABASE))
-	nextSourceRevision++;
+	bobol_identity_advance(nextSourceRevision);
 
     const uint32_t nextReason =
 	source->staleReason.getValue() | staleReason;
@@ -5223,9 +5219,7 @@ BObolSceneController::advanceFrameRevision(void)
 	return;
     }
 
-    this->d->frameRevision++;
-    if (this->d->frameRevision == 0)
-	this->d->frameRevision++;
+    bobol_identity_advance(this->d->frameRevision);
 }
 
 void
@@ -5237,8 +5231,6 @@ BObolSceneController::advanceStructuralRevision(void)
 	return;
     }
 
-    this->d->structuralRevision++;
-    if (this->d->structuralRevision == 0)
-	this->d->structuralRevision++;
+    bobol_identity_advance(this->d->structuralRevision);
     this->advanceFrameRevision();
 }

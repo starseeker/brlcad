@@ -247,7 +247,8 @@ enum BObolLodPresentationWitness {
     BOBOL_LOD_PRESENTATION_WITNESS_RENDER = 1u << 0,
     BOBOL_LOD_PRESENTATION_WITNESS_CONTROLLER_PUMP = 1u << 1,
     BOBOL_LOD_PRESENTATION_WITNESS_TIMER = 1u << 2,
-    BOBOL_LOD_PRESENTATION_WITNESS_INDEPENDENT_PRODUCER = 1u << 3
+    BOBOL_LOD_PRESENTATION_WITNESS_INDEPENDENT_PRODUCER = 1u << 3,
+    BOBOL_LOD_PRESENTATION_WITNESS_CLAIMED_FRAME = 1u << 4
 };
 
 /** Typed evidence supporting a resource-constrained terminal presentation.
@@ -494,7 +495,9 @@ enum BObolHostWorkFlag {
     BOBOL_HOST_WORK_NONE = 0,
     BOBOL_HOST_WORK_PUMP = 1u << 0,
     BOBOL_HOST_WORK_RENDER = 1u << 1,
-    BOBOL_HOST_WORK_CAPACITY_SAMPLE = 1u << 2
+    BOBOL_HOST_WORK_CAPACITY_SAMPLE = 1u << 2,
+    /** The host consumed a render level and is currently traversing it. */
+    BOBOL_HOST_WORK_FRAME_CLAIMED = 1u << 3
 };
 
 /** Immutable observation of the controller/host work boundary.  Revision is
@@ -512,7 +515,57 @@ struct BOBOL_EXPORT BObolHostWorkSnapshot {
     SbBool pumpPending(void) const;
     SbBool renderPending(void) const;
     SbBool capacitySampleRequested(void) const;
+    SbBool frameClaimed(void) const;
 };
+
+/** Finite event alphabet for the opt-in production control-transition
+ * journal.  The nine owner events are numerically aligned with
+ * BObolLodControlOwner; EXTERNAL_INPUT is the only event allowed to introduce
+ * arbitrary new work.  UNNAMED is emitted by the journal's audit boundary
+ * when observable state changed outside a registered reducer scope. */
+enum BObolLodControlTransitionEvent {
+    BOBOL_LOD_CONTROL_TRANSITION_UNNAMED = 0,
+    BOBOL_LOD_CONTROL_TRANSITION_INITIAL,
+    BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT,
+    BOBOL_LOD_CONTROL_TRANSITION_INTERACTION,
+    BOBOL_LOD_CONTROL_TRANSITION_INVENTORY,
+    BOBOL_LOD_CONTROL_TRANSITION_AVAILABILITY,
+    BOBOL_LOD_CONTROL_TRANSITION_PUBLICATION,
+    BOBOL_LOD_CONTROL_TRANSITION_PLANNING,
+    BOBOL_LOD_CONTROL_TRANSITION_PRESENTATION,
+    BOBOL_LOD_CONTROL_TRANSITION_HANDOFF,
+    BOBOL_LOD_CONTROL_TRANSITION_COMPACTION,
+    BOBOL_LOD_CONTROL_TRANSITION_CACHE_WRITE,
+    BOBOL_LOD_CONTROL_TRANSITION_IDLE_SERVICE
+};
+
+BOBOL_EXPORT const char *bobol_lod_control_transition_event_name(
+    BObolLodControlTransitionEvent event);
+
+/** One immutable endpoint in a control-transition refinement witness. */
+struct BOBOL_EXPORT BObolLodControlTraceState {
+    BObolLodControlTraceState(void);
+
+    BObolLodConvergenceStatus convergence;
+    BObolHostWorkSnapshot hostWork;
+    uint64_t viewRevision;
+    uint64_t policyRevision;
+    SbBool interactionActive;
+};
+
+/** One named production transition.  Both endpoints are retained so an
+ * offline checker can prove continuity instead of trusting adjacent samples
+ * that may have come from different observation times. */
+struct BOBOL_EXPORT BObolLodControlTransitionRecord {
+    BObolLodControlTransitionRecord(void);
+
+    uint64_t serial;
+    BObolLodControlTransitionEvent event;
+    BObolLodControlTraceState before;
+    BObolLodControlTraceState after;
+};
+
+static constexpr size_t BOBOL_LOD_CONTROL_TRACE_DEFAULT_RECORD_LIMIT = 4096;
 
 /* Runs on the controller/host owner thread immediately before a scene is
  * rendered.  Producers may use it to apply thread-safe image-stream updates
@@ -942,6 +995,14 @@ public:
     size_t getActiveLodCadPayloadCount(void) const;
     void getLodConvergenceStatus(
 	BObolLodConvergenceStatus &status) const;
+    /** Enable an owner-thread-only, bounded refinement witness.  This is
+     * diagnostic state and is never consulted by scheduling or policy. */
+    void setLodControlTransitionTracing(SbBool enabled,
+	size_t recordLimit = BOBOL_LOD_CONTROL_TRACE_DEFAULT_RECORD_LIMIT);
+    SbBool isLodControlTransitionTracing(void) const;
+    size_t drainLodControlTransitions(
+	std::vector<BObolLodControlTransitionRecord> &records);
+    uint64_t getDroppedLodControlTransitionCount(void) const;
 
     BObolSceneController *getSceneController(void);
     const BObolSceneController *getSceneController(void) const;
@@ -1152,6 +1213,8 @@ public:
 
 private:
     friend struct bobol_display_endpoint;
+    friend class BObolLodControlTransitionScope;
+    friend class BObolRenderClaimCompletionScope;
 
     enum class RenderRequestIntent : uint8_t {
 	PRESENTATION,
@@ -1169,6 +1232,10 @@ private:
     void requestLodPresentationRender(const char *reason);
     void retireLodCapacityRenderRequest(void);
     void notifyFrameRequest(const char *reason);
+    void publishProgressiveWorkPending(void);
+    void retireClaimedRender(void);
+    void retireDisplayEndpointWork(void);
+    void resumeDisplayEndpointWork(void);
     void synchronizeProgressiveWorkPending(void);
     void setViewportSceneGraphWithLod(SoNode *root);
     void cancelActiveLodGeneration(void);
@@ -1178,6 +1245,13 @@ private:
     void retireAutomaticLodControl(void);
     void resetDiscoveryPointProxyFloor(SbBool requestFrame);
     void invalidateDatabaseSourceLodState(void);
+    BObolLodControlTraceState captureLodControlTraceState(void) const;
+    uint64_t beginLodControlTransition(
+	BObolLodControlTransitionEvent event, SbBool ownerEvent);
+    void endLodControlTransition(uint64_t token);
+    void recordLodControlTransition(BObolLodControlTransitionEvent event,
+	const BObolLodControlTraceState &before,
+	const BObolLodControlTraceState &after, SbBool force = FALSE);
     void syncRenderManager(void);
     void advanceLodViewRevision(void);
     enum class LodPolicyTransition : uint8_t {

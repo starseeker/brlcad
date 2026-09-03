@@ -10,6 +10,7 @@
 
 #include "common.h"
 #include "lod_revision_private.h"
+#include "lod_population_identity_private.h"
 
 #include <algorithm>
 #include <array>
@@ -95,9 +96,9 @@ struct BObolLodCapacitySearchKey {
 	 * allocation input.  Both are deliberately absent from this frozen
 	 * renderer-capacity tuple.  Their revisions may advance without changing
 	 * the measured budget this candidate is meant to bound. */
-	return this->inventory == stamp.inventory &&
-	    this->availability == stamp.availability &&
-	    this->view == stamp.view && this->policy == stamp.policy;
+	return this->inventory == stamp.inventory() &&
+	    this->availability == stamp.availability() &&
+	    this->view == stamp.view() && this->policy == stamp.policy();
     }
 
     bool valid(void) const
@@ -163,9 +164,11 @@ public:
 	BObolLodCapacitySearchKey key;
 	size_t candidateBudget = 0;
 	size_t presentedCost = 0;
-	/* Exact retained-allocation identity for this semantic epoch.  Different
-	 * numeric budgets may select the same discrete set of PoP cuts. */
-	uint64_t populationSignature = 0;
+	/* Diagnostic digest only; never compare this to authorize a sample. */
+	uint64_t populationDigest = 0;
+	/* Collision-free token assigned only after exact population comparison
+	 * by the owning view-state registry. */
+	uint64_t populationIdentity = 0;
 	/* Exact numeric interval represented by this discrete allocator
 	 * population.  The minimum is its selected render cost.  When the
 	 * successor flag is set, zero means this is the richest resident
@@ -228,10 +231,10 @@ public:
 	size_t minimumBudget = 0, bool startAtStatic = false)
     {
 	BObolLodCapacitySearchKey key;
-	key.inventory = stamp.inventory;
-	key.availability = stamp.availability;
-	key.view = stamp.view;
-	key.policy = stamp.policy;
+	key.inventory = stamp.inventory();
+	key.availability = stamp.availability();
+	key.view = stamp.view();
+	key.policy = stamp.policy();
 	key.preferredTargetNanoseconds = preferredTargetNanoseconds;
 	key.maximumTargetNanoseconds = maximumTargetNanoseconds;
 	key.startAtStatic = startAtStatic;
@@ -298,7 +301,7 @@ public:
 	    this->phaseValue = observation.validSample ? Phase::MEASURING :
 		Phase::PRESENTING;
 	    this->candidatePresentedCostValue = 0;
-	    this->candidatePopulationSignatureValue = 0;
+	    this->candidatePopulationIdentityValue = 0;
 	    if (this->phaseValue == Phase::PRESENTING)
 		return this->decision(Result::REQUEST_SAMPLE,
 		    this->candidateBudgetValue);
@@ -313,16 +316,19 @@ public:
 	    return this->finish(Result::STALE_POPULATION);
 	if (!this->candidatePresentedCostValue)
 	    this->candidatePresentedCostValue = observation.presentedCost;
-	if (this->candidatePopulationSignatureValue &&
-	    observation.populationSignature &&
-	    this->candidatePopulationSignatureValue !=
-		observation.populationSignature)
+	if (this->candidatePopulationIdentityValue &&
+	    this->candidatePopulationIdentityValue !=
+		observation.populationIdentity)
 	    return this->finish(Result::STALE_POPULATION);
-	if (!this->candidatePopulationSignatureValue)
-	    this->candidatePopulationSignatureValue =
-		observation.populationSignature;
+	if (!this->candidatePopulationIdentityValue) {
+	    if (!observation.populationIdentity &&
+		observation.populationDigest)
+		return this->finish(Result::STALE_POPULATION);
+	    this->candidatePopulationIdentityValue =
+		observation.populationIdentity;
+	}
 	const int equivalent = this->measuredPopulation(
-	    this->candidatePopulationSignatureValue,
+	    this->candidatePopulationIdentityValue,
 	    this->candidatePresentedCostValue);
 	if (equivalent >= 0)
 	    return this->classifyEquivalentPopulation(
@@ -612,7 +618,7 @@ private:
 	this->phaseValue = phase;
 	this->candidateBudgetValue = budget;
 	this->candidatePresentedCostValue = presentedCost;
-	this->candidatePopulationSignatureValue = 0;
+	this->candidatePopulationIdentityValue = 0;
 	this->candidatePopulationMinimumBudgetValue = 0;
 	this->candidateNextDistinctPopulationBudgetValue = 0;
 	this->candidateNextDistinctPopulationBudgetKnownValue = false;
@@ -662,12 +668,13 @@ private:
 	return false;
     }
 
-    int measuredPopulation(uint64_t signature, size_t presentedCost) const
+    int measuredPopulation(uint64_t identity,
+	size_t presentedCost) const
     {
-	if (!signature || !presentedCost)
+	if (!identity || !presentedCost)
 	    return -1;
 	for (unsigned int i = 0; i < this->measuredCandidateCountValue; ++i)
-	    if (this->measuredPopulationSignaturesValue[i] == signature &&
+	    if (this->measuredPopulationIdentitiesValue[i] == identity &&
 		this->measuredPopulationCostsValue[i] == presentedCost)
 		return static_cast<int>(i);
 	return -1;
@@ -729,8 +736,8 @@ private:
 	const unsigned int measuredIndex = this->measuredCandidateCountValue++;
 	this->totalMeasuredCandidateCountValue++;
 	this->measuredCandidatesValue[measuredIndex] = candidate;
-	this->measuredPopulationSignaturesValue[measuredIndex] =
-	    this->candidatePopulationSignatureValue;
+	this->measuredPopulationIdentitiesValue[measuredIndex] =
+	    this->candidatePopulationIdentityValue;
 	this->measuredPopulationCostsValue[measuredIndex] =
 	    this->candidatePresentedCostValue;
 	this->measuredPopulationSafeValue[measuredIndex] = safe;
@@ -873,7 +880,7 @@ private:
 	this->terminalResultValue = result;
 	this->candidateBudgetValue = 0;
 	this->candidatePresentedCostValue = 0;
-	this->candidatePopulationSignatureValue = 0;
+	this->candidatePopulationIdentityValue = 0;
 	this->candidatePopulationMinimumBudgetValue = 0;
 	this->candidateNextDistinctPopulationBudgetValue = 0;
 	this->candidateNextDistinctPopulationBudgetKnownValue = false;
@@ -905,7 +912,7 @@ private:
     size_t unsafeBudgetValue = SIZE_MAX;
     size_t candidateBudgetValue = 0;
     size_t candidatePresentedCostValue = 0;
-    uint64_t candidatePopulationSignatureValue = 0;
+    uint64_t candidatePopulationIdentityValue = 0;
     size_t candidatePopulationMinimumBudgetValue = 0;
     size_t candidateNextDistinctPopulationBudgetValue = 0;
     bool candidateNextDistinctPopulationBudgetKnownValue = false;
@@ -919,7 +926,7 @@ private:
     std::array<size_t, SampleLimit> proposalValues {{0, 0, 0}};
     std::array<size_t, CandidateLimit> measuredCandidatesValue {{}};
     std::array<uint64_t, CandidateLimit>
-	measuredPopulationSignaturesValue {{}};
+	measuredPopulationIdentitiesValue {{}};
     std::array<size_t, CandidateLimit> measuredPopulationCostsValue {{}};
     std::array<bool, CandidateLimit> measuredPopulationSafeValue {{}};
     std::array<bool, CandidateLimit>

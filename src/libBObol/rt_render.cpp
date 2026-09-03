@@ -16,6 +16,7 @@
 #include "BObol/BPickDetail.h"
 #include "BObol/BRtRender.h"
 #include "BObol/BViewController.h"
+#include "identity_counter_private.h"
 
 #include "raytrace.h"
 
@@ -744,9 +745,9 @@ BObolRtRenderer::synchronize(BObolViewController *controller)
     p->cameraReady = TRUE;
     p->presentationStateReady = TRUE;
     if (geometryChanged)
-	++p->geometryRevision;
+	bobol_identity_advance(p->geometryRevision);
     if (presentationChanged)
-	++p->presentationRevision;
+	bobol_identity_advance(p->presentationRevision);
     return TRUE;
 }
 

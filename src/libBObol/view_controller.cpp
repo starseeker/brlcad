@@ -29,6 +29,7 @@
 #include "cad_assembly_private.h"
 #include "lod_coordinator_private.h"
 #include "lod_control_private.h"
+#include "lod_result_authentication_private.h"
 #include "retained_allocation_private.h"
 #include "view_controller_private.h"
 #include "raytrace.h"
@@ -580,6 +581,12 @@ BObolHostWorkSnapshot::capacitySampleRequested(void) const
     return (this->flags & BOBOL_HOST_WORK_CAPACITY_SAMPLE) ? TRUE : FALSE;
 }
 
+SbBool
+BObolHostWorkSnapshot::frameClaimed(void) const
+{
+    return (this->flags & BOBOL_HOST_WORK_FRAME_CLAIMED) ? TRUE : FALSE;
+}
+
 void
 BObolProgressiveStatus::clear(void)
 {
@@ -608,6 +615,190 @@ BObolProgressiveStatus::clear(void)
 BObolLodConvergenceStatus::BObolLodConvergenceStatus(void)
 {
     this->clear();
+}
+
+BObolLodControlTraceState::BObolLodControlTraceState(void) :
+    viewRevision(0),
+    policyRevision(0),
+    interactionActive(FALSE)
+{
+}
+
+BObolLodControlTransitionRecord::BObolLodControlTransitionRecord(void) :
+    serial(0),
+    event(BOBOL_LOD_CONTROL_TRANSITION_UNNAMED)
+{
+}
+
+const char *
+bobol_lod_control_transition_event_name(
+    BObolLodControlTransitionEvent event)
+{
+    switch (event) {
+	case BOBOL_LOD_CONTROL_TRANSITION_INITIAL:
+	    return "initial";
+	case BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT:
+	    return "external_input";
+	case BOBOL_LOD_CONTROL_TRANSITION_INTERACTION:
+	    return "interaction";
+	case BOBOL_LOD_CONTROL_TRANSITION_INVENTORY:
+	    return "inventory";
+	case BOBOL_LOD_CONTROL_TRANSITION_AVAILABILITY:
+	    return "availability";
+	case BOBOL_LOD_CONTROL_TRANSITION_PUBLICATION:
+	    return "publication";
+	case BOBOL_LOD_CONTROL_TRANSITION_PLANNING:
+	    return "planning";
+	case BOBOL_LOD_CONTROL_TRANSITION_PRESENTATION:
+	    return "presentation";
+	case BOBOL_LOD_CONTROL_TRANSITION_HANDOFF:
+	    return "handoff";
+	case BOBOL_LOD_CONTROL_TRANSITION_COMPACTION:
+	    return "compaction";
+	case BOBOL_LOD_CONTROL_TRANSITION_CACHE_WRITE:
+	    return "cache_write";
+	case BOBOL_LOD_CONTROL_TRANSITION_IDLE_SERVICE:
+	    return "idle_service";
+	case BOBOL_LOD_CONTROL_TRANSITION_UNNAMED:
+	default:
+	    return "unnamed";
+    }
+}
+
+static bool
+controller_lod_control_trace_state_equal(
+    const BObolLodControlTraceState &left,
+    const BObolLodControlTraceState &right)
+{
+    const BObolLodConvergenceStatus &a = left.convergence;
+    const BObolLodConvergenceStatus &b = right.convergence;
+    return left.hostWork.revision == right.hostWork.revision &&
+	left.hostWork.renderRevision == right.hostWork.renderRevision &&
+	left.hostWork.flags == right.hostWork.flags &&
+	left.viewRevision == right.viewRevision &&
+	left.policyRevision == right.policyRevision &&
+	left.interactionActive == right.interactionActive &&
+	a.phase == b.phase && a.outcome == b.outcome &&
+	a.controlFactMask == b.controlFactMask &&
+	a.controlObligationMask == b.controlObligationMask &&
+	a.controlOwner == b.controlOwner &&
+	a.controlViolationMask == b.controlViolationMask &&
+	a.controlPresentationWitnessMask ==
+	    b.controlPresentationWitnessMask &&
+	a.constraintEvidenceMask == b.constraintEvidenceMask &&
+	a.inventoryRevision == b.inventoryRevision &&
+	a.availabilityRevision == b.availabilityRevision &&
+	a.visibilityRevision == b.visibilityRevision &&
+	a.viewRevision == b.viewRevision &&
+	a.policyRevision == b.policyRevision &&
+	a.capacityRevision == b.capacityRevision &&
+	a.cadRevision == b.cadRevision &&
+	a.residentDemandRevision == b.residentDemandRevision &&
+	a.capacitySearchPhase == b.capacitySearchPhase &&
+	a.capacitySearchGoal == b.capacitySearchGoal &&
+	a.capacitySearchSamplesRemaining ==
+	    b.capacitySearchSamplesRemaining &&
+	a.capacitySearchMeasuredCandidates ==
+	    b.capacitySearchMeasuredCandidates &&
+	a.capacitySearchTotalMeasuredCandidates ==
+	    b.capacitySearchTotalMeasuredCandidates &&
+	a.capacitySearchCandidateLimit == b.capacitySearchCandidateLimit &&
+	a.capacitySearchMaximumCandidates ==
+	    b.capacitySearchMaximumCandidates &&
+	a.capacitySearchSampleLimit == b.capacitySearchSampleLimit &&
+	a.capacitySearchCompletedUnits == b.capacitySearchCompletedUnits &&
+	a.capacitySearchTotalUnits == b.capacitySearchTotalUnits &&
+	a.currentAllocationPlanSerial == b.currentAllocationPlanSerial &&
+	a.presentationTransactionSerial == b.presentationTransactionSerial &&
+	a.presentationRequiredRenderSerial ==
+	    b.presentationRequiredRenderSerial &&
+	a.presentedFrameSerial == b.presentedFrameSerial &&
+	a.activeGeneration == b.activeGeneration &&
+	a.submissionSourceIndex == b.submissionSourceIndex &&
+	a.submissionEntryOffset == b.submissionEntryOffset &&
+	a.expectedLeafCount == b.expectedLeafCount &&
+	a.availableLeafCount == b.availableLeafCount &&
+	a.visibleTargetCount == b.visibleTargetCount &&
+	a.activePayloadCount == b.activePayloadCount &&
+	a.satisfiedPayloadCount == b.satisfiedPayloadCount &&
+	a.pendingTasks == b.pendingTasks && a.inFlight == b.inFlight &&
+	a.queuedResults == b.queuedResults &&
+	a.queuedCacheWrites == b.queuedCacheWrites &&
+	a.rendererPreparationTargetSignature ==
+	    b.rendererPreparationTargetSignature &&
+	a.rendererPreparationTotalUnits == b.rendererPreparationTotalUnits &&
+	a.rendererPreparationCompletedUnits ==
+	    b.rendererPreparationCompletedUnits &&
+	a.rendererPreparationRemainingUnits ==
+	    b.rendererPreparationRemainingUnits &&
+	a.rendererPreparationReservedBytes ==
+	    b.rendererPreparationReservedBytes &&
+	a.rendererPreparationTargetCount == b.rendererPreparationTargetCount &&
+	a.rendererPreparationPreparingTargetCount ==
+	    b.rendererPreparationPreparingTargetCount &&
+	a.rendererPreparationConstrainedTargetCount ==
+	    b.rendererPreparationConstrainedTargetCount &&
+	a.rendererPreparationFailedTargetCount ==
+	    b.rendererPreparationFailedTargetCount &&
+	a.rendererPreparationInvalidTargetCount ==
+	    b.rendererPreparationInvalidTargetCount &&
+	a.residentCompactionCount == b.residentCompactionCount &&
+	a.residentCompactionCandidateCount ==
+	    b.residentCompactionCandidateCount &&
+	a.sourcePreparationProviderCount ==
+	    b.sourcePreparationProviderCount &&
+	a.sourcePreparationCompletedUnits ==
+	    b.sourcePreparationCompletedUnits &&
+	a.sourcePreparationTotalUnits == b.sourcePreparationTotalUnits &&
+	memcmp(&a.fraction, &b.fraction, sizeof(a.fraction)) == 0 &&
+	a.terminal == b.terminal &&
+	a.terminalError == b.terminalError && a.viewReady == b.viewReady &&
+	a.hasLodState == b.hasLodState &&
+	a.backgroundPending == b.backgroundPending;
+}
+
+static BObolLodControlTransitionEvent
+controller_lod_control_owner_event(
+    const BObolLodControlTraceState &before,
+    const BObolLodControlTraceState &after)
+{
+    int owner = before.convergence.controlOwner;
+    if (owner == BOBOL_LOD_CONTROL_OWNER_NONE)
+	owner = after.convergence.controlOwner;
+    switch (owner) {
+	case BOBOL_LOD_CONTROL_OWNER_INTERACTION:
+	    return BOBOL_LOD_CONTROL_TRANSITION_INTERACTION;
+	case BOBOL_LOD_CONTROL_OWNER_INVENTORY:
+	    return BOBOL_LOD_CONTROL_TRANSITION_INVENTORY;
+	case BOBOL_LOD_CONTROL_OWNER_AVAILABILITY:
+	    return BOBOL_LOD_CONTROL_TRANSITION_AVAILABILITY;
+	case BOBOL_LOD_CONTROL_OWNER_PUBLICATION:
+	    return BOBOL_LOD_CONTROL_TRANSITION_PUBLICATION;
+	case BOBOL_LOD_CONTROL_OWNER_PLANNING:
+	    return BOBOL_LOD_CONTROL_TRANSITION_PLANNING;
+	case BOBOL_LOD_CONTROL_OWNER_PRESENTATION:
+	    return BOBOL_LOD_CONTROL_TRANSITION_PRESENTATION;
+	case BOBOL_LOD_CONTROL_OWNER_HANDOFF:
+	    return BOBOL_LOD_CONTROL_TRANSITION_HANDOFF;
+	case BOBOL_LOD_CONTROL_OWNER_COMPACTION:
+	    return BOBOL_LOD_CONTROL_TRANSITION_COMPACTION;
+	case BOBOL_LOD_CONTROL_OWNER_CACHE_WRITE:
+	    return BOBOL_LOD_CONTROL_TRANSITION_CACHE_WRITE;
+	case BOBOL_LOD_CONTROL_OWNER_NONE:
+	default:
+	    return BOBOL_LOD_CONTROL_TRANSITION_IDLE_SERVICE;
+    }
+}
+
+static BObolLodControlTransitionEvent
+controller_lod_take_pending_transition_event(std::atomic<int> &pending)
+{
+    const int value = pending.exchange(BOBOL_LOD_CONTROL_TRANSITION_UNNAMED,
+	std::memory_order_acq_rel);
+    return value > BOBOL_LOD_CONTROL_TRANSITION_UNNAMED &&
+	value <= BOBOL_LOD_CONTROL_TRANSITION_IDLE_SERVICE ?
+	static_cast<BObolLodControlTransitionEvent>(value) :
+	BOBOL_LOD_CONTROL_TRANSITION_UNNAMED;
 }
 
 void
@@ -1261,12 +1452,17 @@ BObolViewController::lodResultReadyCB(
     if (generationReady) {
 	controller->d->lodAvailabilityLedger.noteResultsReady(bu_gettime());
     }
-    controller->markProgressiveWorkPending();
+    controller->d->lodControlPendingExternalEvent.store(
+	BOBOL_LOD_CONTROL_TRANSITION_PUBLICATION,
+	std::memory_order_release);
+    controller->publishProgressiveWorkPending();
 }
 
 void
 BObolViewController::setLodService(BObolLodService *service)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     if (this->d->lodService == service)
 	return;
 
@@ -1343,6 +1539,8 @@ BObolViewController::setLodService(BObolLodService *service)
 uint64_t
 BObolViewController::beginLodGeneration(void)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     if (!this->d->lodService || !this->d->lodService->isRunning())
 	return 0;
     this->cancelActiveLodGeneration();
@@ -1371,6 +1569,8 @@ BObolViewController::resetDiscoveryPointProxyFloor(SbBool requestFrame)
 void
 BObolViewController::cancelActiveLodGeneration(void)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     if (this->d->lodService && this->d->lodActiveGeneration != 0) {
 	this->d->lodService->cancelGeneration(this->d->lodActiveGeneration);
     }
@@ -1438,6 +1638,7 @@ BObolViewController::automaticLodControlEnabled(void) const
 SbBool
 BObolViewController::synchronizeAutomaticLodControl(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     const bool coverageWasRequired =
 	this->d->lodCoveragePolicy.required();
     const bool automatic = this->automaticLodControlEnabled() != FALSE;
@@ -1457,6 +1658,7 @@ BObolViewController::synchronizeAutomaticLodControl(void)
 void
 BObolViewController::retireAutomaticLodControl(void)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     this->d->retireAutomaticLodControl();
     this->retireLodCapacityRenderRequest();
     BU_ASSERT(this->d->automaticLodControlRetired() &&
@@ -1475,6 +1677,8 @@ BObolViewController::retireAutomaticLodControl(void)
 void
 BObolViewController::invalidateDatabaseSourceLodState(void)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     this->d->resetLodViewQualityHistory();
     this->cancelActiveLodGeneration();
     /* Source replacement retires every routing/index identity used by the
@@ -1544,6 +1748,8 @@ BObolViewController::getManagedLodWorkerCount(void) const
 void
 BObolViewController::setLodAutoSubmit(SbBool enabled)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const SbBool requested = enabled ? TRUE : FALSE;
     if (this->d->lodAutoSubmit != requested)
 	this->d->resetLodViewQualityHistory();
@@ -1563,6 +1769,8 @@ BObolViewController::isLodAutoSubmitEnabled(void) const
 void
 BObolViewController::setLodForcedCut(int cut)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     if (cut < 0)
 	cut = 0;
 
@@ -1578,6 +1786,8 @@ BObolViewController::setLodForcedCut(int cut)
 void
 BObolViewController::clearLodForcedCut(void)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     if (!this->d->lodForcedCut)
 	return;
 
@@ -1647,6 +1857,7 @@ size_t
 BObolViewController::processPendingLodResults(size_t maxResults,
 	uint64_t maxMicroseconds)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     if (!this->d->lodService)
 	return 0;
 
@@ -1739,6 +1950,7 @@ int
 BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	SbBool resetExisting)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     if (!this->d->lodService || !this->d->lodService->isRunning())
 	return 0;
     if (!this->d->activeCamera ||
@@ -2315,6 +2527,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	SbBool refreshMissing,
 	SbBool resetExisting)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     if (!service)
 	service = this->d->lodService;
 
@@ -2781,7 +2994,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    maximumMarginalBudget = std::max(maximumMarginalBudget, safeBudget);
 	}
 	size_t protectedFloorBudget = 0;
-	uint64_t protectedFloorSignature = 0;
+	uint64_t protectedFloorIdentity = 0;
 	const int64_t retainedAllocationStarted = bu_gettime();
 	BObolViewLodState *retainedViewState =
 	    this->d->viewAttachment->getViewLodState();
@@ -2986,7 +3199,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    }
 	    this->d->lodRetainedAllocationCertificate = allocation;
 	    protectedFloorBudget = allocation.protectedFloorBudget;
-	    protectedFloorSignature = allocation.protectedFloorSignature;
+	    protectedFloorIdentity = allocation.protectedFloorIdentity;
 	    if (!reuseCoveredAllocation &&
 		getenv("BOBOL_LOD_TRACE_ALLOCATOR") &&
 		this->d->lodRetainedAllocationTransaction)
@@ -3008,7 +3221,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    this->d->lodViewRevision.value(), this->d->lodPolicyRevision.value(),
 	    this->d->lodPresentationPointProxyPixelThreshold);
 	this->d->setRetainedQualityFloor(
-	    protectedFloorBudget, protectedFloorSignature, sceneActiveCost,
+	    protectedFloorBudget, protectedFloorIdentity, sceneActiveCost,
 	    sceneMinimumActiveCost);
 	if (getenv("BOBOL_LOD_TRACE_BUDGET") ||
 	    getenv("BOBOL_LOD_TRACE_ALLOCATOR"))
@@ -4441,8 +4654,11 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	calibrationInputs.boundedSearch = currentCapacityAllocation;
 	calibrationInputs.candidateBudget = currentCapacityAllocation ?
 	    capacityAllocation.certifiedPresentationBudget : 0;
-	calibrationInputs.populationSignature = currentCapacityAllocation ?
-	    capacityAllocation.selectedPopulationSignature : 0;
+	calibrationInputs.populationDigest = currentCapacityAllocation ?
+	    capacityAllocation.selectedPopulationDigest : 0;
+	calibrationInputs.populationIdentity = currentCapacityAllocation ?
+	    capacityAllocation.selectedPopulationIdentity :
+	    0;
 	calibrationInputs.populationMinimumBudget = currentCapacityAllocation ?
 	    capacityAllocation.selectedPresentationCost : 0;
 	calibrationInputs.nextDistinctPopulationBudget =
@@ -4484,7 +4700,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		this->d->lodAdmissionEvidence.capacity().
 		    capacitySearchMinimumBudget(sceneMinimumActiveCost,
 			capacityAllocation.protectedFloorBudget,
-			capacityAllocation.protectedFloorSignature);
+			capacityAllocation.protectedFloorIdentity);
 	    calibrationInputs.searchKey =
 		BObolLodCapacitySearchCertificate::keyFor(
 		    this->d->admissionRevisionStamp(),
@@ -5235,6 +5451,7 @@ BObolViewController::applyLodResults(BObolLodService *service,
 			       size_t maxEstimatedBytes,
 			       uint64_t generation)
 {
+    BObolLodControlTransitionScope controlTransition(this);
     if (!service)
 	service = this->d->lodService;
 
@@ -5645,106 +5862,47 @@ BObolViewController::applyLodResults(BObolLodService *service,
 		   static_cast<unsigned long long>(
 		       resident ? resident->policyRevision : 0));
 	}
-	if (drained[i].request.viewRevision !=
-		this->d->lodViewRevision.value() ||
-	    drained[i].request.policyRevision !=
-		this->d->lodPolicyRevision.value()) {
-	    /* A completed mesh from the prior camera remains a valid progressive
-	     * bootstrap when this occurrence still has only its box or an older
-	     * mesh epoch.  Reject it once equal/newer view data is resident so an
-	     * out-of-order completion cannot replay a coarse cut. */
-	    const BObolViewLodState::CadPayload *cadPayload =
-		findResidentCad();
-	    const BObolViewLodState::MeshPayload *meshPayload = viewState ?
-		viewState->findMeshForResult(drained[i]) : NULL;
-	    const bool cadMesh =
-		cadPayload &&
-		(cadPayload->resultKind == BOBOL_LOD_RESULT_MESH ||
-		 cadPayload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL);
-	    const bool shapeMesh =
-		meshPayload &&
-		meshPayload->resultKind == BOBOL_LOD_RESULT_MESH;
-	    const auto epochNewer = [&drained, i](uint64_t policy,
-		    uint64_t view) {
-		return policy > drained[i].request.policyRevision ||
-		    (policy == drained[i].request.policyRevision &&
-		     view > drained[i].request.viewRevision);
-	    };
-	    const auto epochEqual = [&drained, i](uint64_t policy,
-		    uint64_t view) {
-		return policy == drained[i].request.policyRevision &&
-		    view == drained[i].request.viewRevision;
-	    };
-	    const bool cadPopulationSupersedes = cadMesh &&
-		cadPayload->activeCut >= drained[i].geometry.activeCut &&
-		cadPayload->counts.faceCount >= drained[i].counts.faceCount &&
-		cadPayload->counts.pointCount >= drained[i].counts.pointCount &&
-		cadPayload->presentationLayers.size() >=
-		    drained[i].presentationLayers.size();
-	    const bool shapePopulationSupersedes = shapeMesh &&
-		meshPayload->activeCut >= drained[i].geometry.activeCut &&
-		meshPayload->counts.faceCount >= drained[i].counts.faceCount &&
-		meshPayload->counts.pointCount >= drained[i].counts.pointCount;
-	    const bool residentSupersedes =
-		(cadMesh &&
-		 (epochNewer(cadPayload->policyRevision,
-		      cadPayload->viewRevision) ||
-		  (epochEqual(cadPayload->policyRevision,
-		       cadPayload->viewRevision) &&
-		   cadPopulationSupersedes))) ||
-		(shapeMesh &&
-		 (epochNewer(meshPayload->policyRevision,
-		      meshPayload->viewRevision) ||
-		  (epochEqual(meshPayload->policyRevision,
-		       meshPayload->viewRevision) &&
-		   shapePopulationSupersedes)));
-	    const bool incomingMesh =
-		drained[i].resultKind == BOBOL_LOD_RESULT_MESH ||
-		drained[i].resultKind == BOBOL_LOD_RESULT_FULL_DETAIL;
-	    if (!incomingMesh || residentSupersedes) {
-		if (traceResult)
-		    bu_log("BObol LoD apply trace rejected_by_epoch object=%s\n",
-			   drained[i].request.objectName.getString());
-		if (getenv("BOBOL_LOD_TRACE_REJECTIONS")) {
-		    static std::atomic<unsigned int> rejectionTraceCount(0);
-		    const unsigned int traceIndex =
-			rejectionTraceCount.fetch_add(1);
-		    if (traceIndex < 64)
-			bu_log("BObol LoD rejection reason=epoch object=%s "
-			       "occurrence=%s incoming_cut=%d requested=%d "
-			       "incoming_view=%llu incoming_policy=%llu "
-			       "current_view=%llu current_policy=%llu "
-			       "resident_cut=%d resident_view=%llu "
-			       "resident_policy=%llu supersedes=%d\n",
-			       drained[i].request.objectName.getString(),
-			       drained[i].request.occurrenceKey.getString(),
-			       drained[i].geometry.activeCut,
-			       drained[i].resolvedCut,
-			       static_cast<unsigned long long>(
-				   drained[i].request.viewRevision.value()),
-			       static_cast<unsigned long long>(
-				   drained[i].request.policyRevision.value()),
-			       static_cast<unsigned long long>(
-				   this->d->lodViewRevision.value()),
-			       static_cast<unsigned long long>(
-				   this->d->lodPolicyRevision.value()),
-			       cadPayload ? cadPayload->activeCut :
-				   (meshPayload ?
-				       meshPayload->activeCut : -1),
-			       static_cast<unsigned long long>(
-				   cadPayload ? cadPayload->viewRevision :
-				       (meshPayload ?
-					   meshPayload->viewRevision : 0)),
-			       static_cast<unsigned long long>(
-				   cadPayload ? cadPayload->policyRevision :
-				       (meshPayload ?
-					   meshPayload->policyRevision : 0)),
-			       residentSupersedes ? 1 : 0);
-		}
-		this->d->lastLodRejectedResultCount++;
-		append_controller_lod_diagnostic(this->d->lastLodDiagnostics,
-						 drained[i].request.objectPath,
-						 "superseded LoD result epoch rejected");
+	/* A reusable immutable generation may be rebased above only after its
+	 * current page set, counts, and prepared renderer generation have all been
+	 * reconstructed.  Every result which still carries an obsolete compact
+	 * route, population, or demand at this point is superseded.  Publishing a
+	 * stale mesh as a first-view bootstrap used to bypass that rule and could
+	 * make an older camera's projection visible until unrelated input woke the
+	 * planner. */
+	if (drained[i].request.occurrenceKey.getLength() > 0) {
+	    BObolLodResultAuthenticationContext authenticationContext;
+	    if (route) {
+		authenticationContext.sourceRoutingId =
+		    route->getCompactSourceRoutingId();
+		authenticationContext.sourcePopulationEpoch =
+		    route->getCompactPopulationEpoch();
+	    }
+	    authenticationContext.viewRevision = this->d->lodViewRevision;
+	    authenticationContext.policyRevision = this->d->lodPolicyRevision;
+	    const BObolLodResultAuthentication authentication =
+		BObolLodResultAuthenticationContract::evaluate(
+		    drained[i].request, drained[i].providerStatus,
+		    authenticationContext);
+	    if (!authentication.identityCurrent()) {
+		drained[i].providerStatus = BOBOL_LOD_PROVIDER_SUPERSEDED;
+		drained[i].stale = TRUE;
+		drained[i].terminal = TRUE;
+		if (drained[i].diagnostic.getLength() == 0)
+		    drained[i].diagnostic =
+			"LoD result identity was superseded before publication";
+		if (traceResult || getenv("BOBOL_LOD_TRACE_REJECTIONS"))
+		    bu_log("BObol LoD rejection reason=authentication "
+			   "object=%s occurrence=%s mismatch_mask=%u\n",
+			   drained[i].request.objectName.getString(),
+			   drained[i].request.occurrenceKey.getString(),
+			   static_cast<unsigned int>(
+			       authentication.identityMismatchMask));
+		directRejected++;
+		currentDemandReplayCandidate = TRUE;
+		append_controller_lod_diagnostic(
+		    this->d->lastLodDiagnostics,
+		    drained[i].request.objectPath,
+		    "superseded LoD result identity rejected");
 		continue;
 	    }
 	}
@@ -6096,6 +6254,8 @@ BObolViewController::getLodViewRevision(void) const
 void
 BObolViewController::setLodPolicyRevision(uint64_t revision)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     uint64_t newRevision = revision == 0 ? 1 : revision;
     if (this->d->lodPolicyRevision.value() == newRevision)
 	return;
@@ -6239,6 +6399,8 @@ BObolViewController::syncRenderManager(void)
 void
 BObolViewController::advanceLodViewRevision(void)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const bool automaticLod =
 	this->automaticLodControlEnabled() != FALSE;
     this->d->advanceAdmissionRevision(
@@ -6296,6 +6458,8 @@ void
 BObolViewController::advanceLodPolicyRevision(
     LodPolicyTransition transition)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     this->d->advanceAdmissionRevision(
 	BObolLodAdmissionRevisionDomain::POLICY);
     BObolViewLodState *presentationState =
@@ -6355,6 +6519,8 @@ BObolViewController::advanceLodPolicyRevision(
 void
 BObolViewController::beginLodInteraction(void)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     if (!this->automaticLodControlEnabled() ||
 	this->d->lodInteractionSession.gestureActive())
 	return;
@@ -6513,6 +6679,8 @@ BObolViewController::beginLodInteraction(void)
 void
 BObolViewController::endLodInteraction(void)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     if (!this->d->lodInteractionSession.gestureActive())
 	return;
 
@@ -6671,6 +6839,213 @@ BObolViewController::getActiveLodRenderCost(void) const
     return activeCost;
 }
 
+BObolLodControlTraceState
+BObolViewController::captureLodControlTraceState(void) const
+{
+    BObolLodControlTraceState state;
+    this->getLodConvergenceStatus(state.convergence);
+    state.hostWork = this->getHostWorkSnapshot();
+    state.viewRevision = this->getLodViewRevision();
+    state.policyRevision = this->getLodPolicyRevision();
+    state.interactionActive = this->isLodInteractionActive();
+    return state;
+}
+
+void
+BObolViewController::recordLodControlTransition(
+    BObolLodControlTransitionEvent event,
+    const BObolLodControlTraceState &before,
+    const BObolLodControlTraceState &after, SbBool force)
+{
+    if (!this->d->lodControlTransitionTracing ||
+	(!force && controller_lod_control_trace_state_equal(before, after)))
+	return;
+    if (this->d->lodControlTransitionRecords.size() >=
+	this->d->lodControlTransitionRecordLimit) {
+	bobol_saturating_counter_advance(
+	    this->d->lodControlTransitionDropped);
+	return;
+    }
+    BObolLodControlTransitionRecord record;
+    record.serial = bobol_nonzero_identity_take(
+	this->d->lodControlTransitionNextSerial);
+    record.event = event;
+    record.before = before;
+    record.after = after;
+    this->d->lodControlTransitionRecords.push_back(std::move(record));
+}
+
+uint64_t
+BObolViewController::beginLodControlTransition(
+    BObolLodControlTransitionEvent event, SbBool ownerEvent)
+{
+    if (!this->d->lodControlTransitionTracing)
+	return 0;
+
+    const BObolLodControlTraceState state =
+	this->captureLodControlTraceState();
+    if (!this->d->lodControlTransitionFrames.empty()) {
+	const Impl::LodControlTransitionFrame &parent =
+	    this->d->lodControlTransitionFrames.back();
+	if (parent.suppressed ||
+	    (!parent.ownerEvent && parent.event ==
+		BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT)) {
+	    Impl::LodControlTransitionFrame frame;
+	    frame.token = bobol_nonzero_identity_take(
+		this->d->lodControlTransitionNextToken);
+	    frame.suppressed = TRUE;
+	    frame.state = state;
+	    this->d->lodControlTransitionFrames.push_back(frame);
+	    return frame.token;
+	}
+    }
+    if (this->d->lodControlTransitionFrames.empty()) {
+	const BObolLodControlTransitionEvent pendingEvent =
+	    controller_lod_take_pending_transition_event(
+		this->d->lodControlPendingExternalEvent);
+	if (this->d->lodControlTransitionHasEndpoint &&
+	    !controller_lod_control_trace_state_equal(
+		this->d->lodControlTransitionEndpoint, state)) {
+	    this->recordLodControlTransition(
+		pendingEvent,
+		this->d->lodControlTransitionEndpoint, state);
+	}
+    } else {
+	Impl::LodControlTransitionFrame &parent =
+	    this->d->lodControlTransitionFrames.back();
+	const BObolLodControlTransitionEvent parentEvent = parent.ownerEvent ?
+	    controller_lod_control_owner_event(parent.state, state) :
+	    parent.event;
+	this->recordLodControlTransition(parentEvent, parent.state, state);
+	parent.state = state;
+    }
+
+    Impl::LodControlTransitionFrame frame;
+    frame.token = bobol_nonzero_identity_take(
+	this->d->lodControlTransitionNextToken);
+    frame.event = event;
+    frame.ownerEvent = ownerEvent;
+    frame.state = state;
+    this->d->lodControlTransitionFrames.push_back(frame);
+    return frame.token;
+}
+
+void
+BObolViewController::endLodControlTransition(uint64_t token)
+{
+    if (!this->d->lodControlTransitionTracing || token == 0 ||
+	this->d->lodControlTransitionFrames.empty())
+	return;
+    Impl::LodControlTransitionFrame frame =
+	this->d->lodControlTransitionFrames.back();
+    if (frame.token != token) {
+	/* A mismatched scope is itself outside the named reducer relation.  Do
+	 * not discard the stack: the owning scopes may still close correctly. */
+	const BObolLodControlTraceState state =
+	    this->captureLodControlTraceState();
+	this->recordLodControlTransition(
+	    BOBOL_LOD_CONTROL_TRANSITION_UNNAMED, frame.state, state, TRUE);
+	return;
+    }
+    if (frame.suppressed) {
+	this->d->lodControlTransitionFrames.pop_back();
+	return;
+    }
+
+    const BObolLodControlTraceState state =
+	this->captureLodControlTraceState();
+    const BObolLodControlTransitionEvent event = frame.ownerEvent ?
+	controller_lod_control_owner_event(frame.state, state) : frame.event;
+    this->recordLodControlTransition(event, frame.state, state);
+    this->d->lodControlTransitionFrames.pop_back();
+    if (this->d->lodControlTransitionFrames.empty()) {
+	this->d->lodControlTransitionEndpoint = state;
+	this->d->lodControlTransitionHasEndpoint = TRUE;
+    } else {
+	this->d->lodControlTransitionFrames.back().state = state;
+    }
+}
+
+void
+BObolViewController::setLodControlTransitionTracing(SbBool enabled,
+    size_t recordLimit)
+{
+    if (!enabled) {
+	this->d->lodControlTransitionTracing = FALSE;
+	this->d->lodControlTransitionFrames.clear();
+	this->d->lodControlTransitionRecords.clear();
+	this->d->lodControlTransitionHasEndpoint = FALSE;
+	this->d->lodControlPendingExternalEvent.store(
+	    BOBOL_LOD_CONTROL_TRANSITION_UNNAMED,
+	    std::memory_order_release);
+	return;
+    }
+    if (this->d->lodControlTransitionTracing) {
+	this->d->lodControlTransitionRecordLimit = std::max<size_t>(1,
+	    recordLimit);
+	return;
+    }
+
+    this->d->lodControlTransitionRecordLimit = std::max<size_t>(1,
+	recordLimit);
+    this->d->lodControlTransitionDropped = 0;
+    this->d->lodControlTransitionFrames.clear();
+    this->d->lodControlTransitionRecords.clear();
+    this->d->lodControlPendingExternalEvent.store(
+	BOBOL_LOD_CONTROL_TRANSITION_UNNAMED,
+	std::memory_order_release);
+    this->d->lodControlTransitionTracing = TRUE;
+    this->d->lodControlTransitionEndpoint =
+	this->captureLodControlTraceState();
+    this->d->lodControlTransitionHasEndpoint = TRUE;
+    this->recordLodControlTransition(BOBOL_LOD_CONTROL_TRANSITION_INITIAL,
+	this->d->lodControlTransitionEndpoint,
+	this->d->lodControlTransitionEndpoint, TRUE);
+}
+
+SbBool
+BObolViewController::isLodControlTransitionTracing(void) const
+{
+    return this->d->lodControlTransitionTracing;
+}
+
+size_t
+BObolViewController::drainLodControlTransitions(
+    std::vector<BObolLodControlTransitionRecord> &records)
+{
+    if (this->d->lodControlTransitionTracing &&
+	this->d->lodControlTransitionFrames.empty()) {
+	const BObolLodControlTraceState state =
+	    this->captureLodControlTraceState();
+	const BObolLodControlTransitionEvent pendingEvent =
+	    controller_lod_take_pending_transition_event(
+		this->d->lodControlPendingExternalEvent);
+	if (this->d->lodControlTransitionHasEndpoint &&
+	    !controller_lod_control_trace_state_equal(
+		this->d->lodControlTransitionEndpoint, state)) {
+	    this->recordLodControlTransition(
+		pendingEvent,
+		this->d->lodControlTransitionEndpoint, state);
+	}
+	this->d->lodControlTransitionEndpoint = state;
+	this->d->lodControlTransitionHasEndpoint = TRUE;
+    }
+    const size_t count = this->d->lodControlTransitionRecords.size();
+    records.insert(records.end(),
+	std::make_move_iterator(
+	    this->d->lodControlTransitionRecords.begin()),
+	std::make_move_iterator(
+	    this->d->lodControlTransitionRecords.end()));
+    this->d->lodControlTransitionRecords.clear();
+    return count;
+}
+
+uint64_t
+BObolViewController::getDroppedLodControlTransitionCount(void) const
+{
+    return this->d->lodControlTransitionDropped;
+}
+
 void
 BObolViewController::getLodConvergenceStatus(
 	BObolLodConvergenceStatus &status) const
@@ -6684,12 +7059,12 @@ BObolViewController::getLodConvergenceStatus(
 	this->d->lodViewQualityHistory.recallCount();
     const BObolLodAdmissionRevisionStamp revisionStamp =
 	this->d->admissionRevisionStamp();
-    status.inventoryRevision = revisionStamp.inventory.value();
-    status.availabilityRevision = revisionStamp.availability.value();
-    status.visibilityRevision = revisionStamp.visibility.value();
-    status.viewRevision = revisionStamp.view.value();
-    status.policyRevision = revisionStamp.policy.value();
-    status.capacityRevision = revisionStamp.capacity.value();
+    status.inventoryRevision = revisionStamp.inventory().value();
+    status.availabilityRevision = revisionStamp.availability().value();
+    status.visibilityRevision = revisionStamp.visibility().value();
+    status.viewRevision = revisionStamp.view().value();
+    status.policyRevision = revisionStamp.policy().value();
+    status.capacityRevision = revisionStamp.capacity().value();
     const BObolLodCapacitySearchCertificate &capacitySearch =
 	this->d->lodAdmissionEvidence.capacity().capacitySearch();
     status.capacitySearchPhase = static_cast<int>(capacitySearch.phase());
@@ -6999,6 +7374,8 @@ BObolViewController::getLodConvergenceStatus(
     presentationProgress.independentProducerPending =
 	this->d->lodPointQualityPhase.presentationPending() &&
 	pointProducerOwnsFrame;
+    presentationProgress.claimedFramePending =
+	hostWork.frameClaimed() != FALSE;
     const bool presentationProgressWitness =
 	presentationProgress.witnessed();
     const SbBool calibrationPending =
@@ -7276,7 +7653,10 @@ BObolViewController::getLodConvergenceStatus(
 	BObolLodControlRefinement::bit(
 	    BObolLodControlRefinement::PresentationWitness::
 		INDEPENDENT_PRODUCER) ==
-	    BOBOL_LOD_PRESENTATION_WITNESS_INDEPENDENT_PRODUCER,
+	    BOBOL_LOD_PRESENTATION_WITNESS_INDEPENDENT_PRODUCER &&
+	BObolLodControlRefinement::bit(
+	    BObolLodControlRefinement::PresentationWitness::CLAIMED_FRAME) ==
+	    BOBOL_LOD_PRESENTATION_WITNESS_CLAIMED_FRAME,
 	"public and private presentation witnesses must agree");
     status.phase = static_cast<int>(convergence.phase);
     status.outcome = static_cast<int>(convergence.outcome);
@@ -7369,6 +7749,8 @@ BObolViewController::getStableCalibratedLodRenderCostPerSecond(void) const
 void
 BObolViewController::syncLodViewSignature(SbBool advanceOnChange)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     struct bv_view_info view = BV_VIEW_INFO_INIT;
     SbBool haveCamera = this->getViewInfo(&view);
     const controller_lod_view_signatures signatures =

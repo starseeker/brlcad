@@ -194,7 +194,8 @@ public:
 	this->refinementRemainingValue = SIZE_MAX;
 	this->retainedAdmissionValue = false;
 	this->retainedAdmissionRemainingValue = SIZE_MAX;
-	this->revisionStampValue = BObolLodAdmissionRevisionStamp();
+	this->revisionStampValue =
+	    BObolLodAdmissionRevisionStamp::administrative();
     }
 
     void consumeRefinement(size_t cost)
@@ -263,7 +264,8 @@ private:
     size_t refinementRemainingValue = SIZE_MAX;
     bool retainedAdmissionValue = false;
     size_t retainedAdmissionRemainingValue = SIZE_MAX;
-    BObolLodAdmissionRevisionStamp revisionStampValue;
+    BObolLodAdmissionRevisionStamp revisionStampValue =
+	BObolLodAdmissionRevisionStamp::administrative();
 };
 
 static_assert(std::is_trivially_copyable<BObolLodAdmissionCursor>::value,
@@ -350,7 +352,8 @@ public:
 	size_t candidateBudget = 0;
 	size_t maximumCandidateBudget = 0;
 	size_t knownSafeBudget = 0;
-	uint64_t populationSignature = 0;
+	uint64_t populationDigest = 0;
+	uint64_t populationIdentity = 0;
 	size_t populationMinimumBudget = 0;
 	size_t nextDistinctPopulationBudget = 0;
 	bool nextDistinctPopulationBudgetKnown = false;
@@ -366,7 +369,8 @@ public:
 	BObolLodCapacitySearchKey searchKey;
 	size_t candidateBudget = 0;
 	size_t presentedCost = 0;
-	uint64_t populationSignature = 0;
+	uint64_t populationDigest = 0;
+	uint64_t populationIdentity = 0;
 	size_t populationMinimumBudget = 0;
 	size_t nextDistinctPopulationBudget = 0;
 	bool nextDistinctPopulationBudgetKnown = false;
@@ -384,7 +388,8 @@ public:
     };
 
     struct CompletedAllocationInputs {
-	BObolLodAdmissionRevisionStamp revisionStamp;
+	BObolLodAdmissionRevisionStamp revisionStamp =
+	    BObolLodAdmissionRevisionStamp::administrative();
 	size_t requestedSceneBudget = 0;
 	size_t certifiedPresentationBudget = 0;
 	bool allocationCertificateCurrent = false;
@@ -923,7 +928,8 @@ public:
 	    BObolLodCapacitySearchCertificate::Observation observation;
 	    observation.key = inputs.searchKey;
 	    observation.candidateBudget = inputs.candidateBudget;
-	    observation.populationSignature = inputs.populationSignature;
+	    observation.populationDigest = inputs.populationDigest;
+	    observation.populationIdentity = inputs.populationIdentity;
 	    observation.populationMinimumBudget =
 		inputs.populationMinimumBudget;
 	    observation.nextDistinctPopulationBudget =
@@ -1058,7 +1064,8 @@ public:
 	observation.key = inputs.searchKey;
 	observation.candidateBudget = inputs.candidateBudget;
 	observation.presentedCost = inputs.presentedCost;
-	observation.populationSignature = inputs.populationSignature;
+	observation.populationDigest = inputs.populationDigest;
+	observation.populationIdentity = inputs.populationIdentity;
 	observation.populationMinimumBudget = inputs.populationMinimumBudget;
 	observation.nextDistinctPopulationBudget =
 	    inputs.nextDistinctPopulationBudget;
@@ -1213,7 +1220,7 @@ public:
 	this->steadyDeadlineCapacityCeilingValue = SIZE_MAX;
 	this->staticDeadlineCapacityCeilingValue = SIZE_MAX;
 	this->retainedQualityFloorBudgetValue = 0;
-	this->retainedQualityFloorSignatureValue = 0;
+	this->retainedQualityFloorIdentityValue = 0;
 	this->retainedQualityFloorRejectedValue = false;
 	this->retainedQualityFloorMissCountValue = 0;
 	this->resetOverloadRecovery();
@@ -1410,7 +1417,7 @@ public:
 	if (this->retainedQualityFloorBudgetValue >
 	    this->staticDeadlineCapacityCeilingValue) {
 	    this->retainedQualityFloorBudgetValue = 0;
-	    this->retainedQualityFloorSignatureValue = 0;
+	    this->retainedQualityFloorIdentityValue = 0;
 	    this->retainedQualityFloorMissCountValue = 0;
 	    this->retainedQualityFloorRejectedValue = true;
 	}
@@ -1434,7 +1441,7 @@ public:
      * would leave its bounded actions consuming the former upgrade limit. */
     void setRetainedQualityFloorBudget(BObolLodAdmissionCursor &cursor,
 	size_t budget,
-	uint64_t populationSignature, size_t activeCost,
+	uint64_t populationIdentity, size_t activeCost,
 	size_t minimumActiveCost)
     {
 	if (this->retainedQualityFloorRejectedValue)
@@ -1444,21 +1451,21 @@ public:
 	    this->staticDeadlineCapacityCeilingValue != SIZE_MAX &&
 	    nextBudget > this->staticDeadlineCapacityCeilingValue) {
 	    this->retainedQualityFloorBudgetValue = 0;
-	    this->retainedQualityFloorSignatureValue = 0;
+	    this->retainedQualityFloorIdentityValue = 0;
 	    this->retainedQualityFloorMissCountValue = 0;
 	    this->retainedQualityFloorRejectedValue = true;
 	    return;
 	}
-	const uint64_t nextSignature = nextBudget ? populationSignature : 0;
+	const uint64_t nextIdentity = nextBudget ? populationIdentity : 0;
 	/* Deadline evidence is meaningful only for the exact protected
 	 * occurrence/cut population which produced it.  During cold streaming or
 	 * a retained reallocation, different floors can be attempted before an
 	 * exact frame is presented.  Combining those misses can reject a later,
 	 * affordable floor even though it has never missed once. */
-	if (this->retainedQualityFloorSignatureValue != nextSignature)
+	if (this->retainedQualityFloorIdentityValue != nextIdentity)
 	    this->retainedQualityFloorMissCountValue = 0;
 	this->retainedQualityFloorBudgetValue = nextBudget;
-	this->retainedQualityFloorSignatureValue = nextSignature;
+	this->retainedQualityFloorIdentityValue = nextIdentity;
 	if (!cursor.initializedValue || !cursor.retainedAdmissionValue ||
 	    !budget || budget == SIZE_MAX || budget <= this->currentBudgetValue)
 	    return;
@@ -1475,7 +1482,7 @@ public:
     void clearRetainedQualityFloorBudget(void)
     {
 	this->retainedQualityFloorBudgetValue = 0;
-	this->retainedQualityFloorSignatureValue = 0;
+	this->retainedQualityFloorIdentityValue = 0;
 	this->retainedQualityFloorRejectedValue = false;
 	this->retainedQualityFloorMissCountValue = 0;
     }
@@ -1494,18 +1501,18 @@ public:
 	if (this->retainedQualityFloorMissCountValue < 3)
 	    return false;
 	this->retainedQualityFloorBudgetValue = 0;
-	this->retainedQualityFloorSignatureValue = 0;
+	this->retainedQualityFloorIdentityValue = 0;
 	this->retainedQualityFloorRejectedValue = true;
 	return true;
     }
 
     bool noteRetainedQualityFloorMet(bool exactProtectedPopulation,
-	uint64_t populationSignature, size_t presentedCost)
+	uint64_t populationIdentity, size_t presentedCost)
     {
 	if (!exactProtectedPopulation ||
 	    !this->retainedQualityFloorBudgetValue ||
 	    this->retainedQualityFloorRejectedValue ||
-	    populationSignature != this->retainedQualityFloorSignatureValue ||
+	    populationIdentity != this->retainedQualityFloorIdentityValue ||
 	    presentedCost < this->retainedQualityFloorBudgetValue)
 	    return false;
 	this->retainedQualityFloorMissCountValue = 0;
@@ -1534,21 +1541,21 @@ public:
      * whose selected cost is no greater than its candidate budget. */
     size_t capacitySearchMinimumBudget(size_t ordinaryMinimumBudget,
 	size_t allocationFloorBudget,
-	uint64_t allocationFloorSignature) const
+	uint64_t allocationFloorIdentity) const
     {
 	const bool currentFloor = allocationFloorBudget > 0 &&
 	    allocationFloorBudget == this->retainedQualityFloorBudgetValue &&
-	    allocationFloorSignature ==
-		this->retainedQualityFloorSignatureValue &&
+	    allocationFloorIdentity ==
+		this->retainedQualityFloorIdentityValue &&
 	    !this->retainedQualityFloorRejectedValue;
 	return currentFloor ?
 	    std::max(ordinaryMinimumBudget, allocationFloorBudget) :
 	    ordinaryMinimumBudget;
     }
 
-    uint64_t retainedQualityFloorSignature(void) const
+    uint64_t retainedQualityFloorIdentity(void) const
     {
-	return this->retainedQualityFloorSignatureValue;
+	return this->retainedQualityFloorIdentityValue;
     }
 
     unsigned int retainedQualityFloorMissCount(void) const
@@ -1679,7 +1686,7 @@ private:
     size_t steadyDeadlineCapacityCeilingValue = SIZE_MAX;
     size_t staticDeadlineCapacityCeilingValue = SIZE_MAX;
     size_t retainedQualityFloorBudgetValue = 0;
-    uint64_t retainedQualityFloorSignatureValue = 0;
+    uint64_t retainedQualityFloorIdentityValue = 0;
     unsigned int retainedQualityFloorMissCountValue = 0;
     BObolLodRetainedAllocationRequest retainedAllocationRequestValue;
     size_t requestedCoverageCompletionAdditionalCostValue = SIZE_MAX;

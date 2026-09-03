@@ -20,6 +20,7 @@
 #include "BObol/BViewController.h"
 #include "BObol/BViewStore.h"
 #include "BObol/BVListShape.h"
+#include "identity_counter_private.h"
 
 #include "bg/line_layer.h"
 #include "bg/plane.h"
@@ -52,23 +53,14 @@ static std::atomic<uint64_t> store_reference_generation_counter(1);
 static uint64_t
 store_reference_generation_next(void)
 {
-    uint64_t generation =
-	store_reference_generation_counter.fetch_add(1,
-		std::memory_order_relaxed);
-
-    /* Zero is reserved for null references.  Exhaustion is not realistic,
-     * but keeping the invariant here makes malformed/null checks exact. */
-    while (!generation)
-	generation = store_reference_generation_counter.fetch_add(1,
-		std::memory_order_relaxed);
-    return generation;
+    return bobol_atomic_nonzero_identity_take(
+	store_reference_generation_counter);
 }
 
 static void
 store_revision_advance(uint64_t &revision)
 {
-    if (++revision == 0)
-	++revision;
+    bobol_identity_advance(revision);
 }
 
 static std::string
@@ -1078,14 +1070,14 @@ struct BObolFeatureStore::Impl {
 
 	if (!rec) {
 	    rec = new BObolFeatureStoreRecord;
-	    rec->id = nextId++;
+	    rec->id = bobol_nonzero_identity_take(nextId);
 	    rec->revision = 1;
 	    rec->name = name;
 	    rec->scope = scope;
 	    records[rec->id] = rec;
 	    names[key] = rec->id;
 	} else {
-	    rec->revision++;
+	    store_revision_advance(rec->revision);
 	}
 
 	rec->kind = kind;
@@ -2135,7 +2127,7 @@ BObolFeatureStore::updateIndexedFaceSetPoints(
     for (size_t i = 0; i < pointIndices.size(); i++)
 	shape->point.set1Value(pointIndices[i], points[i]);
     shape->normal.setNum(0);
-    rec->revision++;
+    store_revision_advance(rec->revision);
     shape->sourceId = static_cast<uint32_t>(rec->revision);
     shape->enableNotify(notify);
     if (notify)
@@ -2319,7 +2311,7 @@ BObolFeatureStore::replaceEditPreviewGeometry(
 	rec->identity = identity;
     rec->points = points;
     rec->commands = store_normalized_line_commands(points, commands);
-    rec->revision++;
+    store_revision_advance(rec->revision);
     rec->sourceRevision = sourceRevision ? sourceRevision :
 			  static_cast<uint32_t>(rec->revision);
     rec->inputsRevision = inputsRevision ? inputsRevision :
@@ -2338,7 +2330,7 @@ BObolFeatureStore::touch(BObolFeatureHandle handle)
     BObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
 	return FALSE;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     if (rec->node)
 	rec->node->touch();
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
@@ -2356,7 +2348,7 @@ BObolFeatureStore::appendLinePoint(BObolFeatureHandle handle,
 
     rec->points.push_back(point);
     rec->commands.push_back(static_cast<int32_t>(BObolLineCommand::Draw));
-    rec->revision++;
+    store_revision_advance(rec->revision);
     SoNode *node = store_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
@@ -2373,7 +2365,7 @@ BObolFeatureStore::replaceLabels(BObolFeatureHandle handle,
 	return FALSE;
 
     rec->labels = labels;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     SoNode *node = store_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
@@ -2395,7 +2387,7 @@ BObolFeatureStore::clearGeometry(BObolFeatureHandle handle)
     rec->labels.clear();
     rec->axesCenters.clear();
     rec->layers.clear();
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->setNode(rec, NULL);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
 		       "clearGeometry");
@@ -2526,7 +2518,7 @@ BObolFeatureStore::applyStyle(BObolFeatureHandle handle,
 	rec->style.arrowTipWidth = style.arrowTipWidth;
     }
 
-    rec->revision++;
+    store_revision_advance(rec->revision);
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
@@ -2610,7 +2602,7 @@ BObolFeatureStore::setOverlayInfo(BObolFeatureHandle handle,
 	return TRUE;
 
     rec->overlay = overlay;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
@@ -2629,7 +2621,7 @@ BObolFeatureStore::clearOverlayInfo(BObolFeatureHandle handle)
     if (store_overlay_equal(rec->overlay, empty))
 	return TRUE;
     rec->overlay = empty;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
@@ -2657,7 +2649,7 @@ BObolFeatureStore::replaceMetadata(BObolFeatureHandle handle,
 	return FALSE;
 
     rec->metadata = metadata;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
 		       "replaceMetadata");
     return TRUE;
@@ -2694,7 +2686,7 @@ BObolFeatureStore::replacePrimitiveMetadata(BObolFeatureHandle handle,
 	    rec->primitiveMetadata.erase(it);
 	else
 	    it->metadata = metadata;
-	rec->revision++;
+	store_revision_advance(rec->revision);
 	this->impl->notify(rec, BObolCommandResultStatus::Updated,
 			   "replacePrimitiveMetadata");
 	return TRUE;
@@ -2705,7 +2697,7 @@ BObolFeatureStore::replacePrimitiveMetadata(BObolFeatureHandle handle,
 	item.primitiveIndex = primitiveIndex;
 	item.metadata = metadata;
 	rec->primitiveMetadata.push_back(item);
-	rec->revision++;
+	store_revision_advance(rec->revision);
 	this->impl->notify(rec, BObolCommandResultStatus::Updated,
 			   "replacePrimitiveMetadata");
     }
@@ -2808,7 +2800,7 @@ BObolFeatureStore::replaceSelectedPrimitives(BObolFeatureHandle handle,
 	return FALSE;
 
     rec->selectedPrimitives = primitives;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     if (rec->node &&
 	rec->node->isOfType(SoBRLMeshShape::getClassTypeId())) {
 	SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(rec->node);
@@ -2840,7 +2832,7 @@ BObolFeatureStore::replaceHighlightedPrimitives(BObolFeatureHandle handle,
 	return FALSE;
 
     rec->highlightedPrimitives = primitives;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     if (rec->node &&
 	rec->node->isOfType(SoBRLMeshShape::getClassTypeId())) {
 	SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(rec->node);
@@ -3850,7 +3842,7 @@ BObolPolygonStore::create(const SbString &name,
 	return BObolPolygonHandle();
 
     BObolPolygonStoreRecord *rec = new BObolPolygonStoreRecord;
-    rec->id = this->impl->nextId++;
+    rec->id = bobol_nonzero_identity_take(this->impl->nextId);
     rec->revision = 1;
     rec->name = name;
     rec->scope = scope;
@@ -3920,7 +3912,7 @@ BObolPolygonStore::duplicate(BObolPolygonHandle handle,
     dst->visual = src->visual;
     dst->currentContour = src->currentContour;
     dst->currentPoint = src->currentPoint;
-    dst->revision++;
+    store_revision_advance(dst->revision);
     this->impl->realize(dst);
     return this->impl->handle(dst);
 }
@@ -3959,7 +3951,7 @@ BObolPolygonStore::update(BObolPolygonHandle handle,
 	rec->currentPoint = static_cast<long>(
 	    oldPoint < updated.num_points ? oldPoint : updated.num_points - 1);
     }
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->realize(rec);
     return TRUE;
 }
@@ -4038,7 +4030,7 @@ BObolPolygonStore::updateModelPoint(BObolPolygonHandle handle,
 	store_polygon_set_rectangle(rec, point, FALSE);
     }
 
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->realize(rec);
     return TRUE;
 }
@@ -4058,7 +4050,7 @@ BObolPolygonStore::move(BObolPolygonHandle handle,
     vect_t translation = {delta[0], delta[1], delta[2]};
     (void)bg_polygon_translate(&rec->polygon, translation);
     rec->originPoint += delta;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->realize(rec);
     return TRUE;
 }
@@ -4079,7 +4071,7 @@ BObolPolygonStore::rename(BObolPolygonHandle handle,
 
     this->impl->names.erase(store_key(rec->scope, rec->name));
     rec->name = newName;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->names[newKey] = rec->id;
     this->impl->realize(rec);
     return TRUE;
@@ -4193,7 +4185,7 @@ BObolPolygonStore::setCurrent(BObolPolygonHandle handle,
     const SbBool presentationChanged = rec->currentPoint >= 0 || point >= 0;
     rec->currentContour = contour;
     rec->currentPoint = point;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     if (presentationChanged)
 	this->impl->realize(rec);
     return TRUE;
@@ -4209,7 +4201,7 @@ BObolPolygonStore::setSelected(BObolPolygonHandle handle, SbBool selected)
     if (rec->selected == normalized)
 	return TRUE;
     rec->selected = normalized;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->realize(rec);
     return TRUE;
 }
@@ -4224,7 +4216,7 @@ BObolPolygonStore::clearSelection(void)
 	if (!rec || !rec->selected)
 	    continue;
 	rec->selected = FALSE;
-	rec->revision++;
+	store_revision_advance(rec->revision);
 	this->impl->realize(rec);
 	changed = TRUE;
     }
@@ -4243,7 +4235,7 @@ BObolPolygonStore::setContourOpen(BObolPolygonHandle handle,
     if (bg_polygon_contour_open_set(&rec->polygon,
 	static_cast<size_t>(contour), open ? 1 : 0))
 	return FALSE;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->realize(rec);
     return TRUE;
 }
@@ -4257,7 +4249,7 @@ BObolPolygonStore::setAllContoursOpen(BObolPolygonHandle handle,
 	return FALSE;
     if (bg_polygon_contours_open_set(&rec->polygon, open ? 1 : 0))
 	return FALSE;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->realize(rec);
     return TRUE;
 }
@@ -4272,7 +4264,7 @@ BObolPolygonStore::clearSelectedPoint(BObolPolygonHandle handle)
 	return TRUE;
     rec->currentContour = -1;
     rec->currentPoint = -1;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->realize(rec);
     return TRUE;
 }
@@ -4288,7 +4280,7 @@ BObolPolygonStore::clearAllPointSelections(void)
 		continue;
 	    it->second->currentContour = -1;
 	    it->second->currentPoint = -1;
-	    it->second->revision++;
+	    store_revision_advance(it->second->revision);
 	    this->impl->realize(it->second);
 	}
     }
@@ -4302,7 +4294,7 @@ BObolPolygonStore::setVisible(BObolPolygonHandle handle, SbBool visible)
     if (!rec)
 	return FALSE;
     rec->visible = visible;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->realize(rec);
     return TRUE;
 }
@@ -4328,7 +4320,7 @@ BObolPolygonStore::setVisual(BObolPolygonHandle handle,
     rec->visual = visual;
     store_polygon_set_fill_flags(rec->visual,
 				 store_polygon_fill_flags(rec->visual));
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->realize(rec);
     return TRUE;
 }
@@ -4352,7 +4344,7 @@ BObolPolygonStore::setEdgeColor(BObolPolygonHandle handle,
     if (!rec)
 	return FALSE;
     rec->visual.edgeColor = edgeColor;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->realize(rec);
     return TRUE;
 }
@@ -4385,7 +4377,7 @@ BObolPolygonStore::setFill(BObolPolygonHandle handle,
     store_polygon_set_fill_flags(rec->visual, flags);
     rec->visual.fillSlope = slope;
     rec->visual.fillSpacing = spacing;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->realize(rec);
     return TRUE;
 }
@@ -4398,7 +4390,7 @@ BObolPolygonStore::setFillFlags(BObolPolygonHandle handle,
     if (!rec)
 	return FALSE;
     store_polygon_set_fill_flags(rec->visual, fillFlags);
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->realize(rec);
     return TRUE;
 }
@@ -4411,7 +4403,7 @@ BObolPolygonStore::setFillColor(BObolPolygonHandle handle,
     if (!rec)
 	return FALSE;
     rec->visual.fillColor = fillColor;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->realize(rec);
     return TRUE;
 }
@@ -4435,7 +4427,7 @@ BObolPolygonStore::setGeometry(BObolPolygonHandle handle,
     if (!rec || !polygon)
 	return FALSE;
     (void)bg_polygon_copy(&rec->polygon, polygon);
-    rec->revision++;
+    store_revision_advance(rec->revision);
     this->impl->realize(rec);
     return TRUE;
 }
@@ -4454,7 +4446,7 @@ BObolPolygonStore::setSketchName(BObolPolygonHandle handle,
     if (!rec)
 	return FALSE;
     rec->sketchName = sketchName;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     return TRUE;
 }
 
@@ -4482,7 +4474,7 @@ BObolPolygonStore::setUserData(BObolPolygonHandle handle, void *userData)
     if (!rec)
 	return FALSE;
     rec->userData = userData;
-    rec->revision++;
+    store_revision_advance(rec->revision);
     return TRUE;
 }
 
@@ -4540,7 +4532,7 @@ BObolPolygonStore::csg(BObolPolygonHandle target,
 	rt->originPoint = rs->originPoint;
 	HMOVE(rt->viewPlane, rs->viewPlane);
 	rt->visual.viewZ = rs->visual.viewZ;
-	rt->revision++;
+	store_revision_advance(rt->revision);
 	this->impl->realize(rt);
 	return TRUE;
     }
@@ -4557,7 +4549,7 @@ BObolPolygonStore::csg(BObolPolygonHandle target,
 
     (void)bg_polygon_move(&rt->polygon, &result);
     rt->type = BObolPolygonType::General;
-    rt->revision++;
+    store_revision_advance(rt->revision);
     this->impl->realize(rt);
     return TRUE;
 }
@@ -4590,7 +4582,7 @@ BObolPolygonStore::importSketch(const SbString &name,
     }
 
     BObolPolygonStoreRecord *rec = new BObolPolygonStoreRecord;
-    rec->id = this->impl->nextId++;
+    rec->id = bobol_nonzero_identity_take(this->impl->nextId);
     rec->revision = 1;
     rec->name = name;
     rec->scope = scope;

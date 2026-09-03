@@ -195,8 +195,12 @@ bounded source scan and, after the first coverage preview is eligible for
 publication, performs one sequential projection pass.  Cache format 23 stores
 the binary-XYZ corners only when the PCA box is materially tighter than the
 source AABB.  Cache reads validate finiteness, orthogonality, corner topology,
-and conservative axis-aligned extent before admitting the metadata.  A miss,
-invalid record, or insignificant improvement simply retains the AABB.
+and conservative axis-aligned extent before carrying the metadata.  Obol
+admission then validates renderer-visible positions in the exact oriented
+volume.  Because the OBB is optional, that specific validation failure removes
+only the OBB and admits the authoritative mesh with its AABB; unrelated
+geometry failures remain hard rejections.  A miss, invalid record, or
+insignificant improvement also retains the AABB.
 
 The draw cache is a carrier, not a second geometry authority.  LoD-asset
 record format 3 stores optional canonical-asset OBB metadata, and chunked

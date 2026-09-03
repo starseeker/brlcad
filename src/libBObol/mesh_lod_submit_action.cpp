@@ -4986,7 +4986,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    if (request.coalesceAssetProducer &&
 		(scheduledAssetProducers.find(assetProducerKey) !=
 			scheduledAssetProducers.end() ||
-		 submitAction->service->updateActiveRequestDemand(request))) {
+		 submitAction->service->updateActiveRequestDemand(
+		     request, submitAction->generation))) {
 		/* One immutable asset producer is already constructing or loading
 		 * this hierarchy.  The completed result wakes the controller; its
 		 * next bounded pass binds this occurrence from the resident asset or
@@ -5328,7 +5329,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	(!submitAction->useForcedCut && !submitAction->resetExisting) ?
 	TRUE : FALSE;
     if (suppressActiveDuplicate &&
-	submitAction->service->updateActiveRequestDemand(request)) {
+	submitAction->service->updateActiveRequestDemand(
+	    request, submitAction->generation)) {
 	submitAction->skippedMeshCount++;
 	submitAction->appendDiagnostic(target,
 				       "current compact LoD request is already active");
@@ -5607,7 +5609,8 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	(!submitAction->useForcedCut && !submitAction->resetExisting) ?
 	TRUE : FALSE;
     if (suppressActiveDuplicate &&
-	submitAction->service->updateActiveRequestDemand(request)) {
+	submitAction->service->updateActiveRequestDemand(
+	    request, submitAction->generation)) {
 	submitAction->skippedMeshCount++;
 	submitAction->appendDiagnostic(target,
 				       "current LoD request is already active");

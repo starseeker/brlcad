@@ -62,6 +62,10 @@ ready, constrained, or failed product outcomes.
 - **Retained-scene commit** atomically replaces the retained presentation.
   **Durable-cache commit** publishes an immutable reusable asset.  A failure
   before either commit preserves the corresponding prior object.
+- **Authentication, ordering, and ownership identities** are monotonic within
+  their production lifetime.  A fixed-width implementation fail-stops before
+  reuse.  **Diagnostic counters** authorize no transition and may saturate;
+  they are not interchangeable with identities even when both use `uint64_t`.
 
 When a new model needs one of these concepts, reuse the qualified meaning and
 type.  A shared TLA+ vocabulary module is warranted only after two models have

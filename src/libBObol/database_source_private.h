@@ -143,16 +143,57 @@ struct BObolCompactOccurrenceRegistryState {
 };
 
 struct BObolCadPresentationBridgeState {
+    struct CompactStamp {
+	Obol::InstanceId instance;
+	Obol::PartId part;
+	uint64_t geometryRevision = 0;
+	uint64_t placementRevision = 0;
+	uint64_t appearanceRevision = 0;
+	uint64_t visibilityRevision = 0;
+	uint64_t selectionRevision = 0;
+	uint64_t semanticRevision = 0;
+
+	bool sameStructure(const CompactStamp &other) const
+	{
+	    return this->instance == other.instance &&
+		this->part == other.part &&
+		this->geometryRevision == other.geometryRevision &&
+		this->placementRevision == other.placementRevision;
+	}
+
+	bool sameStyle(const CompactStamp &other) const
+	{
+	    return this->instance == other.instance &&
+		this->appearanceRevision == other.appearanceRevision &&
+		this->visibilityRevision == other.visibilityRevision &&
+		this->selectionRevision == other.selectionRevision;
+	}
+
+	bool sameSemantic(const CompactStamp &other) const
+	{
+	    return this->instance == other.instance &&
+		this->semanticRevision == other.semanticRevision;
+	}
+    };
+
+    void clearCompiledCompactEvidence(void)
+    {
+	this->compiledCompactStamps.clear();
+	this->compiledCompactPartCount = 0;
+	this->compiledCompactHidden.clear();
+	this->compiledCompactSelected.clear();
+	this->compiledCompactUnpickable.clear();
+    }
+
     SoBRLCadAssembly *compiledAssembly = NULL;
     SbBool compiledAssemblyDirty = TRUE;
     SbBool compiledAssemblyActive = FALSE;
     SbUniqueId compiledAssemblyNodeId = 0;
-    uint64_t compiledCompactStructureSignature = 0;
-    uint64_t compiledCompactStyleSignature = 0;
-    uint64_t compiledCompactSemanticSignature = 0;
-    uint64_t compiledCompactHiddenSignature = 0;
-    uint64_t compiledCompactSelectedSignature = 0;
-    uint64_t compiledCompactUnpickableSignature = 0;
+    std::vector<CompactStamp> compiledCompactStamps;
+    size_t compiledCompactPartCount = 0;
+    std::vector<Obol::InstanceId> compiledCompactHidden;
+    std::vector<Obol::InstanceId> compiledCompactSelected;
+    std::vector<Obol::InstanceId> compiledCompactUnpickable;
 };
 
 struct BObolDatabaseSourceSensorState {
@@ -210,6 +251,10 @@ std::string database_source_leaf_component(const SbString &path);
 uint64_t compact_next_revision(uint64_t revision);
 bool compact_style_equal(const Obol::InstanceStyle &a,
     const Obol::InstanceStyle &b);
+bool compact_semantic_equal(
+    const SoBRLCadAssembly::InstanceSemantic &a,
+    const SoBRLCadAssembly::InstanceSemantic &b);
+void compact_note_semantic_change(BObolCompactInstanceEntry &entry);
 Obol::InstanceStyle compact_effective_style(
     const BObolCompactInstanceEntry &entry);
 SbBool compact_effective_authored_visibility(

@@ -1910,6 +1910,7 @@ SoBRLDatabaseSource::setCompactInstanceRegionIdForPath(const char *queryPath,
 	if (entry.semantic.regionId == regionId)
 	    return;
 	entry.semantic.regionId = regionId;
+	compact_note_semantic_change(entry);
 	entry.appearanceRevision = compact_next_revision(
 	    entry.appearanceRevision);
 	compact_sync_shape_summary_state(entry);
@@ -1945,6 +1946,7 @@ SoBRLDatabaseSource::setCompactInstanceRegionMetadataForPath(
 	entry.semantic.airCode = airCode;
 	entry.semantic.materialId = materialId;
 	entry.semantic.los = los;
+	compact_note_semantic_change(entry);
 	entry.appearanceRevision = compact_next_revision(
 	    entry.appearanceRevision);
 	compact_sync_shape_summary_state(entry);
@@ -1992,6 +1994,7 @@ SoBRLDatabaseSource::setCompactInstanceMetadataForPath(const char *queryPath,
 	entry.semantic.materialColor = nextMaterialColorValid ? nextMaterialColor :
 	    SbColor(1.0f, 1.0f, 1.0f);
 	entry.semantic.materialShader = materialShader;
+	compact_note_semantic_change(entry);
 	entry.normalStyle = compact_entry_style_from_source(this, entry,
 	    FALSE, FALSE);
 	entry.selectedStyle = compact_entry_style_from_source(this, entry,

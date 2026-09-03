@@ -53,6 +53,7 @@ struct BObolCompactInstanceEntry {
 	geometryRevision(1),
 	appearanceRevision(1),
 	placementRevision(1),
+	semanticRevision(1),
 	visibilityRevision(1),
 	selectionRevision(1),
 	occurrenceIndex(0),
@@ -108,6 +109,10 @@ struct BObolCompactInstanceEntry {
     uint64_t geometryRevision;
     uint64_t appearanceRevision;
     uint64_t placementRevision;
+    /* Exact pick/inspection metadata revision.  Every in-place semantic
+     * mutation advances this checked identity; rebuilt entries inherit it
+     * only after an exact semantic comparison. */
+    uint64_t semanticRevision;
     uint64_t visibilityRevision;
     uint64_t selectionRevision;
     uint32_t occurrenceIndex;

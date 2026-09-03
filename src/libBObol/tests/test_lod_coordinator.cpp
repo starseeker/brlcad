@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "exact_sample_identity_private.h"
+#include "identity_counter_private.h"
 #include "lod_coordinator_private.h"
 #include "lod_control_private.h"
 #include "presentation_preparation_private.h"
@@ -14,9 +16,11 @@
 #include "bu/app.h"
 
 #include <cstdio>
+#include <atomic>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <type_traits>
 #include <utility>
 
@@ -47,6 +51,108 @@ static_assert(std::is_trivially_copyable<BObolLodAdmissionCursor>::value,
 static_assert(std::is_trivially_copyable<
     BObolLodAdmissionRevisionStamp>::value,
     "admission revision stamps must remain allocation-free values");
+static_assert(!std::is_default_constructible<
+    BObolLodAdmissionRevisionStamp>::value,
+    "admission revision stamps must require all six domains");
+static_assert(std::is_constructible<BObolLodAdmissionRevisionStamp,
+    BObolLodInventoryEpoch, BObolLodAvailabilityEpoch,
+    BObolLodVisibilityEpoch, BObolLodViewEpoch, BObolLodPolicyEpoch,
+    BObolLodCapacityEpoch>::value,
+    "admission revision stamps must accept exactly the canonical domains");
+static_assert(!std::is_constructible<BObolLodAdmissionRevisionStamp,
+    BObolLodInventoryEpoch, BObolLodAvailabilityEpoch,
+    BObolLodViewEpoch, BObolLodPolicyEpoch,
+    BObolLodCapacityEpoch>::value,
+    "a visibility companion may not be omitted from an admission stamp");
+
+static int
+test_identity_exhaustion_contract(void)
+{
+    uint64_t successor = 17;
+    if (!bobol_identity_successor<uint64_t>(0, successor) ||
+	successor != 1)
+	return 1;
+
+    const uint64_t maximum = std::numeric_limits<uint64_t>::max();
+    if (!bobol_identity_successor(maximum - 1, successor) ||
+	successor != maximum)
+	return 1;
+    successor = 17;
+    if (bobol_identity_successor(maximum, successor) || successor != 17)
+	return 1;
+
+    BObolLodViewEpoch epoch(maximum - 1);
+    if (!epoch.canAdvance())
+	return 1;
+    epoch.advance();
+    if (epoch.value() != maximum || epoch.canAdvance())
+	return 1;
+
+    uint64_t nextSequence = 0;
+    if (bobol_identity_take(nextSequence) != 0 || nextSequence != 1)
+	return 1;
+    uint64_t nextNonzeroIdentity = 1;
+    if (bobol_nonzero_identity_take(nextNonzeroIdentity) != 1 ||
+	nextNonzeroIdentity != 2)
+	return 1;
+
+    std::atomic<uint64_t> atomicIdentity(41);
+    if (bobol_atomic_identity_advance(atomicIdentity) != 42 ||
+	atomicIdentity.load(std::memory_order_relaxed) != 42)
+	return 1;
+    if (bobol_atomic_nonzero_identity_take(atomicIdentity) != 42 ||
+	atomicIdentity.load(std::memory_order_relaxed) != 43)
+	return 1;
+
+    uint32_t diagnostic = std::numeric_limits<uint32_t>::max();
+    bobol_saturating_counter_advance(diagnostic);
+    if (diagnostic != std::numeric_limits<uint32_t>::max())
+	return 1;
+    return 0;
+}
+
+static int
+test_exact_sample_identity(void)
+{
+    BObolExactSampleIdentity identity;
+    const BObolExactSampleIdentity::Entries first = {
+	{17, 2}, {9, 4}
+    };
+    const uint64_t firstToken = identity.intern(first);
+    if (!firstToken || identity.intern({{9, 4}, {17, 2}}) != firstToken)
+	return 1;
+
+    const uint64_t changedToken = identity.intern({{9, 5}, {17, 2}});
+    if (changedToken == firstToken)
+	return 1;
+    const uint64_t returnedToken = identity.intern(first);
+    if (returnedToken == firstToken || returnedToken == changedToken)
+	return 1;
+
+    identity.invalidate();
+    if (identity.intern(first) == returnedToken)
+	return 1;
+
+    BObolExactSampleIdentity boundedIdentity(2);
+    if (boundedIdentity.intern({{1, 1}}) != 1 ||
+	boundedIdentity.intern({{1, 2}}) != 2 ||
+	boundedIdentity.intern({{1, 2}}) != 2)
+	return 1;
+    return 0;
+}
+
+static BObolLodAdmissionRevisionStamp
+admission_revision_stamp(uint64_t inventory = 1,
+    uint64_t availability = 1, uint64_t visibility = 1,
+    uint64_t view = 1, uint64_t policy = 1, uint64_t capacity = 1)
+{
+    return BObolLodAdmissionRevisionStamp(
+	BObolLodInventoryEpoch(inventory),
+	BObolLodAvailabilityEpoch(availability),
+	BObolLodVisibilityEpoch(visibility), BObolLodViewEpoch(view),
+	BObolLodPolicyEpoch(policy), BObolLodCapacityEpoch(capacity));
+}
+
 using BObolLodCapacityView = decltype(
     std::declval<BObolLodAdmissionEvidence &>().capacity());
 static_assert(std::is_const<
@@ -1068,7 +1174,9 @@ test_control_refinement(void)
 	{&Refinement::PresentationProgress::finiteTimerPending,
 	    Refinement::PresentationWitness::TIMER},
 	{&Refinement::PresentationProgress::independentProducerPending,
-	    Refinement::PresentationWitness::INDEPENDENT_PRODUCER}
+	    Refinement::PresentationWitness::INDEPENDENT_PRODUCER},
+	{&Refinement::PresentationProgress::claimedFramePending,
+	    Refinement::PresentationWitness::CLAIMED_FRAME}
     };
     for (const PresentationWitnessExpectation &expectation :
 	    presentationWitnesses) {
@@ -1196,11 +1304,11 @@ test_interaction_session(void)
 	return 1;
     }
 
-    session.observeCameraChange(5000, UINT64_MAX);
+    session.observeCameraChange(5000, UINT64_MAX - 1);
     if (!session.active() || session.gestureActive() ||
 	session.phase() != Session::Phase::DEBOUNCING ||
 	session.releaseCutFloorActive() ||
-	session.settleAfterRenderSerial() != 1 ||
+	session.settleAfterRenderSerial() != UINT64_MAX ||
 	session.releaseExpiredMotionFrame(5149, debounce) ||
 	!session.releaseExpiredMotionFrame(5150, debounce) ||
 	!session.quietReady(5150, debounce)) {
@@ -1242,13 +1350,18 @@ static int
 test_revision_contract(void)
 {
     using Contract = BObolLodRevisionContract;
-    BObolLodAdmissionRevisionStamp stamp;
-    stamp.inventory.set(3);
-    stamp.availability.set(5);
-    stamp.visibility.set(7);
-    stamp.view.set(11);
-    stamp.policy.set(13);
-    stamp.capacity.set(17);
+    const BObolLodAdmissionRevisionStamp stamp =
+	admission_revision_stamp(3, 5, 7, 11, 13, 17);
+    BObolLodCapacityEvidence::Inputs planningInputs;
+    const BObolLodAdmissionPlan plan = BObolLodAdmissionPlanner::plan(
+	BObolLodAdmissionEvidence(), BObolLodAdmissionCursor(), stamp,
+	planningInputs);
+    const BObolLodAdmissionPlan administrativePlan;
+    if (!plan.certifiedFor(stamp) || !plan.nextCursor.matches(stamp) ||
+	administrativePlan.certifiedFor(stamp)) {
+	std::fprintf(stderr, "FAIL: complete/administrative stamp identity\n");
+	return 1;
+    }
 
     const BObolLodAdmissionRevisionDomain domains[] = {
 	BObolLodAdmissionRevisionDomain::INVENTORY,
@@ -1262,31 +1375,40 @@ test_revision_contract(void)
 	const BObolLodAdmissionRevisionStamp next =
 	    Contract::advance(stamp, domain);
 	const unsigned int changed =
-	    (next.inventory != stamp.inventory ? 1u : 0u) +
-	    (next.availability != stamp.availability ? 1u : 0u) +
-	    (next.visibility != stamp.visibility ? 1u : 0u) +
-	    (next.view != stamp.view ? 1u : 0u) +
-	    (next.policy != stamp.policy ? 1u : 0u) +
-	    (next.capacity != stamp.capacity ? 1u : 0u);
+	    (next.inventory() != stamp.inventory() ? 1u : 0u) +
+	    (next.availability() != stamp.availability() ? 1u : 0u) +
+	    (next.visibility() != stamp.visibility() ? 1u : 0u) +
+	    (next.view() != stamp.view() ? 1u : 0u) +
+	    (next.policy() != stamp.policy() ? 1u : 0u) +
+	    (next.capacity() != stamp.capacity() ? 1u : 0u);
 	if (changed != 1u) {
 	    std::fprintf(stderr,
 		"FAIL: revision transition changed %u domains\n", changed);
+	    return 1;
+	}
+	if (Contract::planDisposition(stamp, next) !=
+		Contract::PlanDisposition::STALE ||
+	    plan.certifiedFor(next) || plan.nextCursor.matches(next)) {
+	    std::fprintf(stderr,
+		"FAIL: domain %u did not stale every asynchronous identity\n",
+		static_cast<unsigned int>(domain));
 	    return 1;
 	}
     }
 
     const BObolLodAdmissionRevisionStamp policy =
 	Contract::setPolicy(stamp, 19);
-    if (policy.policy.value() != 19 ||
-	policy.inventory != stamp.inventory ||
-	policy.availability != stamp.availability ||
-	policy.visibility != stamp.visibility ||
-	policy.view != stamp.view || policy.capacity != stamp.capacity) {
+    if (policy.policy().value() != 19 ||
+	policy.inventory() != stamp.inventory() ||
+	policy.availability() != stamp.availability() ||
+	policy.visibility() != stamp.visibility() ||
+	policy.view() != stamp.view() || policy.capacity() != stamp.capacity()) {
 	std::fprintf(stderr, "FAIL: policy synchronization changed evidence\n");
 	return 1;
     }
 
-    BObolLodAdmissionRevisionStamp empty;
+    const BObolLodAdmissionRevisionStamp empty =
+	BObolLodAdmissionRevisionStamp::administrative();
     if (Contract::planDisposition(empty, stamp) !=
 	    Contract::PlanDisposition::ADMINISTRATIVE ||
 	Contract::planDisposition(stamp, stamp) !=
@@ -2046,12 +2168,7 @@ test_static_quality_policy(void)
     trial.begin(16.0f);
     trial.noteSampledCeiling(7);
 
-    BObolLodAdmissionRevisionStamp stamp;
-    stamp.inventory.set(1);
-    stamp.availability.set(1);
-    stamp.view.set(1);
-    stamp.policy.set(1);
-    stamp.capacity.set(1);
+    const BObolLodAdmissionRevisionStamp stamp = admission_revision_stamp();
     if (!trial.probing() || !trial.inProgress() ||
 	trial.capacityRejected() ||
 	trial.sampledCeiling() != 7 ||
@@ -2091,15 +2208,16 @@ test_static_quality_policy(void)
 	std::fprintf(stderr, "FAIL: static quality constrained state\n");
 	return 1;
     }
-    BObolLodAdmissionRevisionStamp changedStamp = stamp;
-    changedStamp.view.set(2);
+    BObolLodAdmissionRevisionStamp changedStamp =
+	BObolLodRevisionContract::advance(
+	    stamp, BObolLodAdmissionRevisionDomain::VIEW);
     if (trial.rejectedFor(changedStamp)) {
 	std::fprintf(stderr,
 	    "FAIL: stale static quality constraint remained current\n");
 	return 1;
     }
-    changedStamp = stamp;
-    changedStamp.capacity.set(2);
+    changedStamp = BObolLodRevisionContract::advance(
+	stamp, BObolLodAdmissionRevisionDomain::CAPACITY);
     if (!trial.rejectedFor(changedStamp)) {
 	std::fprintf(stderr,
 	    "FAIL: completed frame invalidated its capacity constraint\n");
@@ -2206,8 +2324,9 @@ test_static_quality_policy(void)
 	    "FAIL: rejected handoff did not complete reconciliation\n");
 	return 1;
     }
-    BObolLodAdmissionRevisionStamp staleConstraintStamp = stamp;
-    staleConstraintStamp.view.set(2);
+    const BObolLodAdmissionRevisionStamp staleConstraintStamp =
+	BObolLodRevisionContract::advance(
+	    stamp, BObolLodAdmissionRevisionDomain::VIEW);
     if (trial.constrainedPresentationBudgetFor(stamp) !=
 	    rejection.allowedCost ||
 	trial.constrainedPresentationBudgetFor(staleConstraintStamp) != 0) {
@@ -2644,11 +2763,7 @@ test_terminal_reconciliation_composition(void)
 	return 1;
     }
 
-    BObolLodAdmissionRevisionStamp stamp;
-    stamp.inventory.set(1);
-    stamp.availability.set(1);
-    stamp.view.set(1);
-    stamp.policy.set(1);
+    const BObolLodAdmissionRevisionStamp stamp = admission_revision_stamp();
     const BObolLodStaticQualityTrial::HandoffCompletion completion =
 	trial.completeOccurrenceHandoff(stamp, rendererCeiling);
     if (!completion.releaseRendererCeiling ||
@@ -3341,20 +3456,6 @@ test_availability_scheduler(void)
     return 0;
 }
 
-static BObolLodAdmissionRevisionStamp
-admission_revision_stamp(uint64_t inventory = 1,
-    uint64_t availability = 1, uint64_t view = 1, uint64_t policy = 1,
-    uint64_t capacity = 1)
-{
-    BObolLodAdmissionRevisionStamp stamp;
-    stamp.inventory.set(inventory);
-    stamp.availability.set(availability);
-    stamp.view.set(view);
-    stamp.policy.set(policy);
-    stamp.capacity.set(capacity);
-    return stamp;
-}
-
 static BObolLodCapacityEvidence::Decision
 apply_admission_plan(BObolLodCapacityEvidence &evidence,
 	BObolLodAdmissionCursor &cursor,
@@ -3689,7 +3790,7 @@ test_admission_capacity(void)
     BObolLodStructuralAdmissionEvidence::Inputs structuralInputs;
     structuralInputs.viewRevision = 2;
     structuralInputs.policyRevision = 3;
-    structuralInputs.frontierDigest = 4;
+    structuralInputs.frontierIdentity = 4;
     structuralInputs.unresolvedCount = 1;
     structuralInputs.activeCost = 100;
     structuralInputs.certifiedBudget = 200;
@@ -3707,7 +3808,7 @@ test_admission_capacity(void)
 	BObolLodAdmissionPlanner::plan(firstPlan.nextEvidence,
 	    firstPlan.nextCursor, admission_revision_stamp(), input);
     const BObolLodAdmissionRevisionStamp nextViewStamp =
-	admission_revision_stamp(1, 1, 2, 1, 1);
+	admission_revision_stamp(1, 1, 1, 2, 1, 1);
     const BObolLodAdmissionPlan supersedingRevisionPlan =
 	BObolLodAdmissionPlanner::plan(firstPlan.nextEvidence,
 	    firstPlan.nextCursor, nextViewStamp, input);
@@ -5250,12 +5351,10 @@ test_admission_capacity(void)
 	    richerCandidate, activeCandidatePolicy.currentBudget());
 	return 1;
     }
-    BObolLodAdmissionRevisionStamp activeCandidateStamp;
-    activeCandidateStamp.inventory = activeCandidateKey.inventory;
-    activeCandidateStamp.availability = activeCandidateKey.availability;
-    activeCandidateStamp.view = activeCandidateKey.view;
-    activeCandidateStamp.policy = activeCandidateKey.policy;
-    activeCandidateStamp.capacity.set(99);
+    const BObolLodAdmissionRevisionStamp activeCandidateStamp(
+	activeCandidateKey.inventory, activeCandidateKey.availability,
+	BObolLodVisibilityEpoch(1), activeCandidateKey.view,
+	activeCandidateKey.policy, BObolLodCapacityEpoch(99));
     Policy::CompletedAllocationInputs activeCandidateAllocation;
     activeCandidateAllocation.revisionStamp = activeCandidateStamp;
     activeCandidateAllocation.requestedSceneBudget = richerCandidate;
@@ -5320,11 +5419,10 @@ test_admission_capacity(void)
 	 i < BObolLodCapacitySearchCertificate::sampleLimit(); ++i)
 	(void)terminalPolicy.completeCapacitySearchFrame(
 	    terminalCursor, terminalFrame);
-    BObolLodAdmissionRevisionStamp terminalStamp;
-    terminalStamp.inventory = terminalKey.inventory;
-    terminalStamp.availability = terminalKey.availability;
-    terminalStamp.view = terminalKey.view;
-    terminalStamp.policy = terminalKey.policy;
+    const BObolLodAdmissionRevisionStamp terminalStamp(
+	terminalKey.inventory, terminalKey.availability,
+	BObolLodVisibilityEpoch(1), terminalKey.view, terminalKey.policy,
+	BObolLodCapacityEpoch(1));
     if (terminalPolicy.capacitySearch().phase() !=
 	    BObolLodCapacitySearchCertificate::Phase::TERMINAL ||
 	!terminalPolicy.stableBudgetLimited() ||
@@ -5333,10 +5431,12 @@ test_admission_capacity(void)
 	    "FAIL: capacity terminal-retirement setup did not certify\n");
 	return 1;
     }
-    BObolLodAdmissionRevisionStamp differentTerminalStamp = terminalStamp;
-    differentTerminalStamp.view.set(15);
-    BObolLodAdmissionRevisionStamp visibilitySuccessorStamp = terminalStamp;
-    visibilitySuccessorStamp.visibility.set(16);
+    const BObolLodAdmissionRevisionStamp differentTerminalStamp =
+	BObolLodRevisionContract::advance(
+	    terminalStamp, BObolLodAdmissionRevisionDomain::VIEW);
+    const BObolLodAdmissionRevisionStamp visibilitySuccessorStamp =
+	BObolLodRevisionContract::advance(
+	    terminalStamp, BObolLodAdmissionRevisionDomain::VISIBILITY);
     if (terminalPolicy.terminalCertificateCovers(
 	    differentTerminalStamp, 100) ||
 	!terminalPolicy.terminalCertificateCovers(
@@ -6422,7 +6522,7 @@ test_quality_policy(void)
     BObolLodStructuralAdmissionEvidence::Inputs structuralInputs;
     structuralInputs.viewRevision = 7;
     structuralInputs.policyRevision = 11;
-    structuralInputs.frontierDigest = 13;
+    structuralInputs.frontierIdentity = 13;
     structuralInputs.unresolvedCount = 20;
     structuralInputs.activeCost = 300000;
     structuralInputs.currentBudget = 320000;
@@ -6455,7 +6555,7 @@ test_quality_policy(void)
 	    "FAIL: changed structural population did not open a new transaction\n");
 	return 1;
     }
-    structuralInputs.frontierDigest = 14;
+    structuralInputs.frontierIdentity = 14;
     structuralAdmission = apply_structural_admission_plan(
 	structuralAdmissionPolicy, structuralInputs);
     if (!structuralAdmission.requestAdmission ||
@@ -9692,11 +9792,11 @@ test_presentation_transaction(void)
 
     (void)transaction.arm(
 	BObolLodPresentationTransaction::REASON_CALIBRATION,
-	UINT64_MAX, 9, 11);
+	UINT64_MAX - 1, 9, 11);
     if (transaction.requiredRenderSerial() != UINT64_MAX ||
 	!transaction.complete(UINT64_MAX, 9, 11, true).retired) {
 	std::fprintf(stderr,
-	    "FAIL: presentation serial saturation is not deterministic\n");
+	    "FAIL: presentation serial final successor is not deterministic\n");
 	return 1;
     }
 
@@ -10211,7 +10311,7 @@ test_capacity_search_certificate(void)
     /* Numeric scene budgets are not discrete population identities.  A mesh
      * cut staircase can map a wide interval of budgets to exactly the same
      * occurrence cuts.  Once that population has three measurements, a
-     * successor budget selecting the same signature must reuse the result
+     * successor budget selecting the same exact identity must reuse the result
      * immediately instead of repainting the unchanged view three more times. */
     {
 	Certificate equivalentCertificate;
@@ -10219,7 +10319,8 @@ test_capacity_search_certificate(void)
 	equivalent.key = capacity_search_key(demand);
 	equivalent.candidateBudget = initialCandidate;
 	equivalent.presentedCost = 200;
-	equivalent.populationSignature = 0x4c554359ULL;
+	equivalent.populationDigest = 0x4c554359ULL;
+	equivalent.populationIdentity = 0x1d3f7a91ULL;
 	equivalent.validSample = true;
 	equivalent.observedNanoseconds =
 	    equivalent.key.preferredTargetNanoseconds / 2;
@@ -10232,6 +10333,7 @@ test_capacity_search_certificate(void)
 	    return 1;
 	}
 	equivalent.candidateBudget = equivalentDecision.budget;
+	equivalent.populationDigest ^= 0x55aa55aaULL;
 	const size_t repeatedPopulationBudget = equivalent.candidateBudget;
 	equivalentDecision = equivalentCertificate.observe(equivalent);
 	if (equivalentDecision.requestsFrame() ||
@@ -10242,6 +10344,30 @@ test_capacity_search_certificate(void)
 	    std::fprintf(stderr,
 		"FAIL: equivalent capacity population did not make bounded "
 		"progress\n");
+	    return 1;
+	}
+    }
+
+    /* A compact digest is diagnostic only.  Equal digests may not authorize
+     * a different exact population identity. */
+    {
+	Certificate collisionCertificate;
+	Certificate::Observation collision;
+	collision.key = capacity_search_key(demand);
+	collision.candidateBudget = initialCandidate;
+	collision.presentedCost = 200;
+	collision.populationDigest = 73;
+	collision.populationIdentity = 101;
+	collision.validSample = true;
+	collision.observedNanoseconds =
+	    collision.key.preferredTargetNanoseconds / 2;
+	(void)collisionCertificate.observe(collision);
+	collision.populationIdentity = 102;
+	const Certificate::Decision collisionDecision =
+	    collisionCertificate.observe(collision);
+	if (collisionDecision.result != Result::STALE_POPULATION) {
+	    std::fprintf(stderr,
+		"FAIL: equal digest authorized a different exact population\n");
 	    return 1;
 	}
     }
@@ -10483,6 +10609,10 @@ main(int argc, char **argv)
 {
     (void)argc;
     bu_setprogname(argv[0]);
+    if (test_identity_exhaustion_contract())
+	return 1;
+    if (test_exact_sample_identity())
+	return 1;
     if (test_submission_pass())
 	return 1;
     if (test_deadline_safe_presentation())

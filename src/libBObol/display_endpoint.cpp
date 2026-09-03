@@ -18,6 +18,7 @@
 #include "BObol/BViewController.h"
 #include "BObol/BViewportImage.h"
 #include "BObol/BWindowHost.h"
+#include "identity_counter_private.h"
 
 #include "imgstream/stream.h"
 
@@ -110,6 +111,18 @@ struct bobol_display_endpoint {
     {
 	if (this->controller)
 	    this->controller->invalidateRendererPerformanceHistory();
+    }
+
+    void retireWork(void)
+    {
+	if (this->controller)
+	    this->controller->retireDisplayEndpointWork();
+    }
+
+    void resumeWork(void)
+    {
+	if (this->controller)
+	    this->controller->resumeDisplayEndpointWork();
     }
 };
 
@@ -656,8 +669,9 @@ endpoint_rt_start(bobol_display_endpoint_t *endpoint)
     if (!state->renderer.synchronize(endpoint->controller))
 	return 1;
     state->cancelled.store(false, std::memory_order_release);
-    const uint64_t generation = state->generation.fetch_add(1,
-	std::memory_order_acq_rel) + 1u;
+    const uint64_t generation =
+	bobol_atomic_identity_advance(state->generation,
+	    std::memory_order_acq_rel, std::memory_order_acquire);
     BObolRtRenderSettings settings;
     settings.width = endpoint->width;
     settings.height = endpoint->height;
@@ -1303,8 +1317,7 @@ endpoint_diagnostic_refresh(bobol_display_endpoint_t *endpoint)
     if (detail.getLength() > 0)
 	summary << " detail=" << detail.getString();
     endpoint->diagnostic_summary = summary.str();
-    if (++endpoint->diagnostic_revision == 0)
-	++endpoint->diagnostic_revision;
+    bobol_identity_advance(endpoint->diagnostic_revision);
     controller->clearRenderRequest();
     return 1;
 }
@@ -1382,17 +1395,18 @@ bobol_display_endpoint_host_detach(bobol_display_endpoint_t *endpoint)
     endpoint->visible = false;
     endpoint->vsync = true;
 
-    if (!endpoint->host)
-	return;
+    if (endpoint->host) {
+	BObolWindowHost *host = endpoint->host;
+	const bool owns_host = endpoint->owns_host;
+	endpoint->host = NULL;
+	endpoint->owns_host = false;
 
-    BObolWindowHost *host = endpoint->host;
-    const bool owns_host = endpoint->owns_host;
-    endpoint->host = NULL;
-    endpoint->owns_host = false;
+	host->attachController(NULL, FALSE);
+	if (owns_host)
+	    delete host;
+    }
 
-    host->attachController(NULL, FALSE);
-    if (owns_host)
-	delete host;
+    endpoint->retireWork();
 }
 
 extern "C" void
@@ -1594,6 +1608,7 @@ bobol_display_endpoint_host_open(bobol_display_endpoint_t *endpoint,
 	endpoint->controller->setFrameRequestCallback(endpoint_frame_requested,
 	endpoint);
 	endpoint->factory_frame_callback_bound = true;
+	endpoint->resumeWork();
 	if (endpoint->engine == BOBOL_RENDER_ENGINE_RT) {
 	    if (!endpoint_rt_start(endpoint))
 		return 0;

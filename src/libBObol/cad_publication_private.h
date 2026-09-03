@@ -29,6 +29,10 @@ bool bobol_cad_admit_geometry(
 std::shared_ptr<const Obol::PartGeometry> bobol_cad_build_geometry(
     Obol::PartGeometryBuilder geometry, const char *operation);
 
+std::shared_ptr<const Obol::PartGeometry>
+bobol_cad_build_geometry_with_optional_proxy(
+    Obol::PartGeometryBuilder geometry, const char *operation);
+
 bool bobol_cad_validate_shared_parts(
     const std::vector<Obol::PartUpdate> &updates,
     const char *operation);

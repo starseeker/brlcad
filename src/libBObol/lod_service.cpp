@@ -20,6 +20,7 @@
 #include "database_source_realization.h"
 #include "cad_publication_private.h"
 #include "draw_cache_private.h"
+#include "identity_counter_private.h"
 #include "lod_coordinator_private.h"
 
 #include "raytrace.h"
@@ -1392,6 +1393,24 @@ struct BObolLodCacheWriteItem {
     void *writeData;
 };
 
+enum class BObolSharedProducerState : uint8_t {
+    BUILDING = 0,
+    RESULT
+};
+
+struct BObolSharedProducerLease {
+    BObolLodRequest demand;
+    uint64_t deliveredPublication = 0;
+};
+
+struct BObolSharedProducer {
+    uint64_t taskId = 0;
+    uint64_t producerGeneration = 0;
+    uint64_t publication = 0;
+    BObolSharedProducerState state = BObolSharedProducerState::BUILDING;
+    std::unordered_map<uint64_t, BObolSharedProducerLease> leases;
+};
+
 struct BObolLodResultSlotMapKey {
     std::string databaseId;
     std::string occurrence;
@@ -1930,6 +1949,12 @@ struct BObolLodServicePrivate {
      * view-independent page publications do not become stale merely because
      * the camera moved while source preparation continued. */
     std::unordered_map<std::string, BObolLodRequest> latestActiveRequests;
+    /* A shared producer has one immutable worker and one explicit lease per
+     * interested generation.  Non-owner generations receive a lightweight
+     * replay result after each producer publication; the owner alone may
+     * receive the demand-specific payload it prepared. */
+    std::unordered_map<std::string, BObolSharedProducer> sharedProducers;
+    std::unordered_map<uint64_t, std::string> sharedProducerTaskKeys;
     /* A completed producer still owns its request identity until the queued
      * presentation result is drained.  This prevents a fast cache hit from
      * being resubmitted while the GUI intentionally coalesces result waves. */
@@ -1995,9 +2020,7 @@ lod_resident_mesh_bytes_replace(std::atomic<size_t> &total,
 static void
 lod_resident_mesh_revision_advance(std::atomic<uint64_t> &revision)
 {
-    uint64_t next = revision.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (!next)
-	revision.store(1, std::memory_order_relaxed);
+    (void)bobol_atomic_identity_advance(revision);
 }
 
 static bool
@@ -2013,9 +2036,7 @@ lod_resident_demand_epoch_advance(BObolLodServicePrivate *p)
 {
     if (!p)
 	return;
-    p->residentMeshDemandEpoch++;
-    if (!p->residentMeshDemandEpoch)
-	p->residentMeshDemandEpoch++;
+    bobol_identity_advance(p->residentMeshDemandEpoch);
 }
 
 static void
@@ -2242,22 +2263,6 @@ lod_generation_cancelled_unlocked(const BObolLodServicePrivate *p,
 	   p->cancelledGenerations.end() ? TRUE : FALSE;
 }
 
-static SbBool
-lod_generation_cancelled(BObolLodServicePrivate *p, uint64_t generation)
-{
-    std::lock_guard<std::mutex> lock(p->mutex);
-    return lod_generation_cancelled_unlocked(p, generation);
-}
-
-static SbBool
-lod_generation_cancelled_or_stopping(BObolLodServicePrivate *p,
-				     uint64_t generation)
-{
-    std::lock_guard<std::mutex> lock(p->mutex);
-    return p->stopping ||
-	   lod_generation_cancelled_unlocked(p, generation) ? TRUE : FALSE;
-}
-
 static void
 lod_prune_cancelled_generations_unlocked(BObolLodServicePrivate *p)
 {
@@ -2380,6 +2385,106 @@ lod_active_request_key_recorded_unlocked(const BObolLodServicePrivate *p,
 	   p->activeRequestKeyCounts.end() ? TRUE : FALSE;
 }
 
+static BObolSharedProducer *
+lod_shared_producer_unlocked(BObolLodServicePrivate *p,
+	const SbString &key)
+{
+    if (!p || key.getLength() == 0)
+	return NULL;
+    const auto found = p->sharedProducers.find(key.getString());
+    return found == p->sharedProducers.end() ? NULL : &found->second;
+}
+
+static const BObolSharedProducer *
+lod_shared_producer_unlocked(const BObolLodServicePrivate *p,
+	const SbString &key)
+{
+    if (!p || key.getLength() == 0)
+	return NULL;
+    const auto found = p->sharedProducers.find(key.getString());
+    return found == p->sharedProducers.end() ? NULL : &found->second;
+}
+
+static SbBool
+lod_request_demand_is_older(const BObolLodRequest &candidate,
+	const BObolLodRequest &current)
+{
+    return candidate.databaseRevision < current.databaseRevision ||
+	candidate.sourceRevision < current.sourceRevision ||
+	candidate.viewRevision < current.viewRevision ||
+	(candidate.viewRevision == current.viewRevision &&
+	 candidate.policyRevision < current.policyRevision) ? TRUE : FALSE;
+}
+
+static SbBool
+lod_shared_producer_record_lease_unlocked(BObolLodServicePrivate *p,
+	const SbString &key, const BObolLodRequest &request,
+	uint64_t generation, SbBool *replayReady)
+{
+    BObolSharedProducer *producer = lod_shared_producer_unlocked(p, key);
+    if (!producer)
+	return FALSE;
+    if (!generation)
+	generation = producer->producerGeneration;
+    if (!generation || lod_generation_cancelled_unlocked(p, generation))
+	return FALSE;
+
+    auto found = producer->leases.find(generation);
+    if (found != producer->leases.end() &&
+	lod_request_demand_is_older(request, found->second.demand))
+	return TRUE;
+
+    if (found == producer->leases.end()) {
+	BObolSharedProducerLease lease;
+	lease.demand = request;
+	found = producer->leases.emplace(generation, std::move(lease)).first;
+    } else {
+	const SbBool demandChanged = !bobol_lod_request_keys_equal(
+	    request, found->second.demand);
+	found->second.demand = request;
+	/* A queued payload was stamped for the earlier demand.  Preserve it
+	 * for ordinary stale-result accounting and add a current replay edge. */
+	if (demandChanged && producer->publication)
+	    found->second.deliveredPublication = producer->publication - 1;
+    }
+
+    if (generation == producer->producerGeneration)
+	p->latestActiveRequests[key.getString()] = request;
+    if (replayReady && producer->publication &&
+	found->second.deliveredPublication < producer->publication)
+	*replayReady = TRUE;
+    return TRUE;
+}
+
+static SbBool
+lod_shared_producer_has_leases_unlocked(
+	const BObolLodServicePrivate *p, const BObolLodRequest &request)
+{
+    if (!request.coalesceAssetProducer)
+	return FALSE;
+    const BObolSharedProducer *producer = lod_shared_producer_unlocked(
+	p, lod_request_active_key(request));
+    return producer && !producer->leases.empty() ? TRUE : FALSE;
+}
+
+static SbBool
+lod_producer_cancelled_unlocked(const BObolLodServicePrivate *p,
+	uint64_t generation, const BObolLodRequest &request)
+{
+    if (lod_shared_producer_has_leases_unlocked(p, request))
+	return FALSE;
+    return lod_generation_cancelled_unlocked(p, generation);
+}
+
+static SbBool
+lod_producer_cancelled_or_stopping(BObolLodServicePrivate *p,
+	uint64_t generation, const BObolLodRequest &request)
+{
+    std::lock_guard<std::mutex> lock(p->mutex);
+    return p->stopping ||
+	lod_producer_cancelled_unlocked(p, generation, request) ? TRUE : FALSE;
+}
+
 static SbBool
 lod_request_key_recorded_unlocked(const BObolLodServicePrivate *p,
 	const SbString &key)
@@ -2388,6 +2493,10 @@ lod_request_key_recorded_unlocked(const BObolLodServicePrivate *p,
 	return TRUE;
     if (!p || key.getLength() == 0)
 	return FALSE;
+    const BObolSharedProducer *producer =
+	lod_shared_producer_unlocked(p, key);
+    if (producer && !producer->leases.empty())
+	return TRUE;
     return p->queuedResultRequestKeyCounts.find(key.getString()) !=
 	p->queuedResultRequestKeyCounts.end() ? TRUE : FALSE;
 }
@@ -2410,28 +2519,30 @@ lod_active_request_key_remove_unlocked(BObolLodServicePrivate *p,
     }
 }
 
-static void
+static SbBool
 lod_update_active_request_demand_unlocked(BObolLodServicePrivate *p,
-	const SbString &key, const BObolLodRequest &request)
+	const SbString &key, const BObolLodRequest &request,
+	uint64_t generation, SbBool *replayReady = NULL)
 {
-    if (!p || key.getLength() == 0 ||
-	p->activeRequestKeyCounts.find(key.getString()) ==
-	    p->activeRequestKeyCounts.end())
-	return;
+    if (!p || key.getLength() == 0)
+	return FALSE;
+    if (lod_shared_producer_record_lease_unlocked(
+	    p, key, request, generation, replayReady))
+	return TRUE;
+    if (p->activeRequestKeyCounts.find(key.getString()) ==
+	p->activeRequestKeyCounts.end())
+	return FALSE;
 
     auto found = p->latestActiveRequests.find(key.getString());
     if (found == p->latestActiveRequests.end()) {
 	p->latestActiveRequests.emplace(key.getString(), request);
-	return;
+	return TRUE;
     }
     const BObolLodRequest &current = found->second;
-    if (request.databaseRevision < current.databaseRevision ||
-	request.sourceRevision < current.sourceRevision ||
-	request.viewRevision < current.viewRevision ||
-	(request.viewRevision == current.viewRevision &&
-	 request.policyRevision < current.policyRevision))
-	return;
+    if (lod_request_demand_is_older(request, current))
+	return TRUE;
     found->second = request;
+    return TRUE;
 }
 
 static void
@@ -2515,7 +2626,8 @@ lod_wait_for_debug_delay(BObolLodServicePrivate *p,
 
     uint32_t remaining = task.debugDelayMilliseconds;
     while (remaining > 0) {
-	if (lod_generation_cancelled_or_stopping(p, task.generation)) {
+	if (lod_producer_cancelled_or_stopping(
+		p, task.generation, task.request)) {
 	    lod_delayed_task_count_add(p, task.generation, -1);
 	    return FALSE;
 	}
@@ -2526,7 +2638,8 @@ lod_wait_for_debug_delay(BObolLodServicePrivate *p,
     }
 
     lod_delayed_task_count_add(p, task.generation, -1);
-    return !lod_generation_cancelled_or_stopping(p, task.generation);
+    return !lod_producer_cancelled_or_stopping(
+	p, task.generation, task.request);
 }
 
 static void
@@ -2559,7 +2672,8 @@ static SbBool
 lod_task_dependencies_ready(const BObolLodServicePrivate *p,
 			    const BObolLodTask &task)
 {
-    if (lod_generation_cancelled_unlocked(p, task.generation))
+    if (lod_producer_cancelled_unlocked(
+	    p, task.generation, task.request))
 	return TRUE;
 
     for (size_t i = 0; i < task.dependencies.size(); i++) {
@@ -2743,7 +2857,8 @@ lod_find_ready_task(BObolLodServicePrivate *p)
 static BObolLodResult
 lod_execute_task(BObolLodServicePrivate *p, const BObolLodTask &task)
 {
-    if (lod_generation_cancelled(p, task.generation))
+    if (lod_producer_cancelled_or_stopping(
+	    p, task.generation, task.request))
 	return lod_service_status_result(task, BOBOL_LOD_PROVIDER_CANCELLED,
 					 "LoD task generation cancelled");
 
@@ -2757,7 +2872,8 @@ lod_execute_task(BObolLodServicePrivate *p, const BObolLodTask &task)
 
     BObolLodResult result = (*task.realize)(task.request, task.realizeData);
 
-    if (lod_generation_cancelled(p, task.generation))
+    if (lod_producer_cancelled_or_stopping(
+	    p, task.generation, task.request))
 	return lod_service_status_result(task, BOBOL_LOD_PROVIDER_CANCELLED,
 					 "LoD task generation cancelled");
 
@@ -2770,9 +2886,18 @@ lod_execute_task(BObolLodServicePrivate *p, const BObolLodTask &task)
 	 * superseded work and the resident hierarchy will satisfy the next pass. */
 	std::lock_guard<std::mutex> lock(p->mutex);
 	const SbString activeKey = lod_request_active_key(task.request);
-	const auto latest = p->latestActiveRequests.find(activeKey.getString());
-	if (latest != p->latestActiveRequests.end())
-	    expectedRequest = latest->second;
+	const BObolSharedProducer *producer =
+	    lod_shared_producer_unlocked(p, activeKey);
+	if (producer) {
+	    const auto lease = producer->leases.find(task.generation);
+	    if (lease != producer->leases.end())
+		expectedRequest = lease->second.demand;
+	} else {
+	    const auto latest =
+		p->latestActiveRequests.find(activeKey.getString());
+	    if (latest != p->latestActiveRequests.end())
+		expectedRequest = latest->second;
+	}
     }
     lod_normalize_result(result, expectedRequest);
     return result;
@@ -2914,6 +3039,97 @@ lod_result_supersedes(const BObolLodResult &candidate,
     return true;
 }
 
+static size_t
+lod_shared_pending_replay_count_unlocked(
+    const BObolSharedProducer &producer, uint64_t generation = 0)
+{
+    size_t count = 0;
+    for (const auto &entry : producer.leases) {
+	if (generation && entry.first != generation)
+	    continue;
+	if (entry.second.deliveredPublication < producer.publication)
+	    ++count;
+    }
+    return count;
+}
+
+static SbBool
+lod_shared_producer_publish_unlocked(BObolSharedProducer &producer,
+	SbBool finalPublication, SbBool ownerPayloadQueued)
+{
+    bobol_identity_advance(producer.publication);
+    producer.state = finalPublication ? BObolSharedProducerState::RESULT :
+	BObolSharedProducerState::BUILDING;
+
+    if (ownerPayloadQueued) {
+	const auto owner = producer.leases.find(
+	    producer.producerGeneration);
+	if (owner != producer.leases.end())
+	    owner->second.deliveredPublication = producer.publication;
+    }
+    return lod_shared_pending_replay_count_unlocked(producer) ? TRUE : FALSE;
+}
+
+static BObolLodResult
+lod_shared_producer_replay_result(uint64_t generation,
+	const BObolLodRequest &request)
+{
+    BObolLodResult result;
+    result.generation = generation;
+    result.request = request;
+    result.cacheKey = bobol_lod_cache_key(request);
+    result.resultKind = BOBOL_LOD_RESULT_DIAGNOSTIC;
+    result.qualityTier = request.qualityTier;
+    result.providerStatus = BOBOL_LOD_PROVIDER_SUPERSEDED;
+    result.terminal = TRUE;
+    result.stale = TRUE;
+    result.diagnostic =
+	"shared asset producer completed; replay current consumer demand";
+    result.canonicalizePayload();
+    return result;
+}
+
+static std::unordered_map<std::string, BObolSharedProducer>::iterator
+lod_shared_producer_erase_unlocked(
+    BObolLodServicePrivate *p,
+    std::unordered_map<std::string, BObolSharedProducer>::iterator producer)
+{
+    if (!p || producer == p->sharedProducers.end())
+	return producer;
+    const uint64_t taskId = producer->second.taskId;
+    if (lod_generation_cancelled_unlocked(
+	    p, producer->second.producerGeneration)) {
+	p->taskGenerations.erase(taskId);
+	p->completed.erase(taskId);
+    }
+    p->sharedProducerTaskKeys.erase(taskId);
+    return p->sharedProducers.erase(producer);
+}
+
+static void
+lod_shared_producer_retire_if_unowned_unlocked(
+    BObolLodServicePrivate *p,
+    std::unordered_map<std::string, BObolSharedProducer>::iterator producer)
+{
+    if (!p || producer == p->sharedProducers.end() ||
+	!producer->second.leases.empty())
+	return;
+    (void)lod_shared_producer_erase_unlocked(p, producer);
+}
+
+static BObolSharedProducer *
+lod_shared_producer_for_task_unlocked(BObolLodServicePrivate *p,
+	uint64_t taskId)
+{
+    if (!p || !taskId)
+	return NULL;
+    const auto key = p->sharedProducerTaskKeys.find(taskId);
+    if (key == p->sharedProducerTaskKeys.end())
+	return NULL;
+    const auto producer = p->sharedProducers.find(key->second);
+    return producer == p->sharedProducers.end() ? NULL : &producer->second;
+}
+
 static void
 lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 		BObolLodResult &&result)
@@ -2937,8 +3153,18 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
     {
 	std::lock_guard<std::mutex> lock(p->mutex);
 
+	const SbString activeKey = lod_request_active_key(item.task.request);
+	auto sharedEntry = p->sharedProducers.find(activeKey.getString());
+	const SbBool sharedTask = sharedEntry != p->sharedProducers.end() &&
+	    sharedEntry->second.taskId == item.id ? TRUE : FALSE;
+	BObolSharedProducer *shared = sharedTask ?
+	    &sharedEntry->second : NULL;
 	const SbBool discardResult = p->stopping ||
-	    lod_generation_cancelled_unlocked(p, item.task.generation);
+	    (shared ? shared->leases.empty() :
+	     lod_generation_cancelled_unlocked(p, item.task.generation));
+	const SbBool queueOwnerPayload = !shared ||
+	    shared->leases.find(shared->producerGeneration) !=
+		shared->leases.end();
 	if (!discardResult)
 	    p->completed.insert(item.id);
 	else
@@ -2954,8 +3180,7 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 	p->activeWorkingSetBytes =
 	    workingBytes >= p->activeWorkingSetBytes ?
 	    0 : p->activeWorkingSetBytes - workingBytes;
-	lod_active_request_key_remove_unlocked(p,
-					       lod_request_active_key(item.task.request));
+	lod_active_request_key_remove_unlocked(p, activeKey);
 
 	if (item.task.publishResult) {
 	    if (p->resultReservations > 0)
@@ -2963,37 +3188,69 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 	    if (discardResult) {
 		p->discardedStaleResults++;
 	    } else {
-		const BObolLodResultSlotMapKey slot =
-		    lod_result_slot_map_key(completedResult);
-		const auto existing = p->resultSlots.find(slot);
-		if (existing != p->resultSlots.end()) {
-		    if (lod_result_supersedes(
-			    completedResult, *existing->second)) {
-			const SbString oldRequestKey = lod_request_active_key(
-			    existing->second->request);
-			const SbString newRequestKey = lod_request_active_key(
-			    completedResult.request);
-			if (oldRequestKey != newRequestKey) {
+		if (shared && lod_shared_producer_publish_unlocked(
+			*shared, TRUE, queueOwnerPayload))
+		    notifyResultReady = TRUE;
+		if (queueOwnerPayload) {
+		    /* The final worker publication supersedes every undrained
+		     * preview for this producer/consumer.  Keeping an older slot of
+		     * another result kind would make lease retirement depend on drain
+		     * order rather than the final publication witness. */
+		    if (shared) {
+			for (auto queued = p->results.begin();
+			     queued != p->results.end();) {
+			    if (queued->generation !=
+				    shared->producerGeneration ||
+				lod_request_active_key(queued->request) !=
+				    activeKey) {
+				++queued;
+				continue;
+			    }
 			    lod_queued_result_request_key_remove_unlocked(
-				p, existing->second->request);
-			    lod_queued_result_request_key_add_unlocked(
-				p, completedResult.request);
+				p, queued->request);
+			    p->resultSlots.erase(
+				lod_result_slot_map_key(*queued));
+			    lod_generation_count_remove_unlocked(
+				p->generationResultCounts,
+				queued->generation);
+			    queued = p->results.erase(queued);
 			}
-			*existing->second = std::move(completedResult);
 		    }
-		    p->coalescedResults++;
-		} else {
-		    notifyResultReady =
-			lod_generation_count_unlocked(
+		    const BObolLodResultSlotMapKey slot =
+			lod_result_slot_map_key(completedResult);
+		    const auto existing = p->resultSlots.find(slot);
+		    if (existing != p->resultSlots.end()) {
+			if (lod_result_supersedes(
+				completedResult, *existing->second)) {
+			    const SbString oldRequestKey =
+				lod_request_active_key(
+				    existing->second->request);
+			    const SbString newRequestKey =
+				lod_request_active_key(
+				    completedResult.request);
+			    if (oldRequestKey != newRequestKey) {
+				lod_queued_result_request_key_remove_unlocked(
+				    p, existing->second->request);
+				lod_queued_result_request_key_add_unlocked(
+				    p, completedResult.request);
+			    }
+			    *existing->second = std::move(completedResult);
+			}
+			p->coalescedResults++;
+		    } else {
+			if (lod_generation_count_unlocked(
+				p->generationResultCounts,
+				completedResult.generation) == 0)
+			    notifyResultReady = TRUE;
+			lod_queued_result_request_key_add_unlocked(
+			    p, completedResult.request);
+			p->results.push_back(std::move(completedResult));
+			p->resultSlots.emplace(
+			    slot, std::prev(p->results.end()));
+			lod_generation_count_add_unlocked(
 			    p->generationResultCounts,
-			    completedResult.generation) == 0 ? TRUE : FALSE;
-		    lod_queued_result_request_key_add_unlocked(
-			p, completedResult.request);
-		    p->results.push_back(std::move(completedResult));
-		    p->resultSlots.emplace(slot, std::prev(p->results.end()));
-		    lod_generation_count_add_unlocked(
-			p->generationResultCounts,
-			p->results.back().generation);
+			    p->results.back().generation);
+		    }
 		}
 	    }
 	}
@@ -3006,6 +3263,8 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 		BObolLodCacheWriteItem writeItem;
 		writeItem.result = duplicateForCache ? std::move(cacheResult) :
 		    std::move(completedResult);
+		if (shared && !shared->leases.empty())
+		    writeItem.result.generation = shared->leases.begin()->first;
 		writeItem.write = item.task.cacheWrite;
 		writeItem.writeData = item.task.cacheWriteData;
 		const BObolLodResultSlotMapKey slot =
@@ -3027,6 +3286,8 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 	    }
 	}
 	lod_generation_task_finished_unlocked(p, item.task.generation);
+	if (shared && discardResult)
+	    lod_shared_producer_retire_if_unowned_unlocked(p, sharedEntry);
     }
 
     bobol_lod_working_set_release(
@@ -3638,8 +3899,8 @@ lod_cache_writer_loop(BObolLodServicePrivate *p)
 	 * persist a result that became stale while it was waiting for the cache
 	 * writer.  A callback already in progress remains intentionally
 	 * non-preemptible. */
-	if (item.write && !lod_generation_cancelled_or_stopping(p,
-		item.result.generation))
+	if (item.write && !lod_producer_cancelled_or_stopping(
+		p, item.result.generation, item.result.request))
 	    (*item.write)(item.result, item.writeData);
 
 	{
@@ -3753,6 +4014,8 @@ BObolLodService::stop(void)
 	this->p->cacheWriteReservations = 0;
 	this->p->activeRequestKeyCounts.clear();
 	this->p->latestActiveRequests.clear();
+	this->p->sharedProducers.clear();
+	this->p->sharedProducerTaskKeys.clear();
 	this->p->cacheWriterStopping = TRUE;
     }
     for (size_t i = 0; i < pending.size(); i++)
@@ -3974,6 +4237,14 @@ lod_cold_preview_refresh_demand(BObolColdMeshPreviewContext *context)
 	return;
     const SbString key = lod_request_active_key(context->request);
     std::lock_guard<std::mutex> lock(context->serviceState->mutex);
+    const BObolSharedProducer *producer = lod_shared_producer_unlocked(
+	context->serviceState, key);
+    if (producer) {
+	const auto lease = producer->leases.find(context->generation);
+	if (lease != producer->leases.end())
+	    context->request = lease->second.demand;
+	return;
+    }
     const auto found = context->serviceState->latestActiveRequests.find(
 	key.getString());
     if (found != context->serviceState->latestActiveRequests.end())
@@ -4067,7 +4338,8 @@ lod_cold_mesh_preview_cancelled(void *callbackData)
     const BObolColdMeshPreviewContext *context =
 	static_cast<const BObolColdMeshPreviewContext *>(callbackData);
     return !context || !context->service || !context->generation ||
-	context->service->isGenerationCancelled(context->generation) ? 1 : 0;
+	context->service->isProducerCancelled(
+	    context->generation, context->request) ? 1 : 0;
 }
 
 static size_t
@@ -4381,7 +4653,8 @@ lod_publish_cold_spatial_page_impl(
     if (!context || !context->service || !context->generation || !page ||
 	!cacheKey || !context->spatialLeafProducer ||
 	!context->spatialCoverageAdmitted ||
-	context->service->isGenerationCancelled(context->generation) ||
+	context->service->isProducerCancelled(
+	    context->generation, context->request) ||
 	page->cut < page->hierarchy.min_cut ||
 	page->cut > page->hierarchy.max_cut || !page->data.faces ||
 	!page->data.points_orig || !page->data.face_count ||
@@ -4739,7 +5012,7 @@ BObolLodService::realizeResidentMeshLod(
 	} else {
 	    resident = found->second;
 	}
-	resident->useRevision.fetch_add(1, std::memory_order_relaxed);
+	(void)bobol_atomic_identity_advance(resident->useRevision);
     }
 
     std::lock_guard<std::mutex> residentLock(resident->mutex);
@@ -5794,11 +6067,8 @@ BObolLodService::scheduleResidentMeshCompaction(
 	    target.useRevision = resident->useRevision.load(
 		std::memory_order_relaxed);
 	    target.demandEpoch = this->p->residentMeshDemandEpoch;
-	    target.revision =
-		this->p->nextResidentMeshCompactionTargetRevision++;
-	    if (!target.revision)
-		target.revision =
-		    this->p->nextResidentMeshCompactionTargetRevision++;
+	    target.revision = bobol_nonzero_identity_take(
+		this->p->nextResidentMeshCompactionTargetRevision);
 	    if (!this->p->residentMeshCompactionQueuedAssets.insert(
 		    residentEntry.first).second)
 		continue;
@@ -5904,7 +6174,7 @@ BObolLodService::noteResidentMeshUse(const BObolLodCacheKey &assetKey)
 	assetKey.value.getString());
     if (found == this->p->residentMeshes.end() || !found->second)
 	return;
-    found->second->useRevision.fetch_add(1, std::memory_order_relaxed);
+    (void)bobol_atomic_identity_advance(found->second->useRevision);
 }
 
 void
@@ -5924,9 +6194,7 @@ BObolLodService::beginGeneration(void)
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
 
-    this->p->nextGeneration++;
-    if (this->p->nextGeneration == 0)
-	this->p->nextGeneration++;
+    bobol_identity_advance(this->p->nextGeneration);
     this->p->activeGeneration = this->p->nextGeneration;
     return this->p->activeGeneration;
 }
@@ -5952,18 +6220,43 @@ BObolLodService::cancelGeneration(uint64_t generation)
 	if (this->p->activeGeneration == generation)
 	    this->p->activeGeneration = 0;
 
+	for (auto producer = this->p->sharedProducers.begin();
+	     producer != this->p->sharedProducers.end();) {
+	    producer->second.leases.erase(generation);
+	    if (!producer->second.leases.empty() ||
+		producer->second.state == BObolSharedProducerState::BUILDING) {
+		++producer;
+		continue;
+	    }
+	    const uint64_t taskId = producer->second.taskId;
+	    this->p->sharedProducerTaskKeys.erase(taskId);
+	    this->p->taskGenerations.erase(taskId);
+	    this->p->completed.erase(taskId);
+	    producer = this->p->sharedProducers.erase(producer);
+	}
+
 	for (std::deque<BObolLodWorkItem>::iterator it =
 		 this->p->pending.begin(); it != this->p->pending.end();) {
-	    if (it->task.generation != generation) {
+	    BObolSharedProducer *shared =
+		lod_shared_producer_for_task_unlocked(this->p, it->id);
+	    const SbBool sharedSurvives =
+		shared && !shared->leases.empty() ? TRUE : FALSE;
+	    const SbBool sharedUnowned =
+		shared && shared->leases.empty() ? TRUE : FALSE;
+	    if ((it->task.generation != generation && !sharedUnowned) ||
+		(it->task.generation == generation && sharedSurvives)) {
 		++it;
 		continue;
 	    }
-		    this->p->completed.insert(it->id);
-		    if (this->p->inFlight > 0)
-			this->p->inFlight--;
-		    lod_generation_count_remove_unlocked(
-			this->p->generationPendingTaskCounts, generation);
-		    lod_generation_task_finished_unlocked(this->p, generation);
+	    const uint64_t taskId = it->id;
+	    const uint64_t taskGeneration = it->task.generation;
+	    this->p->completed.insert(taskId);
+	    if (this->p->inFlight > 0)
+		this->p->inFlight--;
+	    lod_generation_count_remove_unlocked(
+		this->p->generationPendingTaskCounts, taskGeneration);
+	    lod_generation_task_finished_unlocked(
+		this->p, taskGeneration);
 	    if (it->task.publishResult && this->p->resultReservations > 0)
 		this->p->resultReservations--;
 	    if (this->p->cacheWriterEnabled && it->task.writeCache &&
@@ -5975,6 +6268,14 @@ BObolLodService::cancelGeneration(uint64_t generation)
 		this->p, it->task.request.qualityTier);
 	    cancelled.push_back(std::move(*it));
 	    it = this->p->pending.erase(it);
+	    const auto producerKey =
+		this->p->sharedProducerTaskKeys.find(taskId);
+	    if (producerKey != this->p->sharedProducerTaskKeys.end()) {
+		this->p->sharedProducers.erase(producerKey->second);
+		this->p->sharedProducerTaskKeys.erase(producerKey);
+	    }
+	    this->p->taskGenerations.erase(taskId);
+	    this->p->completed.erase(taskId);
 	}
 	lod_prune_cancelled_generations_unlocked(this->p);
 
@@ -5993,7 +6294,9 @@ BObolLodService::cancelGeneration(uint64_t generation)
 	}
 	for (std::list<BObolLodCacheWriteItem>::iterator it =
 		 this->p->cacheWrites.begin(); it != this->p->cacheWrites.end();) {
-	    if (it->result.generation == generation) {
+	    if (it->result.generation == generation &&
+		!lod_shared_producer_has_leases_unlocked(
+		    this->p, it->result.request)) {
 		this->p->cacheWriteSlots.erase(
 		    lod_result_slot_map_key(it->result));
 		lod_generation_count_remove_unlocked(
@@ -6006,6 +6309,12 @@ BObolLodService::cancelGeneration(uint64_t generation)
 	for (auto it = this->p->taskGenerations.begin();
 	     it != this->p->taskGenerations.end();) {
 	    if (it->second != generation) {
+		++it;
+		continue;
+	    }
+	    BObolSharedProducer *shared =
+		lod_shared_producer_for_task_unlocked(this->p, it->first);
+	    if (shared && !shared->leases.empty()) {
 		++it;
 		continue;
 	    }
@@ -6025,6 +6334,15 @@ BObolLodService::isGenerationCancelled(uint64_t generation) const
     std::lock_guard<std::mutex> lock(this->p->mutex);
     return this->p->stopping ||
 	lod_generation_cancelled_unlocked(this->p, generation);
+}
+
+SbBool
+BObolLodService::isProducerCancelled(
+    uint64_t generation, const BObolLodRequest &request) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->stopping || lod_producer_cancelled_unlocked(
+	this->p, generation, request) ? TRUE : FALSE;
 }
 
 void
@@ -6190,31 +6508,18 @@ static uint64_t
 lod_service_submit_task_unlocked(BObolLodServicePrivate *p,
 				 const BObolLodTask &task,
 				 const SbString &activeKey,
-				 SbBool skipActiveDuplicate)
+				 SbBool skipActiveDuplicate,
+				 SbBool *replayReady)
 {
     if (!p->running || p->stopping)
 	return 0;
-    if ((task.generation != 0 &&
-	    lod_generation_cancelled_unlocked(p, task.generation)) ||
-	    p->inFlight >= p->maxActiveTasks ||
-	    (task.publishResult &&
-	     p->results.size() + p->resultReservations >=
-		p->maxQueuedResults) ||
-	    (p->cacheWriterEnabled && task.writeCache && task.cacheWrite &&
-	     p->cacheWrites.size() + p->cacheWriteInFlight +
-		p->cacheWriteReservations >= p->maxQueuedCacheWrites)) {
-	p->rejectedTasks++;
-	return 0;
-    }
 
     BObolLodWorkItem item;
-    item.id = p->nextTaskId++;
-    if (p->nextTaskId == 0)
-	p->nextTaskId++;
+    item.id = bobol_nonzero_identity_take(p->nextTaskId);
     item.task = task;
     if (item.task.generation == 0) {
 	if (p->activeGeneration == 0) {
-	    p->nextGeneration++;
+	    bobol_identity_advance(p->nextGeneration);
 	    p->activeGeneration = p->nextGeneration;
 	}
 	item.task.generation = p->activeGeneration;
@@ -6223,8 +6528,21 @@ lod_service_submit_task_unlocked(BObolLodServicePrivate *p,
 
     if (skipActiveDuplicate &&
 	lod_request_key_recorded_unlocked(p, activeKey)) {
-	lod_update_active_request_demand_unlocked(
-	    p, activeKey, task.request);
+	(void)lod_update_active_request_demand_unlocked(
+	    p, activeKey, task.request, item.task.generation, replayReady);
+	return 0;
+    }
+
+    if (lod_generation_cancelled_unlocked(
+	    p, item.task.generation) ||
+	p->inFlight >= p->maxActiveTasks ||
+	(task.publishResult &&
+	 p->results.size() + p->resultReservations >=
+	    p->maxQueuedResults) ||
+	(p->cacheWriterEnabled && task.writeCache && task.cacheWrite &&
+	 p->cacheWrites.size() + p->cacheWriteInFlight +
+	    p->cacheWriteReservations >= p->maxQueuedCacheWrites)) {
+	p->rejectedTasks++;
 	return 0;
     }
 
@@ -6237,7 +6555,20 @@ lod_service_submit_task_unlocked(BObolLodServicePrivate *p,
     p->pending.push_back(std::move(item));
     p->pendingQualityCounts[qualityTier]++;
     p->activeRequestKeyCounts[activeKey.getString()]++;
-    lod_update_active_request_demand_unlocked(p, activeKey, task.request);
+    if (skipActiveDuplicate && publishResult &&
+	task.request.coalesceAssetProducer &&
+	activeKey.getLength() > 0) {
+	BObolSharedProducer producer;
+	producer.taskId = id;
+	producer.producerGeneration = generation;
+	BObolSharedProducerLease lease;
+	lease.demand = task.request;
+	producer.leases.emplace(generation, std::move(lease));
+	p->sharedProducers[activeKey.getString()] = std::move(producer);
+	p->sharedProducerTaskKeys[id] = activeKey.getString();
+    }
+    (void)lod_update_active_request_demand_unlocked(
+	p, activeKey, task.request, generation);
     p->generationTaskCounts[generation]++;
     p->generationPendingTaskCounts[generation]++;
     p->taskGenerations[id] = generation;
@@ -6256,14 +6587,17 @@ lod_service_submit_task(BObolLodServicePrivate *p,
 {
     const SbString activeKey = lod_request_active_key(task.request);
     uint64_t id = 0;
+    SbBool replayReady = FALSE;
     {
 	std::lock_guard<std::mutex> lock(p->mutex);
 	id = lod_service_submit_task_unlocked(
-	    p, task, activeKey, skipActiveDuplicate);
+	    p, task, activeKey, skipActiveDuplicate, &replayReady);
     }
 
     if (id)
 	p->workerCv.notify_all();
+    if (replayReady)
+	lod_notify_result_ready(p);
     return id;
 }
 
@@ -6289,8 +6623,6 @@ BObolLodService::tryPublishIntermediateResult(
     BObolLodTask task;
     task.generation = generation;
     task.request = result.request;
-    lod_normalize_result(result, task.request);
-    result.generation = generation;
 
     SbBool notifyResultReady = FALSE;
     {
@@ -6301,46 +6633,68 @@ BObolLodService::tryPublishIntermediateResult(
 	    this->p->mutex, std::try_to_lock);
 	if (!lock.owns_lock())
 	    return FALSE;
+	const SbString activeKey = lod_request_active_key(task.request);
+	BObolSharedProducer *shared = lod_shared_producer_unlocked(
+	    this->p, activeKey);
 	if (this->p->stopping ||
-	    lod_generation_cancelled_unlocked(this->p, generation) ||
+	    lod_producer_cancelled_unlocked(
+		this->p, generation, task.request) ||
 	    lod_generation_count_unlocked(
 		this->p->generationExecutingTaskCounts, generation) == 0 ||
-	    !lod_active_request_key_recorded_unlocked(
-		this->p, lod_request_active_key(result.request)))
+	    (!lod_active_request_key_recorded_unlocked(this->p, activeKey) &&
+	     !(shared && !shared->leases.empty())))
 	    return FALSE;
 
-	const BObolLodResultSlotMapKey slot =
-	    lod_result_slot_map_key(result);
-	const auto existing = this->p->resultSlots.find(slot);
-	if (existing != this->p->resultSlots.end()) {
-	    if (lod_result_supersedes(result, *existing->second)) {
-		const SbString oldRequestKey = lod_request_active_key(
-		    existing->second->request);
-		const SbString newRequestKey = lod_request_active_key(
-		    result.request);
-		if (oldRequestKey != newRequestKey) {
-		    lod_queued_result_request_key_remove_unlocked(
-			this->p, existing->second->request);
-		    lod_queued_result_request_key_add_unlocked(
-			this->p, result.request);
-		}
-		*existing->second = std::move(result);
-	    }
-	    this->p->coalescedResults++;
+	if (shared) {
+	    const auto owner = shared->leases.find(generation);
+	    if (owner != shared->leases.end())
+		lod_normalize_result(result, owner->second.demand);
+	    else
+		lod_normalize_result(result, task.request);
 	} else {
-	    if (this->p->results.size() >= this->p->maxQueuedResults)
-		return FALSE;
-	    notifyResultReady = lod_generation_count_unlocked(
-		this->p->generationResultCounts, generation) == 0 ?
-		TRUE : FALSE;
-	    lod_queued_result_request_key_add_unlocked(
-		this->p, result.request);
-	    this->p->results.push_back(std::move(result));
-	    this->p->resultSlots.emplace(
-		slot, std::prev(this->p->results.end()));
-	    lod_generation_count_add_unlocked(
-		this->p->generationResultCounts, generation);
+	    lod_normalize_result(result, task.request);
 	}
+	result.generation = generation;
+	const SbBool queueOwnerPayload = !shared ||
+	    shared->leases.find(generation) != shared->leases.end();
+
+	if (queueOwnerPayload) {
+	    const BObolLodResultSlotMapKey slot =
+		lod_result_slot_map_key(result);
+	    const auto existing = this->p->resultSlots.find(slot);
+	    if (existing != this->p->resultSlots.end()) {
+		if (lod_result_supersedes(result, *existing->second)) {
+		    const SbString oldRequestKey = lod_request_active_key(
+			existing->second->request);
+		    const SbString newRequestKey = lod_request_active_key(
+			result.request);
+		    if (oldRequestKey != newRequestKey) {
+			lod_queued_result_request_key_remove_unlocked(
+			    this->p, existing->second->request);
+			lod_queued_result_request_key_add_unlocked(
+			    this->p, result.request);
+		    }
+		    *existing->second = std::move(result);
+		}
+		this->p->coalescedResults++;
+	    } else {
+		if (this->p->results.size() >= this->p->maxQueuedResults)
+		    return FALSE;
+		notifyResultReady = lod_generation_count_unlocked(
+		    this->p->generationResultCounts, generation) == 0 ?
+		    TRUE : FALSE;
+		lod_queued_result_request_key_add_unlocked(
+		    this->p, result.request);
+		this->p->results.push_back(std::move(result));
+		this->p->resultSlots.emplace(
+		    slot, std::prev(this->p->results.end()));
+		lod_generation_count_add_unlocked(
+		    this->p->generationResultCounts, generation);
+	    }
+	}
+	if (shared && lod_shared_producer_publish_unlocked(
+		*shared, FALSE, queueOwnerPayload))
+	    notifyResultReady = TRUE;
     }
 
     if (notifyResultReady)
@@ -6369,6 +6723,7 @@ BObolLodService::submitBatch(
 	activeKeys.push_back(lod_request_active_key(task.request));
 
     size_t accepted = 0;
+    SbBool replayReady = FALSE;
     {
 	std::lock_guard<std::mutex> lock(this->p->mutex);
 	this->p->activeRequestKeyCounts.reserve(
@@ -6378,7 +6733,7 @@ BObolLodService::submitBatch(
 	for (size_t i = 0; i < tasks.size(); ++i) {
 	    taskIds[i] = lod_service_submit_task_unlocked(
 		this->p, tasks[i], activeKeys[i],
-		skipActiveDuplicates ? TRUE : FALSE);
+		skipActiveDuplicates ? TRUE : FALSE, &replayReady);
 	    if (taskIds[i])
 		++accepted;
 	}
@@ -6386,20 +6741,28 @@ BObolLodService::submitBatch(
 
     if (accepted)
 	this->p->workerCv.notify_all();
+    if (replayReady)
+	lod_notify_result_ready(this->p);
     return accepted;
 }
 
 SbBool
 BObolLodService::updateActiveRequestDemand(
-    const BObolLodRequest &request)
+    const BObolLodRequest &request, uint64_t generation)
 {
     const SbString key = lod_request_active_key(request);
 
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    const SbBool recorded =
-	lod_request_key_recorded_unlocked(this->p, key);
-    if (recorded)
-	lod_update_active_request_demand_unlocked(this->p, key, request);
+    SbBool replayReady = FALSE;
+    SbBool recorded = FALSE;
+    {
+	std::lock_guard<std::mutex> lock(this->p->mutex);
+	recorded = lod_request_key_recorded_unlocked(this->p, key);
+	if (recorded)
+	    recorded = lod_update_active_request_demand_unlocked(
+		this->p, key, request, generation, &replayReady);
+    }
+    if (replayReady)
+	lod_notify_result_ready(this->p);
     return recorded;
 }
 
@@ -6458,6 +6821,90 @@ lod_result_estimated_presentation_bytes(const BObolLodResult &result)
     return std::max(bytes, counted);
 }
 
+static void
+lod_shared_owner_result_drained_unlocked(BObolLodServicePrivate *p,
+	const BObolLodResult &result)
+{
+    if (!p || !result.request.coalesceAssetProducer)
+	return;
+    const SbString key = lod_request_active_key(result.request);
+    auto producer = p->sharedProducers.find(key.getString());
+    if (producer == p->sharedProducers.end() ||
+	producer->second.state != BObolSharedProducerState::RESULT ||
+	result.generation != producer->second.producerGeneration)
+	return;
+    const auto lease = producer->second.leases.find(result.generation);
+    if (lease != producer->second.leases.end() &&
+	lease->second.deliveredPublication >= producer->second.publication)
+	producer->second.leases.erase(lease);
+    lod_shared_producer_retire_if_unowned_unlocked(p, producer);
+}
+
+enum class BObolSharedReplayFilter : uint8_t {
+    ANY = 0,
+    GENERATION,
+    MATCHING
+};
+
+static size_t
+lod_drain_shared_replays_unlocked(BObolLodServicePrivate *p,
+	std::vector<BObolLodResult> &results, BObolSharedReplayFilter filter,
+	uint64_t generation, const std::vector<BObolLodRequest> *requests,
+	size_t maxResults)
+{
+    if (!p || !maxResults)
+	return 0;
+
+    size_t count = 0;
+    for (auto producer = p->sharedProducers.begin();
+	 producer != p->sharedProducers.end() && count < maxResults;) {
+	BObolSharedProducer &state = producer->second;
+	for (auto lease = state.leases.begin();
+	     lease != state.leases.end() && count < maxResults;) {
+	    if (lease->second.deliveredPublication >= state.publication ||
+		(filter == BObolSharedReplayFilter::GENERATION &&
+		 lease->first != generation)) {
+		++lease;
+		continue;
+	    }
+
+	    BObolLodResult replay = lod_shared_producer_replay_result(
+		lease->first, lease->second.demand);
+	    if (filter == BObolSharedReplayFilter::MATCHING) {
+		SbBool matched = FALSE;
+		if (requests) {
+		    for (const BObolLodRequest &request : *requests) {
+			if (bobol_lod_result_matches_request(replay, request)) {
+			    matched = TRUE;
+			    break;
+			}
+		    }
+		}
+		if (!matched) {
+		    ++lease;
+		    continue;
+		}
+	    }
+
+	    results.push_back(std::move(replay));
+	    lease->second.deliveredPublication = state.publication;
+	    ++count;
+	    if (state.state == BObolSharedProducerState::RESULT)
+		lease = state.leases.erase(lease);
+	    else
+		++lease;
+	}
+
+	if (state.state == BObolSharedProducerState::RESULT &&
+	    state.leases.empty()) {
+	    producer = lod_shared_producer_erase_unlocked(p, producer);
+	} else {
+	    ++producer;
+	}
+    }
+    return count;
+}
+
 size_t
 BObolLodService::drainResults(std::vector<BObolLodResult> &results,
 				size_t maxResults,
@@ -6483,12 +6930,19 @@ BObolLodService::drainResults(std::vector<BObolLodResult> &results,
 	lod_generation_count_remove_unlocked(
 	    this->p->generationResultCounts,
 	    this->p->results.front().generation);
+	lod_shared_owner_result_drained_unlocked(
+	    this->p, this->p->results.front());
 	results.push_back(std::move(this->p->results.front()));
 	this->p->results.pop_front();
 	estimatedBytes = frontBytes > SIZE_MAX - estimatedBytes ?
 	    SIZE_MAX : estimatedBytes + frontBytes;
 	count++;
     }
+
+    const size_t replayLimit = maxResults ? maxResults - count : SIZE_MAX;
+    count += lod_drain_shared_replays_unlocked(
+	this->p, results, BObolSharedReplayFilter::ANY, 0, NULL,
+	replayLimit);
 
     return count;
 }
@@ -6526,12 +6980,18 @@ BObolLodService::drainGenerationResults(
 	this->p->resultSlots.erase(lod_result_slot_map_key(*it));
 	lod_generation_count_remove_unlocked(
 	    this->p->generationResultCounts, generation);
+	lod_shared_owner_result_drained_unlocked(this->p, *it);
 	results.push_back(std::move(*it));
 	it = this->p->results.erase(it);
 	estimatedBytes = resultBytes > SIZE_MAX - estimatedBytes ?
 	    SIZE_MAX : estimatedBytes + resultBytes;
 	count++;
     }
+
+    const size_t replayLimit = maxResults ? maxResults - count : SIZE_MAX;
+    count += lod_drain_shared_replays_unlocked(
+	this->p, results, BObolSharedReplayFilter::GENERATION, generation,
+	NULL, replayLimit);
 
     return count;
 }
@@ -6570,10 +7030,16 @@ BObolLodService::drainMatchingResults(
 	this->p->resultSlots.erase(lod_result_slot_map_key(*it));
 	lod_generation_count_remove_unlocked(
 	    this->p->generationResultCounts, it->generation);
+	lod_shared_owner_result_drained_unlocked(this->p, *it);
 	results.push_back(std::move(*it));
 	it = this->p->results.erase(it);
 	count++;
     }
+
+    const size_t replayLimit = maxResults ? maxResults - count : SIZE_MAX;
+    count += lod_drain_shared_replays_unlocked(
+	this->p, results, BObolSharedReplayFilter::MATCHING, 0, &requests,
+	replayLimit);
 
     return count;
 }
@@ -6588,9 +7054,8 @@ BObolLodService::subscribeResultReady(BObolLodResultReadyCB callback,
     std::lock_guard<std::mutex> lock(this->p->mutex);
 
     BObolLodSubscriber subscriber;
-    subscriber.id = this->p->nextSubscriberId++;
-    if (this->p->nextSubscriberId == 0)
-	this->p->nextSubscriberId++;
+    subscriber.id = bobol_nonzero_identity_take(
+	this->p->nextSubscriberId);
     subscriber.callback = callback;
     subscriber.userData = userData;
     subscriber.active = TRUE;
@@ -6658,7 +7123,13 @@ size_t
 BObolLodService::queuedResultCountForDiagnostics(void) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
-    return this->p->results.size();
+    size_t count = this->p->results.size();
+    for (const auto &producer : this->p->sharedProducers) {
+	const size_t pending = lod_shared_pending_replay_count_unlocked(
+	    producer.second);
+	count = pending > SIZE_MAX - count ? SIZE_MAX : count + pending;
+    }
+    return count;
 }
 
 size_t
@@ -6703,8 +7174,14 @@ size_t
 BObolLodService::queuedResultCountForGeneration(uint64_t generation) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
-    return lod_generation_count_unlocked(
+    size_t count = lod_generation_count_unlocked(
 	this->p->generationResultCounts, generation);
+    for (const auto &producer : this->p->sharedProducers) {
+	const size_t pending = lod_shared_pending_replay_count_unlocked(
+	    producer.second, generation);
+	count = pending > SIZE_MAX - count ? SIZE_MAX : count + pending;
+    }
+    return count;
 }
 
 size_t
@@ -6756,7 +7233,48 @@ size_t
 BObolLodService::activeRequestCountForDiagnostics(void) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
-    return this->p->activeRequestKeyCounts.size();
+    size_t count = this->p->activeRequestKeyCounts.size();
+    for (const auto &producer : this->p->sharedProducers) {
+	if (!producer.second.leases.empty() &&
+	    this->p->activeRequestKeyCounts.find(producer.first) ==
+		this->p->activeRequestKeyCounts.end())
+	    ++count;
+    }
+    return count;
+}
+
+size_t
+BObolLodService::sharedProducerCountForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->sharedProducers.size();
+}
+
+size_t
+BObolLodService::sharedProducerLeaseCountForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    size_t count = 0;
+    for (const auto &producer : this->p->sharedProducers) {
+	const size_t leases = producer.second.leases.size();
+	count = leases > SIZE_MAX - count ? SIZE_MAX : count + leases;
+    }
+    return count;
+}
+
+size_t
+BObolLodService::sharedProducerLeaseCountForGeneration(
+    uint64_t generation) const
+{
+    if (!generation)
+	return 0;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    size_t count = 0;
+    for (const auto &producer : this->p->sharedProducers)
+	if (producer.second.leases.find(generation) !=
+	    producer.second.leases.end())
+	    ++count;
+    return count;
 }
 
 size_t

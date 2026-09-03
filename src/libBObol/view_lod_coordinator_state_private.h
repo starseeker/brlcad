@@ -11,6 +11,7 @@
 #include "BObol/BPickDetail.h"
 #include "BObol/BLodService.h"
 #include "BObol/BViewController.h"
+#include "identity_counter_private.h"
 #include "lod_control_private.h"
 #include "lod_coordinator_private.h"
 #include "retained_allocation_private.h"
@@ -251,14 +252,14 @@ struct BObolLodCoordinator {
 
     BObolLodAdmissionRevisionStamp admissionRevisionStamp(void) const
     {
-	BObolLodAdmissionRevisionStamp stamp;
-	stamp.inventory = this->lodAdmissionInventoryRevision;
-	stamp.availability = this->lodAdmissionAvailabilityRevision;
-	stamp.visibility = this->lodAdmissionVisibilityRevision;
-	stamp.view = this->lodViewRevision;
-	stamp.policy = this->lodPolicyRevision;
-	stamp.capacity = this->lodAdmissionCapacityRevision;
-	return stamp;
+	/* All six owners and every caller are confined to the controller thread.
+	 * Capture them in one expression so an asynchronous request receives one
+	 * immutable value, never a caller-assembled mixture of epochs. */
+	return BObolLodAdmissionRevisionStamp(
+	    this->lodAdmissionInventoryRevision,
+	    this->lodAdmissionAvailabilityRevision,
+	    this->lodAdmissionVisibilityRevision, this->lodViewRevision,
+	    this->lodPolicyRevision, this->lodAdmissionCapacityRevision);
     }
 
     bool retainedAllocationCertificateCurrent(
@@ -370,12 +371,12 @@ struct BObolLodCoordinator {
 	const BObolLodAdmissionRevisionStamp next =
 	    BObolLodRevisionContract::advance(
 		this->admissionRevisionStamp(), domain);
-	this->lodAdmissionInventoryRevision = next.inventory;
-	this->lodAdmissionAvailabilityRevision = next.availability;
-	this->lodAdmissionVisibilityRevision = next.visibility;
-	this->lodViewRevision = next.view;
-	this->lodPolicyRevision = next.policy;
-	this->lodAdmissionCapacityRevision = next.capacity;
+	this->lodAdmissionInventoryRevision = next.inventory();
+	this->lodAdmissionAvailabilityRevision = next.availability();
+	this->lodAdmissionVisibilityRevision = next.visibility();
+	this->lodViewRevision = next.view();
+	this->lodPolicyRevision = next.policy();
+	this->lodAdmissionCapacityRevision = next.capacity();
 	/* No caller may observe or consume progress certified by the preceding
 	 * tuple after this semantic edge. */
 	this->lodAdmissionCursor.reset();
@@ -388,7 +389,7 @@ struct BObolLodCoordinator {
 	const BObolLodAdmissionRevisionStamp next =
 	    BObolLodRevisionContract::setPolicy(
 		this->admissionRevisionStamp(), revision);
-	this->lodPolicyRevision = next.policy;
+	this->lodPolicyRevision = next.policy();
 	/* An externally supplied policy epoch has the same invalidation contract
 	 * as an incremented one.  Keeping this reset here prevents public policy
 	 * synchronization from becoming a sixth revision owner. */
@@ -495,13 +496,13 @@ struct BObolLodCoordinator {
     }
 
     void setRetainedQualityFloor(size_t budget,
-	uint64_t populationSignature, size_t activeCost,
+	uint64_t populationIdentity, size_t activeCost,
 	size_t minimumActiveCost)
     {
 	this->commitAdmissionPlan(
 	    BObolLodAdmissionPlanner::setRetainedQualityFloor(
 		this->lodAdmissionEvidence, this->lodAdmissionCursor, budget,
-		populationSignature, activeCost, minimumActiveCost));
+		populationIdentity, activeCost, minimumActiveCost));
     }
 
     bool recordRetainedQualityFloorMiss(void)
@@ -514,12 +515,12 @@ struct BObolLodCoordinator {
     }
 
     void recordRetainedQualityFloorMet(bool exactProtectedPopulation,
-	uint64_t populationSignature, size_t presentedCost)
+	uint64_t populationIdentity, size_t presentedCost)
     {
 	this->commitAdmissionPlan(
 	    BObolLodAdmissionPlanner::recordRetainedQualityFloorMet(
 		this->lodAdmissionEvidence, this->lodAdmissionCursor,
-		exactProtectedPopulation, populationSignature, presentedCost));
+		exactProtectedPopulation, populationIdentity, presentedCost));
     }
 
     bool confirmRetainedRecoveryPresentation(bool onePixelReady)
@@ -730,9 +731,7 @@ struct BObolLodCoordinator {
 	/* A source, renderer, or user-quality reset changes the population or
 	 * capacity contract behind a previously measured presentation cut. */
 	resetDeadlineSafePresentation();
-	lodViewQualityDomainRevision++;
-	if (!lodViewQualityDomainRevision)
-	    lodViewQualityDomainRevision = 1;
+	bobol_identity_advance(lodViewQualityDomainRevision);
     }
 
     /* These values are annotations owned by one bounded retained-admission

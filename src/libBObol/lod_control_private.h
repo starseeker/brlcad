@@ -1126,7 +1126,8 @@ public:
 	RENDER = 1u << 0,
 	CONTROLLER_PUMP = 1u << 1,
 	TIMER = 1u << 2,
-	INDEPENDENT_PRODUCER = 1u << 3
+	INDEPENDENT_PRODUCER = 1u << 3,
+	CLAIMED_FRAME = 1u << 4
     };
 
     struct PresentationProgress {
@@ -1134,6 +1135,7 @@ public:
 	bool controllerPumpPending = false;
 	bool finiteTimerPending = false;
 	bool independentProducerPending = false;
+	bool claimedFramePending = false;
 
 	uint32_t witnessMask(void) const
 	{
@@ -1146,6 +1148,8 @@ public:
 		mask |= bit(PresentationWitness::TIMER);
 	    if (this->independentProducerPending)
 		mask |= bit(PresentationWitness::INDEPENDENT_PRODUCER);
+	    if (this->claimedFramePending)
+		mask |= bit(PresentationWitness::CLAIMED_FRAME);
 	    return mask;
 	}
 

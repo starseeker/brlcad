@@ -43,6 +43,10 @@ class SoState;
 class SoBRLMeshShape;
 class SoBRLDatabaseSource;
 class SoCADAssembly;
+struct BObolLodPopulationIdentity;
+class BObolRetainedAllocationTransaction;
+class BObolCadPopulationIdentityRegistry;
+class BObolExactSampleIdentity;
 
 /**
  * View-local active LoD bindings for shared Obol geometry.
@@ -77,6 +81,8 @@ public:
         static constexpr size_t BucketCount = 7;
         std::array<size_t, BucketCount> cumulativeCount = {};
         size_t visibleCount = 0;
+        /* Diagnostic digest only; exactness is established by the enclosing
+         * completed-frame observation, not by revision equality. */
         uint64_t revision = 0;
         SbBool exact = FALSE;
     };
@@ -105,6 +111,7 @@ public:
         size_t pressureProxyCount = 0;
         uint64_t progressiveEvictionCount = 0;
         uint64_t triangleAtlasReclamationCount = 0;
+        /* Exact non-reused identity of the contributing assembly/frame set. */
         uint64_t sampleSerial = 0;
         SbBool memoryPressure = FALSE;
     };
@@ -601,8 +608,8 @@ public:
      * the renderer's exact current-view structural proxy classifier. */
     SbBool lastCadStructuralProjectionHistogram(
 	CadStructuralProjectionHistogram &histogram) const;
-    /* Latest completed asynchronous GPU timer aggregate.  The serial changes
-     * only when at least one retained CAD context publishes a newer result. */
+    /* Latest completed asynchronous GPU timer aggregate.  The serial is an
+     * exact non-reused identity for the contributing assembly/sample tuples. */
     SbBool lastCadGpuMeasurement(size_t &faces,
 	uint64_t &nanoseconds, uint64_t &serial,
 	float &pointProxyPixelThreshold) const;
@@ -610,9 +617,8 @@ public:
      * presentation.  A completed zero-work CAD frame is not evidence for
      * calibrating the still-active occurrence population. */
     SbBool hasCadPresentationAssemblies(void) const;
-    /** Aggregate monotonic token for retained CAD draw attempts.  Comparing
-     * this value around one render distinguishes deadline spent preparing a
-     * resumable plan from deadline spent submitting actual CAD geometry. */
+    /** Exact non-reused change identity for the active assemblies' retained
+     * CAD draw-attempt serials. */
     uint64_t cadPresentationExecutionSerial(void) const;
     /** Exact finite-work result observed during the most recent frame. */
     BObolCadPreparationProgress
@@ -632,6 +638,9 @@ public:
      * then read one retained aggregate instead of independently walking the
      * source-presentation map. */
     void refreshCadPresentationFrameStatus(void) const;
+    /** TRUE when at least one assembly entered its renderer during the most
+     * recently observed frame, independently of whether the frame was exact. */
+    SbBool lastCadPresentationFrameExecuted(void) const;
     /** Aggregate exact Obol-owned buffer accounting from unique active CAD
      * presentations.  Once the completed frame has been sampled this query
      * is O(1), never O(parts) or O(source presentations). */
@@ -730,6 +739,13 @@ public:
 	SoCADAssembly *assembly, const SbString &contentKey = SbString("")) const;
 
 private:
+    friend class BObolRetainedAllocationTransaction;
+
+    uint64_t internCadPopulationIdentity(
+	const BObolLodPopulationIdentity &identity,
+	uint64_t cadRevision, uint64_t residentDemandRevision,
+	uint64_t viewRevision, uint64_t policyRevision);
+
     struct CadPresentation {
 	CadPresentation(void) : assembly(NULL), contentKey(""), sourceRoutingId(0) {}
 	SoCADAssembly *assembly;
@@ -852,6 +868,7 @@ private:
     mutable SbBool cadLastPresentedRenderCostValid;
     mutable size_t cadLastPresentedRenderCost;
     mutable SbBool cadLastPresentationFrameExact;
+    mutable SbBool cadLastPresentationFrameExecuted;
     mutable size_t cadLastSubpixelProxyCount;
     mutable size_t cadLastUncollapsedStructuralProxyCount;
     mutable CadStructuralProjectionHistogram
@@ -860,10 +877,16 @@ private:
     mutable size_t cadLastGpuFaces;
     mutable uint64_t cadLastGpuNanoseconds;
     mutable uint64_t cadLastGpuSerial;
+    mutable std::unique_ptr<BObolExactSampleIdentity>
+	cadGpuMeasurementIdentity;
     mutable float cadLastGpuPointProxyPixelThreshold;
     mutable SbBool cadLastPreparedReplay;
     mutable SbBool cadGpuResourceStatusValid;
     mutable CadGpuResourceStatus cadGpuResourceStatusValue;
+    mutable std::unique_ptr<BObolExactSampleIdentity>
+	cadGpuResourceSampleIdentity;
+    mutable std::unique_ptr<BObolExactSampleIdentity>
+	cadPresentationExecutionIdentity;
     /* Authoritative CAD occurrence telemetry is maintained at mutation
      * points.  These values are read on the presentation/UI thread several
      * times per frame; scanning and locking every resident progressive mesh
@@ -915,6 +938,8 @@ private:
 	cadResidentDemandStates;
     std::vector<BObolLodResidentDemand> cadResidentDemands;
     uint64_t cadResidentDemandRevision;
+    std::unique_ptr<BObolCadPopulationIdentityRegistry>
+	cadPopulationIdentityRegistry;
     uint64_t cadActiveAllocationPlanSerial;
     uint64_t cadNextAllocationPlanSerial;
     uint64_t cadAllocationPopulationRevision;

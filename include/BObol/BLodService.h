@@ -305,6 +305,11 @@ public:
     uint64_t currentGeneration(void) const;
     void cancelGeneration(uint64_t generation);
     SbBool isGenerationCancelled(uint64_t generation) const;
+    /* Provider-side cancellation for a potentially shared asset producer.
+     * A cancelled submission generation does not stop immutable production
+     * while another generation retains a lease on the same active key. */
+    SbBool isProducerCancelled(uint64_t generation,
+	const BObolLodRequest &request) const;
 
     void setQueueLimits(size_t maxActiveTasks,
 	size_t maxQueuedResults, size_t maxQueuedCacheWrites);
@@ -367,7 +372,8 @@ public:
      * to stamp immutable page previews with the current camera/policy epoch;
      * it never changes the producer's geometry identity or working-set
      * reservation. */
-    SbBool updateActiveRequestDemand(const BObolLodRequest &request);
+    SbBool updateActiveRequestDemand(const BObolLodRequest &request,
+	uint64_t generation = 0);
     SbBool hasActiveRequest(const BObolLodRequest &request) const;
     /**
      * Drain a bounded presentation wave.  maxEstimatedBytes applies to mesh
@@ -409,6 +415,10 @@ public:
     uint64_t coalescedCacheWriteCountForDiagnostics(void) const;
     uint64_t discardedStaleResultCountForDiagnostics(void) const;
     size_t activeRequestCountForDiagnostics(void) const;
+    size_t sharedProducerCountForDiagnostics(void) const;
+    size_t sharedProducerLeaseCountForDiagnostics(void) const;
+    size_t sharedProducerLeaseCountForGeneration(
+	uint64_t generation) const;
     size_t completedTaskCountForDiagnostics(void) const;
     size_t cancelledGenerationCountForDiagnostics(void) const;
     size_t residentMeshAssetCountForDiagnostics(void) const;

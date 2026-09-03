@@ -11,6 +11,9 @@
 
 #include "common.h"
 
+#include "identity_counter_private.h"
+#include "transaction_fault_private.h"
+
 #include "bv.h"
 #include "BObol/BDrawCache.h"
 #include "BObol/BMeshLodCache.h"
@@ -189,7 +192,7 @@ public:
 	totalItems = workCount;
 	remainingItems = workCount;
 	workerFailure = nullptr;
-	++generation;
+	bobol_identity_advance(generation);
 	workReady.notify_all();
 	workComplete.wait(lock, [this]() { return remainingItems == 0; });
 	currentWork = nullptr;
@@ -1058,12 +1061,14 @@ mesh_lod_key_get(struct BObolMeshLodContext *context, const char *name)
     if (!context || !name)
 	return 0;
 
-    {
-	std::shared_lock<std::shared_mutex> lock(
-	    *context->i->nameMutex);
+    try {
+	std::shared_lock<std::shared_mutex> lock(*context->i->nameMutex);
 	const auto found = context->i->nameKeys->find(name);
 	if (found != context->i->nameKeys->end())
 	    return found->second;
+    } catch (const std::bad_alloc &) {
+	/* The process map is only a hint.  Continue to the authoritative disk
+	 * lookup when even its temporary string key cannot be allocated. */
     }
 
     char keystr[32] = {0};
@@ -1094,8 +1099,15 @@ mesh_lod_key_get(struct BObolMeshLodContext *context, const char *name)
      */
     std::unique_lock<std::shared_mutex> memoryLock(
 	*context->i->nameMutex, std::try_to_lock);
-    if (memoryLock.owns_lock())
-	context->i->nameKeys->emplace(name, meshKey);
+    if (memoryLock.owns_lock()) {
+	try {
+	    (*context->i->nameKeys)[name] = meshKey;
+	} catch (const std::bad_alloc &) {
+	    /* Never leave a possibly stale hint after reading the authoritative
+	     * mapping.  A later lookup can repopulate the optional map. */
+	    context->i->nameKeys->clear();
+	}
+    }
     return meshKey;
 }
 
@@ -1111,6 +1123,10 @@ mesh_lod_key_put(struct BObolMeshLodContext *context,
     if (!mesh_lod_name_cache_key(keystr, sizeof(keystr), name))
 	return -1;
 
+    if (bobol_transaction_fault_requested(
+	    BObolTransactionFaultPoint::DURABLE_CACHE_COMMIT))
+	return -1;
+
     const uint64_t diskKey = static_cast<uint64_t>(key);
     std::unique_lock<std::shared_mutex> lock(*context->i->accessMutex);
     size_t wsize = bu_cache_write((void *)&diskKey, sizeof(diskKey),
@@ -1119,7 +1135,14 @@ mesh_lod_key_put(struct BObolMeshLodContext *context,
     if (wsize > 0) {
 	std::unique_lock<std::shared_mutex> memoryLock(
 	    *context->i->nameMutex);
-	(*context->i->nameKeys)[name] = key;
+	try {
+	    (*context->i->nameKeys)[name] = key;
+	} catch (const std::bad_alloc &) {
+	    /* Disk publication has committed.  Emptying the optional hints makes
+	     * the next reader consult that authoritative mapping instead of a
+	     * predecessor which happened to share this name. */
+	    context->i->nameKeys->clear();
+	}
     }
     lock.unlock();
     return (wsize > 0) ? 0 : -1;
@@ -4206,6 +4229,11 @@ BObolPopState::cacheWriteData(const char *component, const void *data,
 	bu_cache_write_abort(&transaction);
 	return false;
     }
+    if (bobol_transaction_fault_requested(
+	    BObolTransactionFaultPoint::DURABLE_CACHE_COMMIT)) {
+	bu_cache_write_abort(&transaction);
+	return false;
+    }
     return bu_cache_write_commit(context->i->lodCache, &transaction) ==
 	BRLCAD_OK;
 }
@@ -4239,6 +4267,11 @@ BObolPopState::flushSpatialWrites(void)
     if (!spatialWriteTxn) {
 	spatialWriteBytes = 0;
 	return true;
+    }
+    if (bobol_transaction_fault_requested(
+	    BObolTransactionFaultPoint::DURABLE_CACHE_COMMIT)) {
+	abortSpatialWrites();
+	return false;
     }
     const int committed = bu_cache_write_commit(
 	context->i->lodCache, &spatialWriteTxn);
@@ -5952,21 +5985,20 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 	mesh_lod_context_destroy(context);
 	return BRLCAD_OK;
     }
-    if (current.has_cache_key) {
-	current.cleared_cache_entry = 1;
-	current.cleared_cache_key = current.cache_key;
-	mesh_lod_name_cache_del(context, name);
-	current.cache_key = 0;
-	current.has_cache_key = 0;
-	current.has_cached_payload = 0;
-	current.stale_cache_entry = 0;
-    }
-
     struct directory *dp = db_lookup(dbip, name, LOOKUP_QUIET);
     current.directory_found = (dp != RT_DIR_NULL) ? 1 : 0;
     current.is_bot = (dp != RT_DIR_NULL &&
 		      dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) ? 1 : 0;
     if (dp == RT_DIR_NULL || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT) {
+	if (current.has_cache_key) {
+	    current.cleared_cache_entry = 1;
+	    current.cleared_cache_key = current.cache_key;
+	    mesh_lod_name_cache_del(context, name);
+	    current.cache_key = 0;
+	    current.has_cache_key = 0;
+	    current.has_cached_payload = 0;
+	    current.stale_cache_entry = 0;
+	}
 	if (status)
 	    *status = current;
 	mesh_lod_context_destroy(context);
@@ -6140,8 +6172,16 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 	delete generatedState;
 	if (ownsInternal)
 	    rt_db_free_internal(&dbintern);
+	if (status)
+	    *status = current;
 	mesh_lod_context_destroy(context);
 	return BRLCAD_ERROR;
+    }
+
+    if (!sourceLimited && current.has_cache_key &&
+	current.cache_key != key) {
+	current.cleared_cache_entry = 1;
+	current.cleared_cache_key = current.cache_key;
     }
 
     const uint64_t generatedPointCount = useSerializedSource ?
@@ -6175,6 +6215,8 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 	    }
 	    if (ownsInternal)
 		rt_db_free_internal(&dbintern);
+	    if (status)
+		*status = current;
 	    mesh_lod_context_destroy(context);
 	    return BRLCAD_ERROR;
 	}
@@ -6311,19 +6353,8 @@ mesh_lod_cache_store_mesh_impl(
 	return BRLCAD_ERROR;
     }
 
-    if (!preserveVariants && current.has_cache_key &&
-	(current.cache_key != userKey || !current.has_cached_payload)) {
-	current.cleared_cache_entry = 1;
-	current.cleared_cache_key = current.cache_key;
-	mesh_lod_name_cache_del(context, name);
-	current.cache_key = 0;
-	current.has_cache_key = 0;
-	current.has_cached_payload = 0;
-	current.stale_cache_entry = 0;
-    }
-
     if (current.has_cache_key && current.has_cached_payload &&
-	(!preserveVariants || current.cache_key == userKey)) {
+	current.cache_key == userKey) {
 	if (status)
 	    *status = current;
 	mesh_lod_context_destroy(context);
@@ -6352,6 +6383,12 @@ mesh_lod_cache_store_mesh_impl(
 	    *status = current;
 	mesh_lod_context_destroy(context);
 	return BRLCAD_ERROR;
+    }
+
+    if (!preserveVariants && current.has_cache_key &&
+	current.cache_key != key) {
+	current.cleared_cache_entry = 1;
+	current.cleared_cache_key = current.cache_key;
     }
 
     current.cache_key = key;

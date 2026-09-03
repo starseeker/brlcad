@@ -19,7 +19,11 @@
 #include "BObol/BViewLod.h"
 
 #include "database_source_realization.h"
+#include "exact_sample_identity_private.h"
+#include "identity_counter_private.h"
 #include "lod_presentation_private.h"
+#include "lod_population_identity_private.h"
+#include "lod_result_authentication_private.h"
 #include "presentation_preparation_private.h"
 
 #include <Obol/cad/SoCADAssembly.h>
@@ -53,10 +57,7 @@ static uint64_t
 view_lod_next_view_id(void)
 {
     static std::atomic<uint64_t> nextId(1);
-    uint64_t id = nextId.fetch_add(1, std::memory_order_relaxed);
-    while (!id)
-	id = nextId.fetch_add(1, std::memory_order_relaxed);
-    return id;
+    return bobol_atomic_nonzero_identity_take(nextId);
 }
 
 static bool
@@ -823,6 +824,55 @@ view_lod_remove_superseded_cad_payloads(
     }
 }
 
+class BObolCadPopulationIdentityRegistry {
+public:
+    uint64_t intern(const BObolLodPopulationIdentity &identity,
+	uint64_t cadRevision, uint64_t residentDemandRevision,
+	uint64_t viewRevision, uint64_t policyRevision)
+    {
+	const Epoch nextEpoch = {cadRevision, residentDemandRevision,
+	    viewRevision, policyRevision};
+	if (!(this->epoch == nextEpoch)) {
+	    this->epoch = nextEpoch;
+	    this->records.clear();
+	}
+	for (const Record &record : this->records) {
+	    if (record.identity == identity)
+		return record.token;
+	}
+	Record record;
+	record.identity = identity;
+	record.token = bobol_nonzero_identity_take(this->nextToken);
+	this->records.push_back(std::move(record));
+	return this->records.back().token;
+    }
+
+private:
+    struct Epoch {
+	uint64_t cadRevision = 0;
+	uint64_t residentDemandRevision = 0;
+	uint64_t viewRevision = 0;
+	uint64_t policyRevision = 0;
+
+	bool operator==(const Epoch &other) const
+	{
+	    return this->cadRevision == other.cadRevision &&
+		this->residentDemandRevision == other.residentDemandRevision &&
+		this->viewRevision == other.viewRevision &&
+		this->policyRevision == other.policyRevision;
+	}
+    };
+
+    struct Record {
+	uint64_t token = 0;
+	BObolLodPopulationIdentity identity;
+    };
+
+    Epoch epoch;
+    uint64_t nextToken = 1;
+    std::vector<Record> records;
+};
+
 BObolViewLodState::BObolViewLodState(void) :
     residentCadProgressiveCountValue(0),
     residentCadProgressiveActiveRenderCost(0),
@@ -846,15 +896,22 @@ BObolViewLodState::BObolViewLodState(void) :
     cadLastPresentedRenderCostValid(FALSE),
     cadLastPresentedRenderCost(0),
     cadLastPresentationFrameExact(FALSE),
+    cadLastPresentationFrameExecuted(FALSE),
     cadLastSubpixelProxyCount(0),
     cadLastUncollapsedStructuralProxyCount(0),
     cadLastGpuMeasurementValid(FALSE),
     cadLastGpuFaces(0),
     cadLastGpuNanoseconds(0),
     cadLastGpuSerial(0),
+    cadGpuMeasurementIdentity(
+	std::make_unique<BObolExactSampleIdentity>()),
     cadLastGpuPointProxyPixelThreshold(1.0f),
     cadLastPreparedReplay(FALSE),
     cadGpuResourceStatusValid(FALSE),
+    cadGpuResourceSampleIdentity(
+	std::make_unique<BObolExactSampleIdentity>(INT64_MAX)),
+    cadPresentationExecutionIdentity(
+	std::make_unique<BObolExactSampleIdentity>()),
     cadValidPayloadCount(0),
     cadMeshPayloadCountValue(0),
     cadProgressivePayloadCountValue(0),
@@ -867,6 +924,8 @@ BObolViewLodState::BObolViewLodState(void) :
     cadMinimumActiveRenderCost(0),
     cadDisplayMeshBytes(0),
     cadResidentDemandRevision(1),
+    cadPopulationIdentityRegistry(
+	std::make_unique<BObolCadPopulationIdentityRegistry>()),
     cadActiveAllocationPlanSerial(0),
     cadNextAllocationPlanSerial(0),
     cadAllocationPopulationRevision(1),
@@ -894,6 +953,17 @@ BObolViewLodState::BObolViewLodState(void) :
 BObolViewLodState::~BObolViewLodState(void)
 {
     this->clearCadPresentations();
+}
+
+uint64_t
+BObolViewLodState::internCadPopulationIdentity(
+    const BObolLodPopulationIdentity &identity,
+    uint64_t cadRevision, uint64_t residentDemandRevision,
+    uint64_t viewRevision, uint64_t policyRevision)
+{
+    return this->cadPopulationIdentityRegistry->intern(
+	identity, cadRevision, residentDemandRevision,
+	viewRevision, policyRevision);
 }
 
 Obol::CadViewState
@@ -1108,9 +1178,7 @@ view_lod_cad_resident_demand_cut(
 void
 BObolViewLodState::clearCadPayloadMetrics(void)
 {
-    this->cadResidentDemandRevision++;
-    if (!this->cadResidentDemandRevision)
-	this->cadResidentDemandRevision++;
+    bobol_identity_advance(this->cadResidentDemandRevision);
     this->cadValidPayloadCount = 0;
     this->cadMeshPayloadCountValue = 0;
     this->cadProgressivePayloadCountValue = 0;
@@ -1147,9 +1215,7 @@ BObolViewLodState::addCadResidentDemand(const CadPayload *payload)
 	payload->cacheKey.getLength() == 0 ||
 	demandCut < 0 || demandCut >= BOBOL_MESH_LOD_CUT_COUNT_MAX)
 	return;
-    this->cadResidentDemandRevision++;
-    if (!this->cadResidentDemandRevision)
-	this->cadResidentDemandRevision++;
+    bobol_identity_advance(this->cadResidentDemandRevision);
 
     const std::string key = payload->cacheKey.getString();
     const unsigned int channelMask =
@@ -1198,9 +1264,7 @@ BObolViewLodState::removeCadResidentDemand(const CadPayload *payload)
     if (!payload || payload->cacheKey.getLength() == 0 ||
 	demandCut < 0 || demandCut >= BOBOL_MESH_LOD_CUT_COUNT_MAX)
 	return;
-    this->cadResidentDemandRevision++;
-    if (!this->cadResidentDemandRevision)
-	this->cadResidentDemandRevision++;
+    bobol_identity_advance(this->cadResidentDemandRevision);
     const auto found = this->cadResidentDemandStates.find(
 	payload->cacheKey.getString());
     if (found == this->cadResidentDemandStates.end())
@@ -1830,18 +1894,24 @@ BObolViewLodState::applySourceResultInternal(
     if (!source)
 	return SourceResultDisposition::RETRY_CURRENT_DEMAND;
 
-    /* A compact entry index is meaningful only inside one installed source
-     * population.  Reject stale results before they can update failure maps,
-     * resident aliases, or an occurrence slot which happens to have reused
-     * the same semantic key.  Source-wide/direct-node results carry no occurrence
-     * and are intentionally outside this positional routing contract. */
-    if (result.request.occurrenceKey.getLength() > 0 &&
-	result.request.sourceRoutingId != 0 &&
-	(result.request.sourceRoutingId.value() !=
-	    source->getCompactSourceRoutingId() ||
-	 result.request.sourcePopulationEpoch == 0 ||
-	 result.request.sourcePopulationEpoch.value() !=
-	    source->getCompactPopulationEpoch()))
+    /* Authenticate identity before interpreting provider status.  In
+     * particular, a terminal failure for a retired population must not become
+     * failure evidence for a replacement which reused its key or dense slot.
+     * This view-state boundary does not own current demand, so its context
+     * deliberately preserves the request's view/policy pair; the controller
+     * authenticates those domains before calling this reducer. */
+    BObolLodResultAuthenticationContext authenticationContext;
+    authenticationContext.sourceRoutingId =
+	source->getCompactSourceRoutingId();
+    authenticationContext.sourcePopulationEpoch =
+	source->getCompactPopulationEpoch();
+    authenticationContext.viewRevision = result.request.viewRevision;
+    authenticationContext.policyRevision = result.request.policyRevision;
+    const BObolLodResultAuthentication authentication =
+	BObolLodResultAuthenticationContract::evaluate(
+	    result.request, result.providerStatus, authenticationContext);
+    if (authentication.disposition ==
+	    BObolLodResultDisposition::SUPERSEDE)
 	return SourceResultDisposition::RETRY_CURRENT_DEMAND;
 
     /* Validate positional and semantic identity together once at the result
@@ -1863,8 +1933,8 @@ BObolViewLodState::applySourceResultInternal(
     const std::string sourceBindingKey = view_lod_source_primary_key(source);
     const std::string occurrenceKey =
 	view_lod_cad_occurrence_key(result.request.occurrenceKey);
-    if (view_lod_provider_status_is_terminal_failure(
-	    result.providerStatus)) {
+    if (authentication.disposition ==
+	    BObolLodResultDisposition::RECORD_TERMINAL_FAILURE) {
 	if (getenv("BOBOL_LOD_TRACE_FAILURES"))
 	    bu_log("BObol LoD terminal failure occurrence=%s object=%s "
 		   "status=%d cut=%d diagnostic=%s\n",
@@ -1876,10 +1946,7 @@ BObolViewLodState::applySourceResultInternal(
 	    result, result.providerStatus);
 	return SourceResultDisposition::ACCEPTED;
     }
-    if (result.providerStatus == BOBOL_LOD_PROVIDER_CANCELLED ||
-	result.providerStatus == BOBOL_LOD_PROVIDER_SUPERSEDED)
-	return SourceResultDisposition::RETRY_CURRENT_DEMAND;
-    if (result.providerStatus != BOBOL_LOD_PROVIDER_READY)
+    if (authentication.disposition != BObolLodResultDisposition::PUBLISH)
 	return SourceResultDisposition::RETRY_CURRENT_DEMAND;
 
     if ((result.resultKind == BOBOL_LOD_RESULT_MESH ||
@@ -3745,9 +3812,7 @@ BObolViewLodState::currentCadAllocatedCut(
 uint64_t
 BObolViewLodState::beginCadAllocationPlan(void)
 {
-    this->cadNextAllocationPlanSerial++;
-    if (!this->cadNextAllocationPlanSerial)
-	this->cadNextAllocationPlanSerial++;
+    bobol_identity_advance(this->cadNextAllocationPlanSerial);
     this->cadStagedAllocationMismatchCount = 0;
     return this->cadNextAllocationPlanSerial;
 }
@@ -4473,6 +4538,14 @@ BObolViewLodState::lastCadPresentationFrameExact(void) const
 }
 
 SbBool
+BObolViewLodState::lastCadPresentationFrameExecuted(void) const
+{
+    if (!this->cadPresentationFrameStatusValid)
+	this->refreshCadPresentationFrameStatus();
+    return this->cadLastPresentationFrameExecuted;
+}
+
+SbBool
 BObolViewLodState::lastCadPresentationOccurrenceCoverage(
     size_t &subpixelOccurrences, size_t &structuralBoxes) const
 {
@@ -4534,15 +4607,21 @@ BObolViewLodState::hasCadPresentationAssemblies(void) const
 uint64_t
 BObolViewLodState::cadPresentationExecutionSerial(void) const
 {
-    uint64_t serial = 0;
+    BObolExactSampleIdentity::Entries sources;
+    sources.reserve(this->cadPresentationAssemblyUseCounts.size());
     for (const auto &entry : this->cadPresentationAssemblyUseCounts) {
 	const SoCADAssembly *assembly = entry.first;
 	if (!assembly || !entry.second || !assembly->instanceCount())
 	    continue;
-	const uint64_t value = assembly->renderExecutionSerial();
-	serial = value > UINT64_MAX - serial ? UINT64_MAX : serial + value;
+	sources.push_back({assembly->assemblyIdentity(),
+	    assembly->renderExecutionSerial()});
     }
-    return serial;
+    if (sources.empty()) {
+	this->cadPresentationExecutionIdentity->invalidate();
+	return 0;
+    }
+    return this->cadPresentationExecutionIdentity->intern(
+	std::move(sources));
 }
 
 void
@@ -4576,12 +4655,13 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
     this->cadLastPresentedRenderCost = 0;
     this->cadLastGpuFaces = 0;
     this->cadLastGpuNanoseconds = 0;
-    this->cadLastGpuSerial = 1469598103934665603ULL;
+    this->cadLastGpuSerial = 0;
     this->cadLastGpuPointProxyPixelThreshold = 1.0f;
     this->cadLastPresentationFrameExact =
 	this->cadPresentationFrameObservationArmed &&
 	this->cadPresentationFrameStartBindingsRevision ==
 	    this->cadBindingsRevision ? TRUE : FALSE;
+    this->cadLastPresentationFrameExecuted = FALSE;
     this->cadLastSubpixelProxyCount = 0;
     this->cadLastUncollapsedStructuralProxyCount = 0;
     this->cadLastStructuralProjectionHistogram =
@@ -4600,7 +4680,12 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
     SbBool haveGpuPointProxyPixelThreshold = FALSE;
     SbBool preparedReplay = TRUE;
     SbBool resourceSampled = FALSE;
-    uint64_t resourceSerial = 1469598103934665603ULL;
+    BObolExactSampleIdentity::Entries gpuMeasurementSources;
+    BObolExactSampleIdentity::Entries gpuResourceSources;
+    gpuMeasurementSources.reserve(
+	this->cadPresentationAssemblyUseCounts.size());
+    gpuResourceSources.reserve(
+	this->cadPresentationAssemblyUseCounts.size());
     const Obol::CadViewState requestedView =
 	this->cadPresentationViewState();
 
@@ -4621,15 +4706,19 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
     if (this->cadPresentationFrameObservationArmed) {
 	for (const auto &entry :
 		this->cadPresentationFrameStartExecutionSerials) {
-	    if (!entry.first ||
-		entry.first->renderExecutionSerial() == entry.second) {
-		if (getenv("BOBOL_LOD_TRACE_PREPARATION"))
-		    bu_log("BObol CAD presentation inexact: assembly=%p "
-			   "did not execute in the observed frame\n",
-			   static_cast<const void *>(entry.first));
-		this->cadLastPresentationFrameExact = FALSE;
-		break;
+	    if (entry.first &&
+		entry.first->renderExecutionSerial() != entry.second) {
+		this->cadLastPresentationFrameExecuted = TRUE;
+		continue;
 	    }
+	    if (getenv("BOBOL_LOD_TRACE_PREPARATION"))
+		bu_log("BObol CAD presentation inexact: assembly=%p "
+		       "did not execute in the observed frame\n",
+		       static_cast<const void *>(entry.first));
+	    this->cadLastPresentationFrameExact = FALSE;
+	    /* Execution means "at least one" while exactness means "every".
+	     * Keep scanning so unordered assembly iteration cannot change the
+	     * former result after the latter has already failed. */
 	}
     }
 
@@ -4895,11 +4984,8 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
 			UINT64_MAX - this->cadLastGpuNanoseconds ?
 		    UINT64_MAX : this->cadLastGpuNanoseconds +
 			timerNanoseconds;
-		this->cadLastGpuSerial ^= static_cast<uint64_t>(
-		    reinterpret_cast<uintptr_t>(assembly));
-		this->cadLastGpuSerial *= 1099511628211ULL;
-		this->cadLastGpuSerial ^= timerSerial;
-		this->cadLastGpuSerial *= 1099511628211ULL;
+		gpuMeasurementSources.push_back({
+		    assembly->assemblyIdentity(), timerSerial});
 	    }
 	}
 
@@ -4979,14 +5065,8 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
 	if (snapshot.atlasAdmissionPressure)
 	    status.memoryPressure = TRUE;
 
-	/* Hash both identity and local completed-frame serial.  Merely summing
-	 * per-context counters can alias when one context advances while another
-	 * remains unchanged. */
-	resourceSerial ^= static_cast<uint64_t>(
-	    reinterpret_cast<uintptr_t>(assembly));
-	resourceSerial *= 1099511628211ULL;
-	resourceSerial ^= snapshot.frameSerial;
-	resourceSerial *= 1099511628211ULL;
+	gpuResourceSources.push_back({
+	    assembly->assemblyIdentity(), snapshot.frameSerial});
 	resourceSampled = TRUE;
     }
 
@@ -5012,20 +5092,24 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
     this->cadLastGpuMeasurementValid =
 	haveAssembly && gpuMeasurementValid &&
 	haveGpuPointProxyPixelThreshold;
-    if (!this->cadLastGpuMeasurementValid)
+    if (!this->cadLastGpuMeasurementValid) {
 	this->cadLastGpuSerial = 0;
-    else if (!this->cadLastGpuSerial)
-	this->cadLastGpuSerial = 1;
+	this->cadGpuMeasurementIdentity->invalidate();
+    } else {
+	this->cadLastGpuSerial = this->cadGpuMeasurementIdentity->intern(
+	    std::move(gpuMeasurementSources));
+    }
     this->cadLastPreparedReplay = haveAssembly && preparedReplay;
     this->cadGpuResourceStatusValid = resourceSampled;
-    /* qged diagnostics are JSON and therefore carry this token through a
-     * signed 64-bit integer.  It is an opaque change detector, not an
-     * arithmetic counter, so reserve the sign bit and keep zero as "none". */
+    /* qged diagnostics carry this exact change identity through a signed
+     * 64-bit JSON integer.  Its allocator fails stop before leaving that
+     * representation; zero remains reserved for "no sample". */
     if (resourceSampled) {
 	this->cadGpuResourceStatusValue.sampleSerial =
-	    resourceSerial & INT64_MAX;
-	if (!this->cadGpuResourceStatusValue.sampleSerial)
-	    this->cadGpuResourceStatusValue.sampleSerial = 1;
+	    this->cadGpuResourceSampleIdentity->intern(
+		std::move(gpuResourceSources));
+    } else {
+	this->cadGpuResourceSampleIdentity->invalidate();
     }
     this->cadPresentationFrameStatusValid = TRUE;
 }
@@ -5615,9 +5699,7 @@ BObolViewLodState::invalidateCadAllocationCoverage(const char *reason)
 	       static_cast<unsigned long long>(this->cadBindingsRevision),
 	       static_cast<unsigned long long>(
 		   this->cadResidentDemandRevision));
-    this->cadAllocationPopulationRevision++;
-    if (!this->cadAllocationPopulationRevision)
-	this->cadAllocationPopulationRevision++;
+    bobol_identity_advance(this->cadAllocationPopulationRevision);
 }
 
 SbBool
@@ -5657,13 +5739,7 @@ BObolViewLodState::noteCadOccurrenceChanged(
     if (invalidateAllocation) {
 	this->invalidateCadAllocationCoverage("occurrence-presentation-change");
     }
-    this->cadBindingsRevision++;
-    if (!this->cadBindingsRevision) {
-	this->cadBindingsRevision = 1;
-	this->cadFullResyncRevision = 1;
-	this->cadOccurrenceChanges.clear();
-	return;
-    }
+    bobol_identity_advance(this->cadBindingsRevision);
     CadOccurrenceChange change;
     change.revision = this->cadBindingsRevision;
     change.occurrenceKey = occurrenceKey;
@@ -5676,9 +5752,7 @@ BObolViewLodState::noteResidentMeshesChanged(const char *reason)
 {
     this->cadPresentationFrameStatusValid = FALSE;
     this->invalidateCadAllocationCoverage(reason);
-    this->cadBindingsRevision++;
-    if (!this->cadBindingsRevision)
-	this->cadBindingsRevision++;
+    bobol_identity_advance(this->cadBindingsRevision);
     this->cadFullResyncRevision = this->cadBindingsRevision;
     this->cadOccurrenceChanges.clear();
     if (getenv("BOBOL_COMPACT_PRESENTATION_TIMING"))

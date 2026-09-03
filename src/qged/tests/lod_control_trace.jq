@@ -249,10 +249,143 @@ def controller_samples:
 # semantic revision, so that one observation boundary is not a spontaneous
 # terminal reopen.
 def explicit_input:
+  if (.transition_event? != null) then
+    .transition_event == "external_input"
+  else
   (.action // "") as $action |
   ($action != "") and
   ($action != "checkpoint") and
-  (($action | startswith("wait")) | not);
+  (($action | startswith("wait")) | not)
+  end;
+
+def transition_endpoint:
+  [
+    (.lod_control_fact_mask // 0),
+    (.lod_control_obligation_mask // 0),
+    (.lod_control_owner // 0),
+    (.lod_inventory_revision // 0),
+    (.lod_availability_revision // 0),
+    (.lod_visibility_revision // 0),
+    (.lod_control_view_revision // 0),
+    (.lod_control_policy_revision // 0),
+    (.lod_capacity_revision // 0),
+    (.lod_allocation_plan_serial // 0),
+    (.lod_presentation_transaction_serial // 0),
+    (.lod_convergence_outcome // 0),
+    (.lod_renderer_preparation_target_signature // 0),
+    (.lod_renderer_preparation_remaining_units // 0)
+  ];
+
+def transition_prior_endpoint:
+  [
+    (.transition_prior_fact_mask // 0),
+    (.transition_prior_obligation_mask // 0),
+    (.transition_prior_owner // 0),
+    (.transition_prior_inventory_revision // 0),
+    (.transition_prior_availability_revision // 0),
+    (.transition_prior_visibility_revision // 0),
+    (.transition_prior_view_revision // 0),
+    (.transition_prior_policy_revision // 0),
+    (.transition_prior_capacity_revision // 0),
+    (.transition_prior_allocation_plan_serial // 0),
+    (.transition_prior_transaction_serial // 0),
+    (.transition_prior_outcome // 0),
+    (.transition_prior_renderer_preparation_target_signature // 0),
+    (.transition_prior_renderer_preparation_remaining_units // 0)
+  ];
+
+def transition_event_owner($event):
+  if $event == "interaction" then 1
+  elif $event == "inventory" then 2
+  elif $event == "availability" then 3
+  elif $event == "publication" then 4
+  elif $event == "planning" then 5
+  elif $event == "presentation" then 6
+  elif $event == "handoff" then 7
+  elif $event == "compaction" then 8
+  elif $event == "cache_write" then 9
+  elif $event == "idle_service" then 0
+  else null
+  end;
+
+def complete_transition_trace_violations($samples; $required):
+  if $required then
+    ([
+      $samples | to_entries[] as $entry |
+      ["transition_serial", "transition_controller",
+       "transition_controller_serial", "transition_event",
+       "transition_prior_fact_mask", "transition_prior_obligation_mask",
+       "transition_prior_owner", "transition_prior_inventory_revision",
+       "transition_prior_availability_revision",
+       "transition_prior_visibility_revision",
+       "transition_prior_view_revision",
+       "transition_prior_policy_revision",
+       "transition_prior_capacity_revision",
+       "transition_prior_allocation_plan_serial",
+       "transition_prior_transaction_serial", "transition_prior_outcome",
+       "transition_prior_renderer_preparation_target_signature",
+       "transition_prior_renderer_preparation_remaining_units"][] as $field |
+      select(($entry.value | has($field)) | not) |
+      {kind: "missing-transition-field", sample: $entry.key, field: $field}
+    ] + [
+      $samples | to_entries[] as $entry |
+      ($entry.value.transition_event // "") as $event |
+      select((["initial", "external_input", "interaction", "inventory",
+               "availability", "publication", "planning", "presentation",
+               "handoff", "compaction", "cache_write", "idle_service"] |
+              index($event)) == null) |
+      {kind: "unknown-or-unnamed-transition", sample: $entry.key,
+       event: $event}
+    ] + [
+      range(0; $samples | length) as $index |
+      select(($samples[$index].transition_serial // 0) != ($index + 1)) |
+      {kind: "noncontiguous-transition-serial", sample: $index,
+       expected: ($index + 1),
+       actual: ($samples[$index].transition_serial // 0)}
+    ] + [
+      $samples | group_by(.transition_controller)[] as $group |
+      select(($group | length) > 0) |
+      select(($group[0].transition_event // "") != "initial" or
+        (($group[0] | transition_prior_endpoint) !=
+         ($group[0] | transition_endpoint))) |
+      {kind: "invalid-initial-transition",
+       sample: ($group[0].transition_observation // 0),
+       controller: ($group[0].transition_controller // 0)}
+    ] + [
+      $samples | group_by(.transition_controller)[] as $group |
+      range(0; $group | length) as $index |
+      select(($group[$index].transition_controller_serial // 0) !=
+        ($index + 1)) |
+      {kind: "noncontiguous-controller-transition-serial",
+       sample: ($group[$index].transition_observation // 0),
+       controller: ($group[$index].transition_controller // 0),
+       expected: ($index + 1),
+       actual: ($group[$index].transition_controller_serial // 0)}
+    ] + [
+      $samples | group_by(.transition_controller)[] as $group |
+      range(1; $group | length) as $index |
+      select(($group[$index].transition_event // "") == "initial" or
+        (($group[$index] | transition_prior_endpoint) !=
+         ($group[$index - 1] | transition_endpoint))) |
+      {kind: "discontinuous-transition-endpoint",
+       sample: ($group[$index].transition_observation // 0),
+       controller: ($group[$index].transition_controller // 0),
+       prior: ($group[$index] | transition_prior_endpoint),
+       preceding: ($group[$index - 1] | transition_endpoint)}
+    ] + [
+      range(1; $samples | length) as $index |
+      ($samples[$index].transition_event // "") as $event |
+      (transition_event_owner($event)) as $event_owner |
+      select($event_owner != null) |
+      ($samples[$index].transition_prior_owner // 0) as $before_owner |
+      ($samples[$index].lod_control_owner // 0) as $after_owner |
+      (if $before_owner != 0 then $before_owner else $after_owner end) as $owner |
+      select($event_owner != $owner) |
+      {kind: "transition-owner-mismatch", sample: $index, event: $event,
+       expected_owner: $owner, event_owner: $event_owner}
+    ])
+  else []
+  end;
 
 def missing_field_violations($samples):
   [
@@ -268,9 +401,10 @@ def missing_field_violations($samples):
 
 def revision_regressions($samples):
   [
-    range(1; $samples | length) as $index |
-    ($samples[$index - 1] | revision_tuple) as $before |
-    ($samples[$index] | revision_tuple) as $after |
+    ($samples | group_by(.transition_controller // 0))[] as $group |
+    range(1; $group | length) as $index |
+    ($group[$index - 1] | revision_tuple) as $before |
+    ($group[$index] | revision_tuple) as $after |
     range(0; 8) as $domain |
     select($after[$domain] < $before[$domain]) |
     {
@@ -284,9 +418,10 @@ def revision_regressions($samples):
 
 def serial_regressions($samples; $field; $kind):
   [
-    range(1; $samples | length) as $index |
-    ($samples[$index - 1][$field] // 0) as $before |
-    ($samples[$index][$field] // 0) as $after |
+    ($samples | group_by(.transition_controller // 0))[] as $group |
+    range(1; $group | length) as $index |
+    ($group[$index - 1][$field] // 0) as $before |
+    ($group[$index][$field] // 0) as $after |
     select($after < $before) |
     {
       kind: $kind,
@@ -333,9 +468,10 @@ def preparation_certificate_violations($samples):
     }
   ] +
   [
-    range(1; $samples | length) as $index |
-    $samples[$index - 1] as $before |
-    $samples[$index] as $after |
+    ($samples | group_by(.transition_controller // 0))[] as $group |
+    range(1; $group | length) as $index |
+    $group[$index - 1] as $before |
+    $group[$index] as $after |
     ($before.lod_renderer_preparation_target_signature // 0) as $signature |
     select($signature != 0) |
     select(($after.lod_renderer_preparation_target_signature // 0) ==
@@ -430,8 +566,8 @@ def capacity_search_certificate_violations($samples):
 def duplicate_plan_violations($samples):
   [
     $samples |
-    sort_by(allocation_revision_tuple) |
-    group_by(allocation_revision_tuple)[] |
+    sort_by([(.transition_controller // 0), allocation_revision_tuple]) |
+    group_by([(.transition_controller // 0), allocation_revision_tuple])[] |
     . as $group |
     ([$group[].lod_allocation_plan_serial |
       select(. != null and . > 0)] | unique) as $plans |
@@ -451,8 +587,10 @@ def terminal_reopen_violations($samples):
   [
     $samples |
     to_entries |
-    sort_by(.value | revision_tuple) |
-    group_by(.value | revision_tuple)[] |
+    sort_by([(.value.transition_controller // 0),
+      (.value | revision_tuple)]) |
+    group_by([(.value.transition_controller // 0),
+      (.value | revision_tuple)])[] |
     (sort_by(.key)) as $group |
     ([range(0; $group | length) |
       select($group[.].value.lod_convergence_terminal == true)] |
@@ -478,10 +616,11 @@ def terminal_reopen_violations($samples):
 # the diagnostic sampling interval.
 def nonprogress_cycle_violations($samples):
   [
-    range(2; $samples | length) as $index |
-    $samples[$index - 2] as $first |
-    $samples[$index - 1] as $middle |
-    $samples[$index] as $last |
+    ($samples | group_by(.transition_controller // 0))[] as $group |
+    range(2; $group | length) as $index |
+    $group[$index - 2] as $first |
+    $group[$index - 1] as $middle |
+    $group[$index] as $last |
     select(($first | cycle_state) == ($last | cycle_state)) |
     select(($first | cycle_state) != ($middle | cycle_state)) |
     select(($first | revision_tuple) == ($middle | revision_tuple)) |
@@ -568,6 +707,12 @@ controller_samples as $samples |
       dropped: (.control_transition_trace_dropped // 0)
     }]
    else [] end) +
+  (if (.control_transition_trace_complete // false) and
+      ($observations | length) > 0 and ($samples | length) == 0 then
+    [{kind: "missing-complete-control-transition-trace"}]
+   else [] end) +
+  complete_transition_trace_violations($samples;
+    (.control_transition_trace_complete // false)) +
   missing_field_violations($samples) +
   concrete_projection_violations($samples) +
   planning_producer_violations($samples) +

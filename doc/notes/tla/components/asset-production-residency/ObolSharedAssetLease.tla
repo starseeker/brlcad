@@ -50,6 +50,9 @@ CompleteSharedBuild ==
     /\ UNCHANGED <<consumerOpen, published, rejoinCount>>
 
 PublishTo(consumer) ==
+    \* Production may deliver the producer owner's payload or a lightweight
+    \* replay obligation which lets another view bind the immutable resident
+    \* asset under its own demand.  Both discharge this abstract publication.
     /\ producerState = "result"
     /\ consumer \in UnsatisfiedConsumers
     /\ published' = [published EXCEPT ![consumer] = TRUE]
@@ -119,6 +122,10 @@ CancellationRequiresNoConsumers ==
 SurvivingConsumerPreventsCancellation ==
     producerState = "building" /\ LiveConsumers # {} =>
         ~ENABLED CancelUnownedBuild
+
+ResultRetainedForUnsatisfiedConsumer ==
+    producerState = "result" /\ UnsatisfiedConsumers # {} =>
+        ~ENABLED RetireSharedResult
 
 LiveDemandHasProgressWitness ==
     UnsatisfiedConsumers # {} =>

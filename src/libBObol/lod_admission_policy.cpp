@@ -186,12 +186,12 @@ BObolLodAdmissionPlan
 BObolLodAdmissionPlanner::setRetainedQualityFloor(
 	const BObolLodAdmissionEvidence &evidence,
 	const BObolLodAdmissionCursor &cursor, size_t budget,
-	uint64_t populationSignature, size_t activeCost,
+	uint64_t populationIdentity, size_t activeCost,
 	size_t minimumActiveCost)
 {
 	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
 	result.nextEvidence.capacityValue.setRetainedQualityFloorBudget(
-	    result.nextCursor, budget, populationSignature, activeCost,
+	    result.nextCursor, budget, populationIdentity, activeCost,
 	    minimumActiveCost);
 	return result;
 }
@@ -211,12 +211,12 @@ BObolLodAdmissionPlan
 BObolLodAdmissionPlanner::recordRetainedQualityFloorMet(
 	const BObolLodAdmissionEvidence &evidence,
 	const BObolLodAdmissionCursor &cursor, bool exactProtectedPopulation,
-	uint64_t populationSignature, size_t presentedCost)
+	uint64_t populationIdentity, size_t presentedCost)
 {
 	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
 	result.transitionChanged =
 	    result.nextEvidence.capacityValue.noteRetainedQualityFloorMet(
-		exactProtectedPopulation, populationSignature, presentedCost);
+		exactProtectedPopulation, populationIdentity, presentedCost);
 	return result;
 }
 

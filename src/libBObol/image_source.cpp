@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "BObol/BImageSource.h"
+#include "identity_counter_private.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -23,7 +24,7 @@ image_source_clamp_u32(uint64_t value)
 static uint32_t
 next_revision(uint32_t value)
 {
-    return value == UINT32_MAX ? UINT32_MAX : value + 1;
+    return bobol_identity_successor_or_terminate(value);
 }
 
 static void

@@ -88,6 +88,8 @@ BObolViewController::getViewport(void) const
 void
 BObolViewController::setRenderContextManager(SoDB::ContextManager *manager)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     SoGLRenderAction *action = this->d->renderManager ?
 	this->d->renderManager->getGLRenderAction() : NULL;
     if (!action || action->getContextManager() == manager)
@@ -210,9 +212,11 @@ BObolViewController::replaceEditPreviewWithIntent(const char *previewId,
 	preview = new SoBRLEditPreview;
 
     if (sourceRevision == 0)
-	sourceRevision = preview->sourceRevision.getValue() + 1;
+	sourceRevision = bobol_identity_successor_or_terminate(
+	    preview->sourceRevision.getValue());
     if (inputsRevision == 0)
-	inputsRevision = preview->inputsRevision.getValue() + 1;
+	inputsRevision = bobol_identity_successor_or_terminate(
+	    preview->inputsRevision.getValue());
 
     preview->previewId = previewId;
     preview->setEditIntent(editIntentId ? editIntentId : "",
@@ -360,6 +364,8 @@ BObolViewController::findGroup(const char *groupPath) const
 SoGroup *
 BObolViewController::ensureGroup(const char *groupPath)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const uint64_t revision = this->d->sceneController.getStructuralRevision();
     SoGroup *group = this->d->sceneController.ensureGroup(groupPath);
     if (group && this->d->sceneController.getStructuralRevision() != revision)
@@ -375,6 +381,8 @@ BObolViewController::setGroupDrawIntent(const char *groupPath,
 	SbBool overlayIntent,
 	uint32_t revalidationRevision)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed = this->d->sceneController.setGroupDrawIntent(groupPath,
 			intentPath, drawMode, fallbackDrawMode, overlayIntent,
 			revalidationRevision);
@@ -397,6 +405,8 @@ BObolViewController::setGroupDisplayState(const char *groupPath,
 	const SbColor &materialColor,
 	uint32_t materialRevision)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed = this->d->sceneController.setGroupDisplayState(
 			    groupPath, visible, selected, highlighted, lineStyle,
 			    lineWidth, transparency, colorOverride, color,
@@ -410,6 +420,8 @@ int
 BObolViewController::renameGroup(const char *groupPath,
 				   const char *newLeafName)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed =
 	this->d->sceneController.renameGroup(groupPath, newLeafName);
     if (changed > 0)
@@ -421,6 +433,8 @@ int
 BObolViewController::appendChildToGroup(const char *groupPath,
 	SoNode *child)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed =
 	this->d->sceneController.appendChildToGroup(groupPath, child);
     if (changed > 0)
@@ -432,6 +446,8 @@ int
 BObolViewController::removeChildFromGroup(const char *groupPath,
 	SoNode *child)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed =
 	this->d->sceneController.removeChildFromGroup(groupPath, child);
     if (changed > 0)
@@ -443,6 +459,8 @@ int
 BObolViewController::eraseGroupSubpath(const char *parentGroupPath,
 	const char *subpath)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed =
 	this->d->sceneController.eraseGroupSubpath(parentGroupPath, subpath);
     if (changed > 0)
@@ -453,6 +471,8 @@ BObolViewController::eraseGroupSubpath(const char *parentGroupPath,
 int
 BObolViewController::removeGroup(const char *groupPath)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int removed = this->d->sceneController.removeGroup(groupPath);
     if (removed > 0)
 	this->requestLodCapacityRender("scene-group");
@@ -462,6 +482,8 @@ BObolViewController::removeGroup(const char *groupPath)
 int
 BObolViewController::clearGroup(const char *groupPath)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int removed = this->d->sceneController.clearGroup(groupPath);
     if (removed > 0)
 	this->requestLodCapacityRender("scene-group");
@@ -504,6 +526,8 @@ int
 BObolViewController::moveShapeToGroup(const char *shapePath,
 					const char *groupPath)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed =
 	this->d->sceneController.moveShapeToGroup(shapePath, groupPath);
     if (changed > 0)
@@ -514,6 +538,8 @@ BObolViewController::moveShapeToGroup(const char *shapePath,
 int
 BObolViewController::removeShape(const char *shapePath)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int removed = this->d->sceneController.removeShape(shapePath);
     if (removed > 0)
 	this->requestLodCapacityRender("scene-shape");
@@ -527,6 +553,8 @@ BObolViewController::setShapeDrawState(const char *shapePath,
 	SbBool overlayIntent,
 	SbBool hudIntent)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed = this->d->sceneController.setShapeDrawState(shapePath,
 			drawMode, databaseIntent, overlayIntent, hudIntent);
     if (changed > 0)
@@ -548,6 +576,8 @@ BObolViewController::setShapeDisplayState(const char *shapePath,
 	const SbColor &materialColor,
 	uint32_t materialRevision)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed = this->d->sceneController.setShapeDisplayState(
 			    shapePath, visible, selected, highlighted, lineStyle, lineWidth,
 			    transparency, colorOverride, color, materialColorValid,
@@ -566,6 +596,8 @@ BObolViewController::setShapePlacementState(const char *shapePath,
 	SbBool drawSizeValid,
 	float drawSize)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed = this->d->sceneController.setShapePlacementState(
 			    shapePath, drawMatrixValid, drawMatrix, drawCenterValid,
 			    drawCenter, drawSizeValid, drawSize);
@@ -590,6 +622,8 @@ BObolViewController::setShapeSourceState(const char *shapePath,
 	SbBool ownerSourceStale,
 	uint32_t ownerStaleReason)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed = this->d->sceneController.setShapeSourceState(
 			    shapePath, ownerSourcePath, ownerSourceRevision,
 			    ownerInputsRevision, ownerViewRevision, ownerRealizedRevision,
@@ -608,6 +642,8 @@ BObolViewController::replaceDatabaseSource(const char *sourcePath,
 	int drawMode,
 	uint32_t sourceRevision)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     int changed = this->d->sceneController.replaceDatabaseSource(sourcePath,
 		  dbip, drawMode, sourceRevision);
     if (changed > 0) {
@@ -626,6 +662,8 @@ BObolViewController::replaceDatabaseSourceInstance(
     int drawMode,
     uint32_t sourceRevision)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     int changed = this->d->sceneController.replaceDatabaseSourceInstance(
 		      sourceInstanceKey, sourcePath, dbip, drawMode, sourceRevision);
     if (changed > 0) {
@@ -653,6 +691,8 @@ BObolViewController::setDatabaseSourceState(const char *sourcePath,
 	const SbColor &materialColor,
 	uint32_t materialRevision)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     SoBRLDatabaseSource *source =
 	this->d->sceneController.findDatabaseSource(sourcePath);
     const uint32_t previousSourceRevision = source ?
@@ -699,6 +739,8 @@ BObolViewController::setDatabaseSourceInstanceState(
     const SbColor &materialColor,
     uint32_t materialRevision)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     SoBRLDatabaseSource *source =
 	this->d->sceneController.findDatabaseSourceInstance(sourceInstanceKey);
     const uint32_t previousSourceRevision = source ?
@@ -732,6 +774,8 @@ int
 BObolViewController::setDatabaseSourceDisplayPatch(const char *sourcePath,
 	const BObolDatabaseSourceDisplayPatch &patch)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed = this->d->sceneController.setDatabaseSourceDisplayPatch(
 			    sourcePath, patch);
     if (changed > 0) {
@@ -746,6 +790,8 @@ BObolViewController::setDatabaseSourceInstanceDisplayPatch(
     const char *sourceInstanceKey,
     const BObolDatabaseSourceDisplayPatch &patch)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed =
 	this->d->sceneController.setDatabaseSourceInstanceDisplayPatch(
 	    sourceInstanceKey, patch);
@@ -760,6 +806,8 @@ int
 BObolViewController::setDatabaseSourceDisplayName(const char *sourcePath,
 	const char *displayName)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed = this->d->sceneController.setDatabaseSourceDisplayName(
 			    sourcePath, displayName);
     if (changed > 0) {
@@ -774,6 +822,8 @@ BObolViewController::setDatabaseSourceInstanceDisplayName(
     const char *sourceInstanceKey,
     const char *displayName)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed =
 	this->d->sceneController.setDatabaseSourceInstanceDisplayName(
 	    sourceInstanceKey, displayName);
@@ -791,6 +841,8 @@ BObolViewController::setDatabaseSourceBoundsState(const char *sourcePath,
 	const SbVec3f &boundsMax,
 	SbBool boundsExact)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed = this->d->sceneController.setDatabaseSourceBoundsState(
 			    sourcePath, boundsValid, boundsMin, boundsMax,
 			    boundsExact);
@@ -810,6 +862,8 @@ BObolViewController::setDatabaseSourceInstanceBoundsState(
     const SbVec3f &boundsMax,
     SbBool boundsExact)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed =
 	this->d->sceneController.setDatabaseSourceInstanceBoundsState(
 	    sourceInstanceKey, boundsValid, boundsMin, boundsMax,
@@ -827,6 +881,8 @@ BObolViewController::setDatabaseSourceMaterialPolicy(
     const char *sourcePath,
     int materialPolicy)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed = this->d->sceneController.setDatabaseSourceMaterialPolicy(
 			    sourcePath, materialPolicy);
     if (changed > 0) {
@@ -841,6 +897,8 @@ BObolViewController::setDatabaseSourceInstanceMaterialPolicy(
     const char *sourceInstanceKey,
     int materialPolicy)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed =
 	this->d->sceneController.setDatabaseSourceInstanceMaterialPolicy(
 	    sourceInstanceKey, materialPolicy);
@@ -855,6 +913,8 @@ int
 BObolViewController::markDatabaseSourceStale(const char *sourcePath,
 	uint32_t staleReason)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed = this->d->sceneController.markDatabaseSourceStale(
 			    sourcePath, staleReason);
     if (changed > 0) {
@@ -870,6 +930,8 @@ BObolViewController::markDatabaseSourceInstanceStale(
     const char *sourceInstanceKey,
     uint32_t staleReason)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const int changed = this->d->sceneController.markDatabaseSourceInstanceStale(
 			    sourceInstanceKey, staleReason);
     if (changed > 0) {
@@ -883,6 +945,8 @@ BObolViewController::markDatabaseSourceInstanceStale(
 int
 BObolViewController::removeDatabaseSource(const char *sourcePath)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     int removed = this->d->sceneController.removeDatabaseSource(sourcePath);
     if (removed > 0) {
 	this->invalidateDatabaseSourceLodState();
@@ -896,6 +960,8 @@ int
 BObolViewController::removeDatabaseSourceInstance(
     const char *sourceInstanceKey)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     int removed = this->d->sceneController.removeDatabaseSourceInstance(
 		      sourceInstanceKey);
     if (removed > 0) {
@@ -910,6 +976,8 @@ int
 BObolViewController::moveDatabaseSourceToGroup(const char *sourcePath,
 	const char *groupPath)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     int moved = this->d->sceneController.moveDatabaseSourceToGroup(sourcePath,
 		groupPath);
     if (moved > 0) {
@@ -924,6 +992,8 @@ BObolViewController::moveDatabaseSourceInstanceToGroup(
     const char *sourceInstanceKey,
     const char *groupPath)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     int moved = this->d->sceneController.moveDatabaseSourceInstanceToGroup(
 		    sourceInstanceKey, groupPath);
     if (moved > 0) {
@@ -936,6 +1006,8 @@ BObolViewController::moveDatabaseSourceInstanceToGroup(
 int
 BObolViewController::clearDatabaseSources(void)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     int removed = this->d->sceneController.clearDatabaseSources();
     if (removed > 0) {
 	this->invalidateDatabaseSourceLodState();

@@ -1,6 +1,6 @@
 # libBObol active debt
 
-Last reviewed: 2026-09-01
+Last reviewed: 2026-09-03
 
 This is the sole remaining-work list for the Obol drawing stack.  It records
 work which is not complete; resolved failure analysis belongs in
@@ -44,6 +44,11 @@ debt under another name:
   retained scene to recover from process-wide allocator exhaustion during the
   mechanical commit.  Capacity is reserved from the manifest and sparse
   journal size remains bounded.
+- Deterministic precommit denial covers retained-scene, presentation, durable
+  hierarchy-record, and final name-mapping publication.  A denied scene commit
+  preserves the prior node notification identity; a denied cache replacement
+  preserves the prior discoverable immutable hierarchy.  Filesystem crash
+  consistency remains a separate operational gate.
 - Obol update windows are move-only, nest-safe RAII values.  Manual
   `beginUpdate()`/`endUpdate()` pairing is no longer public.
 - One retained assembly presentation never chooses CAD LoD.  It executes the
@@ -59,11 +64,23 @@ debt under another name:
 - Optional PCA-oriented bounds are immutable cache/part metadata, not a LoD
   state.  Monolithic retained parts use them for screen-significant batched
   aggregate boxes in shaded and wire modes; AABB remains the validated
-  fallback.  The optional projection pass occurs after cold coverage can be
-  published, so it cannot delay the first useful preview.
+  fallback.  Exact Obol admission checks real renderer positions rather than
+  requiring a rotated OBB to contain the artificial corners of its own AABB;
+  only an invalid optional OBB is discarded.  The optional projection pass
+  occurs after cold coverage can be published, so it cannot delay the first
+  useful preview.
 - Workload names and renderer names are qualification profiles, not control
   modes.  Lucy, Hubble, 50k, 150k, System GL, and OSMesa all use the same
   state transition relation.
+- Authorization evidence is exact.  Renderer cache keys retain complete typed
+  tuples, while capacity populations and bounded structural frontiers receive
+  non-reused tokens only after exact comparison.  Compact-source and
+  cross-source presentation reuse compares exact revision/membership vectors.
+  Digests remain diagnostic, content-addressed, or bucket-selection values and
+  never independently certify current mutable state.  Multi-assembly draw,
+  timing, and resource observations use exact canonical source tuples keyed
+  by non-reused Obol assembly identities; aggregate tokens never depend on an
+  object address, hash, or saturating sum.
 
 Focused Obol CAD tests, libBObol rendering/realization/update tests,
 `ged_test_obol_draw_sync`, the pivot guard, and the installed-package consumer
@@ -154,15 +171,20 @@ while monotone command preparation and worker realization are active.  This
 was distinguished from an end-state cycle by an extended full workflow: the
 warm 50k OSMesa selection/erase/redraw replay completed in 31.6 seconds, and
 its three post-selection convergence waits returned to ownerless readiness in
-0.55--0.92 seconds with no obligation or violation.  This
-does not close the remaining production refinement debt: not every imperative
-effect writer emits a typed transition record yet, and preparation's remaining
-unit rank is not yet exported into the dense trace, so the checker still
-samples states rather than checking a complete concrete execution against the
-transition relation.
-Finish that migration at semantic ledger boundaries and delete each superseded
-writer in the same change.  Do not add another policy model for the same state,
-and do not create a monolithic effect facade around already cohesive reducers.
+0.55--0.92 seconds with no obligation or violation.
+The controller transition journal now closes the remaining observation gap.
+It records typed before/after endpoints at every registered effect boundary,
+includes renderer-preparation target and remaining-unit ranks, and emits an
+explicit `unnamed` failure record if observable state changes outside those
+boundaries.  The qged checker rejects missing fields, discontinuity, event/
+owner mismatch, truncation, and every prior sampled-state violation.  Its first
+complete trace found a queued-render-to-in-flight-frame seam: exact-frame debt
+temporarily had no witness after host claim.  Production now exposes the
+`renderInFlight` state already required by `ObolHostWork` as a typed claimed-
+frame witness and retires it on frame completion or interruption.  A 512-step
+deterministic C++ trace and a 57-transition OSMesa draw/zoom trace pass with no
+unnamed transition or drop.  Keep this journal diagnostic-only and bounded;
+do not turn it into another scheduler or a monolithic policy facade.
 The 2026-08-30 implementation refinement now gives exact-frame debt distinct
 request-required and frame-awaited states, including reattachment to a
 coalesced host request after a newer semantic mutation supersedes its target.
@@ -219,7 +241,11 @@ The production shape is nevertheless still concentrated in two places:
   controller implementation.
 
 Required completion work (`tla/RISK_COVERAGE.md` supplies the detailed
-formal/executable evidence mapping for the audit-derived items):
+formal/executable evidence mapping for the audit-derived items, and
+`libbobol_tla_conformance.md` records the model-to-production conformance
+findings).  Result authentication and shared-producer lifetime now have
+production gates, focused formulas, and complete asynchronous lifecycle
+matrices; they are no longer debt:
 
 1. Finish inventorying the remaining mutable controller fields by sole owner,
    revision domain, progress witness, and terminal transition.  Delete
@@ -228,39 +254,17 @@ formal/executable evidence mapping for the audit-derived items):
 2. Continue moving nontrivial pure-policy method bodies behind the new
    compile-checked private boundaries.  Keep hot occurrence storage dense and
    allocation-free; this is a responsibility split, not an object hierarchy.
-3. Route each remaining direct lifecycle mutation through the typed reducer
-   which owns that ledger and returns a complete successor plus bounded
-   effects.  Submission cursor positioning, fresh/retired pass transitions,
-   structural relaxation, point-recovery completion, interaction feedback,
-   and host render requests now satisfy this rule.  Deliberate pause/resume
-   operations preserve rescan debt explicitly.  An unmapped transition is
-   debt unless it represents a genuinely new semantic event.
-4. Extend randomized refinement traces as each remaining effect writer moves
-   behind the reducer, and retain the exhaustive focused value tests.  The
-   completed-pass boundary now has full selector enumeration plus 512 seeded
-   multi-pass traces.  Every nonterminal state must identify a worker, cursor,
-   scheduled owner-thread pump, frame acknowledgement, or finite timer which
-   can make progress.
-5. Re-run the applicable TLC models after ownership/liveness changes and the
+3. Preserve the complete transition-journal gate whenever a controller effect
+   boundary changes.  An `unnamed` event, dropped record, discontinuous
+   endpoint, or owner without a finite witness is a contract failure, not a
+   diagnostic warning.
+4. Re-run the applicable TLC models after ownership/liveness changes and the
    graphical matrix after numeric policy changes.  Formal models do not judge
    visual quality or wall-clock performance.
-6. Add a table-driven asynchronous-result matrix crossing current/stale
-   population epoch, demand revision, source-route revision, and typed
-   completion outcome.  A mismatch must supersede without publishing or
-   creating failure for a newer demand.
-7. Add shared-producer lifetime regressions for one consumer closing during a
-   coalesced build, a late consumer joining, and the final consumer closing
-   while a result is queued.  Only the final lease may authorize cancellation.
-8. Add allocator/resource failure injection immediately before retained-scene,
-   presentation, and durable-cache commit boundaries.  Failure must preserve
-   the prior committed object and its notification pair.
-9. Add endpoint-loss and close-during-gesture regressions.  Every in-flight
-   frame, timer, worker, and callback owner must receive a typed completion or
-   cancellation during teardown; retain ASan/TSan coverage for these paths.
-10. Audit all six-domain evidence-stamp constructors and every asynchronous
-    identity counter.  Companion fields may not default across epochs, and
-    counter overflow must invalidate dependent evidence rather than permit an
-    ABA match.
+5. Preserve the completed identity gates: evidence stamps require all six
+   typed domains, inactive holders use the administrative sentinel, and every
+   authentication, ordering, or ownership counter uses the checked fail-stop
+   successor.  Diagnostic counters may saturate but must never authorize work.
 
 Acceptance: unchanged evidence cannot reopen planning; an invalid/stale plan
 cannot commit; one event cannot select two successor owners; no terminal HUD

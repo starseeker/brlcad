@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "cad_publication_private.h"
+#include "transaction_fault_private.h"
 
 #include "bu/log.h"
 
@@ -102,6 +103,17 @@ report_scene_mutation(const Obol::CadSceneMutationResult &result,
     return false;
 }
 
+std::shared_ptr<const Obol::PartGeometry>
+build_geometry(Obol::PartGeometryBuilder geometry, const char *operation,
+    Obol::CadAggregateProxyPolicy proxyPolicy)
+{
+    Obol::CadGeometryAdmission admission = Obol::cadAdmitPartGeometry(
+	std::move(geometry), proxyPolicy);
+    if (!report_geometry_validation(admission.validation, operation))
+	return std::shared_ptr<const Obol::PartGeometry>();
+    return admission.geometry.shared();
+}
+
 } // namespace
 
 bool
@@ -123,11 +135,16 @@ std::shared_ptr<const Obol::PartGeometry>
 bobol_cad_build_geometry(Obol::PartGeometryBuilder geometry,
     const char *operation)
 {
-    Obol::CadGeometryAdmission admission =
-	Obol::cadAdmitPartGeometry(std::move(geometry));
-    if (!report_geometry_validation(admission.validation, operation))
-	return std::shared_ptr<const Obol::PartGeometry>();
-    return admission.geometry.shared();
+    return build_geometry(std::move(geometry), operation,
+	Obol::CadAggregateProxyPolicy::Strict);
+}
+
+std::shared_ptr<const Obol::PartGeometry>
+bobol_cad_build_geometry_with_optional_proxy(
+    Obol::PartGeometryBuilder geometry, const char *operation)
+{
+    return build_geometry(std::move(geometry), operation,
+	Obol::CadAggregateProxyPolicy::DiscardInvalid);
 }
 
 bool
@@ -192,6 +209,12 @@ bobol_cad_publish_mutation(SoCADAssembly *assembly,
 	    publication_operation(operation));
 	return false;
     }
+    if (bobol_transaction_fault_requested(
+	    BObolTransactionFaultPoint::RETAINED_SCENE_COMMIT)) {
+	bu_log("libBObol: injected resource denial before %s CAD scene "
+	    "transaction commit\n", publication_operation(operation));
+	return false;
+    }
     return report_scene_mutation(
 	assembly->applySceneMutation(mutation), mutation, operation);
 }
@@ -218,6 +241,12 @@ bobol_cad_replace_scene(SoCADAssembly *assembly,
     if (!assembly) {
 	bu_log("libBObol: rejected %s CAD scene replacement: null assembly\n",
 	    publication_operation(operation));
+	return false;
+    }
+    if (bobol_transaction_fault_requested(
+	    BObolTransactionFaultPoint::RETAINED_SCENE_COMMIT)) {
+	bu_log("libBObol: injected resource denial before %s CAD scene "
+	    "replacement commit\n", publication_operation(operation));
 	return false;
     }
     return report_scene_replacement(

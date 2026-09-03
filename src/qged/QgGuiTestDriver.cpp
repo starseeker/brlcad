@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <iterator>
 #include <memory>
 #include <vector>
 
@@ -1474,40 +1475,65 @@ private:
     QString error_;
 };
 
-/* The event-level report is intentionally sparse, but a stabilization wait
- * may service hundreds of controller and presentation transitions.  Retain a
- * compact, bounded trace of distinct control states so the offline refinement
- * checker can see an internal terminal reopen or A/B/A cycle.  This observer
- * never feeds production policy. */
+/* Drain the controller's opt-in transition journal.  Unlike the former
+ * polling observer, this retains every named reducer endpoint even when
+ * several transitions occur between Qt event-loop observations. */
 class QgedProgressiveControlTrace {
 public:
+    ~QgedProgressiveControlTrace()
+    {
+	for (BObolViewController *controller : controllers_) {
+	    if (controller)
+		controller->setLodControlTransitionTracing(FALSE);
+	}
+    }
+
     void observe(BObolViewController *controller,
 	const BObolLodConvergenceStatus &status, int eventIndex,
 	const QString &action, qint64 elapsedMilliseconds, bool force = false)
     {
+	(void)status;
+	(void)force;
 	if (!controller)
 	    return;
-
-	QJsonObject identity;
-	qged_append_progressive_control_diagnostics(
-	    identity, *controller, status);
-	if (!force && haveLastIdentity_ && identity == lastIdentity_)
-	    return;
-	lastIdentity_ = identity;
-	haveLastIdentity_ = true;
-
-	if (records_.size() >= qged_test_control_trace_record_limit) {
-	    ++dropped_;
-	    return;
+	auto controllerPosition = std::find(
+	    controllers_.begin(), controllers_.end(), controller);
+	if (controllerPosition == controllers_.end()) {
+	    controller->setLodControlTransitionTracing(TRUE,
+		static_cast<size_t>(qged_test_control_trace_record_limit));
+	    controllers_.push_back(controller);
+	    controllerPosition = controllers_.end() - 1;
 	}
+	const qint64 controllerIndex = static_cast<qint64>(
+	    std::distance(controllers_.begin(), controllerPosition));
 
-	QJsonObject record = identity;
-	record.insert(QStringLiteral("transition_observation"),
-	    static_cast<qint64>(observed_++));
-	record.insert(QStringLiteral("event_index"), eventIndex);
-	record.insert(QStringLiteral("action"), action);
-	record.insert(QStringLiteral("elapsed_ms"), elapsedMilliseconds);
-	records_.append(record);
+	std::vector<BObolLodControlTransitionRecord> transitions;
+	controller->drainLodControlTransitions(transitions);
+	for (const BObolLodControlTransitionRecord &transition : transitions) {
+	    if (records_.size() >= qged_test_control_trace_record_limit) {
+		++locallyDropped_;
+		continue;
+	    }
+	    QJsonObject record;
+	    qged_append_progressive_control_diagnostics(
+		record, transition.after);
+	    const qint64 observation = observed_++;
+	    record.insert(QStringLiteral("transition_observation"), observation);
+	    record.insert(QStringLiteral("transition_serial"),
+		observation + 1);
+	    record.insert(QStringLiteral("transition_controller"),
+		controllerIndex);
+	    record.insert(QStringLiteral("transition_controller_serial"),
+		static_cast<qint64>(transition.serial));
+	    record.insert(QStringLiteral("transition_event"),
+		QString::fromLatin1(
+		    bobol_lod_control_transition_event_name(transition.event)));
+	    this->appendPriorEndpoint(record, transition.before);
+	    record.insert(QStringLiteral("event_index"), eventIndex);
+	    record.insert(QStringLiteral("action"), action);
+	    record.insert(QStringLiteral("elapsed_ms"), elapsedMilliseconds);
+	    records_.append(record);
+	}
     }
 
     void observe(BObolViewController *controller, int eventIndex,
@@ -1528,15 +1554,61 @@ public:
 
     qint64 dropped(void) const
     {
-	return dropped_;
+	uint64_t dropped = static_cast<uint64_t>(locallyDropped_);
+	for (const BObolViewController *controller : controllers_) {
+	    if (controller)
+		dropped += controller->getDroppedLodControlTransitionCount();
+	}
+	return dropped > static_cast<uint64_t>(
+		std::numeric_limits<qint64>::max()) ?
+	    std::numeric_limits<qint64>::max() :
+	    static_cast<qint64>(dropped);
     }
 
 private:
+    static void appendPriorEndpoint(QJsonObject &record,
+	const BObolLodControlTraceState &state)
+    {
+	const BObolLodConvergenceStatus &status = state.convergence;
+	record.insert(QStringLiteral("transition_prior_fact_mask"),
+	    static_cast<qint64>(status.controlFactMask));
+	record.insert(QStringLiteral("transition_prior_obligation_mask"),
+	    static_cast<qint64>(status.controlObligationMask));
+	record.insert(QStringLiteral("transition_prior_owner"),
+	    static_cast<qint64>(status.controlOwner));
+	record.insert(QStringLiteral("transition_prior_inventory_revision"),
+	    static_cast<qint64>(status.inventoryRevision));
+	record.insert(QStringLiteral("transition_prior_availability_revision"),
+	    static_cast<qint64>(status.availabilityRevision));
+	record.insert(QStringLiteral("transition_prior_visibility_revision"),
+	    static_cast<qint64>(status.visibilityRevision));
+	record.insert(QStringLiteral("transition_prior_view_revision"),
+	    static_cast<qint64>(status.viewRevision));
+	record.insert(QStringLiteral("transition_prior_policy_revision"),
+	    static_cast<qint64>(status.policyRevision));
+	record.insert(QStringLiteral("transition_prior_capacity_revision"),
+	    static_cast<qint64>(status.capacityRevision));
+	record.insert(QStringLiteral("transition_prior_allocation_plan_serial"),
+	    static_cast<qint64>(status.currentAllocationPlanSerial));
+	record.insert(QStringLiteral("transition_prior_transaction_serial"),
+	    static_cast<qint64>(status.presentationTransactionSerial));
+	record.insert(QStringLiteral("transition_prior_outcome"), status.outcome);
+	record.insert(QStringLiteral(
+		"transition_prior_renderer_preparation_target_signature"),
+	    static_cast<qint64>(
+		status.rendererPreparationTargetSignature));
+	record.insert(QStringLiteral(
+		"transition_prior_renderer_preparation_remaining_units"),
+	    static_cast<qint64>(std::min<uint64_t>(
+		status.rendererPreparationRemainingUnits,
+		static_cast<uint64_t>(
+		    std::numeric_limits<qint64>::max()))));
+    }
+
     QJsonArray records_;
-    QJsonObject lastIdentity_;
+    std::vector<BObolViewController *> controllers_;
     qint64 observed_ = 0;
-    qint64 dropped_ = 0;
-    bool haveLastIdentity_ = false;
+    qint64 locallyDropped_ = 0;
 };
 
 static bool
@@ -2430,6 +2502,12 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 	    elapsed.start();
 	    bool success = QgEventRecorder::load(script, events, &error);
 	    for (int i = 0; success && i < events.size(); ++i) {
+		/* Enable the controller journal before dispatching the input.  The
+		 * post-event observation below then drains every reducer transition
+		 * caused by this event, including transitions completed in a wait. */
+		controlTrace.observe(
+		    qged_progressive_event_controller(app, events[i]), i,
+		    QStringLiteral("checkpoint"), elapsed.elapsed());
 		QElapsedTimer eventElapsed;
 		eventElapsed.start();
 		QString commandOutput;
@@ -2652,6 +2730,8 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 		controlTrace.dropped());
 	    report.insert(QStringLiteral("control_transition_trace_truncated"),
 		controlTrace.dropped() != 0);
+	    report.insert(QStringLiteral("control_transition_trace_complete"),
+		controlTrace.dropped() == 0);
 	    if (frameCapture) {
 		frameCapture->finish();
 		report.insert(QStringLiteral("presented_frame_capture"),

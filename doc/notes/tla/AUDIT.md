@@ -1,6 +1,6 @@
 # BObol TLA+ suite audit
 
-Audit date: 2026-09-02
+Audit date: 2026-09-03
 
 This is the active formal-suite audit.  Current model-checking results and
 state counts live only in `baselines/tlc-2.19.json` and generated logs.  This
@@ -68,19 +68,51 @@ not have exposed:
   limits and unrecoverable provider/geometry failure.  The composition now
   carries exclusive constraint and failure evidence and exposes distinct
   `Constrained` and `Failed` outcomes.
+- Durable cache publication previously used a Boolean completion marker and
+  could not represent replacement of a valid predecessor.  The focused live-
+  publication model and its asset composition now carry a baseline mapping,
+  atomic candidate mapping, and denied-commit state; denial is required action
+  coverage and must preserve the baseline mapping.
+- Host work previously modeled only an orderly producer close whose remaining
+  notifications, timers, and frames could drain.  Endpoint loss removes that
+  fairness witness.  `CloseEndpoint` now atomically cancels every host/source/
+  provider/exact-publication level and exports its terminal postcondition to
+  the lifecycle composition contract.
+- The unbounded natural-number revision domains could not express the C++
+  machine boundary.  `ObolIdentityExhaustion` now uses a finite domain in
+  which a requested mutation either publishes a fresh successor or enters a
+  closed fail-stop state without committing or reissuing an identity.
+- A cross-repository refinement audit found mutable-state caches which treated
+  compact hashes as exact evidence.  The formulas already compared their
+  abstract records and identities exactly, so no formula change was required:
+  Obol GPU keys and BRL-CAD capacity, structural-frontier, compact-source, and
+  cross-source presentation credentials now retain exact inputs or receive a
+  non-reused token only after exact comparison.
+- Aggregate renderer evidence no longer hashes or sums local serials, or uses
+  reusable object addresses as source identity.  Obol supplies a non-reused
+  assembly identity; exact canonical source tuples produce checked draw,
+  timing, resource, and preparation change tokens.  The formulas already use
+  exact abstract identities, so this too is a refinement correction rather
+  than a formula change.
 
-Two focused models were added because the historical failure families imply
+Three focused models were added because the historical failure families imply
 broader risks than the individual incidents:
 
 - `ObolResultAuthentication` independently checks population epoch, demand
-  revision, and source-route revision, and requires stale results to be
-  rejected or converted into explicitly owned successor work.
+  revision, and source-route revision.  It now also models publish,
+  exact-current terminal-failure, and retry dispositions, and requires stale
+  results to create neither publication nor failure evidence before successor
+  work is owned.
 - `ObolSharedAssetLease` checks that one consumer cannot cancel a coalesced
   producer while another live consumer still depends on it, including a
   bounded late consumer joining during build, result, or post-cancel states.
+- `ObolIdentityExhaustion` checks the fixed-width edge omitted by the natural-
+  number control models: no credential is reused, stale evidence cannot
+  authenticate, and exhaustion resolves through fail-stop quiescence.
 
 `RISK_COVERAGE.md` maps these and the remaining prospective hazards to formal,
-executable, and operational evidence.
+executable, and operational evidence.  `../libbobol_tla_conformance.md` records
+the corresponding production audit and closure evidence.
 
 ## Deliberate limits
 
@@ -91,11 +123,21 @@ allocator behavior, renderer correctness, thread/runtime integration, and
 performance still require executable fault injection, image comparisons,
 sanitizers, resource measurements, and production traces.
 
-The remaining open work is therefore implementation evidence, not an
-unrecorded formal assumption.  The highest-priority gaps are the shared-build
-consumer-close regression, the combined stale-result identity matrix,
-allocator failure at commit boundaries, endpoint loss during interaction,
-and a C++ audit of all six evidence-stamp constructors.  They are recorded as
-completion work in `../libbobol_active_debt.md` and mapped to their formal and
-executable evidence in `RISK_COVERAGE.md`, so they cannot be mistaken for
-properties already proved by TLC.
+The result-authentication implementation and its exhaustive asynchronous
+matrix now refine the strengthened formula.  Explicit generation leases and
+six build/result/cancellation lifecycle cases likewise refine
+`ObolSharedAssetLease`; secondary consumers receive demand-local replay rather
+than another view's payload.  Complete controller transition records now
+carry typed endpoints, event/owner identity, and renderer-preparation rank;
+their first full graphical trace found and closed the already-modeled
+render-in-flight witness seam.  Complete admission stamps are now immutable
+six-argument values, with per-domain stale-plan and retained-allocation
+checks.  Commit-boundary denial now has executable retained-scene,
+presentation, and durable-replacement witnesses plus a prior-mapping formula.
+Endpoint teardown now has executable close-during-gesture, claimed-frame,
+worker cancellation, and reentrant callback-lifetime witnesses plus an atomic
+host-work cancellation formula.  Checked C++ successor primitives and the
+finite exhaustion model now close fixed-width revision wrap as an
+authentication path.  Remaining data-plane and operational limits are mapped
+in `RISK_COVERAGE.md`, so they cannot be mistaken for properties proved by
+TLC.

@@ -95,10 +95,11 @@ qged_progressive_event_controller(QgEdApp &app, const QgTestEvent &event)
     return view ? view->obolViewController() : nullptr;
 }
 
-void
-qged_append_progressive_control_diagnostics(
-    QJsonObject &sample, const BObolViewController &controller,
-    const BObolLodConvergenceStatus &status)
+static void
+qged_append_progressive_control_diagnostic_values(
+    QJsonObject &sample, const BObolLodConvergenceStatus &status,
+    const BObolHostWorkSnapshot &hostWork, uint64_t viewRevision,
+    uint64_t policyRevision, SbBool interactionActive)
 {
     sample.insert(QStringLiteral("controller_available"), true);
     sample.insert(QStringLiteral("lod_control_fact_mask"),
@@ -111,8 +112,6 @@ qged_append_progressive_control_diagnostics(
 	static_cast<qint64>(status.controlViolationMask));
     sample.insert(QStringLiteral("lod_control_presentation_witness_mask"),
 	static_cast<qint64>(status.controlPresentationWitnessMask));
-    const BObolHostWorkSnapshot hostWork =
-	controller.getHostWorkSnapshot();
     sample.insert(QStringLiteral("host_work_flags"),
 	static_cast<qint64>(hostWork.flags));
     sample.insert(QStringLiteral("lod_inventory_revision"),
@@ -132,9 +131,9 @@ qged_append_progressive_control_diagnostics(
     sample.insert(QStringLiteral("lod_resident_demand_revision"),
 	static_cast<qint64>(status.residentDemandRevision));
     sample.insert(QStringLiteral("lod_view_revision"),
-	static_cast<qint64>(controller.getLodViewRevision()));
+	static_cast<qint64>(viewRevision));
     sample.insert(QStringLiteral("lod_policy_revision"),
-	static_cast<qint64>(controller.getLodPolicyRevision()));
+	static_cast<qint64>(policyRevision));
     sample.insert(QStringLiteral("lod_allocation_plan_serial"),
 	static_cast<qint64>(status.currentAllocationPlanSerial));
     sample.insert(QStringLiteral("lod_presentation_transaction_serial"),
@@ -150,7 +149,7 @@ qged_append_progressive_control_diagnostics(
     sample.insert(QStringLiteral("lod_convergence_view_ready"),
 	status.viewReady ? true : false);
     sample.insert(QStringLiteral("lod_interactive"),
-	controller.isLodInteractionActive() ? true : false);
+	interactionActive ? true : false);
 
     /* These counters are observational finite-progress witnesses.  Serial
      * clocks alone do not prove convergence: a defective controller can keep
@@ -235,6 +234,26 @@ qged_append_progressive_control_diagnostics(
 	static_cast<qint64>(status.residentCompactionCandidateCount));
     sample.insert(QStringLiteral("lod_convergence_fraction"),
 	static_cast<double>(status.fraction));
+}
+
+void
+qged_append_progressive_control_diagnostics(
+    QJsonObject &sample, const BObolViewController &controller,
+    const BObolLodConvergenceStatus &status)
+{
+    qged_append_progressive_control_diagnostic_values(sample, status,
+	controller.getHostWorkSnapshot(), controller.getLodViewRevision(),
+	controller.getLodPolicyRevision(),
+	controller.isLodInteractionActive());
+}
+
+void
+qged_append_progressive_control_diagnostics(
+    QJsonObject &sample, const BObolLodControlTraceState &state)
+{
+    qged_append_progressive_control_diagnostic_values(sample,
+	state.convergence, state.hostWork, state.viewRevision,
+	state.policyRevision, state.interactionActive);
 }
 
 QJsonObject

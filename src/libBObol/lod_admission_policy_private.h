@@ -973,7 +973,7 @@ public:
     struct Inputs {
 	uint64_t viewRevision = 0;
 	uint64_t policyRevision = 0;
-	uint64_t frontierDigest = 0;
+	uint64_t frontierIdentity = 0;
 	size_t unresolvedCount = 0;
 	size_t activeCost = 0;
 	size_t currentBudget = 0;
@@ -1004,7 +1004,7 @@ private:
 	const bool duplicate = this->validValue &&
 	    this->viewRevisionValue == inputs.viewRevision &&
 	    this->policyRevisionValue == inputs.policyRevision &&
-	    this->frontierDigestValue == inputs.frontierDigest &&
+	    this->frontierIdentityValue == inputs.frontierIdentity &&
 	    this->unresolvedCountValue == inputs.unresolvedCount &&
 	    this->activeCostValue == inputs.activeCost;
 	if (duplicate) {
@@ -1017,7 +1017,7 @@ private:
 	this->validValue = true;
 	this->viewRevisionValue = inputs.viewRevision;
 	this->policyRevisionValue = inputs.policyRevision;
-	this->frontierDigestValue = inputs.frontierDigest;
+	this->frontierIdentityValue = inputs.frontierIdentity;
 	this->unresolvedCountValue = inputs.unresolvedCount;
 	this->activeCostValue = inputs.activeCost;
 	this->attemptedBudgetValue = inputs.certifiedBudget;
@@ -1037,7 +1037,7 @@ public:
 	this->validValue = false;
 	this->viewRevisionValue = 0;
 	this->policyRevisionValue = 0;
-	this->frontierDigestValue = 0;
+	this->frontierIdentityValue = 0;
 	this->unresolvedCountValue = 0;
 	this->activeCostValue = 0;
 	this->attemptedBudgetValue = 0;
@@ -1047,7 +1047,7 @@ private:
     bool validValue = false;
     uint64_t viewRevisionValue = 0;
     uint64_t policyRevisionValue = 0;
-    uint64_t frontierDigestValue = 0;
+    uint64_t frontierIdentityValue = 0;
     size_t unresolvedCountValue = 0;
     size_t activeCostValue = 0;
     size_t attemptedBudgetValue = 0;
@@ -1120,7 +1120,8 @@ private:
  * the result atomically with the revision tuple which supplied its inputs.
  */
 struct BObolLodAdmissionPlan {
-    BObolLodAdmissionRevisionStamp revisionStamp;
+    BObolLodAdmissionRevisionStamp revisionStamp =
+	BObolLodAdmissionRevisionStamp::administrative();
     BObolLodCapacityEvidence::Decision capacityDecision;
     BObolLodResourceEvidence::Decision resourceDecision;
     BObolLodPointProxyEvidence::Decision pointProxyDecision;
@@ -1229,7 +1230,7 @@ public:
     static BObolLodAdmissionPlan setRetainedQualityFloor(
 	const BObolLodAdmissionEvidence &evidence,
 	const BObolLodAdmissionCursor &cursor, size_t budget,
-	uint64_t populationSignature, size_t activeCost,
+	uint64_t populationIdentity, size_t activeCost,
 	size_t minimumActiveCost);
 
     static BObolLodAdmissionPlan recordRetainedQualityFloorMiss(
@@ -1239,7 +1240,7 @@ public:
     static BObolLodAdmissionPlan recordRetainedQualityFloorMet(
 	const BObolLodAdmissionEvidence &evidence,
 	const BObolLodAdmissionCursor &cursor, bool exactProtectedPopulation,
-	uint64_t populationSignature, size_t presentedCost);
+	uint64_t populationIdentity, size_t presentedCost);
 
     static BObolLodAdmissionPlan confirmRetainedRecoveryPresentation(
 	const BObolLodAdmissionEvidence &evidence,

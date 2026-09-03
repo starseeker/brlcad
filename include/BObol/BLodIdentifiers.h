@@ -11,6 +11,8 @@
 
 #include "BObol/BDefines.h"
 
+#include <exception>
+#include <limits>
 #include <stdint.h>
 #include <type_traits>
 
@@ -65,15 +67,19 @@ public:
 
     void advance(void)
     {
+	if (!this->canAdvance())
+	    std::terminate();
 	++this->rawValue;
-	/* Zero is reserved for "no epoch" at API and cache boundaries. */
-	if (this->rawValue == 0)
-	    ++this->rawValue;
+    }
+
+    constexpr bool canAdvance(void) const
+    {
+	return this->rawValue != std::numeric_limits<uint64_t>::max();
     }
 
     BObolLodStrongUInt64 &operator++(void)
     {
-	++this->rawValue;
+	this->advance();
 	return *this;
     }
 

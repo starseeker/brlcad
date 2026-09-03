@@ -10,6 +10,7 @@
 
 #include "common.h"
 
+#include "identity_counter_private.h"
 #include "lod_revision_private.h"
 
 #include <algorithm>
@@ -61,9 +62,7 @@ private:
 
 	this->cpuPressureValue = cpuPressure;
 	this->gpuPressureValue = gpuPressure;
-	this->pressureRevision++;
-	if (!this->pressureRevision)
-	    this->pressureRevision++;
+	bobol_identity_advance(this->pressureRevision);
 	decision.changed = true;
 	decision.revision = this->pressureRevision;
 	if (cpuPressure || gpuPressure) {
@@ -687,10 +686,7 @@ public:
 	    bound->viewRevision != viewRevision) {
 	    bound->populationEpoch = populationEpoch;
 	    bound->viewRevision = viewRevision;
-	    if (++bound->generation == 0) {
-		bound->generation = 1;
-		bound->entries.clear();
-	    }
+	    bobol_identity_advance(bound->generation);
 	}
 	if (bound->entries.size() < entryCount)
 	    bound->entries.resize(entryCount);

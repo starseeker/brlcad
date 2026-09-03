@@ -25,8 +25,10 @@
 #include "../cad_assembly_private.h"
 #include "../compact_occurrence_registry_private.h"
 #include "../database_source_presentation_private.h"
+#include "../lod_result_authentication_private.h"
 #include "../retained_allocation_private.h"
 #include "../view_lod_coordinator_state_private.h"
+#include "transaction_fault_test_private.h"
 #include "bv.h"
 #include "bu/app.h"
 #include "bu/env.h"
@@ -87,13 +89,10 @@ test_presentation_cad_timing(void)
 static BObolLodAdmissionRevisionStamp
 test_admission_revision(uint64_t view, uint64_t policy, uint64_t capacity = 1)
 {
-    BObolLodAdmissionRevisionStamp stamp;
-    stamp.inventory.set(1);
-    stamp.availability.set(1);
-    stamp.view.set(view);
-    stamp.policy.set(policy);
-    stamp.capacity.set(capacity);
-    return stamp;
+    return BObolLodAdmissionRevisionStamp(BObolLodInventoryEpoch(1),
+	BObolLodAvailabilityEpoch(1), BObolLodVisibilityEpoch(1),
+	BObolLodViewEpoch(view), BObolLodPolicyEpoch(policy),
+	BObolLodCapacityEpoch(capacity));
 }
 
 static int
@@ -1104,6 +1103,107 @@ static BObolLodResult
 aabb_payload_task(const BObolLodRequest &request, void *UNUSED(userData))
 {
     return bobol_lod_aabb_result(request, request.bounds, NULL);
+}
+
+struct ResultAuthenticationTaskData {
+    int providerStatus;
+};
+
+enum class ResultAuthenticationIdentity {
+    STALE_ROUTE = 0,
+    STALE_POPULATION,
+    STALE_VIEW,
+    STALE_POLICY,
+    CURRENT
+};
+
+struct ResultAuthenticationIdentityCase {
+    const char *name;
+    ResultAuthenticationIdentity identity;
+    uint8_t expectedMismatchMask;
+};
+
+static const ResultAuthenticationIdentityCase resultAuthenticationIdentities[] = {
+    {"source route", ResultAuthenticationIdentity::STALE_ROUTE,
+	BObolLodResultAuthentication::mismatchBit(
+	    BObolLodResultIdentityDomain::SOURCE_ROUTE)},
+    {"source population", ResultAuthenticationIdentity::STALE_POPULATION,
+	BObolLodResultAuthentication::mismatchBit(
+	    BObolLodResultIdentityDomain::SOURCE_POPULATION)},
+    {"view demand", ResultAuthenticationIdentity::STALE_VIEW,
+	BObolLodResultAuthentication::mismatchBit(
+	    BObolLodResultIdentityDomain::DEMAND)},
+    {"policy demand", ResultAuthenticationIdentity::STALE_POLICY,
+	BObolLodResultAuthentication::mismatchBit(
+	    BObolLodResultIdentityDomain::DEMAND)},
+    {"current", ResultAuthenticationIdentity::CURRENT, 0}
+};
+
+struct ResultAuthenticationOutcomeCase {
+    int providerStatus;
+    BObolLodResultDisposition disposition;
+};
+
+static const ResultAuthenticationOutcomeCase resultAuthenticationOutcomes[] = {
+    {BOBOL_LOD_PROVIDER_CACHE_MISS,
+	BObolLodResultDisposition::RECORD_TERMINAL_FAILURE},
+    {BOBOL_LOD_PROVIDER_STALE,
+	BObolLodResultDisposition::RECORD_TERMINAL_FAILURE},
+    {BOBOL_LOD_PROVIDER_ERROR,
+	BObolLodResultDisposition::RECORD_TERMINAL_FAILURE},
+    {BOBOL_LOD_PROVIDER_UNKNOWN,
+	BObolLodResultDisposition::RETRY_CURRENT_DEMAND},
+    {BOBOL_LOD_PROVIDER_RUNNING,
+	BObolLodResultDisposition::RETRY_CURRENT_DEMAND},
+    {BOBOL_LOD_PROVIDER_TERMINAL,
+	BObolLodResultDisposition::RETRY_CURRENT_DEMAND},
+    {BOBOL_LOD_PROVIDER_FALLBACK,
+	BObolLodResultDisposition::RETRY_CURRENT_DEMAND},
+    {BOBOL_LOD_PROVIDER_CANCELLED,
+	BObolLodResultDisposition::RETRY_CURRENT_DEMAND},
+    {BOBOL_LOD_PROVIDER_SUPERSEDED,
+	BObolLodResultDisposition::RETRY_CURRENT_DEMAND},
+    {BOBOL_LOD_PROVIDER_READY, BObolLodResultDisposition::PUBLISH}
+};
+
+static void
+make_result_authentication_identity_stale(
+    BObolLodRequest &request,
+    ResultAuthenticationIdentity identity)
+{
+    switch (identity) {
+	case ResultAuthenticationIdentity::STALE_ROUTE:
+	    request.sourceRoutingId.advance();
+	    break;
+	case ResultAuthenticationIdentity::STALE_POPULATION:
+	    request.sourcePopulationEpoch.advance();
+	    break;
+	case ResultAuthenticationIdentity::STALE_VIEW:
+	    request.viewRevision.advance();
+	    break;
+	case ResultAuthenticationIdentity::STALE_POLICY:
+	    request.policyRevision.advance();
+	    break;
+	case ResultAuthenticationIdentity::CURRENT:
+	    break;
+    }
+}
+
+static BObolLodResult
+result_authentication_task(const BObolLodRequest &request, void *userData)
+{
+    const ResultAuthenticationTaskData *taskData =
+	static_cast<const ResultAuthenticationTaskData *>(userData);
+    BObolLodResult result = mesh_payload_result(request);
+    result.providerStatus = taskData ? taskData->providerStatus :
+	BOBOL_LOD_PROVIDER_ERROR;
+    result.terminal = TRUE;
+    result.stale =
+	result.providerStatus == BOBOL_LOD_PROVIDER_STALE ||
+	result.providerStatus == BOBOL_LOD_PROVIDER_CANCELLED ||
+	result.providerStatus == BOBOL_LOD_PROVIDER_SUPERSEDED ? TRUE : FALSE;
+    result.diagnostic = "result-authentication matrix outcome";
+    return result;
 }
 
 static BObolLodResult
@@ -8226,6 +8326,7 @@ test_empty_cad_presentation_frame(void)
     size_t renderCost = 1;
     const int ret = viewState.hasCadPresentationAssemblies() ||
 	!viewState.lastCadPresentationFrameExact() ||
+	viewState.lastCadPresentationFrameExecuted() ||
 	viewState.lastCadPresentedRenderCost(renderCost) || renderCost != 0;
     if (ret)
 	printf("FAIL: empty CAD presentation made an idle frame inexact\n");
@@ -8324,11 +8425,43 @@ test_controller_prepares_compact_presentation_delta(void)
 	    ret = 1;
 	}
 	if (!ret) {
+	    const SbUniqueId nodeId = assembly->getNodeId();
+	    {
+		ScopedTransactionFault fault(
+		    BObolTransactionFaultPoint::RETAINED_SCENE_COMMIT);
+		controller.synchronizePresentation();
+	    }
+	    if (source->currentCompactViewLodAssembly(viewState) ||
+		assembly->isInstanceHidden(ids[0]) ||
+		assembly->getNodeId() != nodeId) {
+		printf("FAIL: retained-scene resource denial changed the prior "
+		       "presentation or notification\n");
+		ret = 1;
+	    }
+	}
+	if (!ret) {
+	    const SbUniqueId nodeId = assembly->getNodeId();
+	    {
+		ScopedTransactionFault fault(
+		    BObolTransactionFaultPoint::PRESENTATION_COMMIT);
+		controller.synchronizePresentation();
+	    }
+	    if (source->currentCompactViewLodAssembly(viewState) ||
+		assembly->isInstanceHidden(ids[0]) ||
+		assembly->getNodeId() != nodeId) {
+		printf("FAIL: presentation resource denial changed the prior "
+		       "scene or notification\n");
+		ret = 1;
+	    }
+	}
+	if (!ret) {
+	    const SbUniqueId nodeId = assembly->getNodeId();
 	    controller.synchronizePresentation();
 	    if (source->currentCompactViewLodAssembly(viewState) != assembly ||
-		!assembly->isInstanceHidden(ids[0])) {
+		!assembly->isInstanceHidden(ids[0]) ||
+		assembly->getNodeId() == nodeId) {
 		printf("FAIL: controller did not prepare compact hide before "
-		       "render traversal\n");
+		       "render traversal or publish its notification\n");
 		ret = 1;
 	    }
 	}
@@ -8630,6 +8763,12 @@ test_compact_many_leaf_scene_admission(void)
 	    residentRequest.objectPath = summary.meshAssetPath;
 	    residentRequest.objectName = summary.meshAssetName;
 	    residentRequest.occurrenceKey = summary.sourceInstanceKey;
+	    residentRequest.sourceRoutingId =
+		source->getCompactSourceRoutingId();
+	    residentRequest.sourcePopulationEpoch =
+		source->getCompactPopulationEpoch();
+	    residentRequest.sourceEntryIndex =
+		static_cast<uint32_t>(pinnedPlan[0]);
 	    residentRequest.viewRevision = 1;
 	    residentRequest.policyRevision = 1;
 	    residentRequest.drawMode = BOBOL_LOD_DRAW_SHADED;
@@ -9232,6 +9371,12 @@ test_compact_many_leaf_scene_admission(void)
 		    prioritySummary.meshAssetName;
 		priorityResult.request.occurrenceKey =
 		    prioritySummary.sourceInstanceKey;
+		priorityResult.request.sourceRoutingId =
+		    prioritySource->getCompactSourceRoutingId();
+		priorityResult.request.sourcePopulationEpoch =
+		    prioritySource->getCompactPopulationEpoch();
+		priorityResult.request.sourceEntryIndex =
+		    static_cast<uint32_t>(priorityIndex);
 		priorityResult.request.viewRevision = 6;
 		priorityResult.request.policyRevision = 6;
 		priorityResult.request.drawMode = BOBOL_LOD_DRAW_SHADED;
@@ -9504,7 +9649,7 @@ test_compact_many_leaf_scene_admission(void)
 			    }
 			    if (nested && previousSignature != 0 &&
 				population.selectedPresentationCost == previousCost &&
-				population.selectedPopulationSignature !=
+				population.selectedPopulationDigest !=
 				    previousSignature)
 				nested = false;
 			    if (!nested) {
@@ -9518,7 +9663,7 @@ test_compact_many_leaf_scene_admission(void)
 				       static_cast<unsigned long long>(
 					   previousSignature),
 				       static_cast<unsigned long long>(
-					   population.selectedPopulationSignature),
+					   population.selectedPopulationDigest),
 				       population.nextDistinctPresentationBudget,
 				       population.nextDistinctPresentationBudgetKnown ? 1 : 0);
 				ret = 1;
@@ -9526,7 +9671,7 @@ test_compact_many_leaf_scene_admission(void)
 			    }
 			    previousCost = population.selectedPresentationCost;
 			    previousSignature =
-				population.selectedPopulationSignature;
+				population.selectedPopulationDigest;
 			    if (budget == maximumBudget)
 				break;
 			    budget = maximumBudget - budget < budgetStep ?
@@ -13782,14 +13927,14 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    BObolLodResult progressiveOccurrence = results[0];
 	    progressiveOccurrence.request.occurrenceKey =
 		"progressive-occurrence";
-	    progressiveOccurrence.request.sourceRoutingId = 0;
-	    progressiveOccurrence.request.sourcePopulationEpoch = 0;
+	    progressiveOccurrence.request.sourceRoutingId =
+		source->getCompactSourceRoutingId();
+	    progressiveOccurrence.request.sourcePopulationEpoch =
+		source->getCompactPopulationEpoch();
 	    progressiveOccurrence.request.sourceEntryIndex = UINT32_MAX;
 	    BObolLodResult fullDetailSibling = progressiveOccurrence;
 	    fullDetailSibling.request.occurrenceKey =
 		"full-detail-sibling";
-	    fullDetailSibling.request.sourceRoutingId = 0;
-	    fullDetailSibling.request.sourcePopulationEpoch = 0;
 	    fullDetailSibling.request.sourceEntryIndex = UINT32_MAX;
 	    fullDetailSibling.request.requestedCut = -1;
 	    fullDetailSibling.request.requiredChunks.clear();
@@ -13809,12 +13954,20 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			results[0].geometry.activeCut) {
 		printf("FAIL: full-detail sibling changed the single-progressive "
 		       "policy domain (meshes=%zu progressive=%zu predicted=%d "
-		       "expected=%d)\n",
+		       "expected=%d route=%llu/%llu population=%llu/%llu)\n",
 		       mixedState.cadMeshPayloadCount(),
 		       mixedState.cadProgressivePayloadCount(),
 		       mixedState.singleCadProgressiveCutWithinRenderCost(
 			   mixedState.activeRenderCost()),
-		       results[0].geometry.activeCut);
+		       results[0].geometry.activeCut,
+		       static_cast<unsigned long long>(
+			   results[0].request.sourceRoutingId.value()),
+		       static_cast<unsigned long long>(
+			   source->getCompactSourceRoutingId()),
+		       static_cast<unsigned long long>(
+			   results[0].request.sourcePopulationEpoch.value()),
+		       static_cast<unsigned long long>(
+			   source->getCompactPopulationEpoch()));
 		ret = 1;
 	    }
 	    const BObolViewLodState::CadPayload *progressivePayload =
@@ -14719,12 +14872,22 @@ test_pixel_demand_allocation_identity(void)
 	return 1;
     }
     protectedInputs.sceneBudget--;
-    protectedInputs.revisionStamp = BObolLodRevisionContract::advance(
-	protectedInputs.revisionStamp,
-	BObolLodAdmissionRevisionDomain::CAPACITY);
-    if (allocation.pixelDemandInputEquivalent(protectedInputs)) {
-	printf("FAIL: complete allocation crossed a semantic revision\n");
-	return 1;
+    const BObolLodAdmissionRevisionDomain domains[] = {
+	BObolLodAdmissionRevisionDomain::INVENTORY,
+	BObolLodAdmissionRevisionDomain::AVAILABILITY,
+	BObolLodAdmissionRevisionDomain::VISIBILITY,
+	BObolLodAdmissionRevisionDomain::VIEW,
+	BObolLodAdmissionRevisionDomain::POLICY,
+	BObolLodAdmissionRevisionDomain::CAPACITY
+    };
+    for (const BObolLodAdmissionRevisionDomain domain : domains) {
+	protectedInputs.revisionStamp = BObolLodRevisionContract::advance(
+	    inputs.revisionStamp, domain);
+	if (allocation.pixelDemandInputEquivalent(protectedInputs)) {
+	    printf("FAIL: complete allocation crossed semantic revision "
+		   "domain %u\n", static_cast<unsigned int>(domain));
+	    return 1;
+	}
     }
     return 0;
 }
@@ -15074,6 +15237,180 @@ test_view_lod_mesh_eviction_preserves_proxy(void)
 }
 
 static int
+test_result_authentication_contract(void)
+{
+    constexpr uint64_t sourceRoutingId = 11;
+    constexpr uint64_t sourcePopulationEpoch = 13;
+    constexpr uint64_t viewRevision = 17;
+    constexpr uint64_t policyRevision = 19;
+    BObolLodRequest request;
+    request.occurrenceKey = "result-authentication";
+    request.sourceRoutingId = sourceRoutingId;
+    request.sourcePopulationEpoch = sourcePopulationEpoch;
+    request.viewRevision = viewRevision;
+    request.policyRevision = policyRevision;
+    BObolLodResultAuthenticationContext current;
+    current.sourceRoutingId = request.sourceRoutingId;
+    current.sourcePopulationEpoch = request.sourcePopulationEpoch;
+    current.viewRevision = request.viewRevision;
+    current.policyRevision = request.policyRevision;
+
+    for (const ResultAuthenticationOutcomeCase &outcome :
+	    resultAuthenticationOutcomes) {
+	const BObolLodResultAuthentication authentication =
+	    BObolLodResultAuthenticationContract::evaluate(
+		request, outcome.providerStatus, current);
+	if (!authentication.identityCurrent() ||
+	    authentication.disposition != outcome.disposition) {
+	    printf("FAIL: current result status %d has disposition %d mask %u\n",
+		outcome.providerStatus,
+		static_cast<int>(authentication.disposition),
+		static_cast<unsigned int>(
+		    authentication.identityMismatchMask));
+	    return 1;
+	}
+    }
+
+    for (const ResultAuthenticationIdentityCase &identityCase :
+	    resultAuthenticationIdentities) {
+	if (identityCase.identity == ResultAuthenticationIdentity::CURRENT)
+	    continue;
+	BObolLodRequest stale = request;
+	make_result_authentication_identity_stale(stale, identityCase.identity);
+	for (const ResultAuthenticationOutcomeCase &outcome :
+		resultAuthenticationOutcomes) {
+	    const BObolLodResultAuthentication authentication =
+		BObolLodResultAuthenticationContract::evaluate(
+		    stale, outcome.providerStatus, current);
+	    if (authentication.identityMismatchMask !=
+		    identityCase.expectedMismatchMask ||
+		authentication.disposition !=
+		    BObolLodResultDisposition::SUPERSEDE) {
+		printf("FAIL: stale %s status %d has disposition %d mask %u\n",
+		    identityCase.name, outcome.providerStatus,
+		    static_cast<int>(authentication.disposition),
+		    static_cast<unsigned int>(
+			authentication.identityMismatchMask));
+		return 1;
+	    }
+	}
+    }
+    return 0;
+}
+
+static int
+test_compact_result_authentication_matrix(
+    BObolViewController &controller,
+    BObolLodService &service,
+    SoBRLDatabaseSource *source,
+    const SbString &occurrenceKey,
+    const BObolLodRequest &baseRequest)
+{
+    BObolViewLodState *viewState = controller.getViewLodState();
+    const BObolViewLodState::CadPayload *retiredPayload = viewState ?
+	viewState->findCadForOccurrence(source, occurrenceKey) : NULL;
+    if (!viewState || (retiredPayload &&
+	    !viewState->removeCadPayload(retiredPayload)) ||
+	viewState->findCadForOccurrence(source, occurrenceKey)) {
+	printf("FAIL: result-authentication matrix requires a cold occurrence\n");
+	return 1;
+    }
+
+    /* Run stale rows before the sole current READY row.  This specifically
+     * guards the former cold-start loophole which published a stale camera
+     * mesh when no payload was resident. */
+    for (const ResultAuthenticationIdentityCase &identityCase :
+	    resultAuthenticationIdentities) {
+	for (const ResultAuthenticationOutcomeCase &outcomeCase :
+		resultAuthenticationOutcomes) {
+	    BObolLodRequest request = baseRequest;
+	    request.sourceRoutingId = source->getCompactSourceRoutingId();
+	    request.sourcePopulationEpoch =
+		source->getCompactPopulationEpoch();
+	    request.viewRevision = controller.getLodViewRevision();
+	    request.policyRevision = controller.getLodPolicyRevision();
+	    request.requestedCut = 2;
+	    make_result_authentication_identity_stale(
+		request, identityCase.identity);
+
+	    viewState->clearCadOccurrenceTerminalFailures();
+	    controller.clearProgressiveWorkPending();
+	    controller.clearRenderRequest();
+	    const uint64_t cadRevisionBefore = viewState->cadRevision();
+	    const BObolViewLodState::CadPayload *payloadBefore =
+		viewState->findCadForOccurrence(source, occurrenceKey);
+	    ResultAuthenticationTaskData taskData = {
+		outcomeCase.providerStatus
+	    };
+	    BObolLodTask task;
+	    task.generation = controller.beginLodGeneration();
+	    task.request = request;
+	    task.realize = result_authentication_task;
+	    task.realizeData = &taskData;
+	    if (service.submit(task) == 0 || wait_for_service(service) ||
+		controller.processPendingLodResults(1, 0) != 1) {
+		printf("FAIL: result-authentication matrix did not drain "
+		       "%s status %d\n", identityCase.name,
+		       outcomeCase.providerStatus);
+		return 1;
+	    }
+
+	    const bool identityCurrent = identityCase.identity ==
+		ResultAuthenticationIdentity::CURRENT;
+	    const bool publishes = identityCurrent &&
+		outcomeCase.providerStatus == BOBOL_LOD_PROVIDER_READY;
+	    const bool recordsFailure = identityCurrent &&
+		outcomeCase.disposition ==
+		    BObolLodResultDisposition::RECORD_TERMINAL_FAILURE;
+	    const bool retries = !identityCurrent ||
+		outcomeCase.disposition ==
+		    BObolLodResultDisposition::RETRY_CURRENT_DEMAND;
+	    const BObolViewLodState::CadPayload *payloadAfter =
+		viewState->findCadForOccurrence(source, occurrenceKey);
+	    const size_t failureCount =
+		viewState->cadOccurrenceTerminalFailureCountForSource(source);
+	    const bool publishMismatch = publishes &&
+		(controller.getLastLodAppliedResultCount() != 1 ||
+		 controller.getLastLodRejectedResultCount() != 0 ||
+		 failureCount != 0 || !payloadAfter ||
+		 viewState->cadRevision() == cadRevisionBefore);
+	    const bool failureMismatch = recordsFailure &&
+		(controller.getLastLodAppliedResultCount() != 1 ||
+		 controller.getLastLodRejectedResultCount() != 0 ||
+		 failureCount != 1 || payloadAfter != payloadBefore ||
+		 viewState->cadRevision() != cadRevisionBefore);
+	    const bool retryMismatch = retries &&
+		(controller.getLastLodAppliedResultCount() != 0 ||
+		 controller.getLastLodRejectedResultCount() != 1 ||
+		 failureCount != 0 || payloadAfter != payloadBefore ||
+		 viewState->cadRevision() != cadRevisionBefore ||
+		 !controller.hasProgressiveWorkPending() ||
+		 !controller.isRenderRequested());
+	    if (publishMismatch || failureMismatch || retryMismatch) {
+		printf("FAIL: result-authentication matrix %s status %d "
+		       "published=%d failure=%d retry=%d applied=%u "
+		       "rejected=%u failures=%zu revision=%llu/%llu "
+		       "payload=%p/%p pending=%d render=%d diagnostics=%s\n",
+		       identityCase.name, outcomeCase.providerStatus,
+		       publishes ? 1 : 0, recordsFailure ? 1 : 0,
+		       retries ? 1 : 0,
+		       controller.getLastLodAppliedResultCount(),
+		       controller.getLastLodRejectedResultCount(), failureCount,
+		       static_cast<unsigned long long>(cadRevisionBefore),
+		       static_cast<unsigned long long>(viewState->cadRevision()),
+		       static_cast<const void *>(payloadBefore),
+		       static_cast<const void *>(payloadAfter),
+		       controller.hasProgressiveWorkPending() ? 1 : 0,
+		       controller.isRenderRequested() ? 1 : 0,
+		       controller.getLastLodDiagnostics().getString());
+		return 1;
+	    }
+	}
+    }
+    return 0;
+}
+
+static int
 test_view_controller_compact_direct_result_route(void)
 {
     SoSeparator *sceneRoot = new SoSeparator;
@@ -15323,6 +15660,9 @@ test_view_controller_compact_direct_result_route(void)
 		}
 	    }
 	}
+	if (!ret && test_compact_result_authentication_matrix(
+		controller, service, source, summary.sourceInstanceKey, request))
+	    ret = 1;
 	controller.setLodService(NULL);
     }
     service.stop();
@@ -16151,6 +16491,9 @@ test_shared_progressive_asset_presentation_fanout(void)
 	result.request.occurrenceKey = occurrence;
 	result.request.sourceRevision = source->sourceRevision.getValue();
 	result.request.sourceContentHash = 51;
+	result.request.sourceRoutingId = source->getCompactSourceRoutingId();
+	result.request.sourcePopulationEpoch =
+	    source->getCompactPopulationEpoch();
 	result.request.sourceEntryIndex = UINT32_MAX;
 	result.request.providerId = "mesh_lod_cache";
 	result.request.providerVersion = "shared-presentation-test-v1";
@@ -16300,8 +16643,13 @@ test_compact_occurrence_lod_identity(void)
     firstRequest.drawMode = BOBOL_LOD_DRAW_WIRE;
     firstRequest.qualityTier = BOBOL_LOD_QUALITY_PROXY;
     firstRequest.occurrenceKey = firstSummary.sourceInstanceKey;
+    firstRequest.sourceRoutingId = source->getCompactSourceRoutingId();
+    firstRequest.sourcePopulationEpoch =
+	source->getCompactPopulationEpoch();
+    firstRequest.sourceEntryIndex = 0;
     BObolLodRequest secondRequest = firstRequest;
     secondRequest.occurrenceKey = secondSummary.sourceInstanceKey;
+    secondRequest.sourceEntryIndex = 1;
     const SbBox3f firstBounds(SbVec3f(0.0f, 0.0f, 0.0f),
 	SbVec3f(2.0f, 2.0f, 2.0f));
     const SbBox3f secondBounds(SbVec3f(0.0f, 0.0f, 0.0f),
@@ -16424,6 +16772,8 @@ main(int argc, char **argv)
     if (test_submission_delta_value())
 	return 1;
     if (test_structural_repair_value())
+	return 1;
+    if (test_result_authentication_contract())
 	return 1;
 
     char processCacheDir[MAXPATHLEN] = {0};
