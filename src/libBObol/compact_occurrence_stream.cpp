@@ -488,6 +488,15 @@ BObolCompactOccurrenceStream::notePreparationWorkCompleted(void)
 }
 
 void
+BObolCompactOccurrenceStream::completePreparationWork(void)
+{
+    const size_t total = this->d->preparationWorkTotal.load(
+	std::memory_order_acquire);
+    this->d->preparationWorkCompleted.store(total,
+	std::memory_order_release);
+}
+
+void
 BObolCompactOccurrenceStream::getPreparationWorkCount(
     size_t &completed, size_t &total) const
 {

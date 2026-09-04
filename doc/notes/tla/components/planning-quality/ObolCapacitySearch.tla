@@ -42,7 +42,10 @@
 \* independently bounds cold recovery before any safe population is known.
 \* Candidate allocation and exact presentation are explicit producer
 \* barriers.  Neither may consume timing samples, and measurement cannot
-\* begin until both have completed.  An older population-presentation barrier
+\* begin until both have completed.  Inexact presentations and unusable
+\* measurement frames share one bounded consecutive-attempt certificate; a
+\* valid frame resets it and no retry is an unranked stutter.  An older
+\* population-presentation barrier
 \* may still be pending when a completed sample chooses the next allocation.
 \* That barrier owns the already completed frame first, then transfers the
 \* exact candidate allocation without retaining presentation debt.
@@ -58,13 +61,13 @@
 EXTENDS FiniteSets, Naturals, TLC
 
 CONSTANT CandidateCount, SearchMinimum, SampleLimit,
-         CandidateAttemptLimit, PresentationAttemptLimit, PopulationOf
+         CandidateAttemptLimit, InvalidFrameAttemptLimit, PopulationOf
 
 ASSUME /\ CandidateCount > 0
        /\ SearchMinimum \in 1..CandidateCount
        /\ SampleLimit > 0
        /\ CandidateAttemptLimit > 0
-       /\ PresentationAttemptLimit > 0
+       /\ InvalidFrameAttemptLimit > 0
 
 Phases == {"choose", "allocate", "present", "measure", "goal_done",
            "terminal", "unmeasurable"}
@@ -103,7 +106,7 @@ VARIABLES phase,
           bracketBridgeUsed,
           priorFrameBarrier,
           revisionHasPlan,
-          inexactPresentations
+          invalidFrameAttempts
 
 vars == <<phase, goal, trueSteadyCapacity, trueStaticCapacity, staticEligible,
           handoffKind,
@@ -112,7 +115,7 @@ vars == <<phase, goal, trueSteadyCapacity, trueStaticCapacity, staticEligible,
           certificateRevision, priorWidth, narrowed, goalTransitions,
           goalAttempts, candidatePublications, postSafeFailure,
           bracketBridgeUsed, priorFrameBarrier, revisionHasPlan,
-          inexactPresentations>>
+          invalidFrameAttempts>>
 
 Capacity(g) == IF g = "steady" THEN trueSteadyCapacity ELSE trueStaticCapacity
 StartAtStatic == handoffKind \in {"readyPose", "readyZoom"}
@@ -144,7 +147,7 @@ TypeOK ==
     /\ bracketBridgeUsed \in BOOLEAN
     /\ priorFrameBarrier \in BOOLEAN
     /\ revisionHasPlan \in BOOLEAN
-    /\ inexactPresentations \in 0..PresentationAttemptLimit
+    /\ invalidFrameAttempts \in 0..InvalidFrameAttemptLimit
 
 BracketSound == safe <= CandidateCapacity(goal)
     /\ CandidateCapacity(goal) < unsafe
@@ -233,7 +236,7 @@ Init ==
     /\ bracketBridgeUsed = FALSE
     /\ priorFrameBarrier = FALSE
     /\ revisionHasPlan = FALSE
-    /\ inexactPresentations = 0
+    /\ invalidFrameAttempts = 0
 
 ChooseCandidate ==
     /\ phase = "choose"
@@ -262,7 +265,7 @@ ChooseCandidate ==
                     staticEligible, handoffKind, safe, unsafe, measured,
                     measuredSafePopulations, measuredUnsafePopulations,
                     certificateRevision, priorWidth, goalTransitions,
-                    inexactPresentations>>
+                    invalidFrameAttempts>>
 
 ConsumePriorFrameBarrier ==
     /\ phase = "allocate"
@@ -276,13 +279,13 @@ ConsumePriorFrameBarrier ==
                     measuredUnsafePopulations, certificateRevision,
                     priorWidth, goalTransitions, goalAttempts,
                     candidatePublications, postSafeFailure, phase,
-                    bracketBridgeUsed, inexactPresentations>>
+                    bracketBridgeUsed, invalidFrameAttempts>>
 
 ApplyCandidateAllocation ==
     /\ phase = "allocate"
     /\ ~priorFrameBarrier
     /\ phase' = "present"
-    /\ inexactPresentations' = 0
+    /\ invalidFrameAttempts' = 0
     /\ revisionHasPlan' = TRUE
     /\ narrowed' = FALSE
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
@@ -296,7 +299,7 @@ ApplyCandidateAllocation ==
 PresentExactCandidate ==
     /\ phase = "present"
     /\ phase' = "measure"
-    /\ inexactPresentations' = 0
+    /\ invalidFrameAttempts' = 0
     /\ narrowed' = FALSE
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
                     staticEligible, handoffKind, safe, unsafe, candidate,
@@ -308,8 +311,8 @@ PresentExactCandidate ==
 
 RecordInexactPresentation ==
     /\ phase = "present"
-    /\ inexactPresentations < PresentationAttemptLimit
-    /\ inexactPresentations' = inexactPresentations + 1
+    /\ invalidFrameAttempts < InvalidFrameAttemptLimit
+    /\ invalidFrameAttempts' = invalidFrameAttempts + 1
     /\ narrowed' = FALSE
     /\ UNCHANGED <<phase, goal, trueSteadyCapacity, trueStaticCapacity,
                     staticEligible, handoffKind, safe, unsafe, candidate,
@@ -321,7 +324,7 @@ RecordInexactPresentation ==
 
 RetireUnmeasurablePresentation ==
     /\ phase = "present"
-    /\ inexactPresentations = PresentationAttemptLimit
+    /\ invalidFrameAttempts = InvalidFrameAttemptLimit
     /\ phase' = "unmeasurable"
     /\ candidate' = 0
     /\ samplesRemaining' = 0
@@ -332,25 +335,57 @@ RetireUnmeasurablePresentation ==
                     measuredSafePopulations, measuredUnsafePopulations,
                     priorWidth, goalTransitions, goalAttempts,
                     candidatePublications, postSafeFailure, priorFrameBarrier,
-                    revisionHasPlan, inexactPresentations,
+                    revisionHasPlan, invalidFrameAttempts,
                     bracketBridgeUsed>>
 
 ResolvePresentation ==
     PresentExactCandidate \/ RecordInexactPresentation
         \/ RetireUnmeasurablePresentation
 
+RecordInvalidMeasurement ==
+    /\ phase = "measure"
+    /\ invalidFrameAttempts < InvalidFrameAttemptLimit
+    /\ invalidFrameAttempts' = invalidFrameAttempts + 1
+    /\ narrowed' = FALSE
+    /\ UNCHANGED <<phase, goal, trueSteadyCapacity, trueStaticCapacity,
+                    staticEligible, handoffKind, safe, unsafe, candidate,
+                    samplesRemaining, measured, measuredSafePopulations,
+                    measuredUnsafePopulations, certificateRevision,
+                    priorWidth, goalTransitions, goalAttempts,
+                    candidatePublications, postSafeFailure, priorFrameBarrier,
+                    revisionHasPlan, bracketBridgeUsed>>
+
+RetireUnmeasurableMeasurement ==
+    /\ phase = "measure"
+    /\ invalidFrameAttempts = InvalidFrameAttemptLimit
+    /\ phase' = "unmeasurable"
+    /\ candidate' = 0
+    /\ samplesRemaining' = 0
+    /\ certificateRevision' = 1
+    /\ narrowed' = FALSE
+    /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
+                    staticEligible, handoffKind, safe, unsafe, measured,
+                    measuredSafePopulations, measuredUnsafePopulations,
+                    priorWidth, goalTransitions, goalAttempts,
+                    candidatePublications, postSafeFailure, priorFrameBarrier,
+                    revisionHasPlan, invalidFrameAttempts,
+                    bracketBridgeUsed>>
+
+ResolveInvalidMeasurement ==
+    RecordInvalidMeasurement \/ RetireUnmeasurableMeasurement
+
 ConsumeSample ==
     /\ phase = "measure"
     /\ samplesRemaining > 1
     /\ samplesRemaining' = samplesRemaining - 1
+    /\ invalidFrameAttempts' = 0
     /\ narrowed' = FALSE
     /\ UNCHANGED <<phase, goal, trueSteadyCapacity, trueStaticCapacity,
                     staticEligible, handoffKind, safe, unsafe, candidate, measured,
                     measuredSafePopulations, measuredUnsafePopulations,
                     certificateRevision, priorWidth, goalTransitions,
                     goalAttempts, candidatePublications, postSafeFailure,
-                    priorFrameBarrier, revisionHasPlan,
-                    inexactPresentations, bracketBridgeUsed>>
+                    priorFrameBarrier, revisionHasPlan, bracketBridgeUsed>>
 
 ClassifyCandidate ==
     /\ phase = "measure"
@@ -376,6 +411,7 @@ ClassifyCandidate ==
           (safe > 0 /\ PopulationOf[candidate] > Capacity(goal))
     /\ candidate' = 0
     /\ samplesRemaining' = 0
+    /\ invalidFrameAttempts' = 0
     /\ narrowed' = TRUE
     /\ IF \/ unsafe' = safe' + 1
            \/ safe' = CandidateCount
@@ -394,8 +430,7 @@ ClassifyCandidate ==
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
                     staticEligible, handoffKind, goalTransitions,
                     goalAttempts, candidatePublications,
-                    priorFrameBarrier, revisionHasPlan,
-                    inexactPresentations, bracketBridgeUsed>>
+                    priorFrameBarrier, revisionHasPlan, bracketBridgeUsed>>
 
 PromoteStaticSafeCandidate ==
     /\ phase = "measure"
@@ -419,11 +454,11 @@ PromoteStaticSafeCandidate ==
     /\ goalAttempts' = 0
     /\ postSafeFailure' = FALSE
     /\ bracketBridgeUsed' = FALSE
+    /\ invalidFrameAttempts' = 0
     /\ phase' = IF candidate = CandidateCount THEN "goal_done" ELSE "choose"
     /\ UNCHANGED <<trueSteadyCapacity, trueStaticCapacity, handoffKind,
                     staticEligible, candidatePublications,
-                    priorFrameBarrier, revisionHasPlan,
-                    inexactPresentations>>
+                    priorFrameBarrier, revisionHasPlan>>
 
 RejectAtDeadline ==
     /\ phase \in {"allocate", "present", "measure"}
@@ -457,7 +492,7 @@ RejectAtDeadline ==
                     staticEligible, handoffKind, goalTransitions,
                     goalAttempts, candidatePublications,
                     priorFrameBarrier, revisionHasPlan,
-                    inexactPresentations, bracketBridgeUsed>>
+                    invalidFrameAttempts, bracketBridgeUsed>>
 
 ReusePopulation ==
     /\ phase = "measure"
@@ -495,7 +530,7 @@ ReusePopulation ==
                     measuredSafePopulations, measuredUnsafePopulations,
                     goalTransitions, goalAttempts, candidatePublications,
                     priorFrameBarrier, revisionHasPlan,
-                    inexactPresentations, bracketBridgeUsed>>
+                    invalidFrameAttempts, bracketBridgeUsed>>
 
 AdvanceToStaticGoal ==
     /\ phase = "goal_done"
@@ -521,7 +556,7 @@ AdvanceToStaticGoal ==
                     handoffKind,
                     safe, candidatePublications,
                     priorFrameBarrier, revisionHasPlan,
-                    inexactPresentations>>
+                    invalidFrameAttempts>>
 
 PublishTerminalCertificate ==
     /\ phase = "goal_done"
@@ -537,13 +572,14 @@ PublishTerminalCertificate ==
                     measuredUnsafePopulations, priorWidth, goalTransitions,
                     goalAttempts, candidatePublications, postSafeFailure,
                     priorFrameBarrier, revisionHasPlan,
-                    inexactPresentations, bracketBridgeUsed>>
+                    invalidFrameAttempts, bracketBridgeUsed>>
 
 Next ==
     \/ ChooseCandidate
     \/ ConsumePriorFrameBarrier
     \/ ApplyCandidateAllocation
     \/ ResolvePresentation
+    \/ ResolveInvalidMeasurement
     \/ ConsumeSample
     \/ PromoteStaticSafeCandidate
     \/ ClassifyCandidate
@@ -559,6 +595,7 @@ Spec ==
     /\ WF_vars(ConsumePriorFrameBarrier)
     /\ WF_vars(ApplyCandidateAllocation)
     /\ WF_vars(ResolvePresentation)
+    /\ WF_vars(ResolveInvalidMeasurement)
     /\ WF_vars(ConsumeSample)
     /\ WF_vars(PromoteStaticSafeCandidate)
     /\ WF_vars(ClassifyCandidate)

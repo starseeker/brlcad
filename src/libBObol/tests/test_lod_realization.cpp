@@ -129,6 +129,20 @@ test_key_determinism(void)
 	return 1;
     }
 
+    /* Normal selection is a view presentation identity, while the retained
+     * PoP hierarchy is shared by every normal presentation. */
+    b = a;
+    b.normalStyle = BOBOL_LOD_NORMAL_SMOOTH;
+    b.normalCreaseAngle = 37.5f;
+    if (bu_strcmp(key_a.value.getString(),
+	    bobol_lod_cache_key(b).value.getString()) == 0 ||
+	bobol_lod_request_keys_equal(a, b) ||
+	bu_strcmp(bobol_lod_geometry_cache_key(a).value.getString(),
+	    bobol_lod_geometry_cache_key(b).value.getString()) != 0) {
+	printf("FAIL: normal policy did not remain presentation-only identity\n");
+	return 1;
+    }
+
     return 0;
 }
 

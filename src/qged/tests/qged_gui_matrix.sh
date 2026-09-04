@@ -1186,6 +1186,27 @@ validate_report()
 	    (.lod_control_violation_mask == 0) and
 	    (((.lod_convergence_performance_limited // false) | not) or
 	     ((.lod_convergence_constraint_evidence_mask // 0) != 0)))) and
+	# Estimated progress is presentation-only, but it still makes a strict
+	# user-facing promise: only terminal convergence may display 100 percent.
+	# Unknown work must remain explicitly indeterminate instead of retaining a
+	# stale estimate from an earlier terminal frame.
+	(all(.samples[] | select(.controller_available == true);
+	    has("lod_progress_estimate_available") and
+	    has("lod_estimated_fraction") and
+	    has("lod_estimated_remaining_ms") and
+	    (.lod_estimated_fraction >= 0) and
+	    (.lod_estimated_fraction <= 1) and
+	    (if .lod_convergence_terminal == true then
+		(.lod_progress_estimate_available == true) and
+		(.lod_estimated_fraction == 1) and
+		(.lod_estimated_remaining_ms == 0)
+	     elif .lod_progress_estimate_available == true then
+		(.lod_estimated_fraction < 1) and
+		(.lod_estimated_remaining_ms > 0)
+	     else
+		(.lod_estimated_fraction == 0) and
+		(.lod_estimated_remaining_ms == 0)
+	     end))) and
 	# "View ready" is the faceplate terminal promise.  Validate the actual
 	# retained label text, not merely the controller readiness bit: a usable
 	# framebuffer may coexist with background work and an incomplete bar.

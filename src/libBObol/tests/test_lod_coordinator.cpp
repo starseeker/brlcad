@@ -4888,10 +4888,15 @@ test_admission_capacity(void)
      * begins.  A later search candidate must supersede it. */
     policy.requestPresentationReconciliation(180);
     calibration = policy.finishBlockedPass(calibrationInput);
+	const uint64_t capacityCandidateProgressUnits =
+	    2 + BObolLodCapacitySearchCertificate::sampleLimit() *
+		(BObolLodCapacitySearchCertificate::invalidSampleLimit() + 1);
     if (!calibration.requestFrame || !calibration.sampleFrame ||
 	policy.capacitySearch().candidateBudget() != 200 ||
 	policy.capacitySearch().maximumCandidateCount() != 4 ||
-	policy.capacitySearch().progressTotalUnits() != 20 ||
+	policy.capacitySearch().progressTotalUnits() !=
+	    policy.capacitySearch().maximumCandidateCount() *
+		capacityCandidateProgressUnits ||
 	policy.capacitySearch().progressCompletedUnits() >=
 	    policy.capacitySearch().progressTotalUnits()) {
 	std::fprintf(stderr, "FAIL: bounded capacity candidate barrier\n");
@@ -4927,7 +4932,8 @@ test_admission_capacity(void)
 	completed.requestSampleFrame ||
 	policy.currentBudget() <= 200 ||
 	policy.capacitySearch().measuredCandidateCount() != 1 ||
-	policy.capacitySearch().progressCompletedUnits() != 5 ||
+	policy.capacitySearch().progressCompletedUnits() !=
+	    capacityCandidateProgressUnits ||
 	policy.capacitySearch().phase() !=
 	    BObolLodCapacitySearchCertificate::Phase::ALLOCATING ||
 	policy.presentationFramePending() ||
@@ -8016,7 +8022,10 @@ test_presentation_policy(void)
 	std::fabs(restore.progressiveNextFraction - 0.375f) > 0.0001f ||
 	std::fabs(restore.pointProxyPixelThreshold - 1.0f) > 0.0001f ||
 	restore.provenRenderCostFloor != 7000 ||
-	policy.handoffCostFloor() != 7000) {
+	policy.handoffCostFloor() != 7000 ||
+	policy.handoffReconciliationBudget() != 7000 ||
+	policy.allocationReconciliationBudget(false) != 7000 ||
+	policy.allocationReconciliationBudget(true) != 0) {
 	std::fprintf(stderr, "FAIL: stable zoom-quality proof restore\n");
 	return 1;
     }
@@ -8034,7 +8043,8 @@ test_presentation_policy(void)
     }
     completed.submissionPending = false;
     completion = policy.completePass(completed);
-    if (!completion.finishHandoff || policy.handoffCostFloor() != 0) {
+    if (!completion.finishHandoff || policy.handoffCostFloor() != 0 ||
+	policy.handoffReconciliationBudget() != 0) {
 	std::fprintf(stderr, "FAIL: quality proof handoff completion\n");
 	return 1;
     }
@@ -10505,11 +10515,22 @@ test_capacity_search_certificate(void)
 	observation.observedNanoseconds = 10000000ULL;
 	observation.validSample = true;
 	decision = invalidCertificate.observe(observation);
-	observation.presentedCost = 0;
-	observation.observedNanoseconds = 0;
-	observation.validSample = false;
-    for (unsigned int i = 0; i <= Certificate::invalidSampleLimit(); ++i)
+    observation.presentedCost = 0;
+    observation.observedNanoseconds = 0;
+    observation.validSample = false;
+	uint64_t previousInvalidProgress =
+	    invalidCertificate.progressCompletedUnits();
+    for (unsigned int i = 0; i <= Certificate::invalidSampleLimit(); ++i) {
 	decision = invalidCertificate.observe(observation);
+	const uint64_t currentInvalidProgress =
+	    invalidCertificate.progressCompletedUnits();
+	if (currentInvalidProgress <= previousInvalidProgress) {
+	    std::fprintf(stderr,
+		"FAIL: bounded invalid measurement did not advance progress\n");
+	    return 1;
+	}
+	previousInvalidProgress = currentInvalidProgress;
+    }
     if (decision.result != Result::UNMEASURABLE || !decision.terminal()) {
 	std::fprintf(stderr,
 	    "FAIL: capacity search invalid samples did not terminate\n");
@@ -10532,8 +10553,19 @@ test_capacity_search_certificate(void)
 	    return 1;
 	}
     }
-    for (unsigned int i = 0; i <= Certificate::invalidSampleLimit(); ++i)
+	previousInvalidProgress =
+	    presentationCertificate.progressCompletedUnits();
+    for (unsigned int i = 0; i <= Certificate::invalidSampleLimit(); ++i) {
 	decision = presentationCertificate.observe(observation);
+	const uint64_t currentInvalidProgress =
+	    presentationCertificate.progressCompletedUnits();
+	if (currentInvalidProgress <= previousInvalidProgress) {
+	    std::fprintf(stderr,
+		"FAIL: bounded inexact presentation did not advance progress\n");
+	    return 1;
+	}
+	previousInvalidProgress = currentInvalidProgress;
+    }
     if (decision.result != Result::UNMEASURABLE || !decision.terminal()) {
 	std::fprintf(stderr,
 	    "FAIL: inexact capacity presentations did not terminate\n");

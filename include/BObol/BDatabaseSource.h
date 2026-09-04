@@ -707,6 +707,11 @@ struct BOBOL_EXPORT BObolCompactOccurrenceStream {
      * produce LoD-backed or terminal geometry. */
     void setPreparationWorkCount(size_t count);
     void notePreparationWorkCompleted(void);
+    /** Close a producer whose finite preparation work was completed before
+     * its denominator became known.  This is the post-walk counterpart to
+     * notePreparationWorkCompleted(); it never advances beyond the published
+     * total. */
+    void completePreparationWork(void);
     void getPreparationWorkCount(size_t &completed, size_t &total) const;
     void setSourceProfile(const BObolCompactSourceProfile &profile);
     SbBool getSourceProfile(BObolCompactSourceProfile &profile) const;

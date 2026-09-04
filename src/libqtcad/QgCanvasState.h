@@ -688,13 +688,13 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 	s.obol ? s.obol->getViewLodState() : nullptr;
     const uint64_t cadExecutionBefore = presentationState ?
 	presentationState->cadPresentationExecutionSerial() : 0;
-    if (presentationState)
+    if (recordPresentationTiming && presentationState)
 	presentationState->beginCadPresentationFrame();
     const SbBool rendered = renderer.render(s.obol->getRenderRoot());
     const uint64_t completed = s.obol->beginRenderTiming();
     const uint64_t cadExecutionAfter = presentationState ?
 	presentationState->cadPresentationExecutionSerial() : 0;
-    if (presentationState)
+    if (recordPresentationTiming && presentationState)
 	presentationState->refreshCadPresentationFrameStatus();
     const BObolCadPreparationProgress cadPreparation = presentationState ?
 	presentationState->cadPresentationPreparationProgress() :

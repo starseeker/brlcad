@@ -223,6 +223,11 @@ public:
 	return InvalidSampleLimit;
     }
 
+    unsigned int invalidSampleCount(void) const
+    {
+	return this->invalidSampleCountValue;
+    }
+
     static BObolLodCapacitySearchKey keyFor(
 	const BObolLodAdmissionRevisionStamp &stamp,
 	uint64_t preferredTargetNanoseconds,
@@ -474,12 +479,18 @@ public:
 
     uint64_t progressTotalUnits(void) const
     {
-	/* Each candidate has one allocation edge, one exact-presentation edge,
-	 * and a fixed number of timing samples.  This is an upper bound: a proof
-	 * may terminate before consuming every candidate. */
+	/* Each candidate has one allocation edge, one exact-presentation edge, and
+	 * a fixed number of timing samples.  Every sample may be preceded by the
+	 * bounded invalid-attempt allowance.  This is an upper bound: a proof may
+	 * skip every invalid attempt or terminate before consuming every candidate.
+	 * Keep that allowance in this rank: it is a real finite transition in
+	 * ObolCapacitySearch.tla, and omitting it makes a valid retry
+	 * observationally indistinguishable from an unbounded repaint loop. */
 	static constexpr uint64_t candidateSetupUnits = 2;
+	static constexpr uint64_t sampleWindowUnits =
+	    InvalidSampleLimit + 1;
 	return static_cast<uint64_t>(this->maximumCandidateCount()) *
-	    (candidateSetupUnits + sampleLimit());
+	    (candidateSetupUnits + sampleLimit() * sampleWindowUnits);
     }
 
     uint64_t progressCompletedUnits(void) const
@@ -490,15 +501,29 @@ public:
 	if (this->phaseValue == Phase::TERMINAL)
 	    return total;
 	static constexpr uint64_t candidateSetupUnits = 2;
-	const uint64_t candidateUnits = candidateSetupUnits + sampleLimit();
+	static constexpr uint64_t sampleWindowUnits =
+	    InvalidSampleLimit + 1;
+	const uint64_t candidateUnits = candidateSetupUnits +
+	    sampleLimit() * sampleWindowUnits;
 	uint64_t completed =
 	    static_cast<uint64_t>(this->totalMeasuredCandidateCountValue) *
 	    candidateUnits;
 	if (this->phaseValue == Phase::PRESENTING) {
-	    completed += 1;
+	    /* Applying the allocation completes the first unit.  Every completed
+	     * inexact attempt then consumes one of the certificate's bounded retry
+	     * units. */
+	    completed += 1 + std::min<unsigned int>(
+		this->invalidSampleCountValue, InvalidSampleLimit);
 	} else if (this->phaseValue == Phase::MEASURING) {
+	    /* Reaching MEASURING proves the exact-presentation edge and bypasses
+	     * unused invalid attempts before each completed sample.  Invalid
+	     * attempts between two valid samples then consume the next window's
+	     * bounded allowance monotonically. */
 	    completed += candidateSetupUnits +
-		std::min<unsigned int>(this->sampleCountValue, sampleLimit());
+		std::min<unsigned int>(this->sampleCountValue, sampleLimit()) *
+		    sampleWindowUnits +
+		std::min<unsigned int>(this->invalidSampleCountValue,
+			InvalidSampleLimit);
 	}
 	return std::min(completed, total);
     }

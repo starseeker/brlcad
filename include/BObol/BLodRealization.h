@@ -35,6 +35,15 @@ enum BObolLodDrawMode {
     BOBOL_LOD_DRAW_HIDDEN_LINE = 6
 };
 
+/* Renderer presentation policy captured with a view demand.  This is not
+ * source/cache identity: one resident PoP asset may prepare several immutable
+ * view-specific normal variants without duplicating persistent geometry. */
+enum BObolLodNormalStyle {
+    BOBOL_LOD_NORMAL_AUTHORED = 0,
+    BOBOL_LOD_NORMAL_FLAT = 1,
+    BOBOL_LOD_NORMAL_SMOOTH = 2
+};
+
 enum BObolLodQualityTier {
     BOBOL_LOD_QUALITY_METADATA = 0,
     BOBOL_LOD_QUALITY_ATTRIBUTES = 1,
@@ -382,7 +391,8 @@ public:
      * produce an empty layer vector when none of its faces is active at the
      * requested cut; that is a successful zero-draw presentation. */
     SbBool prepareCadPresentationLayers(int drawMode,
-	const std::vector<uint32_t> &chunkIds, int activeCut,
+	const std::vector<BObolLodChunkCut> &chunkCuts, int normalStyle,
+	float normalCreaseAngle,
 	std::vector<BObolLodPresentationLayer> &layers) const;
 
 private:
@@ -496,6 +506,8 @@ struct BOBOL_EXPORT BObolLodRequest {
      * 2 selected.  It is scheduling metadata and not cache identity. */
     uint8_t visualEmphasis;
     int drawMode;
+    int normalStyle;
+    float normalCreaseAngle;
     uint32_t lodPolicy;
     SbString providerId;
     SbString providerVersion;

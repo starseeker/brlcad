@@ -67,6 +67,8 @@ make_report()
             lod_capacity_search_candidate_limit: 4,
             lod_capacity_search_maximum_candidates: 0,
             lod_capacity_search_sample_limit: 3,
+            lod_capacity_search_invalid_frame_attempts: 0,
+            lod_capacity_search_invalid_frame_attempt_limit: 2,
             lod_capacity_search_completed_units: 0,
             lod_capacity_search_total_units: 0,
             lod_submission_source_index: 0,
@@ -173,6 +175,19 @@ make_report()
                 .transition_controller_serial = 2)
             ]
           }
+        elif $scenario == "complete-producer-progress" then
+          (sample(1; 1; 7; false) |
+            .lod_control_fact_mask = 1 |
+            .lod_control_obligation_mask = 1) as $interaction |
+          {
+            samples: [$interaction],
+            control_transition_trace_complete: true,
+            control_transitions: [
+              transition($interaction; $interaction; 1; "initial"),
+              transition($interaction; $interaction; 2;
+                "producer_progress")
+            ]
+          }
         elif $scenario == "complete-unnamed" then
           (sample(1; 5; 7; false)) as $initial |
           (sample(0; 0; 7; true)) as $terminal |
@@ -246,8 +261,8 @@ make_report()
               .lod_capacity_search_measured_candidates = 1 |
               .lod_capacity_search_total_measured_candidates = 1 |
               .lod_capacity_search_maximum_candidates = 4 |
-              .lod_capacity_search_completed_units = 7 |
-              .lod_capacity_search_total_units = 20)
+              .lod_capacity_search_completed_units = 13 |
+              .lod_capacity_search_total_units = 44)
           ]}
         elif $scenario == "preparation-progress-cycle" then
           {samples: [
@@ -275,6 +290,73 @@ make_report()
               .lod_renderer_preparation_target_count = 1 |
               .lod_renderer_preparation_preparing_targets = 1)
           ]}
+	elif $scenario == "entering-preparation-progress-cycle" then
+	  {samples: [
+	    (sample(1; 5; 7; false) |
+	      .transition_event = "producer_progress" |
+	      .transition_prior_renderer_preparation_target_signature = 19 |
+	      .transition_prior_renderer_preparation_remaining_units = 8 |
+	      .lod_renderer_preparation_target_signature = 19 |
+	      .lod_renderer_preparation_total_units = 10 |
+	      .lod_renderer_preparation_completed_units = 4 |
+	      .lod_renderer_preparation_remaining_units = 6 |
+	      .lod_renderer_preparation_target_count = 1 |
+	      .lod_renderer_preparation_preparing_targets = 1),
+	    (sample(5; 8; 7; false) |
+	      .lod_control_fact_mask = 33554432 |
+	      .lod_control_obligation_mask = 128 |
+	      .lod_renderer_preparation_target_signature = 19 |
+	      .lod_renderer_preparation_total_units = 10 |
+	      .lod_renderer_preparation_completed_units = 4 |
+	      .lod_renderer_preparation_remaining_units = 6 |
+	      .lod_renderer_preparation_target_count = 1 |
+	      .lod_renderer_preparation_preparing_targets = 1),
+	    (sample(1; 5; 7; false) |
+	      .lod_renderer_preparation_target_signature = 19 |
+	      .lod_renderer_preparation_total_units = 10 |
+	      .lod_renderer_preparation_completed_units = 4 |
+	      .lod_renderer_preparation_remaining_units = 6 |
+	      .lod_renderer_preparation_target_count = 1 |
+	      .lod_renderer_preparation_preparing_targets = 1)
+	  ]}
+	elif $scenario == "producer-event-cycle-without-progress" then
+	  {samples: [
+	    (sample(1; 5; 7; false) |
+	      .transition_event = "producer_progress" |
+	      .transition_prior_renderer_preparation_target_signature = 19 |
+	      .transition_prior_renderer_preparation_remaining_units = 6 |
+	      .lod_renderer_preparation_target_signature = 19 |
+	      .lod_renderer_preparation_total_units = 10 |
+	      .lod_renderer_preparation_completed_units = 4 |
+	      .lod_renderer_preparation_remaining_units = 6 |
+	      .lod_renderer_preparation_target_count = 1 |
+	      .lod_renderer_preparation_preparing_targets = 1),
+	    (sample(5; 8; 7; false) |
+	      .lod_control_fact_mask = 33554432 |
+	      .lod_control_obligation_mask = 128 |
+	      .lod_renderer_preparation_target_signature = 19 |
+	      .lod_renderer_preparation_total_units = 10 |
+	      .lod_renderer_preparation_completed_units = 4 |
+	      .lod_renderer_preparation_remaining_units = 6 |
+	      .lod_renderer_preparation_target_count = 1 |
+	      .lod_renderer_preparation_preparing_targets = 1),
+	    (sample(1; 5; 7; false) |
+	      .lod_renderer_preparation_target_signature = 19 |
+	      .lod_renderer_preparation_total_units = 10 |
+	      .lod_renderer_preparation_completed_units = 4 |
+	      .lod_renderer_preparation_remaining_units = 6 |
+	      .lod_renderer_preparation_target_count = 1 |
+	      .lod_renderer_preparation_preparing_targets = 1)
+	  ]}
+	elif $scenario == "claimed-frame-interior" then
+	  {samples: [
+	    sample(1; 5; 7; false),
+	    (sample(5; 8; 7; false) |
+	      .lod_control_fact_mask = 33554432 |
+	      .lod_control_obligation_mask = 128),
+	    (sample(1; 5; 7; false) |
+	      .host_work_flags = 8)
+	  ]}
         elif $scenario == "dense-cycle" then
           {
             samples: [sample(0; 0; 7; true)],
@@ -354,9 +436,9 @@ make_report()
           {samples: [(sample(1; 5; 7; false) |
             .lod_capacity_search_phase = 3 |
             .lod_capacity_search_samples_remaining = 3 |
-            .lod_capacity_search_maximum_candidates = 4 |
+              .lod_capacity_search_maximum_candidates = 4 |
               .lod_capacity_search_completed_units = 1 |
-              .lod_capacity_search_total_units = 20)]}
+              .lod_capacity_search_total_units = 44)]}
         elif $scenario == "orphaned-selective-scope" then
           {samples: [(sample(3; 5; 7; false) |
             .lod_control_fact_mask = 128 |
@@ -396,12 +478,16 @@ expect_accept valid
 expect_accept complete-valid
 expect_accept complete-owner-transfer
 expect_accept complete-multi-controller
+expect_accept complete-producer-progress
 expect_accept input-reopen
 expect_accept progress-cycle
 expect_accept preparation-progress-cycle
+expect_accept entering-preparation-progress-cycle
+expect_accept claimed-frame-interior
 expect_reject cycle
 expect_reject alias-cycle
 expect_reject frame-clock-cycle
+expect_reject producer-event-cycle-without-progress
 expect_reject dense-cycle
 expect_reject truncated
 expect_reject fact-obligation-mismatch

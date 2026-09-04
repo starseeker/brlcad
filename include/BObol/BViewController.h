@@ -330,6 +330,8 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     unsigned int capacitySearchCandidateLimit;
     unsigned int capacitySearchMaximumCandidates;
     unsigned int capacitySearchSampleLimit;
+    unsigned int capacitySearchInvalidFrameAttempts;
+    unsigned int capacitySearchInvalidFrameAttemptLimit;
     uint64_t capacitySearchCompletedUnits;
     uint64_t capacitySearchTotalUnits;
     /** Allocation plan certified by the current eight-domain revision tuple.
@@ -426,6 +428,15 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     uint64_t gpuProgressiveEvictionCount;
     uint64_t gpuTriangleAtlasReclamationCount;
     uint64_t gpuResourceSampleSerial;
+    /** Presentation-only estimate derived from observed rates of the finite
+     * work ranks above.  This never participates in scheduling or terminal
+     * readiness.  When progressEstimateAvailable is false, clients should
+     * present an indeterminate activity indicator and the exact per-stage
+     * ranks instead of interpreting estimatedFraction as determinate
+     * progress. */
+    SbBool progressEstimateAvailable;
+    float estimatedFraction;
+    uint64_t estimatedRemainingMilliseconds;
     float fraction;
     /* terminal means the visible presentation has no remaining foreground
      * obligation.  viewReady includes a truthful constrained terminal view,
@@ -521,10 +532,11 @@ struct BOBOL_EXPORT BObolHostWorkSnapshot {
 /** Finite event alphabet for the opt-in production control-transition
  * journal.  The nine owner events are numerically aligned with
  * BObolLodControlOwner; EXTERNAL_INPUT is the only event allowed to introduce
- * arbitrary new work.  PUBLICATION also carries the typed worker result-ready
- * notification until the owner thread can expose its publication obligation.
+ * arbitrary user work.  PRODUCER_PROGRESS records an independently advancing
+ * worker or a claimed renderer traversal; it refines to either a producer
+ * action or a control-state stutter, not an owner-thread reducer action.
  * UNNAMED is emitted by the journal's audit boundary when observable state
- * changed outside a registered reducer scope. */
+ * changed outside every registered or independently witnessed transition. */
 enum BObolLodControlTransitionEvent {
     BOBOL_LOD_CONTROL_TRANSITION_UNNAMED = 0,
     BOBOL_LOD_CONTROL_TRANSITION_INITIAL,
@@ -538,7 +550,8 @@ enum BObolLodControlTransitionEvent {
     BOBOL_LOD_CONTROL_TRANSITION_HANDOFF,
     BOBOL_LOD_CONTROL_TRANSITION_COMPACTION,
     BOBOL_LOD_CONTROL_TRANSITION_CACHE_WRITE,
-    BOBOL_LOD_CONTROL_TRANSITION_IDLE_SERVICE
+    BOBOL_LOD_CONTROL_TRANSITION_IDLE_SERVICE,
+    BOBOL_LOD_CONTROL_TRANSITION_PRODUCER_PROGRESS
 };
 
 BOBOL_EXPORT const char *bobol_lod_control_transition_event_name(

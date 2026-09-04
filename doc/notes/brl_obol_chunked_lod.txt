@@ -111,9 +111,21 @@ Partition and cache format
   cells split into bounded face-count pages.  The target is a bound on latency
   and working memory, not a visible grid.  Small meshes remain one chunk.
 * Each chunk owns local vertex and triangle arrays ordered by activation cut,
-  cumulative fixed-width counts for every cut, tight bounds, and optional
-  authored corner normals.  Serialized integers are fixed-width and all
-  offsets/counts are validated before array access.
+  cumulative fixed-width counts for every cut, tight bounds, one fixed-width
+  source-vertex ID per local vertex, and optional authored corner normals.
+  The source IDs are presentation topology: they join a logical vertex across
+  private page boundaries without retaining or loading the whole source mesh.
+  Serialized integers are fixed-width and all IDs, offsets, and counts are
+  validated before array access.
+* `authored` preserves cached corner normals.  `flat` deliberately publishes
+  no normal array and lets Obol derive the exact source-face normal.  `smooth`
+  is built on the realization worker for the complete admitted page set: one
+  compact incident record per active corner is sorted by source-vertex ID,
+  crease-filtered normals include neighboring faces in other pages, and only
+  one bounded page is canonicalized into renderer arrays at a time.  The GUI
+  thread only adopts immutable handles.  A resident hierarchy trim preserves
+  any still-drawable view presentation; it never chooses a normal policy or
+  silently substitutes an authored-normal layer.
 * The provider/cache version changes with this format.  Existing PoP caches
   are invalidated; backward compatibility is intentionally not required.
 
@@ -133,7 +145,9 @@ Required verification
    to boxes; a missing newly visible set uses one coherent atomic fallback.
 6. Wire and shaded modes use the same chunk/cut residency and preserve one
    selection/picking identity.
-7. Cold/warm System GL and OSMesa runs, hierarchy erase/redraw, resizing, and
+7. Authored, flat, and smooth shading survive page boundaries, cut changes,
+   and resident compaction; smooth continuity is checked at shared source IDs.
+8. Cold/warm System GL and OSMesa runs, hierarchy erase/redraw, resizing, and
    the 50k/150k many-leaf tests remain stable and responsive.
 
 Implementation map

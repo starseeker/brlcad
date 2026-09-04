@@ -1013,6 +1013,8 @@ BObolViewController::isLightingEnabled(void) const
 void
 BObolViewController::setLightingProfile(LightingProfile profile)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     if (profile != LIGHTING_STUDIO && profile != LIGHTING_MGED)
 	return;
     if (this->d->lightingProfile == profile)

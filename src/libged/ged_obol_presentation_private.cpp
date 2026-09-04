@@ -1025,8 +1025,10 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 
     int color[3] = {96, 220, 255};
     struct bu_vls text = BU_VLS_INIT_ZERO;
+    const float displayFraction = status.progressEstimateAvailable ?
+	status.estimatedFraction : status.fraction;
     const int percent = static_cast<int>(
-	std::floor(std::max(0.0f, std::min(1.0f, status.fraction)) *
+	std::floor(std::max(0.0f, std::min(1.0f, displayFraction)) *
 	    100.0f + 0.5f));
     const size_t pending = status.pendingTasks > SIZE_MAX - status.inFlight ?
 	SIZE_MAX : status.pendingTasks + status.inFlight;
@@ -1063,15 +1065,24 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 		static_cast<double>(status.rendererPreparationTotalUnits);
 	    const int preparationPercent = static_cast<int>(std::floor(
 		preparationFraction * 100.0 + 0.5));
-	    bu_vls_sprintf(&text,
-		"Preparing renderer %d%%  view %d%%  %s/%s units",
-		preparationPercent, percent,
-		ged_obol_lod_compact_count(
-		    status.rendererPreparationCompletedUnits).c_str(),
-		ged_obol_lod_compact_count(
-		    status.rendererPreparationTotalUnits).c_str());
+	    const std::string completed = ged_obol_lod_compact_count(
+		status.rendererPreparationCompletedUnits);
+	    const std::string total = ged_obol_lod_compact_count(
+		status.rendererPreparationTotalUnits);
+	    if (status.progressEstimateAvailable) {
+		bu_vls_sprintf(&text,
+		    "Preparing renderer %d%%  view %d%%  %s/%s units",
+		    preparationPercent, percent, completed.c_str(),
+		    total.c_str());
+	    } else {
+		bu_vls_sprintf(&text, "Preparing renderer %d%%  %s/%s units",
+		    preparationPercent, completed.c_str(), total.c_str());
+	    }
 	} else {
-	    bu_vls_sprintf(&text, "Finalizing renderer  view %d%%", percent);
+	    if (status.progressEstimateAvailable)
+		bu_vls_sprintf(&text, "Finalizing renderer  view %d%%", percent);
+	    else
+		bu_vls_sprintf(&text, "Finalizing renderer");
 	}
 	if (status.rendererPreparationPreparingTargetCount > 1)
 	    bu_vls_printf(&text, "  %s targets",
@@ -1101,14 +1112,28 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 	    const int searchPercent = static_cast<int>(std::floor(
 		100.0 * static_cast<double>(completedUnits) /
 		static_cast<double>(status.capacitySearchTotalUnits) + 0.5));
-	    bu_vls_sprintf(&text,
-		"Tuning %s detail  search %d%%  view %d%%  probe %u/%u max",
-		goal, searchPercent, percent, probe,
-		status.capacitySearchMaximumCandidates);
+	    if (status.progressEstimateAvailable) {
+		bu_vls_sprintf(&text,
+		    "Tuning %s detail  search %d%%  view %d%%  probe %u/%u max",
+		    goal, searchPercent, percent, probe,
+		    status.capacitySearchMaximumCandidates);
+	    } else {
+		bu_vls_sprintf(&text,
+		    "Tuning %s detail  search %d%%  probe %u/%u max",
+		    goal, searchPercent, probe,
+		    status.capacitySearchMaximumCandidates);
+	    }
 	} else {
-	    bu_vls_sprintf(&text,
-		"Tuning %s detail  view %d%%  probe %u/%u max",
-		goal, percent, probe, status.capacitySearchMaximumCandidates);
+	    if (status.progressEstimateAvailable) {
+		bu_vls_sprintf(&text,
+		    "Tuning %s detail  view %d%%  probe %u/%u max",
+		    goal, percent, probe,
+		    status.capacitySearchMaximumCandidates);
+	    } else {
+		bu_vls_sprintf(&text,
+		    "Tuning %s detail  probe %u/%u max", goal, probe,
+		    status.capacitySearchMaximumCandidates);
+	    }
 	}
 	if (status.capacitySearchPhase ==
 		BOBOL_LOD_CAPACITY_SEARCH_ALLOCATING) {
@@ -1131,13 +1156,10 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 	return true;
     };
     const auto format_finalization = [&]() {
-	/* The last percent is the coherent allocation/publication/presentation
-	 * handoff, not another unbounded quality search.  Name its authoritative
-	 * control owner so a slow software frame or a large occurrence pass does
-	 * not look like an unexplained 99-percent stall.  Capacity search and
+	/* Name the authoritative finalization owner regardless of the estimated
+	 * percentage.  One slow software frame may dominate the remaining wall
+	 * time and legitimately begin well before 99 percent.  Capacity search and
 	 * renderer preparation have exact ranks and are formatted above. */
-	if (percent < 99)
-	    return false;
 	color[0] = 255;
 	color[1] = 190;
 	color[2] = 72;
@@ -1181,7 +1203,10 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 		 * Say that explicitly: otherwise 65k/150k beside 18% looks like
 		 * broken arithmetic even though later mesh/refinement work owns the
 		 * remainder of the convergence scale. */
-		bu_vls_sprintf(&text, "View %d%%  discovering", percent);
+		if (status.progressEstimateAvailable)
+		    bu_vls_sprintf(&text, "View %d%%  discovering", percent);
+		else
+		    bu_vls_sprintf(&text, "Discovering model");
 		bu_vls_printf(&text, "  %s/%s parts",
 		    ged_obol_lod_compact_count(
 			std::min(status.availableLeafCount,
@@ -1208,14 +1233,22 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 		    100.0 * static_cast<double>(completed) /
 		    static_cast<double>(status.sourcePreparationTotalUnits) +
 		    0.5));
-		bu_vls_sprintf(&text,
-		    "%s %s/%s (%d%%)  view %d%%",
+		const char *operation =
 		    completed < status.sourcePreparationTotalUnits ?
-			"Preparing geometry" : "Publishing geometry",
-		    ged_obol_lod_compact_count(completed).c_str(),
-		    ged_obol_lod_compact_count(
-			status.sourcePreparationTotalUnits).c_str(),
-		    preparationPercent, percent);
+			"Preparing geometry" : "Publishing geometry";
+		const std::string completedText =
+		    ged_obol_lod_compact_count(completed);
+		const std::string totalText = ged_obol_lod_compact_count(
+		    status.sourcePreparationTotalUnits);
+		if (status.progressEstimateAvailable) {
+		    bu_vls_sprintf(&text, "%s %s/%s (%d%%)  view %d%%",
+			operation, completedText.c_str(), totalText.c_str(),
+			preparationPercent, percent);
+		} else {
+		    bu_vls_sprintf(&text, "%s %s/%s (%d%%)", operation,
+			completedText.c_str(), totalText.c_str(),
+			preparationPercent);
+		}
 	    } else {
 		/* Coverage can begin before a producer has enumerated a finite
 		 * representation queue.  Report that state without manufacturing a
@@ -1254,22 +1287,40 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 		color[0] = 255;
 		color[1] = 170;
 		color[2] = 64;
-		bu_vls_sprintf(&text,
-		    "Improving view %d%%  target %.0f FPS  %s render primitives",
-		    percent,
-		    static_cast<double>(controller->getLodStableTargetFps()),
-		    ged_obol_lod_compact_count(displayedPrimitiveCount).c_str());
+		const std::string primitives =
+		    ged_obol_lod_compact_count(displayedPrimitiveCount);
+		if (status.progressEstimateAvailable) {
+		    bu_vls_sprintf(&text,
+			"Improving view %d%%  target %.0f FPS  %s render primitives",
+			percent,
+			static_cast<double>(controller->getLodStableTargetFps()),
+			primitives.c_str());
+		} else {
+		    bu_vls_sprintf(&text,
+			"Improving view  target %.0f FPS  %s render primitives",
+			static_cast<double>(controller->getLodStableTargetFps()),
+			primitives.c_str());
+		}
 		append_settling_detail();
 	    }
 	    break;
 	case BOBOL_LOD_CONVERGENCE_REFINING:
 	    if (!format_renderer_preparation() && !format_capacity_search() &&
 		!format_finalization()) {
-		bu_vls_sprintf(&text,
-		    "Improving view %d%%  target %.0f FPS  %s render primitives",
-		    percent,
-		    static_cast<double>(controller->getLodStableTargetFps()),
-		    ged_obol_lod_compact_count(displayedPrimitiveCount).c_str());
+		const std::string primitives =
+		    ged_obol_lod_compact_count(displayedPrimitiveCount);
+		if (status.progressEstimateAvailable) {
+		    bu_vls_sprintf(&text,
+			"Improving view %d%%  target %.0f FPS  %s render primitives",
+			percent,
+			static_cast<double>(controller->getLodStableTargetFps()),
+			primitives.c_str());
+		} else {
+		    bu_vls_sprintf(&text,
+			"Improving view  target %.0f FPS  %s render primitives",
+			static_cast<double>(controller->getLodStableTargetFps()),
+			primitives.c_str());
+		}
 		append_settling_detail();
 	    }
 	    break;
@@ -1319,7 +1370,10 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 		color[0] = 255;
 		color[1] = 205;
 		color[2] = 72;
-		bu_vls_sprintf(&text, "Finalizing view %d%%", percent);
+		if (status.progressEstimateAvailable)
+		    bu_vls_sprintf(&text, "Finalizing view %d%%", percent);
+		else
+		    bu_vls_sprintf(&text, "Finalizing view");
 		break;
 	    }
 	    if (status.gpuMemoryPressure) {
@@ -1359,13 +1413,36 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 	    break;
     }
 
+    static constexpr uint64_t millisecondsPerSecond = 1000;
+    static constexpr uint64_t secondsPerMinute = 60;
+    if (status.progressEstimateAvailable && !status.terminal &&
+	status.estimatedRemainingMilliseconds >= millisecondsPerSecond &&
+	status.phase != BOBOL_LOD_CONVERGENCE_INTERACTIVE &&
+	status.phase != BOBOL_LOD_CONVERGENCE_BACKGROUND &&
+	status.phase != BOBOL_LOD_CONVERGENCE_ERROR) {
+	const uint64_t remainingSeconds =
+	    (status.estimatedRemainingMilliseconds +
+		millisecondsPerSecond - 1) / millisecondsPerSecond;
+	if (remainingSeconds < secondsPerMinute) {
+	    bu_vls_printf(&text, "  about %" PRIu64 "s remaining",
+		remainingSeconds);
+	} else {
+	    bu_vls_printf(&text,
+		"  about %" PRIu64 "m %" PRIu64 "s remaining",
+		remainingSeconds / secondsPerMinute,
+		remainingSeconds % secondsPerMinute);
+	}
+    }
+
+    static constexpr fastf_t progressBottom = -0.58;
+    static constexpr fastf_t progressHeight = 1.16;
     const int track_color[3] = {72, 78, 86};
     std::vector<SbVec3f> points;
     std::vector<int32_t> commands;
     points.reserve(2);
     commands.reserve(2);
     ged_obol_faceplate_append_line(points, commands, view_ctx,
-	0.965, -0.58, 0.965, 0.58);
+	0.965, progressBottom, 0.965, progressBottom + progressHeight);
     BObolFeatureStyle track_style = ged_obol_faceplate_style(
 	track_color, 72, 78, 86, 9);
     (void)ged_obol_faceplate_publish_lines(controller, view_ctx,
@@ -1373,10 +1450,10 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 
     points.clear();
     commands.clear();
-    fastf_t fill_bottom = -0.58;
+    fastf_t fill_bottom = progressBottom;
     fastf_t fill_top =
-	fill_bottom + 1.16 * std::max(0.0f,
-	    std::min(1.0f, status.fraction));
+	fill_bottom + progressHeight * std::max(0.0f,
+	    std::min(1.0f, displayFraction));
     /*
      * A cold hierarchy does not know its final leaf cardinality until the
      * database walk completes.  That is active, useful discovery work, but a
@@ -1386,25 +1463,24 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
      * a real denominator is available.  This is presentation-only state: it
      * neither advances LoD work nor changes the camera/autoview contract.
      */
-	const bool indeterminateProgress =
-	(status.phase == BOBOL_LOD_CONVERGENCE_DISCOVERING &&
-	 status.expectedLeafCount <= status.availableLeafCount) ||
-	(status.phase == BOBOL_LOD_CONVERGENCE_PREPARING &&
-	 status.visibleTargetCount == 0) ||
+    const bool indeterminateProgress =
+	(!status.terminal && !status.progressEstimateAvailable) ||
 	(status.phase == BOBOL_LOD_CONVERGENCE_BACKGROUND &&
 	 (pending > 0 || status.queuedCacheWrites > 0));
     if (indeterminateProgress) {
-	static const uint64_t sweep_steps = 40;
-	static const int64_t sweep_interval_microseconds = 100000;
+	static constexpr uint64_t sweepSteps = 40;
+	static constexpr int64_t sweepIntervalMicroseconds = 100000;
 	const uint64_t step = static_cast<uint64_t>(
-	    bu_gettime() / sweep_interval_microseconds) % sweep_steps;
-	const fastf_t unit = step <= sweep_steps / 2 ?
+	    bu_gettime() / sweepIntervalMicroseconds) % sweepSteps;
+	const fastf_t unit = step <= sweepSteps / 2 ?
 	    static_cast<fastf_t>(step) /
-		static_cast<fastf_t>(sweep_steps / 2) :
-	    static_cast<fastf_t>(sweep_steps - step) /
-		static_cast<fastf_t>(sweep_steps / 2);
-	const fastf_t segment = 0.20 * 1.16;
-	fill_bottom = -0.58 + unit * (1.16 - segment);
+		static_cast<fastf_t>(sweepSteps / 2) :
+	    static_cast<fastf_t>(sweepSteps - step) /
+		static_cast<fastf_t>(sweepSteps / 2);
+	static constexpr fastf_t indeterminateSegmentFraction = 0.20;
+	const fastf_t segment =
+	    indeterminateSegmentFraction * progressHeight;
+	fill_bottom = progressBottom + unit * (progressHeight - segment);
 	fill_top = fill_bottom + segment;
     }
     if (fill_top > fill_bottom) {

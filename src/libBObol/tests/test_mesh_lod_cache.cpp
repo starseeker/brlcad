@@ -41,6 +41,7 @@
 #include <cstring>
 #include <limits>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 static constexpr BObolTransactionFaultPoint durablePublicationFaults[] = {
@@ -78,6 +79,39 @@ mesh_pop_points_equal(const point_t a, const point_t b)
 {
     return fastf_equal(a[X], b[X]) && fastf_equal(a[Y], b[Y]) &&
 	fastf_equal(a[Z], b[Z]);
+}
+
+struct MeshLodPointBits {
+    uint32_t x;
+    uint32_t y;
+    uint32_t z;
+
+    bool operator==(const MeshLodPointBits &other) const
+    {
+	return x == other.x && y == other.y && z == other.z;
+    }
+};
+
+struct MeshLodPointBitsHash {
+    size_t operator()(const MeshLodPointBits &point) const
+    {
+	static constexpr size_t mix = 0x9e3779b9u;
+	size_t hash = point.x;
+	hash ^= static_cast<size_t>(point.y) + mix + (hash << 6) + (hash >> 2);
+	hash ^= static_cast<size_t>(point.z) + mix + (hash << 6) + (hash >> 2);
+	return hash;
+    }
+};
+
+static MeshLodPointBits
+mesh_lod_point_bits(const SbVec3f &point)
+{
+    MeshLodPointBits bits = {};
+    const float *values = point.getValue();
+    memcpy(&bits.x, &values[X], sizeof(bits.x));
+    memcpy(&bits.y, &values[Y], sizeof(bits.y));
+    memcpy(&bits.z, &values[Z], sizeof(bits.z));
+    return bits;
 }
 
 struct mesh_lod_suffix_test_data {
@@ -195,6 +229,9 @@ mesh_lod_spatial_page_test_callback(unsigned long long cacheKey,
 	page->data.face_count != page->info.cuts[page->cut].face_count ||
 	page->data.point_count != page->info.cuts[page->cut].point_count ||
 	page->data.point_orig_count != page->data.point_count ||
+	page->data.source_vertex_id_count != page->data.point_count ||
+	(page->data.source_vertex_id_count &&
+	    !page->data.source_vertex_ids) ||
 	(page->data.face_count && !page->data.faces) ||
 	(page->data.point_count && (!page->data.points ||
 				     !page->data.points_orig)) ||
@@ -253,6 +290,7 @@ mesh_lod_spatial_page_cancellation_callback(void *callbackData)
 static int
 mesh_lod_chunk_test_callback(uint32_t chunkId, int cut,
 	const point_t *points, size_t pointCount,
+	const uint32_t *sourceVertexIds, size_t sourceVertexIdCount,
 	const uint32_t *faces, size_t faceCount,
 	const vect_t *normals, size_t normalCount, void *callbackData)
 {
@@ -265,8 +303,10 @@ mesh_lod_chunk_test_callback(uint32_t chunkId, int cut,
     const BObolMeshLodChunkInfo &info = test->hierarchy->chunks[chunkId];
     const BObolMeshLodChunkCutInfo &selected = info.cuts[cut];
     if (pointCount != selected.point_count ||
+	sourceVertexIdCount != pointCount ||
 	faceCount != selected.face_count ||
-	(pointCount && !points) || (faceCount && !faces) ||
+	(pointCount && (!points || !sourceVertexIds)) ||
+	(faceCount && !faces) ||
 	normalCount != (test->hierarchy->has_normals ? faceCount * 3 : 0) ||
 	(normalCount && !normals))
 	return 0;
@@ -303,6 +343,19 @@ mesh_lod_chunk_test_callback(uint32_t chunkId, int cut,
     test->faces += faceCount;
     test->points += pointCount;
     return 1;
+}
+
+static SbBool
+mesh_lod_prepare_test_layers(BObolLodProgressiveMesh &mesh, int drawMode,
+    const std::vector<uint32_t> &chunkIds, int cut,
+    std::vector<BObolLodPresentationLayer> &layers)
+{
+    std::vector<BObolLodChunkCut> chunkCuts;
+    chunkCuts.reserve(chunkIds.size());
+    for (uint32_t chunkId : chunkIds)
+	chunkCuts.push_back({chunkId, cut});
+    return mesh.prepareCadPresentationLayers(drawMode, chunkCuts,
+	BOBOL_LOD_NORMAL_AUTHORED, 60.0f, layers);
 }
 
 static int
@@ -1426,7 +1479,7 @@ main(int argc, char *argv[])
 	}
 	uint64_t firstRevision = 0;
 	std::vector<BObolLodPresentationLayer> firstLayers;
-	if (!chunkedMesh.prepareCadPresentationLayers(
+	if (!mesh_lod_prepare_test_layers(chunkedMesh,
 		BOBOL_LOD_DRAW_SHADED, {firstChunk}, lodHierarchy.max_cut,
 		firstLayers) || firstLayers.size() != 1) {
 	    printf("FAIL: mesh lod first private page presentation\n");
@@ -1455,7 +1508,7 @@ main(int argc, char *argv[])
 	}
 	uint64_t coarseRevision = 0;
 	std::vector<BObolLodPresentationLayer> coarseLayers;
-	if (!chunkedMesh.prepareCadPresentationLayers(
+	if (!mesh_lod_prepare_test_layers(chunkedMesh,
 		BOBOL_LOD_DRAW_HIDDEN_LINE, {firstChunk, secondChunk},
 		secondCoarseCut, coarseLayers) || coarseLayers.size() != 2) {
 	    printf("FAIL: mesh lod coarse page presentation\n");
@@ -1532,7 +1585,7 @@ main(int argc, char *argv[])
 	}
 	uint64_t richRevision = 0;
 	std::vector<BObolLodPresentationLayer> richLayers;
-	if (!chunkedMesh.prepareCadPresentationLayers(
+	if (!mesh_lod_prepare_test_layers(chunkedMesh,
 		BOBOL_LOD_DRAW_HIDDEN_LINE, {firstChunk, secondChunk},
 		lodHierarchy.max_cut, richLayers) || richLayers.size() != 2) {
 	    printf("FAIL: mesh lod rich page presentation\n");
@@ -1569,6 +1622,66 @@ main(int argc, char *argv[])
 	    !chunkedMesh.canDrawChunksAtCut(
 		{firstChunk, secondChunk}, lodHierarchy.max_cut)) {
 	    printf("FAIL: mesh lod richer page was not an isolated prefix update\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+
+	/* Smooth presentation is a worker-side page-set operation.  The same
+	 * source vertex may occur in both private page arrays, but its synthesized
+	 * normal must be identical on either side of that storage boundary. */
+	std::vector<BObolLodChunkCut> smoothCuts = {
+	    {firstChunk, lodHierarchy.max_cut},
+	    {secondChunk, lodHierarchy.max_cut}
+	};
+	std::vector<BObolLodPresentationLayer> smoothLayers;
+	if (!chunkedMesh.prepareCadPresentationLayers(
+		BOBOL_LOD_DRAW_SHADED, smoothCuts,
+		BOBOL_LOD_NORMAL_SMOOTH, 180.0f, smoothLayers) ||
+	    smoothLayers.size() != 2 || !smoothLayers[0].geometry ||
+	    !smoothLayers[0].geometry->shaded || !smoothLayers[1].geometry ||
+	    !smoothLayers[1].geometry->shaded) {
+	    printf("FAIL: mesh lod smooth page-set preparation\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	const Obol::TriMesh &smoothFirst =
+	    *smoothLayers[0].geometry->shaded;
+	const Obol::TriMesh &smoothSecond =
+	    *smoothLayers[1].geometry->shaded;
+	std::unordered_map<MeshLodPointBits, SbVec3f,
+	    MeshLodPointBitsHash> firstPageNormals;
+	for (size_t point = 0; point < smoothFirst.positions.size(); ++point) {
+	    if (point >= smoothFirst.normals.size()) {
+		printf("FAIL: mesh lod smooth first page has incomplete normals\n");
+		ret = 1;
+		goto cleanup;
+	    }
+	    firstPageNormals.emplace(
+		mesh_lod_point_bits(smoothFirst.positions[point]),
+		smoothFirst.normals[point]);
+	}
+	bool comparedPageBoundary = false;
+	for (size_t point = 0; point < smoothSecond.positions.size(); ++point) {
+	    if (point >= smoothSecond.normals.size()) {
+		printf("FAIL: mesh lod smooth second page has incomplete normals\n");
+		ret = 1;
+		goto cleanup;
+	    }
+	    const auto found = firstPageNormals.find(
+		mesh_lod_point_bits(smoothSecond.positions[point]));
+	    if (found == firstPageNormals.end())
+		continue;
+	    comparedPageBoundary = true;
+	    if ((found->second - smoothSecond.normals[point]).sqrLength() >
+		    1.0e-8f) {
+		printf("FAIL: mesh lod smooth normal changed across page boundary\n");
+		ret = 1;
+		goto cleanup;
+	    }
+	}
+	if (!comparedPageBoundary || smoothFirst.progressiveLineage != 0 ||
+	    smoothSecond.progressiveLineage != 0) {
+	    printf("FAIL: mesh lod smooth page boundary fixture/lineage\n");
 	    ret = 1;
 	    goto cleanup;
 	}
@@ -1631,7 +1744,7 @@ main(int argc, char *argv[])
 	if (!broadWaveMesh.populatedChunkIdsAtCut(
 		chunkIds, sparsePageCut, populatedChunks) ||
 	    populatedChunks != expectedPopulatedChunks ||
-	    !broadWaveMesh.prepareCadPresentationLayers(
+	    !mesh_lod_prepare_test_layers(broadWaveMesh,
 		BOBOL_LOD_DRAW_SHADED, chunkIds, sparsePageCut,
 		sparseLayers) ||
 	    sparseLayers.size() != expectedPopulatedChunks.size()) {
@@ -1650,7 +1763,7 @@ main(int argc, char *argv[])
 	    }
 	}
 	std::vector<BObolLodPresentationLayer> broadCoarseLayers;
-	if (!broadWaveMesh.prepareCadPresentationLayers(
+	if (!mesh_lod_prepare_test_layers(broadWaveMesh,
 		BOBOL_LOD_DRAW_SHADED, chunkIds, allPageCoarseCut,
 		broadCoarseLayers) ||
 	    broadCoarseLayers.size() != chunkIds.size() ||
@@ -1662,7 +1775,7 @@ main(int argc, char *argv[])
 	    goto cleanup;
 	}
 	std::vector<BObolLodPresentationLayer> broadRichLayers;
-	if (!broadWaveMesh.prepareCadPresentationLayers(
+	if (!mesh_lod_prepare_test_layers(broadWaveMesh,
 		BOBOL_LOD_DRAW_SHADED, chunkIds, lodHierarchy.max_cut,
 		broadRichLayers)) {
 	    printf("FAIL: mesh lod broad-wave rich page presentation\n");
@@ -1701,7 +1814,7 @@ main(int argc, char *argv[])
 	chunkedMesh.residentChunkIds(retainedChunks);
 	uint64_t compactRevision = 0;
 	std::vector<BObolLodPresentationLayer> compactLayers;
-	if (!chunkedMesh.prepareCadPresentationLayers(
+	if (!mesh_lod_prepare_test_layers(chunkedMesh,
 		BOBOL_LOD_DRAW_SHADED, {secondChunk}, lodHierarchy.max_cut,
 		compactLayers) || compactLayers.size() != 1) {
 	    printf("FAIL: mesh lod compact page presentation\n");
@@ -2093,6 +2206,69 @@ main(int argc, char *argv[])
 				   static_cast<size_t>(vertexCount), 1)) {
 	    printf("FAIL: mesh lod generated mesh data\n");
 	    ret = 1;
+	}
+	if (!ret) {
+	    BObolMeshLodHierarchyInfo normalHierarchy =
+		BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	    BObolLodProgressiveMesh normalMesh;
+	    std::vector<uint32_t> normalChunkIds;
+	    std::vector<BObolLodChunkCut> normalChunkCuts;
+	    if (!bobol_mesh_lod_hierarchy_info_get(
+		    meshLod, &normalHierarchy) ||
+		!normalHierarchy.chunk_count || !normalHierarchy.chunks) {
+		printf("FAIL: mesh lod authored-normal spatial hierarchy\n");
+		ret = 1;
+	    } else {
+		normalChunkIds.reserve(normalHierarchy.chunk_count);
+		normalChunkCuts.reserve(normalHierarchy.chunk_count);
+		for (uint32_t chunk = 0;
+			chunk < normalHierarchy.chunk_count; ++chunk) {
+		    normalChunkIds.push_back(chunk);
+		    normalChunkCuts.push_back({chunk, normalHierarchy.max_cut});
+		}
+		std::vector<BObolLodPresentationLayer> authoredLayers;
+		std::vector<BObolLodPresentationLayer> flatLayers;
+		std::vector<BObolLodPresentationLayer> smoothLayers;
+		const bool prepared = normalMesh.updateChunksFromCache(
+			meshLod, normalHierarchy, normalChunkIds,
+			normalHierarchy.max_cut, FALSE) &&
+		    normalMesh.prepareCadPresentationLayers(
+			BOBOL_LOD_DRAW_SHADED, normalChunkCuts,
+			BOBOL_LOD_NORMAL_AUTHORED, 60.0f, authoredLayers) &&
+		    normalMesh.prepareCadPresentationLayers(
+			BOBOL_LOD_DRAW_SHADED, normalChunkCuts,
+			BOBOL_LOD_NORMAL_FLAT, 60.0f, flatLayers) &&
+		    normalMesh.prepareCadPresentationLayers(
+			BOBOL_LOD_DRAW_SHADED, normalChunkCuts,
+			BOBOL_LOD_NORMAL_SMOOTH, 60.0f, smoothLayers);
+		bool validNormalVariants = prepared &&
+		    authoredLayers.size() == normalHierarchy.chunk_count &&
+		    flatLayers.size() == normalHierarchy.chunk_count &&
+		    smoothLayers.size() == normalHierarchy.chunk_count;
+		for (size_t page = 0;
+			validNormalVariants && page < authoredLayers.size(); ++page) {
+		    const Obol::TriMesh *authored =
+			authoredLayers[page].geometry &&
+			authoredLayers[page].geometry->shaded ?
+			    &*authoredLayers[page].geometry->shaded : NULL;
+		    const Obol::TriMesh *flat =
+			flatLayers[page].geometry &&
+			flatLayers[page].geometry->shaded ?
+			    &*flatLayers[page].geometry->shaded : NULL;
+		    const Obol::TriMesh *smooth =
+			smoothLayers[page].geometry &&
+			smoothLayers[page].geometry->shaded ?
+			    &*smoothLayers[page].geometry->shaded : NULL;
+		    validNormalVariants = authored && flat && smooth &&
+			!authored->normals.empty() && flat->normals.empty() &&
+			!smooth->normals.empty() &&
+			smooth->normals.size() == smooth->positions.size();
+		}
+		if (!validNormalVariants) {
+		    printf("FAIL: mesh lod spatial normal presentation overrides\n");
+		    ret = 1;
+		}
+	    }
 	}
 	if (meshLod)
 	    bobol_mesh_lod_destroy(meshLod);

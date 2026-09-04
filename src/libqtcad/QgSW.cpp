@@ -162,6 +162,7 @@ void QgSW::queued_update()
 
 void QgSW::paintEvent(QPaintEvent *e)
 {
+    QTCAD_SLOT("QgSW::paintEvent", 1);
     if (!d->v)
 return;
 

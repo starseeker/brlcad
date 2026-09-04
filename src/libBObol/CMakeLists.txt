@@ -43,6 +43,7 @@ set(
   lod_delivery_policy_private.h
   lod_presentation_policy_private.h
   lod_population_identity_private.h
+  lod_progress_estimator_private.h
   lod_quiet_successor_private.h
   lod_result_authentication_private.h
   lod_scene_evidence_private.h
@@ -226,6 +227,7 @@ cmakefiles(
   lod_delivery_policy_private.h
   lod_presentation_policy_private.h
   lod_population_identity_private.h
+  lod_progress_estimator_private.h
   lod_presentation_policy.cpp
   lod_admission_policy.cpp
   lod_quiet_successor_private.h

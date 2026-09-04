@@ -78,6 +78,19 @@ mesh_lod_terminal_draw_mode_supported(int drawMode)
 	drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
 }
 
+static SbBool
+mesh_lod_request_has_presentation_normals(
+    const BObolLodRequest &request, SbBool authoredNormals)
+{
+    const bool shaded = request.drawMode == BOBOL_LOD_DRAW_SHADED ||
+	request.drawMode == BOBOL_LOD_DRAW_SHADED_BOTS ||
+	request.drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
+    if (!shaded || request.normalStyle == BOBOL_LOD_NORMAL_FLAT)
+	return FALSE;
+    return request.normalStyle == BOBOL_LOD_NORMAL_SMOOTH ?
+	TRUE : authoredNormals;
+}
+
 static bool
 mesh_lod_resident_progressive_wire_satisfies_mode(
     const BObolCompactLodPlanningSummary &summary, int drawMode)
@@ -456,7 +469,8 @@ mesh_lod_warm_source_task_estimate(
 	return 0;
     return mesh_lod_resident_working_set_estimate(
 	sourceRequest.lodPointCount, sourceRequest.lodFaceCount,
-	sourceRequest.lodHasNormals ? TRUE : FALSE, request.drawMode);
+	mesh_lod_request_has_presentation_normals(request,
+	    sourceRequest.lodHasNormals ? TRUE : FALSE), request.drawMode);
 }
 
 SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
@@ -1774,6 +1788,16 @@ mesh_lod_make_source_request(const SoBRLDatabaseSource *source,
     }
 }
 
+static void
+mesh_lod_apply_normal_policy(BObolLodRequest &request,
+	const BObolViewLodState *viewState)
+{
+    if (!viewState)
+	return;
+    request.normalStyle = static_cast<int>(viewState->getNormalStyle());
+    request.normalCreaseAngle = viewState->getNormalCreaseAngle();
+}
+
 /* Use the same row-vector view-projection half-spaces as SoCADAssembly's
  * renderer.  SbViewVolume::intersect derives a second set of planes from its
  * parametric volume; at extreme close-up views the two tests can disagree,
@@ -2381,6 +2405,20 @@ mesh_lod_cad_payload_is_provisional_preview(
 }
 
 static SbBool
+mesh_lod_cad_normal_presentation_matches(
+    const BObolViewLodState::CadPayload *payload,
+    const BObolLodRequest &request)
+{
+    if (!payload || payload->presentationLayers.empty())
+	return TRUE;
+    if (payload->normalStyle != request.normalStyle)
+	return FALSE;
+    return request.normalStyle != BOBOL_LOD_NORMAL_SMOOTH ||
+	memcmp(&payload->normalCreaseAngle, &request.normalCreaseAngle,
+	    sizeof(request.normalCreaseAngle)) == 0 ? TRUE : FALSE;
+}
+
+static SbBool
 mesh_lod_cad_payload_is_resident(
     const BObolViewLodState::CadPayload *payload,
     const BObolLodRequest &request,
@@ -2392,6 +2430,7 @@ mesh_lod_cad_payload_is_resident(
 	payload->providerStatus == BOBOL_LOD_PROVIDER_READY &&
 	mesh_lod_geometry_key_matches(payload->cacheKey, request,
 	    cachedGeometryKey) &&
+	mesh_lod_cad_normal_presentation_matches(payload, request) &&
 	payload->activeCut == request.requestedCut &&
 	mesh_lod_cad_payload_has_presentable_spatial_demand(
 	    payload, request);
@@ -2556,6 +2595,7 @@ mesh_lod_retarget_cad_demand_if_changed(
 	payload->viewRevision == request.viewRevision &&
 	payload->policyRevision == request.policyRevision &&
 	payload->visualEmphasis == request.visualEmphasis &&
+	mesh_lod_cad_normal_presentation_matches(payload, request) &&
 	payload->projectedCutCountsViewRevision == request.viewRevision &&
 	payload->projectedCutCountsPolicyRevision == request.policyRevision &&
 	payload->projectedCutCountsMeshRevision ==
@@ -2919,6 +2959,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		projected.viewRevision = submitAction->viewRevision;
 		projected.policyRevision = submitAction->policyRevision;
 		projected.drawMode = payload->drawMode;
+		mesh_lod_apply_normal_policy(projected,
+		    submitAction->viewState);
+		if (!mesh_lod_cad_normal_presentation_matches(
+			payload, projected))
+		    continue;
 		candidate.demand = projected;
 		candidate.minimumFaces = payload->counts.faceCount;
 		candidate.minimumCost = bobol_lod_render_cost_units(
@@ -3553,6 +3598,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		soleSelectedOccurrence ? 2 :
 		(summary.highlighted ? 1 : 0);
 	    request.drawMode = sourceDrawMode;
+	    mesh_lod_apply_normal_policy(request, submitAction->viewState);
 	    request.providerId = submitAction->providerId;
 	    request.providerVersion = submitAction->providerVersion;
 	    request.qualityTier = submitAction->qualityTier;
@@ -4290,6 +4336,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    const SbBool activeAssetMatches =
 		mesh_lod_cad_payload_matches_asset_epoch(
 		    activePayload, request);
+	    const SbBool activePresentationMatches =
+		mesh_lod_cad_normal_presentation_matches(
+		    activePayload, request);
 	    /* Structural repair is a retained-presentation transaction.  If the
 	     * occurrence already owns drawable mesh data, re-journal that exact
 	     * binding instead of submitting or reloading the shared asset.  An
@@ -4297,7 +4346,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	     * framebuffer is authoritative evidence that this instance is still
 	     * bound to its source box. */
 	    if (submitAction->structuralPresentationRepair &&
-		activeAssetMatches && activePayload &&
+		activeAssetMatches && activePresentationMatches && activePayload &&
 		(activePayload->resultKind == BOBOL_LOD_RESULT_MESH ||
 		 activePayload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL)) {
 		BObolLodRequest retainedPresentation = request;
@@ -4475,6 +4524,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		submitAction->allowResidentPrefetchPastAllocation ?
 		    request.requestedCut : presentationDemand.requestedCut;
 	    if (!submitAction->useForcedCut && activeAssetMatches &&
+		activePresentationMatches &&
 		activePayload->activeCut == request.requestedCut &&
 		mesh_lod_cad_payload_has_presentable_spatial_demand(
 		    activePayload, request)) {
@@ -4484,6 +4534,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		continue;
 	    }
 	    if (!submitAction->useForcedCut && activeAssetMatches &&
+		activePresentationMatches &&
 		allocatedPresentationCut >= 0 &&
 		activePayload->activeCut >=
 		    presentationDemand.requestedCut &&
@@ -4522,6 +4573,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    }
 	    if (!submitAction->useForcedCut &&
 		!submitAction->allowCutDowngrade && activeAssetMatches &&
+		activePresentationMatches &&
 		activePayload->activeCut > request.requestedCut &&
 		mesh_lod_cad_payload_has_presentable_spatial_demand(
 		    activePayload, request)) {
@@ -4532,7 +4584,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    }
 	    if (!submitAction->useForcedCut &&
 		!submitAction->allowRetainedRefinement &&
-		activeAssetMatches &&
+		activeAssetMatches && activePresentationMatches &&
 		request.requestedCut > activePayload->activeCut &&
 		mesh_lod_cad_payload_has_presentable_spatial_demand(
 		    activePayload, request)) {
@@ -4767,6 +4819,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	     * changes only prefix selection and never rereads/rebuilds geometry. */
 	    const SbBool retainedTargetDrawable =
 		!submitAction->useForcedCut && activePayload &&
+		activePresentationMatches &&
 		activePayload->progressiveMesh &&
 		presentationDemand.requestedCut > activePayload->activeCut &&
 		mesh_lod_can_draw_chunks(activePayload->progressiveMesh,
@@ -4825,7 +4878,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    static_cast<unsigned long long>(
 			activePayload->preparedCadGeometryRevision));
 	    if (!submitAction->resetExisting && activePayload &&
-		activeAssetMatches &&
+		activeAssetMatches && activePresentationMatches &&
 		retargetCut > activePayload->activeCut) {
 		retargetCut = submitAction->admitAllocatedRefinementCut(
 		    activePayload->progressiveMesh,
@@ -4855,7 +4908,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		}
 	    }
 	    if (!submitAction->resetExisting && activePayload &&
-		activeAssetMatches &&
+		activeAssetMatches && activePresentationMatches &&
 		retargetCut >= 0 &&
 		activePayload->activeCut != retargetCut) {
 		mesh_lod_note_upward_resident_use(submitAction,
@@ -5111,7 +5164,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		submitAction->service) {
 		const int transientCut = mesh_lod_resident_task_cut_limit(
 		    activePayload->progressiveMesh, workingSetCut,
-		    request.requiredChunks, activePayload->hasNormals,
+		    request.requiredChunks,
+		    mesh_lod_request_has_presentation_normals(
+			request, activePayload->hasNormals),
 		    request.drawMode,
 		    submitAction->service->getWorkingSetLimit());
 		if (transientCut >=
@@ -5132,7 +5187,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    mesh_lod_resident_task_estimate(
 			activePayload->progressiveMesh, workingSetCut,
 			request.requiredChunks,
-			activePayload->hasNormals, request.drawMode) :
+			mesh_lod_request_has_presentation_normals(
+			    request, activePayload->hasNormals),
+			request.drawMode) :
 		    (haveProviderSummary ?
 			mesh_lod_warm_source_task_estimate(
 			    providerSummary, request) : 0));
@@ -5202,6 +5259,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	submitAction->providerId.getString(),
 	submitAction->providerVersion.getString(),
 	submitAction->qualityTier);
+    mesh_lod_apply_normal_policy(request, submitAction->viewState);
     if (submitAction->useViewVolume) {
 	SbMatrix localToRoot = source->drawMatrixValid.getValue() ?
 	    source->drawMatrix.getValue() : SbMatrix::identity();
@@ -5249,6 +5307,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	!submitAction->allowCutDowngrade && activePayload &&
 	activePayload->activeCut > request.requestedCut &&
 	mesh_lod_cad_payload_has_same_source(activePayload, request) &&
+	mesh_lod_cad_normal_presentation_matches(activePayload, request) &&
 	mesh_lod_cad_payload_has_presentable_spatial_demand(
 	    activePayload, request)) {
 	mesh_lod_retarget_cad_demand_if_changed(
@@ -5261,6 +5320,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	!submitAction->allowRetainedRefinement && activePayload &&
 	request.requestedCut > activePayload->activeCut &&
 	mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
+	mesh_lod_cad_normal_presentation_matches(activePayload, request) &&
 	mesh_lod_cad_payload_has_presentable_spatial_demand(
 	    activePayload, request)) {
 	mesh_lod_retarget_cad_demand_if_changed(
@@ -5271,6 +5331,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     }
     const SbBool retainedTargetDrawable =
 	!submitAction->useForcedCut && activePayload &&
+	mesh_lod_cad_normal_presentation_matches(activePayload, request) &&
 	activePayload->progressiveMesh &&
 	presentationDemand.requestedCut > activePayload->activeCut &&
 	mesh_lod_can_draw_chunks(activePayload->progressiveMesh,
@@ -5281,6 +5342,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    retainedTargetDrawable);
     if (!submitAction->resetExisting && activePayload &&
 	mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
+	mesh_lod_cad_normal_presentation_matches(activePayload, request) &&
 	retargetCut > activePayload->activeCut) {
 	retargetCut = submitAction->admitAllocatedRefinementCut(
 	    activePayload->progressiveMesh,
@@ -5304,6 +5366,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     }
     if (!submitAction->resetExisting && activePayload &&
 	mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
+	mesh_lod_cad_normal_presentation_matches(activePayload, request) &&
 	retargetCut >= 0 &&
 	activePayload->activeCut != retargetCut) {
 	mesh_lod_note_upward_resident_use(submitAction,
@@ -5448,7 +5511,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    mesh_lod_resident_task_estimate(
 			activePayload->progressiveMesh, workingSetCut,
 			request.requiredChunks,
-			activePayload->hasNormals, request.drawMode);
+			mesh_lod_request_has_presentation_normals(
+			    request, activePayload->hasNormals),
+			request.drawMode);
 	    }
 
     uint64_t taskId = suppressActiveDuplicate ?
@@ -5506,6 +5571,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 			  submitAction->providerId.getString(),
 			  submitAction->providerVersion.getString(),
 			  submitAction->qualityTier);
+    mesh_lod_apply_normal_policy(request, submitAction->viewState);
     if (submitAction->useViewVolume &&
 	!mesh_lod_apply_projected_demand(request, request.bounds,
 	    SbMatrix::identity(), submitAction->viewVolume, submitAction->view,
@@ -5723,7 +5789,9 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 		    mesh_lod_resident_task_estimate(
 			viewPayload->progressiveMesh, workingSetCut,
 			request.requiredChunks,
-			viewPayload->hasNormals, request.drawMode);
+			mesh_lod_request_has_presentation_normals(
+			    request, viewPayload->hasNormals),
+			request.drawMode);
 	    } else if (shape->lodAvailable.getValue() &&
 		shape->lodActiveCut.getValue() >= workingSetCut &&
 		shape->lodFaceCount.getValue() > 0 &&
@@ -5732,7 +5800,9 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 		    mesh_lod_resident_working_set_estimate(
 			shape->lodPointCount.getValue(),
 			shape->lodFaceCount.getValue(),
-			shape->lodHasNormals.getValue(), request.drawMode);
+			mesh_lod_request_has_presentation_normals(
+			    request, shape->lodHasNormals.getValue()),
+			request.drawMode);
 	    }
 
     uint64_t taskId = suppressActiveDuplicate ?

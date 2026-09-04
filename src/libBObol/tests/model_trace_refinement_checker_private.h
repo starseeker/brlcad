@@ -176,12 +176,13 @@ public:
 		    "fact mask does not refine to the reported obligation and owner");
 
 	    const bool ownerlessResultNotification = record.event ==
-		BOBOL_LOD_CONTROL_TRANSITION_PUBLICATION &&
+		BOBOL_LOD_CONTROL_TRANSITION_PRODUCER_PROGRESS &&
 		before.controlOwner == BOBOL_LOD_CONTROL_OWNER_NONE &&
 		after.controlOwner == BOBOL_LOD_CONTROL_OWNER_NONE;
 	    const bool resultPublicationNotification =
 		ownerlessResultNotification ||
-		(record.event == BOBOL_LOD_CONTROL_TRANSITION_PUBLICATION &&
+		(record.event ==
+		    BOBOL_LOD_CONTROL_TRANSITION_PRODUCER_PROGRESS &&
 		 (factActive(before.controlFactMask, Refinement::Fact::RESULT) ||
 		  factActive(after.controlFactMask, Refinement::Fact::RESULT)));
 	    const int eventOwner = ownerForEvent(record.event);
@@ -350,7 +351,7 @@ private:
     static bool knownEvent(BObolLodControlTransitionEvent event)
     {
 	return event >= BOBOL_LOD_CONTROL_TRANSITION_INITIAL &&
-	    event <= BOBOL_LOD_CONTROL_TRANSITION_IDLE_SERVICE;
+	    event <= BOBOL_LOD_CONTROL_TRANSITION_PRODUCER_PROGRESS;
     }
 
     static int ownerForEvent(BObolLodControlTransitionEvent event)

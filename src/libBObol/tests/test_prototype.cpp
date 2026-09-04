@@ -4725,13 +4725,79 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    streamSource->realizeDatabaseMesh(&directStream);
 	std::vector<BObolCompactOccurrence> streamed;
 	(void)directStream.drain(streamed, 4);
+	BObolCompactSourceProfile streamProfile;
+	size_t preparationCompleted = 0;
+	size_t preparationTotal = 0;
+	directStream.getPreparationWorkCount(preparationCompleted,
+	    preparationTotal);
+	std::vector<BObolCompactManifestOccurrence> manifest;
+	const bool manifestReady = directStream.takeManifest(manifest);
 	if (!streamRealized || streamed.size() != 1 ||
 	    !streamed[0].geometry ||
-	    !BU_STR_EQUAL(streamed[0].summary.path.getString(), "/box.s")) {
+	    !BU_STR_EQUAL(streamed[0].summary.path.getString(), "/box.s") ||
+	    directStream.getExpectedCount() != 1 ||
+	    preparationCompleted != 1 || preparationTotal != 1 ||
+	    !directStream.getSourceProfile(streamProfile) ||
+	    !streamProfile.valid || streamProfile.occurrenceCount != 1 ||
+	    streamProfile.uniqueAssetCount != 1 ||
+	    streamProfile.encodedSourceBytes == 0 ||
+	    streamProfile.largestAssetBytes != streamProfile.encodedSourceBytes ||
+	    !manifestReady || manifest.size() != 1) {
 	    streamSource->unref();
-	    FAIL("direct primitive realization should stream one compact occurrence");
+	    FAIL("direct primitive realization should close its one-occurrence stream contract");
 	}
 	streamSource->unref();
+    }
+
+    /* Exercise the exact qged failure regime: a bare top-level BoT whose
+     * standing AABB carries a lazy PoP request.  The direct path must publish
+     * both the drawable occurrence and its complete source/profile census;
+     * wrapping the same BoT in a region must not be required for refinement. */
+    constexpr float directBotViewScale = 100.0f;
+    constexpr int directBotViewWidth = 100;
+    constexpr int directBotViewHeight = 100;
+    for (int drawMode : {SoBRLDatabaseSource::WIREFRAME,
+	SoBRLDatabaseSource::SHADED}) {
+	SoBRLDatabaseSource *botStreamSource = new SoBRLDatabaseSource;
+	botStreamSource->ref();
+	botStreamSource->setDatabase(dbip);
+	botStreamSource->path = "tet.bot";
+	botStreamSource->drawMode = drawMode;
+	botStreamSource->lodBotThreshold = 1;
+	botStreamSource->sourceRevision = drawMode ==
+	    SoBRLDatabaseSource::WIREFRAME ? 7 : 8;
+	botStreamSource->setRealizationViewPolicy(TRUE, TRUE, TRUE,
+	    directBotViewScale, 1.0f, directBotViewWidth,
+	    directBotViewHeight, 1, 0.0f, 0.0f);
+	BObolCompactOccurrenceStream botStream;
+	const SbBool realized = drawMode == SoBRLDatabaseSource::WIREFRAME ?
+	    botStreamSource->realizeDatabaseWireframe(&botStream) :
+	    botStreamSource->realizeDatabaseMesh(&botStream);
+	std::vector<BObolCompactOccurrence> occurrences;
+	(void)botStream.drain(occurrences, 2);
+	BObolCompactSourceProfile profile;
+	std::vector<BObolCompactManifestOccurrence> manifest;
+	if (!realized || occurrences.size() != 1 ||
+	    !occurrences[0].geometry || !occurrences[0].lodBacked ||
+	    !occurrences[0].sourceMeshRequestValid ||
+	    occurrences[0].sourceMeshRequest.faceCount != 4 ||
+	    !BU_STR_EQUAL(
+		occurrences[0].sourceMeshRequest.meshAssetPath.getString(),
+		"/tet.bot") ||
+	    !BU_STR_EQUAL(
+		occurrences[0].sourceMeshRequest.meshAssetName.getString(),
+		"tet.bot") ||
+	    botStream.getExpectedCount() != 1 ||
+	    !botStream.getSourceProfile(profile) || !profile.valid ||
+	    profile.occurrenceCount != 1 || profile.uniqueAssetCount != 1 ||
+	    !botStream.takeManifest(manifest) || manifest.size() != 1 ||
+	    !manifest[0].sourceMeshRequestValid ||
+	    !BU_STR_EQUAL(manifest[0].meshAssetPath.getString(), "/tet.bot") ||
+	    !BU_STR_EQUAL(manifest[0].meshAssetName.getString(), "tet.bot")) {
+	    botStreamSource->unref();
+	    FAIL("bare top-level BoT should publish a complete progressive stream contract");
+	}
+	botStreamSource->unref();
     }
 
     /* A path ending in a primitive is still an assembled occurrence.  The

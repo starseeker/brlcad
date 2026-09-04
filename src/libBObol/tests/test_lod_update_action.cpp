@@ -11821,6 +11821,45 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	}
     }
 
+    /* A page layer is immutable normal-policy output.  A retained cut change
+     * must not relabel authored arrays as a smooth presentation; that demand
+     * requires a worker-prepared replacement. */
+    if (!ret) {
+	BObolViewLodState normalState;
+	BObolLodResult normalResult = results[0];
+	BObolLodPresentationLayer page;
+	page.layerKey = "page:0";
+	page.geometry = normalResult.preparedCadGeometry;
+	page.geometryRevision = normalResult.preparedCadGeometryRevision;
+	page.activeCut = normalResult.geometry.activeCut;
+	normalResult.presentationLayers.push_back(page);
+	normalResult.preparedCadGeometry.reset();
+	normalResult.preparedCadGeometryRevision = 0;
+	normalResult.canonicalizePayload();
+	if (!page.geometry ||
+	    !normalState.applySourceResult(source, normalResult)) {
+	    printf("FAIL: spatial normal-retarget fixture apply\n");
+	    ret = 1;
+	} else {
+	    const BObolViewLodState::CadPayload *payload =
+		normalState.findCadForResult(normalResult);
+	    BObolLodRequest smoothDemand = normalResult.request;
+	    smoothDemand.requestedCut = payload ? payload->requestedCut : -1;
+	    smoothDemand.requiredChunks = payload ?
+		payload->requiredChunks : std::vector<uint32_t>();
+	    smoothDemand.normalStyle = BOBOL_LOD_NORMAL_SMOOTH;
+	    smoothDemand.normalCreaseAngle = 60.0f;
+	    if (!payload || payload->presentationLayers.empty() ||
+		normalState.retargetCadPayload(
+		    payload, payload->activeCut, smoothDemand) ||
+		payload->normalStyle != normalResult.request.normalStyle) {
+		printf("FAIL: retained spatial page accepted a mismatched "
+		       "normal policy\n");
+		ret = 1;
+	    }
+	}
+    }
+
     /* A same-cut page-set retarget is a renderer mutation.  It can hide an
      * occurrence when its spatial demand becomes empty, or expose resident
      * pages after a retained-frontier redraw.  The occurrence journal must

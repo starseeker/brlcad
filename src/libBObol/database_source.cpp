@@ -111,6 +111,21 @@ void realized_mesh_shape_summary(const SoBRLMeshShape *shape,
 	BObolRealizedShapeSummary &summary);
 static int cad_source_mesh_request_from_bot(
 	BObolSourceMeshRequest &request, const struct rt_bot_internal *bot);
+static uint64_t
+database_source_encoded_source_bytes(const struct db_i *dbip,
+	const struct directory *dp)
+{
+    if (!dp || dp->d_len <= 0)
+	return 0;
+    uint64_t encodedBytes = static_cast<uint64_t>(dp->d_len);
+    if (dbip && db_version(dbip) < 5) {
+	const uint64_t recordBytes = sizeof(union record);
+	if (encodedBytes > UINT64_MAX / recordBytes)
+	    return UINT64_MAX;
+	encodedBytes *= recordBytes;
+    }
+    return encodedBytes;
+}
 
 const SbString &
 compact_instance_identity(const BObolCompactInstanceEntry &entry)
@@ -1021,6 +1036,16 @@ cad_wire_part_geometry_from_line_set(const std::vector<SbVec3f> &points,
     size_t lastIndex = 0;
     uint32_t segmentIndex = 0;
     for (size_t i = 0; i < count; i++) {
+	if (!std::isfinite(points[i][0]) || !std::isfinite(points[i][1]) ||
+	    !std::isfinite(points[i][2])) {
+	    if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+		bu_log("[obol-timing] rejected non-finite wire point %zu: "
+		       "%.9g %.9g %.9g\n", i,
+		       static_cast<double>(points[i][0]),
+		       static_cast<double>(points[i][1]),
+		       static_cast<double>(points[i][2]));
+	    return 0;
+	}
 	const int command = commands[i];
 	if (command == SoBRLVListShape::POINT) {
 	    const SbVec3f &point = points[i];
@@ -3021,6 +3046,17 @@ cad_progressive_wire_part_geometry_from_provider(
 	    static_cast<float>(realization.line_points[i][X]),
 	    static_cast<float>(realization.line_points[i][Y]),
 	    static_cast<float>(realization.line_points[i][Z]));
+	if (!std::isfinite(point[0]) || !std::isfinite(point[1]) ||
+	    !std::isfinite(point[2])) {
+	    if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+		bu_log("[obol-timing] progressive wire provider returned "
+		       "non-finite point %zu: %.17g %.17g %.17g\n", i,
+		       static_cast<double>(realization.line_points[i][X]),
+		       static_cast<double>(realization.line_points[i][Y]),
+		       static_cast<double>(realization.line_points[i][Z]));
+	    primitive_realization_line_set_free(&realization);
+	    return 0;
+	}
 	if (command == RT_PRIMITIVE_LINE_MOVE || curves.empty())
 	    curves.emplace_back();
 	if (curves.back().empty() || curves.back().back() != point)
@@ -3751,6 +3787,92 @@ static int
 cad_vlist_part_geometry(const SoBRLVListShape *shape,
 			Obol::PartGeometryBuilder &geometry);
 
+/* Close the representation contract for a compact registry produced by a
+ * serial walk.  Parallel mesh coverage publishes these fields while work is
+ * running; direct leaves and ordinary wire walks learn their exact population
+ * only after it is installed. */
+static bool
+close_compact_stream_contract(SoBRLDatabaseSource *source,
+	BObolCompactOccurrenceStream *stream)
+{
+    if (!source || !stream || stream->isCancelled())
+	return false;
+
+    const int compactCount = source->getCompactInstanceCount();
+    if (compactCount <= 0)
+	return false;
+
+    const size_t occurrenceCount = static_cast<size_t>(compactCount);
+    BObolCompactSourceProfile profile;
+    profile.occurrenceCount = occurrenceCount;
+    std::unordered_set<std::string> assets;
+    for (int occurrenceIndex = 0; occurrenceIndex < compactCount;
+	 occurrenceIndex++) {
+	BObolCompactOccurrence occurrence;
+	if (!source->getCompactOccurrence(occurrenceIndex, occurrence))
+	    return false;
+	stream->recordManifestOccurrence(occurrence);
+	const char *assetName = occurrence.sourceMeshRequestValid ?
+	    occurrence.sourceMeshRequest.meshAssetName.getString() :
+	    occurrence.summary.sourceName.getString();
+	if (!assetName || !assetName[0] ||
+	    !assets.insert(assetName).second)
+	    continue;
+	struct directory *asset = db_lookup(source->getDatabase(), assetName,
+	    LOOKUP_QUIET);
+	const uint64_t encodedBytes = database_source_encoded_source_bytes(
+	    source->getDatabase(), asset);
+	profile.largestAssetBytes = std::max(profile.largestAssetBytes,
+	    encodedBytes);
+	profile.encodedSourceBytes = encodedBytes >
+	    UINT64_MAX - profile.encodedSourceBytes ? UINT64_MAX :
+	    profile.encodedSourceBytes + encodedBytes;
+    }
+    profile.uniqueAssetCount = assets.size();
+    profile.reusedOccurrenceCount = profile.occurrenceCount >
+	profile.uniqueAssetCount ? profile.occurrenceCount -
+	profile.uniqueAssetCount : 0;
+    profile.valid = profile.uniqueAssetCount > 0 &&
+	profile.uniqueAssetCount <= profile.occurrenceCount &&
+	profile.encodedSourceBytes > 0 && profile.largestAssetBytes > 0 ?
+	TRUE : FALSE;
+
+    stream->setExpectedCount(occurrenceCount);
+    stream->setPreparationWorkCount(occurrenceCount);
+    stream->completePreparationWork();
+    if (profile.valid) {
+	stream->setSourceProfile(profile);
+	source->setCompactSourceProfile(profile);
+    }
+    return stream->sealManifest(occurrenceCount);
+}
+
+/* A direct primitive bypasses the general coverage producer, but it must
+ * close the same stream contract.  In particular, the consumer needs an
+ * exact population denominator and the persisted leaf manifest needs a
+ * source profile.  Leaving those fields at zero made a valid one-leaf draw
+ * indistinguishable from an empty/incomplete discovery result and could make
+ * its first LoD request terminal while an identical region-wrapped leaf
+ * worked normally. */
+static void
+publish_direct_compact_occurrence(SoBRLDatabaseSource *source,
+	BObolCompactOccurrenceStream *stream, const struct directory *dp,
+	const BObolCompactOccurrence &occurrence)
+{
+    if (!source || !stream || !dp || !occurrence.geometry ||
+	stream->isCancelled())
+	return;
+
+    /* setCompactOccurrence canonicalizes bounds, style and source identity.
+     * Publish that installed value rather than the construction input so the
+     * stream journal and the live compact registry cannot disagree. */
+    BObolCompactOccurrence published = occurrence;
+    (void)source->getCompactOccurrence(0, published);
+
+    (void)close_compact_stream_contract(source, stream);
+    stream->push(std::move(published));
+}
+
 static int
 realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 			      BObolDatabaseSourceRealizationCache *cache,
@@ -3968,6 +4090,11 @@ realize_direct_leaf_wireframe_compact(
 	find_wire_cad_geometry_any(cache, cacheKey);
     bool viewDependentCsgGeometry = cachedCad ?
 	cachedCad->viewDependentCsgGeometry : false;
+    bool lodBacked = cachedCad && cachedCad->lodBacked &&
+	cachedCad->sourceMeshRequestValid;
+    BObolSourceMeshRequest sourceMeshRequest;
+    if (lodBacked)
+	sourceMeshRequest = cachedCad->sourceMeshRequest;
     if (cachedCad)
 	cadGeometry = cachedCad->geometry;
     bobol_performance_counter_add(
@@ -4005,14 +4132,24 @@ realize_direct_leaf_wireframe_compact(
 	const int usedLodProxy = bot_lod_proxy_bounds(&validInternal.local,
 	    wireLodThreshold, lodProxyBounds);
 	if (usedLodProxy) {
+	    const struct rt_bot_internal *bot =
+		static_cast<const struct rt_bot_internal *>(
+		    validInternal.local.idb_ptr);
+	    lodBacked = cad_source_mesh_request_from_bot(
+		sourceMeshRequest, bot) != 0;
+	    if (lodBacked) {
+		sourceMeshRequest.meshAssetPath = fullPath.c_str();
+		sourceMeshRequest.meshAssetName = dp->d_namep;
+	    }
 	    Obol::PartGeometryBuilder generated;
-	    if (cad_wire_part_geometry_from_aabb(lodProxyBounds, generated)) {
+	    if (lodBacked &&
+		cad_wire_part_geometry_from_aabb(lodProxyBounds, generated)) {
 		geometryKind = "aabb";
 		localBounds = lodProxyBounds;
 		localBoundsValid = TRUE;
 		cadGeometry = cache->storeWireCadGeometry(cacheKey,
 		    std::move(generated), typeLabel, geometryKind, &localBounds,
-		    true);
+		    true, &sourceMeshRequest);
 	    }
 	} else if (validInternal.local.idb_type == ID_MATERIAL) {
 	    SoBRLMaterialObject *materialObject = material_object_from_internal(
@@ -4076,6 +4213,15 @@ realize_direct_leaf_wireframe_compact(
     occurrence.geometry = cadGeometry;
     occurrence.viewDependentCsgGeometry =
 	viewDependentCsgGeometry ? TRUE : FALSE;
+    occurrence.lodBacked = lodBacked ? TRUE : FALSE;
+    occurrence.sourceMeshRequestValid = lodBacked ? TRUE : FALSE;
+    if (lodBacked) {
+	occurrence.sourceMeshRequest = sourceMeshRequest;
+	compact_source_mesh_request_sync(occurrence.sourceMeshRequest,
+	    occurrence.summary);
+	compact_summary_lod_from_source_mesh_request(occurrence.summary,
+	    occurrence.sourceMeshRequest);
+    }
     occurrence.summary = compact_occurrence_summary(source,
 	fullPath.c_str(), dp->d_namep,
 	geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
@@ -4098,13 +4244,7 @@ realize_direct_leaf_wireframe_compact(
 	source->realizationDiagnostic = msg;
 	return -1;
     }
-    /* A direct leaf bypasses realize_leaf(), whose normal compact path hands
-     * every completed occurrence to the progressive stream.  Preserve that
-     * producer contract here: detached realization cannot adopt its private
-     * one-entry registry over an empty live source, and without this handoff a
-     * top-level primitive converges to an empty scene. */
-    if (stream && !stream->isCancelled())
-	stream->push(occurrence);
+    publish_direct_compact_occurrence(source, stream, dp, occurrence);
     return 1;
 }
 
@@ -6556,15 +6696,19 @@ realize_direct_leaf_mesh_compact(
 		if (!generatedGeometry && bot &&
 		    source->lodBotThreshold.getValue() > 0 &&
 		    bot->num_faces >= source->lodBotThreshold.getValue() &&
-		    cad_source_mesh_request_from_bot(sourceMeshRequest, bot) &&
-		    cad_wire_part_geometry_from_aabb(sourceMeshRequest.bounds,
-			generated)) {
-		    generatedGeometry = 1;
-		    lodBacked = true;
-		} else if (!generatedGeometry) {
+		    cad_source_mesh_request_from_bot(sourceMeshRequest, bot)) {
+		    sourceMeshRequest.meshAssetPath = fullPath.c_str();
+		    sourceMeshRequest.meshAssetName = dp->d_namep;
+		    if (cad_wire_part_geometry_from_aabb(sourceMeshRequest.bounds,
+			    generated)) {
+			generatedGeometry = 1;
+			lodBacked = true;
+		    }
+		}
+		if (!generatedGeometry) {
 		    generatedGeometry = cad_mesh_part_geometry_from_internal(
 			&validInternal.local, source, generated);
-		}
+	    }
 		if (generatedGeometry &&
 		    drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE)
 		    (void)cad_mesh_append_hidden_line_edges(generated);
@@ -6792,8 +6936,8 @@ realize_direct_leaf_mesh_compact(
     occurrence.booleanOperation = source->booleanOperation.getValue();
     occurrence.localTransform = pathMatrix;
     const int compacted = source->setCompactOccurrence(occurrence);
-    if (compacted > 0 && stream && !stream->isCancelled())
-	stream->push(occurrence);
+    if (compacted > 0)
+	publish_direct_compact_occurrence(source, stream, dp, occurrence);
     return compacted > 0 ? 1 : 0;
 }
 
@@ -13398,6 +13542,9 @@ bobol_database_source_realize_wireframe_compact_with_cache(
     source->installCompactInstanceIndex(data.compact_index, TRUE);
     source->markCompiledAssemblyDirty();
 
+    if (stream)
+	(void)close_compact_stream_contract(source, stream);
+
     const SbBool preserveExact = source->hasExactSourceBounds();
 
     SbBox3f semanticBounds;
@@ -13736,22 +13883,6 @@ compact_coverage_working_set_estimate(const struct db_i *dbip,
     if (encodedBytes > (SIZE_MAX - fixedBytes) / copyFactor)
 	return SIZE_MAX;
     return encodedBytes * copyFactor + fixedBytes;
-}
-
-static uint64_t
-compact_coverage_encoded_source_bytes(const struct db_i *dbip,
-	const struct directory *dp)
-{
-    if (!dp || dp->d_len <= 0)
-	return 0;
-    uint64_t encodedBytes = static_cast<uint64_t>(dp->d_len);
-    if (dbip && db_version(dbip) < 5) {
-	const uint64_t recordBytes = sizeof(union record);
-	if (encodedBytes > UINT64_MAX / recordBytes)
-	    return UINT64_MAX;
-	encodedBytes *= recordBytes;
-    }
-    return encodedBytes;
 }
 
 struct compact_coverage_vertex_bounds {
@@ -15390,7 +15521,7 @@ compact_stream_publish_parallel_coverage(
 	for (const std::unique_ptr<compact_coverage_asset> &asset :
 	     collect.assets) {
 	    const uint64_t encodedBytes =
-		compact_coverage_encoded_source_bytes(source->getDatabase(),
+		database_source_encoded_source_bytes(source->getDatabase(),
 		    asset ? asset->dp : NULL);
 	    profile.largestAssetBytes = std::max(profile.largestAssetBytes,
 		encodedBytes);
@@ -15635,7 +15766,7 @@ compact_stream_publish_parallel_coverage(
 		continue;
 	    profile.uniqueAssetCount++;
 	    const uint64_t encodedBytes =
-		compact_coverage_encoded_source_bytes(source->getDatabase(),
+		database_source_encoded_source_bytes(source->getDatabase(),
 		    asset->dp);
 	    profile.largestAssetBytes = std::max(
 		profile.largestAssetBytes, encodedBytes);

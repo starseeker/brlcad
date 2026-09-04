@@ -98,6 +98,35 @@ test_control_transition_journal(void)
 	    records.front().after.convergence.policyRevision,
 	"policy publication is a named external-input transition");
 
+    controller.setLodControlTransitionTracing(FALSE);
+    controller.setLodControlTransitionTracing(TRUE, 64);
+    records.clear();
+    (void)controller.drainLodControlTransitions(records);
+    records.clear();
+    {
+	BObolLodControlTransitionScope transaction(
+	    &controller, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
+	controller.setLodPolicyRevision(
+	    controller.getLodPolicyRevision() + 1);
+	controller.markProgressiveWorkPending();
+    }
+    CHECK(controller.drainLodControlTransitions(records) == 1 &&
+	records.size() == 1 &&
+	records[0].event == BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT,
+	"nested helpers commit as one outer control transaction");
+
+    BObolViewController externalController;
+    externalController.setLodControlTransitionTracing(TRUE, 64);
+    records.clear();
+    (void)externalController.drainLodControlTransitions(records);
+    records.clear();
+    externalController.requestExactCadPresentationRender(
+	"trace-external-style");
+    CHECK(externalController.drainLodControlTransitions(records) == 1 &&
+	records.size() == 1 &&
+	records[0].event == BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT,
+	"application exact-presentation requests are explicit input edges");
+
     static constexpr unsigned int randomizedTransitionCount = 512;
     static constexpr uint32_t randomizedSeedMultiplier = 1664525u;
     static constexpr uint32_t randomizedSeedIncrement = 1013904223u;

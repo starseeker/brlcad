@@ -363,6 +363,8 @@ BObolViewLodState::CadPayload::CadPayload(void) :
     qualityTier(BOBOL_LOD_QUALITY_METADATA),
     providerStatus(BOBOL_LOD_PROVIDER_UNKNOWN),
     drawMode(BOBOL_LOD_DRAW_UNKNOWN),
+    normalStyle(BOBOL_LOD_NORMAL_AUTHORED),
+    normalCreaseAngle(60.0f),
     activeCut(-1),
     residentCut(-1),
     requestedCut(-1),
@@ -2053,6 +2055,8 @@ BObolViewLodState::applySourceResultInternal(
     payload->qualityTier = result.qualityTier;
     payload->providerStatus = result.providerStatus;
     payload->drawMode = result.request.drawMode;
+    payload->normalStyle = result.request.normalStyle;
+    payload->normalCreaseAngle = result.request.normalCreaseAngle;
     payload->activeCut = result.geometry.activeCut;
     payload->residentCut = result.residentCut;
     payload->requestedCut = result.resolvedCut >= 0 ?
@@ -3258,6 +3262,17 @@ BObolViewLodState::retargetCadPayload(
 	return FALSE;
     const bool layeredPresentation = target &&
 	!target->presentationLayers.empty();
+    const bool normalPresentationMismatch = layeredPresentation &&
+	(target->normalStyle != demand.normalStyle ||
+	 (demand.normalStyle == BOBOL_LOD_NORMAL_SMOOTH &&
+	  !view_lod_float_bits_equal(target->normalCreaseAngle,
+	      demand.normalCreaseAngle)));
+    /* Page geometry is canonicalized for one normal policy.  A cut-only
+     * retarget may select a prefix of those immutable arrays, but it must not
+     * relabel them as a different flat/smooth presentation.  The provider
+     * prepares and atomically publishes the requested variant. */
+    if (normalPresentationMismatch)
+	return FALSE;
     const bool retainedPageSet = target &&
 	target->requiredChunks == demand.requiredChunks;
     /* A lower prefix of the currently presented cumulative PoP generation
@@ -5499,9 +5514,18 @@ BObolViewLodState::applyResidentMeshCompaction(
 		    payload->progressiveMesh, payload->requiredChunks,
 		    payload->activeCut))
 		payload->presentedChunks = payload->requiredChunks;
+	} else if (!payload->presentationLayers.empty() &&
+	    view_lod_progressive_can_draw(
+		payload->progressiveMesh, payload->requiredChunks,
+		payload->activeCut)) {
+	    /*
+	     * Page layers own their renderer arrays.  A resident trim therefore
+	     * cannot invalidate a still-admitted view presentation, and preserving
+	     * it avoids both a box fallback and an accidental normal-style change.
+	     */
+	    payload->preparedCadGeometry.reset();
+	    payload->preparedCadGeometryRevision = 0;
 	} else {
-	    /* Release the retired generation even when a non-authored normal
-	     * mode must prepare its replacement later. */
 	    payload->preparedCadGeometry.reset();
 	    payload->preparedCadGeometryRevision = 0;
 	    payload->presentationLayers.clear();

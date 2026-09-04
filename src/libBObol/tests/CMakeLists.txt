@@ -8,6 +8,14 @@ if(TARGET havoc.g)
 endif(TARGET havoc.g)
 set_property(TEST libBObol_prototype APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 
+# This manually-invoked qualification executable recursively audits every
+# named primitive and combination in one or more database files/directories.
+# It is intentionally not a default CTest: the installed corpus grows over
+# time, and exercising every nested draw root in both modes is unbounded work.
+brlcad_addexec(test_bobol_database_draw_corpus
+  test_database_draw_corpus.cpp
+  "libBObol;librt;libbu;Obol::Obol" TEST ALL_CXX)
+
 brlcad_find_package(OSMESA REQUIRED)
 brlcad_addexec(test_bobol_render test_render.cpp "libBObol;libbu;Obol::Obol;${OSMESA_LIBRARY}" TEST ALL_CXX)
 target_include_directories(test_bobol_render SYSTEM PRIVATE ${OSMESA_INCLUDE_DIR} ${BOBOL_OPENGL_INCLUDE_DIRS})
@@ -61,6 +69,13 @@ set_source_files_properties(
 target_include_directories(test_bobol_lod_coordinator PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/..)
 brlcad_add_test(NAME libBObol_lod_coordinator COMMAND test_bobol_lod_coordinator)
+
+brlcad_addexec(test_bobol_lod_progress_estimator
+  test_lod_progress_estimator.cpp "libbu" TEST ALL_CXX)
+target_include_directories(test_bobol_lod_progress_estimator PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/..)
+brlcad_add_test(NAME libBObol_lod_progress_estimator
+  COMMAND test_bobol_lod_progress_estimator)
 
 brlcad_addexec(test_bobol_model_conformance test_model_conformance.cpp
   "libBObol;libbu;Obol::Obol" TEST ALL_CXX)
@@ -224,6 +239,7 @@ set(_bobol_headless_tests
   libBObol_lod_realization
   libBObol_lod_service
   libBObol_lod_coordinator
+  libBObol_lod_progress_estimator
   libBObol_compact_occurrence_stream
   libBObol_source_realization
   libBObol_lod_update_action
@@ -257,6 +273,7 @@ set(_bobol_sanitizer_tests
   libBObol_lod_service
   libBObol_lod_update_action
   libBObol_lod_coordinator
+  libBObol_lod_progress_estimator
   libBObol_compact_occurrence_stream
   libBObol_source_realization
   libBObol_draw_cache
@@ -279,6 +296,7 @@ set(_bobol_sanitizer_targets
   test_bobol_lod_service
   test_bobol_lod_update_action
   test_bobol_lod_coordinator
+  test_bobol_lod_progress_estimator
   test_bobol_compact_occurrence_stream
   test_bobol_source_realization
   test_bobol_draw_cache
@@ -304,6 +322,7 @@ cmakefiles(
   test_image_source.cpp
   test_lod_realization.cpp
   test_lod_coordinator.cpp
+  test_lod_progress_estimator.cpp
   model_conformance_harness_private.h
   model_trace_refinement_checker_private.h
   test_model_conformance.cpp

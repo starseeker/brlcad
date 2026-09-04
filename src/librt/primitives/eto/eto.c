@@ -45,6 +45,37 @@
 
 static int eto_is_valid(struct rt_eto_internal *eto);
 
+/* Resolve the cross-section direction without acos().  Parallel C and N
+ * vectors are valid, but their independently rounded dot product and length
+ * can otherwise put acos's input just outside [-1, 1] and inject NaNs into
+ * wire plots, tessellations, labels, and ray-preparation state. */
+static void
+eto_frame_components(const vect_t c, const vect_t unit_n, fastf_t *horizontal,
+	fastf_t *vertical, fastf_t *cosine, fastf_t *sine)
+{
+    const fastf_t magnitude = MAGNITUDE(c);
+    const fastf_t vertical_component = VDOT(c, unit_n);
+    const fastf_t horizontal_squared =
+	magnitude * magnitude - vertical_component * vertical_component;
+    const fastf_t horizontal_component = horizontal_squared > 0.0 ?
+	sqrt(horizontal_squared) : 0.0;
+    fastf_t direction_cosine = magnitude > SMALL_FASTF ?
+	vertical_component / magnitude : 0.0;
+    if (direction_cosine > 1.0)
+	direction_cosine = 1.0;
+    else if (direction_cosine < -1.0)
+	direction_cosine = -1.0;
+
+    if (horizontal)
+	*horizontal = horizontal_component;
+    if (vertical)
+	*vertical = vertical_component;
+    if (cosine)
+	*cosine = direction_cosine;
+    if (sine)
+	*sine = magnitude > SMALL_FASTF ? horizontal_component / magnitude : 0.0;
+}
+
 /*
  * The ETO has the following input fields:
  *  V	V from origin to center.
@@ -263,8 +294,8 @@ rt_eto_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
 {
     struct eto_specific *eto;
 
-    vect_t Au, Bu, Cu, Nu;
-    fastf_t ch, cv, dh, phi;
+    vect_t Au, Bu, Nu;
+    fastf_t ch, cv, dh, cos_phi, sin_phi;
     struct rt_eto_internal *tip;
 
     if (rtip) RT_CK_RTI(rtip);
@@ -290,15 +321,9 @@ rt_eto_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
     bn_vec_ortho(Bu, Nu);	/* x axis */
     VUNITIZE(Bu);
     VCROSS(Au, Nu, Bu);	/* y axis */
-    VMOVE(Cu, tip->eto_C);
-    VUNITIZE(Cu);
-
     /* get horizontal and vertical components of C and Rd */
-    cv = VDOT(eto->eto_C, Nu);
-    ch = sqrt(VDOT(eto->eto_C, eto->eto_C) - cv * cv);
-    /* angle between C and Nu */
-    phi = acos(cv / eto->eto_rc);
-    dh = eto->eto_rd * cos(phi);
+    eto_frame_components(eto->eto_C, Nu, &ch, &cv, &cos_phi, &sin_phi);
+    dh = eto->eto_rd * cos_phi;
     /* make sure ellipse doesn't overlap itself when revolved */
     if (ch > eto->eto_r || dh > eto->eto_r) {
 	bu_log("eto(%s): revolved ellipse overlaps itself\n",
@@ -306,8 +331,8 @@ rt_eto_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
 	return 1;
     }
 
-    eto->ev = fabs(VDOT(Cu, Nu));	/* vertical component of Cu */
-    eto->eu = sqrt(1.0 - eto->ev * eto->ev);	/* horiz component */
+    eto->ev = fabs(cos_phi);	/* vertical component of Cu */
+    eto->eu = sin_phi;		/* horizontal component */
     eto->fu = -eto->ev;
     eto->fv =  eto->eu;
 
@@ -769,7 +794,7 @@ rt_eto_norm(struct hit *hitp, struct soltab *stp, struct xray *rp)
 void
 rt_eto_curve(struct curvature *cvp, struct hit *hitp, struct soltab *stp)
 {
-    fastf_t a, b, ch, cv, dh, dv, k_circ, k_ell, phi, rad, xp,
+    fastf_t a, b, ch, cv, dh, dv, cos_phi, sin_phi, k_circ, k_ell, rad, xp,
 	yp1, yp2, work;
     struct eto_specific *eto =
 	(struct eto_specific *)stp->st_specific;
@@ -786,12 +811,9 @@ rt_eto_curve(struct curvature *cvp, struct hit *hitp, struct soltab *stp)
     VSCALE(Radius, Ru, eto->eto_r);
 
     /* get horizontal and vertical components of C and Rd */
-    cv = VDOT(eto->eto_C, Nu);
-    ch = sqrt(VDOT(eto->eto_C, eto->eto_C) - cv * cv);
-    /* angle between C and Nu */
-    phi = acos(cv / MAGNITUDE(eto->eto_C));
-    dv = eto->eto_rd * sin(phi);
-    dh = -eto->eto_rd * cos(phi);
+    eto_frame_components(eto->eto_C, Nu, &ch, &cv, &cos_phi, &sin_phi);
+    dv = eto->eto_rd * sin_phi;
+    dh = -eto->eto_rd * cos_phi;
 
     /* build coord system for ellipse: x, y directions are Dp, Cp */
     VCOMB2(Cp, ch, Ru, cv, Nu);
@@ -1102,8 +1124,8 @@ rt_eto_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
     struct rt_eto_internal *eto;
     fastf_t radian, radian_step;
     vect_t ellipse_A, ellipse_B, contour_A, contour_B, I, J;
-    vect_t center, cross_AN, eto_V, eto_N, eto_A, eto_B;
-    fastf_t mag_N, mag_ai, mag_aj, mag_bi, mag_bj;
+    vect_t center, eto_V, eto_A, eto_B;
+    fastf_t mag_ai, mag_aj, mag_bi, mag_bj;
     int i, num_cross_sections, points_per_ellipse;
 
     if (!realization)
@@ -1119,24 +1141,7 @@ rt_eto_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
 
     VMOVE(eto_V, eto->eto_V);
 
-    VMOVE(eto_N, eto->eto_N);
-    mag_N = MAGNITUDE(eto_N);
-
     VMOVE(ellipse_A, eto->eto_C);
-
-    VCROSS(cross_AN, ellipse_A, eto_N);
-
-    VCROSS(ellipse_B, ellipse_A, cross_AN);
-    VUNITIZE(ellipse_B);
-    VSCALE(ellipse_B, ellipse_B, eto->eto_rd);
-
-    VCROSS(eto_A, eto_N, cross_AN);
-    VUNITIZE(eto_A);
-    VSCALE(eto_A, eto_A, eto->eto_r);
-
-    VCROSS(eto_B, eto_N, eto_A);
-    VUNITIZE(eto_B);
-    VSCALE(eto_B, eto_B, eto->eto_r);
 
     /* We want to be able to plot any of the ellipses that result from
      * intersecting the eto with a plane containing N. The center point of any
@@ -1153,13 +1158,26 @@ rt_eto_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
      * The scalars ai, aj, bi, and bj are the scalar projections of A onto I,
      * A onto J,and B onto I, and B onto J respectively.
      */
-    VMOVE(I, eto_A);
-    VMOVE(J, eto_N);
-    VUNITIZE(I);
+    VMOVE(J, eto->eto_N);
     VUNITIZE(J);
 
-    mag_ai = VDOT(ellipse_A, I);
-    mag_aj = VDOT(ellipse_A, J);
+    eto_frame_components(ellipse_A, J, &mag_ai, &mag_aj, NULL, NULL);
+    VJOIN1(I, ellipse_A, -mag_aj, J);
+    if (MAGNITUDE(I) <= SMALL_FASTF)
+	bn_vec_ortho(I, J);
+    VUNITIZE(I);
+
+    VSCALE(eto_A, I, eto->eto_r);
+    VCROSS(eto_B, J, I);
+    VUNITIZE(eto_B);
+    VSCALE(eto_B, eto_B, eto->eto_r);
+
+    /* The minor cross-section axis lies in the radial/normal plane and is
+     * perpendicular to C.  Constructing it from scalar components remains
+     * defined when C is exactly parallel to N, unlike C x (C x N). */
+    VCOMB2(ellipse_B, mag_aj, I, -mag_ai, J);
+    VUNITIZE(ellipse_B);
+    VSCALE(ellipse_B, ellipse_B, eto->eto_rd);
     mag_bi = VDOT(ellipse_B, I);
     mag_bj = VDOT(ellipse_B, J);
 
@@ -1173,13 +1191,13 @@ rt_eto_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
 	points_per_ellipse = 6;
     }
 
-    VJOIN1(center, eto_V, mag_aj / mag_N, eto_N);
+    VJOIN1(center, eto_V, mag_aj, J);
     if (!primitive_lod_append_ellipse(realization, center, contour_A,
 		contour_B, points_per_ellipse))
 	return -1;
 
     eto_contour_axes(contour_A, contour_B, eto_A, eto_B, -mag_ai);
-    VJOIN1(center, eto_V, -mag_aj / mag_N, eto_N);
+    VJOIN1(center, eto_V, -mag_aj, J);
     if (!primitive_lod_append_ellipse(realization, center, contour_A,
 		contour_B, points_per_ellipse))
 	return -1;
@@ -1193,13 +1211,13 @@ rt_eto_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
 	points_per_ellipse = 6;
     }
 
-    VJOIN1(center, eto_V, mag_bj / mag_N, eto_N);
+    VJOIN1(center, eto_V, mag_bj, J);
     if (!primitive_lod_append_ellipse(realization, center, contour_A,
 		contour_B, points_per_ellipse))
 	return -1;
 
     eto_contour_axes(contour_A, contour_B, eto_A, eto_B, -mag_bi);
-    VJOIN1(center, eto_V, -mag_bj / mag_N, eto_N);
+    VJOIN1(center, eto_V, -mag_bj, J);
     if (!primitive_lod_append_ellipse(realization, center, contour_A,
 		contour_B, points_per_ellipse))
 	return -1;
@@ -1300,7 +1318,7 @@ rt_eto_standard_line_set(struct eto_line_sink *sink, struct rt_db_internal *ip,
 			 const struct bg_tess_tol *ttol)
 {
     fastf_t a, b;	/* axis lengths of ellipse */
-    fastf_t ang, ch, cv, dh, dv, ntol, dtol, phi, theta;
+    fastf_t ang, ch, cv, dh, dv, cos_phi, sin_phi, ntol, dtol, theta;
     fastf_t *eto_ells = NULL;
     int i, j, npts, nells;
     point_t *ell = NULL;	/* array of ellipse points */
@@ -1366,12 +1384,9 @@ rt_eto_standard_line_set(struct eto_line_sink *sink, struct rt_db_internal *ip,
     nells = rt_num_circular_segments(dtol, tip->eto_r);
     theta = M_2PI / nells;	/* put ellipse every theta rads */
     /* get horizontal and vertical components of C and Rd */
-    cv = VDOT(tip->eto_C, Nu);
-    ch = sqrt(VDOT(tip->eto_C, tip->eto_C) - cv * cv);
-    /* angle between C and Nu */
-    phi = acos(cv / MAGNITUDE(tip->eto_C));
-    dv = tip->eto_rd * sin(phi);
-    dh = -tip->eto_rd * cos(phi);
+    eto_frame_components(tip->eto_C, Nu, &ch, &cv, &cos_phi, &sin_phi);
+    dv = tip->eto_rd * sin_phi;
+    dh = -tip->eto_rd * cos_phi;
 
     /* make sure ellipse doesn't overlap itself when revolved */
     if (ch > tip->eto_r || dh > tip->eto_r) {
@@ -1435,7 +1450,8 @@ rt_eto_standard_line_set(struct eto_line_sink *sink, struct rt_db_internal *ip,
 int
 rt_eto_wireframe_line_set(struct rt_primitive_lod_realization *realization,
 			  struct rt_db_internal *ip,
-			  const struct bg_tess_tol *ttol)
+			  const struct bg_tess_tol *ttol,
+			  const struct bn_tol *UNUSED(tol))
 {
     struct eto_line_sink sink;
 
@@ -1477,7 +1493,7 @@ rt_eto_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, co
 {
     fastf_t a, b;	/* axis lengths of ellipse */
     fastf_t eto_r_eff;	/* effective rotation radius (fabs of eto_r) */
-    fastf_t ang, ch, cv, dh, dv, ntol, dtol, phi, theta;
+    fastf_t ang, ch, cv, dh, dv, cos_phi, sin_phi, ntol, dtol, theta;
     fastf_t *eto_ells = NULL;
     int i, j, k, nfaces, npts, nells;
     point_t *ell = NULL;	/* array of ellipse points */
@@ -1666,12 +1682,9 @@ rt_eto_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, co
     }
     theta = M_2PI / nells;	/* put ellipse every theta rads */
     /* get horizontal and vertical components of C and Rd */
-    cv = VDOT(tip->eto_C, Nu);
-    ch = sqrt(VDOT(tip->eto_C, tip->eto_C) - cv * cv);
-    /* angle between C and Nu */
-    phi = acos(cv / MAGNITUDE(tip->eto_C));
-    dv = tip->eto_rd * sin(phi);
-    dh = -tip->eto_rd * cos(phi);
+    eto_frame_components(tip->eto_C, Nu, &ch, &cv, &cos_phi, &sin_phi);
+    dv = tip->eto_rd * sin_phi;
+    dh = -tip->eto_rd * cos_phi;
 
     /* When the cross-section ellipse overlaps the symmetry axis during
      * revolution (self-intersecting case), generate only the outer surface
@@ -2235,16 +2248,12 @@ rt_eto_params(struct pc_pc_set *ps, const struct rt_db_internal *ip)
 static int
 eto_is_self_intersecting(const struct rt_eto_internal *tip)
 {
-    fastf_t Nu[3], cv, ch_sq, ch, mag_c, cos_phi, dh, r_min_reach;
+    fastf_t Nu[3], ch, cos_phi, dh, r_min_reach;
 
     VMOVE(Nu, tip->eto_N);
     VUNITIZE(Nu);
-    cv   = VDOT(tip->eto_C, Nu);
-    ch_sq = MAGSQ(tip->eto_C) - cv * cv;
-    ch   = (ch_sq > 0.0) ? sqrt(ch_sq) : 0.0;
-    mag_c = MAGNITUDE(tip->eto_C);
-    if (mag_c < SMALL_FASTF) return 0;
-    cos_phi = fabs(cv / mag_c);
+    eto_frame_components(tip->eto_C, Nu, &ch, NULL, &cos_phi, NULL);
+    cos_phi = fabs(cos_phi);
     dh = tip->eto_rd * cos_phi;
     r_min_reach = sqrt(dh * dh + ch * ch);
     return (r_min_reach > tip->eto_r) ? 1 : 0;
@@ -2345,7 +2354,7 @@ rt_eto_labels(struct rt_point_labels *pl, int pl_max, const mat_t xform, const s
     pl[npl].str[0] = _char; \
     pl[npl++].str[1] = '\0'; }
 
-    fastf_t ch, cv, dh, dv, cmag, phi;
+    fastf_t ch, cv, dh, dv, cos_phi, sin_phi;
     vect_t Au, Nu;
 
     MAT4X3PNT(pos_view, xform, eto->eto_V);
@@ -2356,14 +2365,10 @@ rt_eto_labels(struct rt_point_labels *pl, int pl_max, const mat_t xform, const s
     bn_vec_ortho(Au, Nu);
     VUNITIZE(Au);
 
-    cmag = MAGNITUDE(eto->eto_C);
     /* get horizontal and vertical components of C and Rd */
-    cv = VDOT(eto->eto_C, Nu);
-    ch = sqrt(cmag*cmag - cv*cv);
-    /* angle between C and Nu */
-    phi = acos(cv / cmag);
-    dv = -eto->eto_rd * sin(phi);
-    dh = eto->eto_rd * cos(phi);
+    eto_frame_components(eto->eto_C, Nu, &ch, &cv, &cos_phi, &sin_phi);
+    dv = -eto->eto_rd * sin_phi;
+    dh = eto->eto_rd * cos_phi;
 
     VJOIN2(work, eto->eto_V, eto->eto_r+ch, Au, cv, Nu);
     MAT4X3PNT(pos_view, xform, work);

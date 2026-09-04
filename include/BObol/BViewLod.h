@@ -253,6 +253,8 @@ public:
 	int qualityTier;
 	int providerStatus;
 	int drawMode;
+	int normalStyle;
+	float normalCreaseAngle;
 	int activeCut;
 	int residentCut;
 	int requestedCut;

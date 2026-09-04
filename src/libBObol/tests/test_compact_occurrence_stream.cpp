@@ -46,6 +46,13 @@ test_priority_and_state(void)
 	std::fprintf(stderr, "FAIL: bounded preparation work rank\n");
 	return 1;
     }
+    stream.setPreparationWorkCount(100000);
+    stream.completePreparationWork();
+    stream.getPreparationWorkCount(preparationCompleted, preparationTotal);
+    if (preparationCompleted != 100000 || preparationTotal != 100000) {
+	std::fprintf(stderr, "FAIL: post-walk preparation closure\n");
+	return 1;
+    }
     BObolCompactSourceProfile profile;
     profile.valid = TRUE;
     profile.occurrenceCount = 100000;

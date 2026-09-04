@@ -67,7 +67,7 @@
 
 #define POP_CUT_COUNT_MAX BOBOL_MESH_LOD_CUT_COUNT_MAX
 #define POP_CACHEDIR BOBOL_DRAW_CACHE_DIR
-#define CACHE_CURRENT_FORMAT 23
+#define CACHE_CURRENT_FORMAT 24
 
 /* A spatial-cache seed page is an interruption-safe local mesh diagnostic,
  * not a complete source presentation.  Keep it small; the separately
@@ -374,6 +374,7 @@ static_assert(sizeof(BObolSpatialFaceDisk) == 8,
 struct BObolPreparedMeshLodChunk {
     struct BObolMeshLodChunkInfo info = {};
     std::vector<fastf_t> points;
+    std::vector<uint32_t> sourceVertexIds;
     std::vector<uint32_t> faces;
     std::vector<fastf_t> normals;
     std::vector<unsigned char> bytes;
@@ -2685,9 +2686,9 @@ BObolPopState::initializeGeneration(
     if (!userKey) {
 	generationFailureReason = "source hashing";
 	struct bu_data_hash_state *state = bu_data_hash_create();
-	static const char prefixSemantics[] = "BObol-chunked-PoP-format-23";
+	static const char prefixSemantics[] = "BObol-chunked-PoP-format-24";
 	static const char spatialSemantics[] =
-	    "BObol-spatial-leaf-producer-v2";
+	    "BObol-spatial-leaf-producer-v3";
 	bu_data_hash_update(state, prefixSemantics, sizeof(prefixSemantics));
 	if (spatialLeafRequested)
 	    bu_data_hash_update(state, spatialSemantics, sizeof(spatialSemantics));
@@ -3854,6 +3855,7 @@ BObolPopState::readChunks(const uint32_t *chunkIds, size_t requestedCount,
     }
 
     std::vector<fastf_t> pointStorage;
+    std::vector<uint32_t> sourceVertexIdStorage;
     std::vector<uint32_t> faceStorage;
     std::vector<fastf_t> normalStorage;
     for (size_t requested = 0; requested < requestedCount; ++requested) {
@@ -3861,7 +3863,7 @@ BObolPopState::readChunks(const uint32_t *chunkIds, size_t requestedCount,
 	const BObolMeshLodChunkInfo &info = chunkInfos[chunkId];
 	if (cut < info.min_cut) {
 	    if (!callback(chunkId, cut, NULL, 0, NULL, 0, NULL, 0,
-		    callbackData)) {
+		    NULL, 0, callbackData)) {
 		cacheDone();
 		return false;
 	    }
@@ -3909,8 +3911,8 @@ BObolPopState::readChunks(const uint32_t *chunkIds, size_t requestedCount,
 	uint32_t flags = 0;
 	uint32_t fullPoints = 0;
 	uint32_t fullFaces = 0;
-	uint32_t reservedA = 1;
-	uint32_t reservedB = 1;
+	uint32_t sourceVertexCount = 0;
+	uint32_t reserved = 1;
 	double bounds[6] = {};
 	if (!read(magic, sizeof(magic)) ||
 	    !read(&version, sizeof(version)) ||
@@ -3919,13 +3921,13 @@ BObolPopState::readChunks(const uint32_t *chunkIds, size_t requestedCount,
 	    !read(&flags, sizeof(flags)) ||
 	    !read(&fullPoints, sizeof(fullPoints)) ||
 	    !read(&fullFaces, sizeof(fullFaces)) ||
-	    !read(&reservedA, sizeof(reservedA)) ||
-	    !read(&reservedB, sizeof(reservedB)) ||
+	    !read(&sourceVertexCount, sizeof(sourceVertexCount)) ||
+	    !read(&reserved, sizeof(reserved)) ||
 	    !read(bounds, sizeof(bounds)) ||
 	    memcmp(magic, meshLodChunkMagic, sizeof(magic)) != 0 ||
-	    version != 1 || diskChunk != chunkId ||
+	    version != 2 || diskChunk != chunkId ||
 	    diskCutCount != cutCount || flags > 1 ||
-	    (flags != 0) != hasNormals || reservedA || reservedB ||
+	    (flags != 0) != hasNormals || !sourceVertexCount || reserved ||
 	    fullPoints != terminal.point_count ||
 	    fullFaces != terminal.face_count)
 	    goto chunk_read_failed;
@@ -3944,20 +3946,25 @@ BObolPopState::readChunks(const uint32_t *chunkIds, size_t requestedCount,
 	{
 	    const uint64_t pointBytes =
 		static_cast<uint64_t>(fullPoints) * 3u * sizeof(double);
+	    const uint64_t sourceVertexIdBytes =
+		static_cast<uint64_t>(fullPoints) * sizeof(uint32_t);
 	    const uint64_t indexBytes =
 		static_cast<uint64_t>(fullFaces) * 3u * sizeof(uint32_t);
 	    const uint64_t normalBytes = hasNormals ?
 		static_cast<uint64_t>(fullFaces) * 9u * sizeof(double) : 0;
 	    const uint64_t expected = static_cast<uint64_t>(offset) +
-		pointBytes + indexBytes + normalBytes;
+		pointBytes + sourceVertexIdBytes + indexBytes + normalBytes;
 	    if (expected != recordSize || expected > SIZE_MAX)
 		goto chunk_read_failed;
 	    const size_t pointOffset = offset;
-	    const size_t indexOffset = pointOffset +
+	    const size_t sourceVertexIdOffset = pointOffset +
 		static_cast<size_t>(pointBytes);
+	    const size_t indexOffset = sourceVertexIdOffset +
+		static_cast<size_t>(sourceVertexIdBytes);
 	    const size_t normalOffset = indexOffset +
 		static_cast<size_t>(indexBytes);
 	    pointStorage.resize(static_cast<size_t>(selected.point_count) * 3);
+	    sourceVertexIdStorage.resize(selected.point_count);
 	    faceStorage.resize(static_cast<size_t>(selected.face_count) * 3);
 	    normalStorage.resize(hasNormals ?
 		static_cast<size_t>(selected.face_count) * 9 : 0);
@@ -3971,6 +3978,12 @@ BObolPopState::readChunks(const uint32_t *chunkIds, size_t requestedCount,
 		    goto chunk_read_failed;
 		pointStorage[scalar] = static_cast<fastf_t>(value);
 	    }
+	    memcpy(sourceVertexIdStorage.data(),
+		record + sourceVertexIdOffset,
+		sourceVertexIdStorage.size() * sizeof(sourceVertexIdStorage[0]));
+	    for (uint32_t sourceVertexId : sourceVertexIdStorage)
+		if (static_cast<size_t>(sourceVertexId) >= sourceVertexCount)
+		    goto chunk_read_failed;
 	    memcpy(faceStorage.data(), record + indexOffset,
 		faceStorage.size() * sizeof(faceStorage[0]));
 	    for (uint32_t index : faceStorage)
@@ -3987,7 +4000,9 @@ BObolPopState::readChunks(const uint32_t *chunkIds, size_t requestedCount,
 	}
 	if (!callback(chunkId, cut,
 		reinterpret_cast<const point_t *>(pointStorage.data()),
-		selected.point_count, faceStorage.data(), selected.face_count,
+		selected.point_count, sourceVertexIdStorage.data(),
+		sourceVertexIdStorage.size(), faceStorage.data(),
+		selected.face_count,
 		normalStorage.empty() ? NULL :
 		    reinterpret_cast<const vect_t *>(normalStorage.data()),
 		normalStorage.empty() ? 0 :
@@ -4839,6 +4854,7 @@ BObolPopState::prepareChunk(uint32_t chunkId,
 	    cutInfo.point_count = static_cast<uint32_t>(cumulativePoints);
 	    cutInfo.face_count = static_cast<uint32_t>(cumulativeFaces);
 	    uint64_t bytes = cumulativePoints * 3u * sizeof(float) +
+		cumulativePoints * sizeof(uint32_t) +
 		cumulativeFaces * 3u * sizeof(uint32_t);
 	    if (hasNormals)
 		bytes += cumulativeFaces * 9u * sizeof(float);
@@ -4854,6 +4870,7 @@ BObolPopState::prepareChunk(uint32_t chunkId,
 	 * the optional live callback.  The former three independent passes were
 	 * the dominant serial cost after spatial classification was parallelized. */
 	std::vector<fastf_t> pagePoints;
+	std::vector<uint32_t> pageSourceVertexIds;
 	std::vector<uint32_t> pageFaces;
 	std::vector<fastf_t> pageNormals;
 	if (cumulativePoints > SIZE_MAX / 3u ||
@@ -4862,6 +4879,7 @@ BObolPopState::prepareChunk(uint32_t chunkId,
 	    return false;
 	try {
 	    pagePoints.reserve(static_cast<size_t>(cumulativePoints) * 3u);
+	    pageSourceVertexIds.reserve(static_cast<size_t>(cumulativePoints));
 	    pageFaces.reserve(static_cast<size_t>(cumulativeFaces) * 3u);
 	    if (hasNormals)
 		pageNormals.reserve(static_cast<size_t>(cumulativeFaces) * 9u);
@@ -4883,6 +4901,7 @@ BObolPopState::prepareChunk(uint32_t chunkId,
 		point_t point;
 		if (!reader.point(sourceVertex, point))
 		    return false;
+		pageSourceVertexIds.push_back(sourceVertex);
 		for (size_t axis = 0; axis < 3; ++axis) {
 		    pageMinimum[axis] = std::min(pageMinimum[axis],
 			static_cast<double>(point[axis]));
@@ -4926,6 +4945,8 @@ BObolPopState::prepareChunk(uint32_t chunkId,
 	    }
 	}
 	if (pagePoints.size() != static_cast<size_t>(cumulativePoints) * 3u ||
+	    pageSourceVertexIds.size() !=
+		static_cast<size_t>(cumulativePoints) ||
 	    pageFaces.size() != static_cast<size_t>(cumulativeFaces) * 3u ||
 	    (hasNormals && pageNormals.size() !=
 		static_cast<size_t>(cumulativeFaces) * 9u))
@@ -4940,17 +4961,23 @@ BObolPopState::prepareChunk(uint32_t chunkId,
 	const uint64_t normalScalarCount = hasNormals ? cumulativeFaces * 9u : 0;
 	const uint64_t expected = 88u +
 	    static_cast<uint64_t>(POP_CUT_COUNT_MAX) * 2u * sizeof(uint32_t) +
-	    pointScalarCount * sizeof(double) + indexCount * sizeof(uint32_t) +
+	    pointScalarCount * sizeof(double) +
+	    cumulativePoints * sizeof(uint32_t) +
+	    indexCount * sizeof(uint32_t) +
 	    normalScalarCount * sizeof(double);
 	if (expected > SIZE_MAX)
 	    return false;
 	bytes.reserve(static_cast<size_t>(expected));
-	const uint32_t diskVersion = 1;
+	const uint32_t diskVersion = 2;
 	const uint32_t diskChunk = chunkId;
 	const uint32_t diskCutCount = cutCount;
 	const uint32_t diskFlags = hasNormals ? 1u : 0u;
 	const uint32_t diskPointCount = static_cast<uint32_t>(cumulativePoints);
 	const uint32_t diskFaceCount = static_cast<uint32_t>(cumulativeFaces);
+	if (vertexCount > UINT32_MAX)
+	    return false;
+	const uint32_t diskSourceVertexCount =
+	    static_cast<uint32_t>(vertexCount);
 	const uint32_t reserved = 0;
 	const double bounds[6] = {
 	    static_cast<double>(info.bmin[X]),
@@ -4970,7 +4997,8 @@ BObolPopState::prepareChunk(uint32_t chunkId,
 		sizeof(diskPointCount)) ||
 	    !mesh_lod_chunk_append(bytes, &diskFaceCount,
 		sizeof(diskFaceCount)) ||
-	    !mesh_lod_chunk_append(bytes, &reserved, sizeof(reserved)) ||
+	    !mesh_lod_chunk_append(bytes, &diskSourceVertexCount,
+		sizeof(diskSourceVertexCount)) ||
 	    !mesh_lod_chunk_append(bytes, &reserved, sizeof(reserved)) ||
 	    !mesh_lod_chunk_append(bytes, bounds, sizeof(bounds)))
 	    return false;
@@ -4986,6 +5014,9 @@ BObolPopState::prepareChunk(uint32_t chunkId,
 	}
 	if (!mesh_lod_chunk_append_vectors(bytes, pagePoints))
 	    return false;
+	if (!mesh_lod_chunk_append(bytes, pageSourceVertexIds.data(),
+		pageSourceVertexIds.size() * sizeof(pageSourceVertexIds[0])))
+	    return false;
 	if (!mesh_lod_chunk_append(bytes, pageFaces.data(),
 		pageFaces.size() * sizeof(uint32_t)))
 	    return false;
@@ -4997,6 +5028,7 @@ BObolPopState::prepareChunk(uint32_t chunkId,
 
     prepared.info = info;
     prepared.points = std::move(pagePoints);
+    prepared.sourceVertexIds = std::move(pageSourceVertexIds);
     prepared.faces = std::move(pageFaces);
     prepared.normals = std::move(pageNormals);
     prepared.bytes = std::move(bytes);
@@ -5010,6 +5042,7 @@ BObolPopState::publishChunk(BObolPreparedMeshLodChunk &&prepared)
     const size_t pagePointCount = prepared.points.size() / 3u;
     const size_t pageFaceCount = prepared.faces.size() / 3u;
     if (!pagePointCount || !pageFaceCount || prepared.points.size() % 3u ||
+	prepared.sourceVertexIds.size() != pagePointCount ||
 	prepared.faces.size() % 3u ||
 	(hasNormals && prepared.normals.size() != pageFaceCount * 9u) ||
 	prepared.bytes.empty())
@@ -5061,6 +5094,8 @@ BObolPopState::publishChunk(BObolPreparedMeshLodChunk &&prepared)
 	    page.data.point_count = pagePointCount;
 	    page.data.points_orig = page.data.points;
 	    page.data.point_orig_count = page.data.point_count;
+	    page.data.source_vertex_ids = prepared.sourceVertexIds.data();
+	    page.data.source_vertex_id_count = pagePointCount;
 	    page.data.normals = hasNormals ?
 		reinterpret_cast<const vect_t *>(prepared.normals.data()) : NULL;
 	    page.data.normal_count = hasNormals ? pageFaceCount * 3u : 0;
@@ -5951,8 +5986,12 @@ bobol_mesh_lod_cache_invalidate(struct db_i *dbip,
 	return BRLCAD_ERROR;
 
     struct BObolMeshLodContext *context = mesh_lod_context_create_for_db(dbip);
-    if (!context)
+    if (!context) {
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	    bu_log("[obol-timing] pop cache invalidate unavailable for %s: "
+		   "cache context is unavailable\n", name);
 	return BRLCAD_ERROR;
+    }
 
     mesh_lod_status_current(dbip, context, name, &current);
     if (current.has_cache_key) {
@@ -5993,10 +6032,20 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 	return BRLCAD_ERROR;
 
     struct BObolMeshLodContext *context = mesh_lod_context_create_for_db(dbip);
-    if (!context)
+    if (!context) {
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	    bu_log("[obol-timing] pop cache refresh unavailable for %s: "
+		   "cache context is unavailable\n", name);
 	return BRLCAD_ERROR;
+    }
 
     mesh_lod_status_current(dbip, context, name, &current);
+    if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	bu_log("[obol-timing] pop cache refresh begin for %s: "
+	       "force=%d serialized=%d mapped=%d payload=%d stale=%d\n",
+	       name, forceRefresh ? 1 : 0, preferSerializedSource ? 1 : 0,
+	       current.has_cache_key, current.has_cached_payload,
+	       current.stale_cache_entry);
     if (!forceRefresh && current.has_cache_key &&
 	current.has_cached_payload && !current.stale_cache_entry) {
 	if (status)
@@ -6009,6 +6058,12 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
     current.is_bot = (dp != RT_DIR_NULL &&
 		      dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) ? 1 : 0;
     if (dp == RT_DIR_NULL || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT) {
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	    bu_log("[obol-timing] pop cache refresh unavailable for %s: "
+		   "directory=%d bot=%d\n", name,
+		   dp != RT_DIR_NULL ? 1 : 0,
+		   dp != RT_DIR_NULL &&
+		   dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT ? 1 : 0);
 	if (current.has_cache_key) {
 	    current.cleared_cache_entry = 1;
 	    current.cleared_cache_key = current.cache_key;
@@ -6034,6 +6089,9 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
     if (useSerializedSource &&
 	!mesh_lod_serialized_bot_open(dbip, dp, serializedSource,
 	    &serializedSourceMap)) {
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	    bu_log("[obol-timing] pop cache refresh unavailable for %s: "
+		   "checked serialized source view is unavailable\n", name);
 	if (status)
 	    *status = current;
 	mesh_lod_context_destroy(context);
@@ -6041,11 +6099,17 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
     }
     if (!bot && !useSerializedSource) {
 	if (rt_db_get_internal(&dbintern, dp, dbip, NULL) < 0) {
+	    if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+		bu_log("[obol-timing] pop cache refresh unavailable for %s: "
+		       "source import failed\n", name);
 	    mesh_lod_context_destroy(context);
 	    return BRLCAD_ERROR;
 	}
 	ownsInternal = true;
 	if (dbintern.idb_minor_type != DB5_MINORTYPE_BRLCAD_BOT) {
+	    if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+		bu_log("[obol-timing] pop cache refresh unavailable for %s: "
+		       "imported source is not a BoT\n", name);
 	    rt_db_free_internal(&dbintern);
 	    mesh_lod_context_destroy(context);
 	    return BRLCAD_ERROR;
@@ -6110,6 +6174,9 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 	if (!mesh_lod_arrays_validate(sourceFaces, sourceFaceCount,
 			  sourceVertices, sourceVertexCount,
 			  sourceVertices, sourceVertexCount, NULL, NULL, NULL)) {
+	    if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+		bu_log("[obol-timing] pop cache refresh unavailable for %s: "
+		       "source mesh arrays are invalid\n", name);
 	    if (ownsInternal)
 		rt_db_free_internal(&dbintern);
 	    if (status)
@@ -6171,6 +6238,11 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 		generatedState->hierarchyInfo(&generatedHierarchy);
 	    sourceLimited = generatedState && generatedState->isValid &&
 		generatedState->sourceLimited();
+	    if (generatedState && !generatedState->isValid &&
+		getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+		bu_log("[obol-timing] pop cache generation declined %s: %s\n",
+		       name, generatedState->generationFailure() ?
+		       generatedState->generationFailure() : "unknown reason");
 	} else {
 	    key = mesh_lod_cache_generate(
 		context, sourceVertices, sourceVertexCount,
@@ -6181,6 +6253,9 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 	/* A display cache miss is recoverable.  In particular, do not turn a
 	 * serialized-source admission into an uncaught allocator failure while
 	 * building its temporary PoP classification. */
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	    bu_log("[obol-timing] pop cache generation exhausted allocation "
+		   "budget for %s\n", name);
 	delete generatedState;
 	generatedState = NULL;
 	key = 0;
@@ -6188,6 +6263,10 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
     }
 	if (!key || (!sourceLimited &&
 		     mesh_lod_key_put(context, dp->d_namep, key) != 0)) {
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	    bu_log("[obol-timing] pop cache refresh failed for %s: %s\n",
+		   name, key ? "mapping write failed" :
+		   "generation produced no cache key");
 	delete generatedState;
 	if (ownsInternal)
 	    rt_db_free_internal(&dbintern);
@@ -6220,12 +6299,23 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
     if (generatedState) {
 	struct BObolMeshLod *lod =
 	    mesh_lod_adopt_generated_state(context, generatedState);
-	if (!lod ||
-	    (!generatedState->spatialLeafPayload() &&
-	     !generatedState->materializeInitialPrefix(
-		generatedState->sourceLimited() ?
-		generatedState->maximumAvailableCut() :
-		generatedState->minPopCut))) {
+	const int initialCut = generatedState->sourceLimited() ?
+	    generatedState->maximumAvailableCut() : generatedState->minPopCut;
+	const bool prefixReady = lod &&
+	    (generatedState->spatialLeafPayload() ||
+	     generatedState->materializeInitialPrefix(initialCut));
+	if (!prefixReady) {
+	    if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+		bu_log("[obol-timing] pop cache refresh failed for %s: "
+		       "adopted=%d spatial=%d initial_cut=%d min_cut=%d "
+		       "max_cut=%d source_limited=%d reason=%s\n",
+		       name, lod ? 1 : 0,
+		       generatedState->spatialLeafPayload() ? 1 : 0,
+		       initialCut, generatedState->minPopCut,
+		       generatedState->maximumAvailableCut(),
+		       generatedState->sourceLimited() ? 1 : 0,
+		       generatedState->generationFailure() ?
+		       generatedState->generationFailure() : "none");
 	    if (lod) {
 		lod->context = NULL;
 		bobol_mesh_lod_destroy(lod);

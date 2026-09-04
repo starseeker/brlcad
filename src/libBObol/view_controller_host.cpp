@@ -1092,6 +1092,8 @@ BObolViewController::requestLodPresentationRender(const char *reason)
 void
 BObolViewController::requestExactCadPresentationRender(const char *reason)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     const BObolViewLodState *presentationState =
 	this->d->viewAttachment ?
 	    this->d->viewAttachment->getViewLodState() : NULL;

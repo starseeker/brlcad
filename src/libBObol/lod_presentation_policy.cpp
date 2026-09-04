@@ -288,15 +288,22 @@ BObolLodPresentationPolicy::beginQuiet(const QuietInputs &quietInputs)
 	    HandoffState::PRESENTATION_REQUIRED :
 	    (decision.handoff == Reducer::Handoff::ALLOCATION ?
 		HandoffState::ALLOCATION_REQUIRED : HandoffState::INACTIVE);
-    this->handoffReconciliationBudgetValue = 0;
-    this->handoffReconciliationBudgetLimitValue = 0;
     /* A proven scale target carries the exact cost of the completed frame it
-     * restores.  A prior stable control vector is only a starting point after
-     * zoom and therefore carries no current-projection cost proof.  Other
-     * handoffs establish their cost through completed-frame evidence. */
-    this->handoffCostFloorValue =
-	decision.handoff == Reducer::Handoff::ALLOCATION &&
-	decision.restoredProvenQuality ? decision.provenRenderCostFloor : 0;
+     * restores.  Translate its renderer-wide (and potentially spatial-page)
+     * ceiling into occurrence-local cuts at that exact allowance before
+     * removing the ceiling.  Treating this witness only as a lower bound lets
+     * the ordinary static allowance select a much richer global population;
+     * a subsequent deadline miss can then discard the useful tiled frame and
+     * fall all the way to the minimum cut.  A prior stable control vector is
+     * only a starting point after zoom and carries no current-projection cost
+     * proof.  Other handoffs establish their reconciliation budget through
+     * completed-frame evidence. */
+    const size_t provenScaleBudget =
+        decision.handoff == Reducer::Handoff::ALLOCATION &&
+        decision.restoredProvenQuality ? decision.provenRenderCostFloor : 0;
+    this->handoffReconciliationBudgetValue = provenScaleBudget;
+    this->handoffReconciliationBudgetLimitValue = provenScaleBudget;
+    this->handoffCostFloorValue = provenScaleBudget;
 
     this->priorStableValue = Snapshot();
     this->provenQualityValue = Snapshot();

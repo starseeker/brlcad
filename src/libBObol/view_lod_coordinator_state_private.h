@@ -14,6 +14,7 @@
 #include "identity_counter_private.h"
 #include "lod_control_private.h"
 #include "lod_coordinator_private.h"
+#include "lod_progress_estimator_private.h"
 #include "retained_allocation_private.h"
 
 #include <algorithm>
@@ -1216,6 +1217,7 @@ struct BObolLodCoordinator {
      * camera and source-inventory revisions invalidate it.
     */
     mutable BObolLodConvergencePolicy lodConvergencePolicy;
+    mutable BObolLodProgressEstimator lodProgressEstimator;
     void clearLodSubmissionSourceState(void)
     {
 	lodSubmissionSourcePlan.reset();
@@ -1241,6 +1243,7 @@ struct BObolLodCoordinator {
     void resetLodConvergenceFraction(void)
     {
 	lodConvergencePolicy.resetFraction();
+	lodProgressEstimator.resetEpisode();
     }
     static BObolLodVisibilityCensus::SourceKey lodConvergenceSourceKey(
 	SoBRLDatabaseSource *source)

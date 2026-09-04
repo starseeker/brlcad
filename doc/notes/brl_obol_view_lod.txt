@@ -314,6 +314,14 @@ presentation.  It retains the PoP asset, resident buffer prefix, selected cut,
 and cache entry, then repaints immediately through the normal host refresh
 path.  Lighting remains a separate `view lighting` policy.
 
+Large spatially paged meshes follow the same commands.  Their persistent page
+records retain fixed-width source-vertex IDs, allowing one worker task to join
+incident faces across the complete admitted page set.  Smooth normals are
+crease-filtered across those page boundaries and canonicalized one bounded
+page at a time; flat pages remain normal-free and use Obol's exact source-face
+normal.  The GUI thread adopts the resulting immutable geometry handles and
+never expands a whole mesh into corner-normal arrays.
+
 The default camera-tracked headlight travels straight from the viewer into the
 scene (`view lighting offset 0 0 -1`), matching the established BRL-CAD shaded
 display.  This matters for unoriented plate-mode BoTs: an oblique light makes

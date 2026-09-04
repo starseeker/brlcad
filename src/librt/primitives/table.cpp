@@ -38,6 +38,7 @@
 #include "nmg.h"
 #include "raytrace.h"
 #include "rt/geom.h"
+#include "rt/primitives/eto.h"
 
 extern "C" {
 
@@ -1366,7 +1367,7 @@ const struct rt_functab OBJ[] = {
 	RTFUNCTAB_FUNC_MAT_CAST(rt_eto_mat),
 	RTFUNCTAB_FUNC_PERTURB_CAST(rt_eto_perturb), /* perturb */
 	NULL, /* indexed_face_set */
-	NULL, /* wireframe_line_set */
+	RTFUNCTAB_FUNC_WIREFRAME_LINE_SET_CAST(rt_eto_wireframe_line_set),
 	RTFUNCTAB_FUNC_VALIDATE_CAST(rt_eto_functab_validate) /* validate */
     },
 

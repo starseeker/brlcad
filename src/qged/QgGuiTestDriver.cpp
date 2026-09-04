@@ -2274,7 +2274,7 @@ qged_test_wait_progressive_scope_ready(QgEdApp &app,
 		for (BObolViewController *controller : visibleControllers) {
 		    scopePresentationBarriers.emplace_back(controller,
 			controller->getPresentedFrameSerial());
-		    controller->requestLodCapacityRender("qged-test-scope-ready");
+		    controller->requestPresentationRender("qged-test-scope-ready");
 		    qged_test_present_controller_frame(app, controller);
 		}
 		quiet.invalidate();

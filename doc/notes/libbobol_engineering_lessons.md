@@ -571,6 +571,26 @@ only one visible part is not needlessly reduced to a point.  Page/cluster
 partitioning is an implementation detail; occurrence identity is a scene
 semantic.
 
+### Progressive position and normal surfaces are distinct
+
+A normal-free tiled mesh kept its exact source positions but displayed
+quantized PoP positions.  Renderer tiers disagreed about which surface should
+define a fallback face normal: the generic shader used the source triangle,
+while the directional, immediate, and some flattened paths used the temporary
+voxelized triangle.  Lucy consequently changed from coherent folds to noisy
+facets when the lighting profile or renderer tier changed, even though its
+cached indices and positions were valid.
+
+Rule: progressive geometry has a displayed position surface and a source
+normal surface.  Clip and illuminate at the displayed position, but derive a
+missing face normal from the source triangle; use the displayed triangle only
+when the source face is degenerate.  Culling and two-sided orientation still
+follow the non-exact displayed-cut contract.  Keep this rule in one CPU helper
+and assert it for every GLSL variant, immediate mode, and the flattened
+software atlas.  Do not store three synthesized normals per source triangle
+merely to cover a renderer inconsistency: for large scan meshes that would
+defeat indexed spatial residency.
+
 ### Ready is a semantic proof, not an empty queue
 
 An empty worker queue may still have unpublished results, unacknowledged frames,
@@ -652,10 +672,14 @@ Counting only represented leaves reported roughly 95--99% while expensive mesh
 handoff and refinement still remained.  Users interpreted the nearly full bar
 as a stalled system.
 
-Rule: progress is phase- and cost-weighted: discovery/coverage, useful
-representation, detailed mesh work, and final handoff have separate weight.
-The label reports counts and the terminal constraint; it is an estimate, not a
-promise based on object count alone.
+Rule: keep the monotonic finite-rank contract fraction distinct from the HUD's
+time estimate.  The latter learns observed rates for discovery, source and
+renderer preparation, visible resolution, and bounded capacity search, then
+adds a final coherent-frame cost.  If an unfinished rank has no denominator or
+measured rate, show indeterminate activity and exact stage counts.  Never turn
+the contract's weighted object coverage into a fabricated ETA, advance an
+estimate merely because observer time passed, or retain a terminal 100-percent
+estimate after a nonterminal presentation transition.
 
 ## Progressive mesh policy
 

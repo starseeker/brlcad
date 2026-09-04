@@ -265,9 +265,16 @@ asset after compaction reads only `(resident, requested]`; it must not recreate
 a cache-reader copy of `[minimum, resident]`.  The worker constructs and
 atomically publishes a replacement immutable renderer snapshot while the old
 snapshot remains drawable.  Down-trimming allocates the exact retained prefix
-and must not preserve a richer vector's capacity.  Authored corner-normal
-meshes currently use the whole-prefix fallback because globally consistent
-vertex splitting is not derivable from an unannotated suffix.
+and must not preserve a richer vector's capacity.  Every spatial-page vertex
+retains a fixed-width source-vertex ID in the persistent cache.  For explicit
+smooth shading, the worker uses those IDs to join incident faces across the
+complete admitted page set, applies the requested crease angle, and
+canonicalizes one bounded page at a time.  Explicit flat shading retains no
+synthesized array; Obol derives the exact source-face normal.  These are
+presentation variants of one resident asset and never run on the GUI thread.
+A quiet resident compaction has no authority to choose a view normal policy:
+it preserves any still-drawable immutable page presentation and only trims the
+shared hierarchy storage.
 
 Each ordinary coordinate/index stream also carries a nonzero process-local
 lineage token.  Equal lineage across immutable geometry generations certifies
@@ -374,7 +381,7 @@ pass may preserve it and avoid a whole-hierarchy recount.
 The convergence policy is a scene-pointer-free projection of those retained
 proofs and progress witnesses.  It alone decides ready/background status,
 memory- and performance-limited terminal states, the public HUD phase, and the
-monotonic fraction for one typed view/policy epoch.  Discovery, useful
+monotonic contract fraction for one typed view/policy epoch.  Discovery, useful
 representation, rich visible coverage, bounded capacity certification, and
 the terminal coherent handoff have distinct progress weight.  The capacity
 component uses the search's exact finite rank: allocation, exact presentation,
@@ -391,6 +398,19 @@ new provisional-camera revision makes representation coverage temporarily
 incomplete.  The phase label may not imply that the database inventory was
 discarded, and the exact preparation rank may not be replaced by the derived
 representation count.
+
+The HUD may separately project an observed time-to-completion estimate from
+the same finite ranks.  That estimator is an allocation-free observer, never a
+scheduler or a readiness authority.  It learns a smoothed wall-time cost per
+rank unit across view episodes, includes the measured or target cost of the
+final coherent presentation, and resets its displayed fraction for each typed
+view/policy epoch without discarding useful rate history.  If any outstanding
+foreground producer lacks a finite denominator or an observed rate, the
+estimate is unavailable: clients must show indeterminate activity plus the
+exact stage counts, not reuse the deterministic contract fraction as though it
+were elapsed-time progress.  Only terminal convergence may report 100 percent
+and zero remaining time.  Re-observing an unchanged rank cannot advance either
+the estimate or its fraction.
 
 The budget policy treats projected per-occurrence error as demand and measured
 renderer cost as total-scene admission.  It owns the current allowance, the

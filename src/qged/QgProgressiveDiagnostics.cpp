@@ -173,6 +173,11 @@ qged_append_progressive_control_diagnostic_values(
 	static_cast<qint64>(status.capacitySearchMaximumCandidates));
     sample.insert(QStringLiteral("lod_capacity_search_sample_limit"),
 	static_cast<qint64>(status.capacitySearchSampleLimit));
+    sample.insert(QStringLiteral("lod_capacity_search_invalid_frame_attempts"),
+	static_cast<qint64>(status.capacitySearchInvalidFrameAttempts));
+    sample.insert(
+	QStringLiteral("lod_capacity_search_invalid_frame_attempt_limit"),
+	static_cast<qint64>(status.capacitySearchInvalidFrameAttemptLimit));
     sample.insert(QStringLiteral("lod_capacity_search_completed_units"),
 	static_cast<qint64>(status.capacitySearchCompletedUnits));
     sample.insert(QStringLiteral("lod_capacity_search_total_units"),
@@ -237,6 +242,14 @@ qged_append_progressive_control_diagnostic_values(
 	static_cast<qint64>(status.residentCompactionCandidateCount));
     sample.insert(QStringLiteral("lod_convergence_fraction"),
 	static_cast<double>(status.fraction));
+    sample.insert(QStringLiteral("lod_progress_estimate_available"),
+	status.progressEstimateAvailable ? true : false);
+    sample.insert(QStringLiteral("lod_estimated_fraction"),
+	static_cast<double>(status.estimatedFraction));
+    sample.insert(QStringLiteral("lod_estimated_remaining_ms"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.estimatedRemainingMilliseconds,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
 }
 
 void

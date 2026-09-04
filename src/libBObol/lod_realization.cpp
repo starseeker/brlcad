@@ -320,6 +320,7 @@ struct BObolLodProgressiveMeshGeneration {
 	uint64_t geometryRevision = 0;
 	SbBox3f bounds;
 	std::vector<SbVec3f> positions;
+	std::vector<uint32_t> sourceVertexIds;
 	std::vector<uint32_t> indices;
 	std::vector<SbVec3f> cornerNormals;
 	mutable std::mutex preparedMutex;
@@ -454,6 +455,9 @@ static bool
 bobol_prepare_authored_corner_normals(
     Obol::TriMesh &mesh, const std::vector<SbVec3f> &cornerNormals);
 
+static void
+bobol_refresh_progressive_position_counts(Obol::TriMesh &mesh);
+
 static bool
 bobol_lod_finite_render_coordinate(fastf_t value)
 {
@@ -499,6 +503,23 @@ bobol_lod_point_in_domain(const fastf_t *point,
 	    return false;
     }
     return true;
+}
+
+/* Normal canonicalization preserves triangle order but may split source
+ * vertices.  Recompute the smallest live vertex prefix for each triangle
+ * prefix after every such rewrite. */
+static void
+bobol_refresh_progressive_position_counts(Obol::TriMesh &mesh)
+{
+    size_t scanned = 0;
+    uint32_t maximum = 0;
+    for (Obol::ProgressiveTriangleCut &cut : mesh.progressiveCuts) {
+	const size_t end = std::min<size_t>(
+	    cut.indexCount, mesh.indices.size());
+	for (; scanned < end; ++scanned)
+	    maximum = std::max(maximum, mesh.indices[scanned]);
+	cut.positionCount = end ? maximum + 1u : 0u;
+    }
 }
 
 static bool
@@ -832,25 +853,8 @@ progressive_generation_from_data(
      * identity yet, so only the ordinary coordinate/index PoP path exposes
      * the lineage optimization to Obol. */
     mesh.progressiveLineage = data.normals ? 0 : progressiveLineage;
-    if (data.normals) {
-	/* Corner-normal preparation may duplicate vertices and rewrite indices.
-	 * Recompute only that uncommon authored-normal case; ordinary PoP assets
-	 * populated these cumulative maxima during their single validation/copy
-	 * pass above. */
-	size_t scannedIndices = 0;
-	maximumIndex = 0;
-	for (uint32_t cut = 0; cut < hierarchy.cut_count; ++cut) {
-	    for (; scannedIndices < cutIndexCount[cut]; ++scannedIndices)
-		maximumIndex = std::max(
-		    maximumIndex, mesh.indices[scannedIndices]);
-	    const size_t positionCount = cutIndexCount[cut] ?
-		static_cast<size_t>(maximumIndex) + 1 : 0;
-	    mesh.progressiveCuts[cut].positionCount = static_cast<uint32_t>(
-		std::min(positionCount,
-		    static_cast<size_t>(
-			std::numeric_limits<uint32_t>::max())));
-	}
-    }
+    if (data.normals)
+	bobol_refresh_progressive_position_counts(mesh);
     geometry->shaded = std::move(mesh);
     geometry->shadedCullBackfaces =
 	shadedCullBackfaces ? true : false;
@@ -888,6 +892,7 @@ lod_spatial_worker_count(size_t pageCount)
 static int
 bobol_progressive_chunk_read(uint32_t chunkId, int cut,
     const point_t *points, size_t pointCount,
+    const uint32_t *sourceVertexIds, size_t sourceVertexIdCount,
     const uint32_t *faces, size_t faceCount,
     const vect_t *normals, size_t normalCount, void *callbackData)
 {
@@ -901,9 +906,11 @@ bobol_progressive_chunk_read(uint32_t chunkId, int cut,
 	context->hierarchy->chunks[chunkId];
     if (cut < info.min_cut) {
 	(*context->chunks)[chunkId].reset();
-	return pointCount == 0 && faceCount == 0 && normalCount == 0;
+	return pointCount == 0 && sourceVertexIdCount == 0 &&
+	    faceCount == 0 && normalCount == 0;
     }
     if (!points || !faces || !pointCount || !faceCount ||
+	!sourceVertexIds || sourceVertexIdCount != pointCount ||
 	faceCount > SIZE_MAX / 3 ||
 	normalCount != (context->hierarchy->has_normals ? faceCount * 3 : 0) ||
 	(normalCount && !normals))
@@ -929,6 +936,8 @@ bobol_progressive_chunk_read(uint32_t chunkId, int cut,
 	    static_cast<float>(points[point][Y]),
 	    static_cast<float>(points[point][Z]));
     }
+	chunk->sourceVertexIds.assign(
+	    sourceVertexIds, sourceVertexIds + sourceVertexIdCount);
     chunk->indices.assign(faces, faces + faceCount * 3);
     for (uint32_t index : chunk->indices)
 	if (index >= pointCount)
@@ -1097,19 +1106,8 @@ progressive_generation_from_chunks(
 	    hierarchy.cuts[cut].quantization_bits[Z]
 	};
     }
-    if (!mesh.normals.empty()) {
-	/* Normal canonicalization can split a source position.  Triangle order is
-	 * unchanged, so recompute the live vertex frontier for every cut. */
-	size_t scanned = 0;
-	uint32_t maximum = 0;
-	for (Obol::ProgressiveTriangleCut &cut : mesh.progressiveCuts) {
-	    const size_t end = std::min<size_t>(
-		cut.indexCount, mesh.indices.size());
-	    for (; scanned < end; ++scanned)
-		maximum = std::max(maximum, mesh.indices[scanned]);
-	    cut.positionCount = end ? maximum + 1u : 0u;
-	}
-    }
+    if (!mesh.normals.empty())
+	bobol_refresh_progressive_position_counts(mesh);
     geometry->shaded = std::move(mesh);
     if (!generation->aggregateProxyCorners)
 	geometry->conservativeBounds = generation->bounds;
@@ -1184,6 +1182,7 @@ progressive_generation_prefix(
 	    const size_t indexCount =
 		static_cast<size_t>(metadata.cuts[chunkCut].face_count) * 3;
 	    if (pointCount > prior->positions.size() ||
+		pointCount > prior->sourceVertexIds.size() ||
 		indexCount > prior->indices.size() ||
 		(!prior->cornerNormals.empty() &&
 		 indexCount > prior->cornerNormals.size()))
@@ -1196,6 +1195,8 @@ progressive_generation_prefix(
 	    trimmed->bounds = prior->bounds;
 	    trimmed->positions.assign(prior->positions.begin(),
 		prior->positions.begin() + pointCount);
+	    trimmed->sourceVertexIds.assign(prior->sourceVertexIds.begin(),
+		prior->sourceVertexIds.begin() + pointCount);
 	    trimmed->indices.assign(prior->indices.begin(),
 		prior->indices.begin() + indexCount);
 	    if (!prior->cornerNormals.empty())
@@ -2884,15 +2885,19 @@ BObolLodProgressiveMesh::estimateBytes(void) const
 		continue;
 	    const size_t positions = resident->positions.capacity() *
 		sizeof(SbVec3f);
+	    const size_t sourceVertexIds = resident->sourceVertexIds.capacity() *
+		sizeof(uint32_t);
 	    const size_t indices = resident->indices.capacity() *
 		sizeof(uint32_t);
 	    const size_t normals = resident->cornerNormals.capacity() *
 		sizeof(SbVec3f);
 	    if (positions > SIZE_MAX - bytes ||
-		indices > SIZE_MAX - bytes - positions ||
-		normals > SIZE_MAX - bytes - positions - indices)
+		sourceVertexIds > SIZE_MAX - bytes - positions ||
+		indices > SIZE_MAX - bytes - positions - sourceVertexIds ||
+		normals >
+		    SIZE_MAX - bytes - positions - sourceVertexIds - indices)
 		return SIZE_MAX;
-	    bytes += positions + indices + normals;
+	    bytes += positions + sourceVertexIds + indices + normals;
 	}
 	return bytes;
     }
@@ -3080,6 +3085,11 @@ bobol_prepare_authored_corner_normals(
 
 static constexpr uint64_t lod_spatial_page_lineage_salt =
     UINT64_C(0x9e3779b97f4a7c15);
+static constexpr uint32_t lod_spatial_incident_index_bits = 16;
+static constexpr uint32_t lod_spatial_incident_index_limit =
+    1u << lod_spatial_incident_index_bits;
+static constexpr uint32_t lod_spatial_incident_index_mask =
+    lod_spatial_incident_index_limit - 1u;
 
 static uint64_t
 bobol_spatial_page_lineage(uint64_t assetLineage, uint32_t chunkId)
@@ -3094,12 +3104,15 @@ static std::shared_ptr<const Obol::PartGeometry>
 bobol_prepare_spatial_page_shaded(
     const BObolLodProgressiveMeshGeneration &generation,
     const BObolLodProgressiveMeshGeneration::ResidentChunk &resident,
-    uint64_t assetLineage)
+    uint64_t assetLineage, int normalStyle, int activeCut,
+    const std::vector<SbVec3f> *smoothCornerNormals)
 {
     static constexpr int shadedChannelKey = 2;
-    {
+    const bool smooth = normalStyle == BOBOL_LOD_NORMAL_SMOOTH;
+    const int preparedKey = shadedChannelKey | (normalStyle << 2);
+    if (!smooth) {
 	std::lock_guard<std::mutex> lock(resident.preparedMutex);
-	const auto cached = resident.preparedCadGeometry.find(shadedChannelKey);
+	const auto cached = resident.preparedCadGeometry.find(preparedKey);
 	if (cached != resident.preparedCadGeometry.end()) {
 	    std::shared_ptr<const Obol::PartGeometry> geometry =
 		cached->second.lock();
@@ -3113,18 +3126,32 @@ bobol_prepare_spatial_page_shaded(
 	resident.indices.size() % 3 != 0)
 	return std::shared_ptr<const Obol::PartGeometry>();
     const auto &metadata = generation.chunks[resident.chunkId];
+    const int preparedCut = smooth ? activeCut : resident.residentCut;
+    if (preparedCut < metadata.minimumCut ||
+	preparedCut > metadata.maximumCut)
+	return std::shared_ptr<const Obol::PartGeometry>();
+    const size_t preparedPointCount =
+	metadata.cuts[preparedCut].point_count;
+    const size_t preparedIndexCount = static_cast<size_t>(
+	metadata.cuts[preparedCut].face_count) * 3u;
+    if (!preparedPointCount || preparedIndexCount < 3 ||
+	preparedPointCount > resident.positions.size() ||
+	preparedIndexCount > resident.indices.size())
+	return std::shared_ptr<const Obol::PartGeometry>();
     std::shared_ptr<Obol::PartGeometryBuilder> geometry(new Obol::PartGeometryBuilder);
     Obol::TriMesh mesh;
-    mesh.positions = resident.positions;
-    mesh.indices = resident.indices;
+    mesh.positions.assign(resident.positions.begin(),
+	resident.positions.begin() + preparedPointCount);
+    mesh.indices.assign(resident.indices.begin(),
+	resident.indices.begin() + preparedIndexCount);
     mesh.bounds = resident.bounds;
     mesh.progressiveMinimumCut = static_cast<uint8_t>(
 	std::max(0, metadata.minimumCut));
-    int drawableCut = resident.residentCut;
-    for (int candidate = resident.residentCut + 1;
+    int drawableCut = preparedCut;
+    for (int candidate = preparedCut + 1;
 	    candidate <= metadata.maximumCut; ++candidate) {
 	const auto &candidateInfo = metadata.cuts[candidate];
-	if (candidateInfo.point_count > resident.positions.size() ||
+	if (smooth || candidateInfo.point_count > resident.positions.size() ||
 	    static_cast<uint64_t>(candidateInfo.face_count) * 3u >
 		resident.indices.size())
 	    break;
@@ -3151,19 +3178,21 @@ bobol_prepare_spatial_page_shaded(
 	    generation.cuts[cut].quantization_bits[Z]
 	};
     }
-    if (!resident.cornerNormals.empty()) {
+
+    if (smooth) {
+	if (!smoothCornerNormals ||
+	    smoothCornerNormals->size() != mesh.indices.size() ||
+	    !bobol_prepare_authored_corner_normals(
+		mesh, *smoothCornerNormals))
+	    return std::shared_ptr<const Obol::PartGeometry>();
+	bobol_refresh_progressive_position_counts(mesh);
+	mesh.progressiveLineage = 0;
+    } else if (normalStyle == BOBOL_LOD_NORMAL_AUTHORED &&
+	!resident.cornerNormals.empty()) {
 	if (!bobol_prepare_authored_corner_normals(
 		mesh, resident.cornerNormals))
 	    return std::shared_ptr<const Obol::PartGeometry>();
-	size_t scanned = 0;
-	uint32_t maximum = 0;
-	for (Obol::ProgressiveTriangleCut &cut : mesh.progressiveCuts) {
-	    const size_t end = std::min<size_t>(
-		cut.indexCount, mesh.indices.size());
-	    for (; scanned < end; ++scanned)
-		maximum = std::max(maximum, mesh.indices[scanned]);
-	    cut.positionCount = end ? maximum + 1u : 0u;
-	}
+	bobol_refresh_progressive_position_counts(mesh);
 	/* Vertex splitting changes the array prefix and cannot inherit an
 	 * append-only promise from the source corner-normal stream. */
 	mesh.progressiveLineage = 0;
@@ -3182,9 +3211,10 @@ bobol_prepare_spatial_page_shaded(
 	    "spatial shaded presentation page");
     if (!completed)
 	return std::shared_ptr<const Obol::PartGeometry>();
-    {
+
+    if (!smooth) {
 	std::lock_guard<std::mutex> lock(resident.preparedMutex);
-	resident.preparedCadGeometry[shadedChannelKey] = completed;
+	resident.preparedCadGeometry[preparedKey] = completed;
     }
     return completed;
 }
@@ -3193,7 +3223,8 @@ static std::shared_ptr<const Obol::PartGeometry>
 bobol_prepare_spatial_page_geometry(
     const BObolLodProgressiveMeshGeneration &generation,
     const BObolLodProgressiveMeshGeneration::ResidentChunk &resident,
-    int drawMode, uint64_t assetLineage)
+    int drawMode, uint64_t assetLineage, int normalStyle, int activeCut,
+    const std::vector<SbVec3f> *smoothCornerNormals)
 {
     const bool wire = drawMode == BOBOL_LOD_DRAW_WIRE ||
 	drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
@@ -3202,11 +3233,14 @@ bobol_prepare_spatial_page_geometry(
 	drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
     if (!wire && !shaded)
 	return std::shared_ptr<const Obol::PartGeometry>();
-    const int channelKey = (wire ? 1 : 0) | (shaded ? 2 : 0);
-    if (channelKey == 2)
+    const bool smooth = normalStyle == BOBOL_LOD_NORMAL_SMOOTH;
+    const int channelKey = (wire ? 1 : 0) | (shaded ? 2 : 0) |
+	(normalStyle << 2);
+    if (!wire)
 	return bobol_prepare_spatial_page_shaded(
-	    generation, resident, assetLineage);
-    {
+	    generation, resident, assetLineage, normalStyle, activeCut,
+	    smoothCornerNormals);
+    if (!smooth) {
 	std::lock_guard<std::mutex> lock(resident.preparedMutex);
 	const auto cached = resident.preparedCadGeometry.find(channelKey);
 	if (cached != resident.preparedCadGeometry.end()) {
@@ -3219,7 +3253,8 @@ bobol_prepare_spatial_page_geometry(
 
     const std::shared_ptr<const Obol::PartGeometry> shadedGeometry =
 	bobol_prepare_spatial_page_shaded(
-	    generation, resident, assetLineage);
+	    generation, resident, assetLineage, normalStyle, activeCut,
+	    smoothCornerNormals);
     const Obol::TriMesh *sourceMesh =
 	shadedGeometry && shadedGeometry->shaded ?
 	    &*shadedGeometry->shaded : NULL;
@@ -3258,25 +3293,191 @@ bobol_prepare_spatial_page_geometry(
 	    "spatial wire presentation page");
     if (!completed)
 	return std::shared_ptr<const Obol::PartGeometry>();
-    {
+    if (!smooth) {
 	std::lock_guard<std::mutex> lock(resident.preparedMutex);
 	resident.preparedCadGeometry[channelKey] = completed;
     }
     return completed;
 }
 
+static SbVec3f
+bobol_spatial_face_normal(
+    const BObolLodProgressiveMeshGeneration::ResidentChunk &resident,
+    size_t faceIndex)
+{
+    const size_t first = faceIndex * 3u;
+    if (first + 2u >= resident.indices.size())
+	return SbVec3f(0.0f, 0.0f, 1.0f);
+    const uint32_t ia = resident.indices[first];
+    const uint32_t ib = resident.indices[first + 1u];
+    const uint32_t ic = resident.indices[first + 2u];
+    if (ia >= resident.positions.size() || ib >= resident.positions.size() ||
+	ic >= resident.positions.size())
+	return SbVec3f(0.0f, 0.0f, 1.0f);
+    SbVec3f normal = (resident.positions[ib] - resident.positions[ia]).cross(
+	resident.positions[ic] - resident.positions[ia]);
+    if (normal.sqrLength() > 0.0f)
+	normal.normalize();
+    else
+	normal.setValue(0.0f, 0.0f, 1.0f);
+    return normal;
+}
+
+static bool
+bobol_spatial_smooth_face_normals(
+    const BObolLodProgressiveMeshGeneration &generation,
+    const std::vector<BObolLodChunkCut> &chunkCuts,
+    std::vector<std::vector<SbVec3f>> &faceNormals,
+    std::vector<uint64_t> &incidents)
+{
+    faceNormals.clear();
+    incidents.clear();
+    if (chunkCuts.empty() ||
+	chunkCuts.size() > lod_spatial_incident_index_limit)
+	return false;
+    size_t faceTotal = 0;
+    faceNormals.resize(chunkCuts.size());
+    for (size_t pageOrdinal = 0; pageOrdinal < chunkCuts.size(); ++pageOrdinal) {
+	const BObolLodChunkCut &selection = chunkCuts[pageOrdinal];
+	if (selection.chunkId >= generation.chunks.size() ||
+	    selection.chunkId >= generation.residentChunks.size())
+	    return false;
+	const auto &metadata = generation.chunks[selection.chunkId];
+	if (selection.cut < metadata.minimumCut ||
+	    selection.cut > metadata.maximumCut)
+	    return false;
+	const size_t pointCount = metadata.cuts[selection.cut].point_count;
+	const size_t faceCount = metadata.cuts[selection.cut].face_count;
+	if (!faceCount)
+	    continue;
+	const auto &resident = generation.residentChunks[selection.chunkId];
+	if (!resident)
+	    return false;
+	if (faceCount > lod_spatial_incident_index_limit ||
+	    pointCount > resident->positions.size() ||
+	    pointCount > resident->sourceVertexIds.size() ||
+	    faceCount > resident->indices.size() / 3u ||
+	    faceCount > (SIZE_MAX - faceTotal))
+	    return false;
+	faceTotal += faceCount;
+	faceNormals[pageOrdinal].resize(faceCount);
+	for (size_t face = 0; face < faceCount; ++face)
+	    faceNormals[pageOrdinal][face] =
+		bobol_spatial_face_normal(*resident, face);
+    }
+    if (!faceTotal || faceTotal > SIZE_MAX / 3u)
+	return false;
+    try {
+	incidents.reserve(faceTotal * 3u);
+	for (size_t pageOrdinal = 0;
+		pageOrdinal < chunkCuts.size(); ++pageOrdinal) {
+	    const auto &resident =
+		generation.residentChunks[chunkCuts[pageOrdinal].chunkId];
+	    const size_t faceCount = faceNormals[pageOrdinal].size();
+	    for (size_t face = 0; face < faceCount; ++face) {
+		const uint32_t faceReference =
+		    (static_cast<uint32_t>(pageOrdinal) <<
+			lod_spatial_incident_index_bits) |
+		    static_cast<uint32_t>(face);
+		for (size_t corner = 0; corner < 3u; ++corner) {
+		    const uint32_t localVertex =
+			resident->indices[face * 3u + corner];
+		    if (localVertex >= resident->sourceVertexIds.size())
+			return false;
+		    incidents.push_back(
+			(static_cast<uint64_t>(
+			    resident->sourceVertexIds[localVertex]) << 32u) |
+			faceReference);
+		}
+	    }
+	}
+    } catch (const std::bad_alloc &) {
+	faceNormals.clear();
+	incidents.clear();
+	return false;
+    }
+    std::sort(incidents.begin(), incidents.end());
+    return true;
+}
+
+static bool
+bobol_spatial_smooth_corner_normals(
+    const BObolLodProgressiveMeshGeneration &generation,
+    const std::vector<BObolLodChunkCut> &chunkCuts,
+    const std::vector<std::vector<SbVec3f>> &faceNormals,
+    const std::vector<uint64_t> &incidents, size_t pageOrdinal,
+    float creaseAngleDegrees, std::vector<SbVec3f> &cornerNormals)
+{
+    cornerNormals.clear();
+    if (pageOrdinal >= chunkCuts.size() ||
+	pageOrdinal >= faceNormals.size())
+	return false;
+    const auto &resident =
+	generation.residentChunks[chunkCuts[pageOrdinal].chunkId];
+    if (!resident || faceNormals[pageOrdinal].size() > SIZE_MAX / 3u)
+	return false;
+    const float clampedAngle = std::max(0.0f,
+	std::min(180.0f, creaseAngleDegrees));
+    const float creaseCosine = static_cast<float>(
+	std::cos(clampedAngle * M_PI / 180.0));
+    try {
+	cornerNormals.reserve(faceNormals[pageOrdinal].size() * 3u);
+	for (size_t face = 0; face < faceNormals[pageOrdinal].size(); ++face) {
+	    const SbVec3f &faceNormal = faceNormals[pageOrdinal][face];
+	    for (size_t corner = 0; corner < 3u; ++corner) {
+		const uint32_t localVertex =
+		    resident->indices[face * 3u + corner];
+		if (localVertex >= resident->sourceVertexIds.size())
+		    return false;
+		const uint64_t sourcePrefix = static_cast<uint64_t>(
+		    resident->sourceVertexIds[localVertex]) << 32u;
+		const auto first = std::lower_bound(
+		    incidents.begin(), incidents.end(), sourcePrefix);
+		const auto last = std::upper_bound(
+		    first, incidents.end(), sourcePrefix | UINT32_MAX);
+		SbVec3f smoothNormal(0.0f, 0.0f, 0.0f);
+		for (auto incident = first; incident != last; ++incident) {
+		    const uint32_t reference =
+			static_cast<uint32_t>(*incident);
+		    const size_t adjacentPage =
+			reference >> lod_spatial_incident_index_bits;
+		    const size_t adjacentFace =
+			reference & lod_spatial_incident_index_mask;
+		    if (adjacentPage >= faceNormals.size() ||
+			adjacentFace >= faceNormals[adjacentPage].size())
+			return false;
+		    const SbVec3f &candidate =
+			faceNormals[adjacentPage][adjacentFace];
+		    if (candidate.dot(faceNormal) >= creaseCosine)
+			smoothNormal += candidate;
+		}
+		if (smoothNormal.sqrLength() > 0.0f)
+		    smoothNormal.normalize();
+		else
+		    smoothNormal = faceNormal;
+		cornerNormals.push_back(smoothNormal);
+	    }
+	}
+    } catch (const std::bad_alloc &) {
+	cornerNormals.clear();
+	return false;
+    }
+    return true;
+}
+
 SbBool
 BObolLodProgressiveMesh::prepareCadPresentationLayers(
-    int drawMode, const std::vector<uint32_t> &chunkIds, int activeCut,
+    int drawMode, const std::vector<BObolLodChunkCut> &chunkCuts,
+    int normalStyle, float normalCreaseAngle,
     std::vector<BObolLodPresentationLayer> &layers) const
 {
     layers.clear();
     const bool traceFailures =
 	getenv("BOBOL_LOD_TRACE_PRESENTATION_LAYERS") != NULL;
-    const auto traceFailure = [traceFailures, drawMode, activeCut](
+    const auto traceFailure = [traceFailures, drawMode](
 	const char *reason, uint32_t chunkId, uint64_t faceCount,
 	uint64_t pointCount, size_t residentPoints, size_t residentIndices,
-	int residentCut) {
+	int activeCut, int residentCut) {
 	if (!traceFailures)
 	    return;
 	bu_log("BObol spatial presentation preparation failure reason=%s "
@@ -3287,26 +3488,28 @@ BObolLodProgressiveMesh::prepareCadPresentationLayers(
 	       static_cast<unsigned long long>(pointCount), residentPoints,
 	       residentIndices, residentCut);
     };
-    if (!this->p || chunkIds.empty()) {
-	traceFailure("invalid-input", 0, 0, 0, 0, 0, -1);
+    if (!this->p || chunkCuts.empty() ||
+	normalStyle < BOBOL_LOD_NORMAL_AUTHORED ||
+	normalStyle > BOBOL_LOD_NORMAL_SMOOTH ||
+	!std::isfinite(normalCreaseAngle)) {
+	traceFailure("invalid-input", 0, 0, 0, 0, 0, -1, -1);
 	return FALSE;
 	}
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_load(this->p);
     if (!generation || generation->chunks.empty()) {
-	traceFailure("missing-spatial-generation", 0, 0, 0, 0, 0, -1);
+	traceFailure("missing-spatial-generation", 0, 0, 0, 0, 0, -1, -1);
 	return FALSE;
 	}
-    if (activeCut < generation->minimumCut ||
-	activeCut > generation->maximumCut) {
-	traceFailure("invalid-active-cut", 0, 0, 0, 0, 0, -1);
-	return FALSE;
-	}
-    for (size_t selected = 0; selected < chunkIds.size(); ++selected) {
-	const uint32_t chunkId = chunkIds[selected];
+    for (size_t selected = 0; selected < chunkCuts.size(); ++selected) {
+	const uint32_t chunkId = chunkCuts[selected].chunkId;
+	const int activeCut = chunkCuts[selected].cut;
 	if (chunkId >= generation->chunks.size() ||
-	    (selected && chunkId <= chunkIds[selected - 1])) {
-	    traceFailure("invalid-page-set", chunkId, 0, 0, 0, 0, -1);
+	    activeCut < generation->minimumCut ||
+	    activeCut > generation->maximumCut ||
+	    (selected && chunkId <= chunkCuts[selected - 1].chunkId)) {
+	    traceFailure("invalid-page-set", chunkId, 0, 0, 0, 0,
+		activeCut, -1);
 	    return FALSE;
 	}
 	const auto &cut = generation->chunks[chunkId].cuts[activeCut];
@@ -3320,12 +3523,26 @@ BObolLodProgressiveMesh::prepareCadPresentationLayers(
 		cut.face_count, cut.point_count,
 		resident ? resident->positions.size() : 0,
 		resident ? resident->indices.size() : 0,
+		activeCut,
 		resident ? resident->residentCut : -1);
 	    return FALSE;
 	}
     }
-    layers.reserve(chunkIds.size());
-    for (uint32_t chunkId : chunkIds) {
+    const bool shaded = drawMode == BOBOL_LOD_DRAW_SHADED ||
+	drawMode == BOBOL_LOD_DRAW_SHADED_BOTS ||
+	drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
+    const bool smooth = shaded && normalStyle == BOBOL_LOD_NORMAL_SMOOTH;
+    std::vector<std::vector<SbVec3f>> faceNormals;
+    std::vector<uint64_t> incidents;
+    if (smooth && !bobol_spatial_smooth_face_normals(
+	    *generation, chunkCuts, faceNormals, incidents))
+	return FALSE;
+
+    layers.reserve(chunkCuts.size());
+    for (size_t pageOrdinal = 0;
+	    pageOrdinal < chunkCuts.size(); ++pageOrdinal) {
+	const uint32_t chunkId = chunkCuts[pageOrdinal].chunkId;
+	const int activeCut = chunkCuts[pageOrdinal].cut;
 	const auto &resident = generation->residentChunks[chunkId];
 	if (!resident ||
 	    !generation->chunks[chunkId].cuts[activeCut].face_count)
@@ -3334,13 +3551,22 @@ BObolLodProgressiveMesh::prepareCadPresentationLayers(
 	std::string key("page:");
 	key += std::to_string(chunkId);
 	layer.layerKey = key.c_str();
+	std::vector<SbVec3f> cornerNormals;
+	if (smooth && !bobol_spatial_smooth_corner_normals(
+		*generation, chunkCuts, faceNormals, incidents,
+		pageOrdinal, normalCreaseAngle, cornerNormals))
+	    return FALSE;
+	const int effectiveNormalStyle = shaded ? normalStyle :
+	    BOBOL_LOD_NORMAL_AUTHORED;
 	layer.geometry = bobol_prepare_spatial_page_geometry(
-	    *generation, *resident, drawMode, this->p->lineage);
+	    *generation, *resident, drawMode, this->p->lineage,
+	    effectiveNormalStyle, activeCut,
+	    smooth ? &cornerNormals : NULL);
 	if (!layer.geometry) {
 	    const auto &cut = generation->chunks[chunkId].cuts[activeCut];
 	    traceFailure("renderer-geometry-rejected", chunkId,
 		cut.face_count, cut.point_count, resident->positions.size(),
-		resident->indices.size(), resident->residentCut);
+		resident->indices.size(), activeCut, resident->residentCut);
 	    layers.clear();
 	    return FALSE;
 	}
@@ -3534,6 +3760,8 @@ BObolLodRequest::clear(void)
     policyRevision = 0;
     visualEmphasis = 0;
     drawMode = BOBOL_LOD_DRAW_UNKNOWN;
+    normalStyle = BOBOL_LOD_NORMAL_AUTHORED;
+    normalCreaseAngle = 60.0f;
     lodPolicy = 0;
     providerId = "";
     providerVersion = "";
@@ -3815,6 +4043,15 @@ append_float_string(std::string &out, float value)
 }
 
 static void
+append_float_field(std::string &out, const char *name, float value)
+{
+    out.append(name);
+    out.push_back('=');
+    append_float_string(out, value);
+    out.push_back(';');
+}
+
+static void
 append_bounds_field(std::string &out, const char *name,
 		    const SbBox3f &bounds)
 {
@@ -3873,6 +4110,8 @@ bobol_lod_cache_key(const BObolLodRequest &request)
     append_uint_field(out, "view_revision", request.viewRevision.value());
     append_uint_field(out, "policy_revision", request.policyRevision.value());
     append_int_field(out, "draw_mode", request.drawMode);
+    append_int_field(out, "normal_style", request.normalStyle);
+    append_float_field(out, "normal_crease", request.normalCreaseAngle);
     append_uint_field(out, "lod_policy", request.lodPolicy);
     append_string_field(out, "provider_id", request.providerId);
     append_string_field(out, "provider_version", request.providerVersion);
@@ -4026,6 +4265,9 @@ bobol_lod_request_keys_equal(const BObolLodRequest &lhs,
 	lhs.viewRevision != rhs.viewRevision ||
 	lhs.policyRevision != rhs.policyRevision ||
 	lhs.drawMode != rhs.drawMode ||
+	lhs.normalStyle != rhs.normalStyle ||
+	memcmp(&lhs.normalCreaseAngle, &rhs.normalCreaseAngle,
+	    sizeof(lhs.normalCreaseAngle)) != 0 ||
 	lhs.lodPolicy != rhs.lodPolicy ||
 	bu_strcmp(lhs.providerId.getString(), rhs.providerId.getString()) != 0 ||
 	bu_strcmp(lhs.providerVersion.getString(),

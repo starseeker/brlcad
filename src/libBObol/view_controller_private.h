@@ -34,6 +34,19 @@ class SoNode;
 class SoOffscreenRenderer;
 class SoBRLViewLodGroup;
 
+/* Keep the diagnostic transition stack's value type outside the exported
+ * controller pimpl.  libstdc++ may emit an out-of-line vector growth helper;
+ * nesting this type in BObolViewController::Impl consequently exposed a
+ * private implementation name from libBObol. */
+struct BObolLodControlTransitionFrame {
+    uint64_t token = 0;
+    BObolLodControlTransitionEvent event =
+	BOBOL_LOD_CONTROL_TRANSITION_UNNAMED;
+    SbBool ownerEvent = FALSE;
+    SbBool suppressed = FALSE;
+    BObolLodControlTraceState state;
+};
+
 std::vector<SoBRLDatabaseSource *> controller_render_database_sources(
     const BObolViewController *controller);
 std::vector<SoBRLDatabaseSource *> controller_render_database_source_roots(
@@ -169,11 +182,11 @@ private:
     SbString reasonValue;
 };
 
-/* Diagnostic RAII boundary around one production effect writer.  An owner
- * scope derives its event from the currently selected refinement owner;
- * explicit scopes are reserved for external input publication.  Nested
- * scopes are segmented by BObolViewController so their transitions remain
- * ordered rather than collapsing into one sampled state change. */
+/* Diagnostic RAII boundary around one production effect transaction.  An
+ * owner scope derives its event from the currently selected refinement owner;
+ * explicit scopes are reserved for external input publication.  The outermost
+ * scope is the commit boundary.  Nested scopes are implementation helpers and
+ * must not expose a partially updated control ledger as a model state. */
 class BObolLodControlTransitionScope {
 public:
     explicit BObolLodControlTransitionScope(BObolViewController *controller) :
@@ -395,15 +408,6 @@ struct BObolViewController::Impl : BObolLodCoordinator {
     static constexpr float POINT_PROXY_PIXEL_THRESHOLD_MINIMUM = 1.0f;
     static constexpr float POINT_PROXY_PIXEL_THRESHOLD_MAXIMUM = 64.0f;
 
-    struct LodControlTransitionFrame {
-	uint64_t token = 0;
-	BObolLodControlTransitionEvent event =
-	    BOBOL_LOD_CONTROL_TRANSITION_UNNAMED;
-	SbBool ownerEvent = FALSE;
-	SbBool suppressed = FALSE;
-	BObolLodControlTraceState state;
-    };
-
     BObolSceneController sceneController;
     SoViewport *viewport = new SoViewport;
     BObolViewController *controller = NULL;
@@ -471,7 +475,7 @@ struct BObolViewController::Impl : BObolLodCoordinator {
     uint64_t lodControlTransitionDropped = 0;
     SbBool lodControlTransitionHasEndpoint = FALSE;
     BObolLodControlTraceState lodControlTransitionEndpoint;
-    std::vector<LodControlTransitionFrame> lodControlTransitionFrames;
+    std::vector<BObolLodControlTransitionFrame> lodControlTransitionFrames;
     std::vector<BObolLodControlTransitionRecord> lodControlTransitionRecords;
     /* Worker callbacks cannot inspect Coin/controller state.  They publish
      * only the finite event kind; the owner thread captures both endpoints at

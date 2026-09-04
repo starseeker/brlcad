@@ -36,7 +36,7 @@ struct rt_bot_internal;
 
 /* Display-provider contract version.  Bump this whenever the meaning or
  * completeness of a selected PoP cut changes. */
-#define BOBOL_MESH_LOD_PROVIDER_VERSION "bobol-chunked-pop-v2"
+#define BOBOL_MESH_LOD_PROVIDER_VERSION "bobol-chunked-pop-v3"
 
 /* Large logical leaves are divided into deterministic private cache pages.
  * This is a latency/working-set bound, not a visible tessellation rule. */
@@ -86,14 +86,18 @@ struct BObolMeshLodChunkInfo {
     struct BObolMeshLodChunkCutInfo cuts[BOBOL_MESH_LOD_CUT_COUNT_MAX];
 };
 
-/* One borrowed chunk prefix.  Face indices are local to points and normals,
- * when present, contain three authored corner normals per face.  The pointers
- * are valid only for the duration of the callback. */
+/* One borrowed chunk prefix.  Face indices are local to points.  Each local
+ * point retains its fixed-width source vertex id so presentation workers can
+ * join topology across private page boundaries without loading the complete
+ * source mesh.  Normals, when present, contain three authored corner normals
+ * per face.  The pointers are valid only for the duration of the callback. */
 typedef int (*BObolMeshLodChunkCallback)(
 	uint32_t chunk_id,
 	int cut,
 	const point_t *points,
 	size_t point_count,
+	const uint32_t *source_vertex_ids,
+	size_t source_vertex_id_count,
 	const uint32_t *faces,
 	size_t face_count,
 	const vect_t *normals,
@@ -108,6 +112,9 @@ struct BObolMeshLodData {
     size_t point_count;
     const point_t *points_orig;
     size_t point_orig_count;
+    /* Present only for spatial pages and parallel to points_orig. */
+    const uint32_t *source_vertex_ids;
+    size_t source_vertex_id_count;
     const vect_t *normals;
     size_t normal_count;
     point_t bmin;

@@ -4145,12 +4145,10 @@ test_rt_mesh_provider_task(void)
 		completions[0].residentCut > rendererRichCut ||
 		rendererFloorPages != compactDemand.chunkIds ||
 		completions[0].channelMask != 2 ||
-		(completions[0].preparedCadGeometry ?
-		    completions[0].preparedCadGeometryRevision !=
-			reloaded.progressiveMesh->revision() :
-		    completions[0].presentationLayers.empty())) {
-		printf("FAIL: resident compaction did not publish one "
-		       "renderer-ready immutable generation\n");
+		completions[0].preparedCadGeometry ||
+		!completions[0].presentationLayers.empty()) {
+		printf("FAIL: spatial resident compaction published "
+		       "view-specific presentation geometry\n");
 		ret = 1;
 	    }
 	}

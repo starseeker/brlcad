@@ -3614,18 +3614,16 @@ lod_execute_resident_compaction(
 	if (work.target.chunkCuts.empty()) {
 	    result.preparedCadGeometry = mesh->prepareCadGeometry(
 		drawMode, &result.preparedCadGeometryRevision);
-	} else {
-	    for (const BObolLodChunkCut &chunk : work.target.chunkCuts) {
-		std::vector<BObolLodPresentationLayer> page;
-		if (!mesh->prepareCadPresentationLayers(
-			drawMode, {chunk.chunkId}, chunk.cut, page) ||
-		    page.size() != 1) {
-		    result.presentationLayers.clear();
-		    break;
-		}
-		result.presentationLayers.push_back(std::move(page.front()));
-	    }
 	}
+	/*
+	 * Spatial presentation layers are immutable view products, not resident
+	 * hierarchy storage.  Rebuilding them here would require choosing one
+	 * normal policy for every view sharing this asset, and historically let a
+	 * quiet compaction replace smooth or flat shading with authored shading.
+	 * The owner keeps any still-drawable layer set across the trim.  Its normal
+	 * request prepares a replacement on a worker only when the cut, visible
+	 * pages, or presentation policy actually changes.
+	 */
     }
     if (getenv("BOBOL_LOD_TRACE_COMPACTION")) {
 	std::vector<BObolLodChunkCut> retained;
@@ -5613,8 +5611,13 @@ BObolLodService::realizeResidentMeshLod(
      */
     const int64_t preparedGeometryStarted = bu_gettime();
     if (chunked) {
+	std::vector<BObolLodChunkCut> presentationCuts;
+	presentationCuts.reserve(requiredChunks.size());
+	for (uint32_t chunkId : requiredChunks)
+	    presentationCuts.push_back({chunkId, drawCut});
 	if (!resident->mesh->prepareCadPresentationLayers(
-		request.drawMode, requiredChunks, drawCut,
+		request.drawMode, presentationCuts, request.normalStyle,
+		request.normalCreaseAngle,
 		result.presentationLayers))
 	    return lod_provider_status_result(request,
 		BOBOL_LOD_PROVIDER_ERROR,
@@ -5640,6 +5643,22 @@ BObolLodService::realizeResidentMeshLod(
 	result.preparedCadGeometry =
 	    resident->mesh->prepareCadGeometry(
 		request.drawMode, &result.preparedCadGeometryRevision);
+    }
+    if (request.normalStyle == BOBOL_LOD_NORMAL_FLAT) {
+	result.counts.normalCount = 0;
+	result.hasNormals = FALSE;
+    } else if (request.normalStyle == BOBOL_LOD_NORMAL_SMOOTH && chunked) {
+	uint64_t normalCount = 0;
+	for (const BObolLodPresentationLayer &layer :
+		result.presentationLayers) {
+	    if (!layer.geometry || !layer.geometry->shaded)
+		continue;
+	    const size_t count = layer.geometry->shaded->normals.size();
+	    normalCount = count > UINT64_MAX - normalCount ?
+		UINT64_MAX : normalCount + static_cast<uint64_t>(count);
+	}
+	result.counts.normalCount = normalCount;
+	result.hasNormals = normalCount ? TRUE : FALSE;
     }
     preparedGeometryMicroseconds = std::max<int64_t>(
 	0, bu_gettime() - preparedGeometryStarted);

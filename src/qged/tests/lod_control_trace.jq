@@ -33,6 +33,8 @@ def required_control_fields:
     "lod_capacity_search_candidate_limit",
     "lod_capacity_search_maximum_candidates",
     "lod_capacity_search_sample_limit",
+    "lod_capacity_search_invalid_frame_attempts",
+    "lod_capacity_search_invalid_frame_attempt_limit",
     "lod_capacity_search_completed_units",
     "lod_capacity_search_total_units",
     "lod_renderer_preparation_target_signature",
@@ -126,7 +128,23 @@ def submission_cursor:
     (.lod_submission_entry_offset // 0)
   ];
 
+# The dense transition journal records the producer's prior preparation rank
+# on the transition which publishes its new endpoint.  An A/B/A window may
+# begin with that progress edge and then request/claim the one exact replay it
+# enabled.  Compare the first record with its own prior endpoint so this finite
+# progress is not lost merely because cycle_state observes post-transition
+# states.  Requiring an unchanged nonzero target signature and a strict
+# remaining-unit decrease prevents a producer event or frame clock alone from
+# excusing a repaint cycle.
+def entering_preparation_progress($sample):
+  (($sample.transition_prior_renderer_preparation_target_signature // 0) != 0) and
+  (($sample.transition_prior_renderer_preparation_target_signature // 0) ==
+   ($sample.lod_renderer_preparation_target_signature // 0)) and
+  (($sample.lod_renderer_preparation_remaining_units // 0) <
+   ($sample.transition_prior_renderer_preparation_remaining_units // 0));
+
 def strict_progress_between($before; $after):
+  entering_preparation_progress($before) or
   (($after.lod_capacity_search_completed_units // 0) >
     ($before.lod_capacity_search_completed_units // 0)) or
   (($after | submission_cursor) > ($before | submission_cursor)) or
@@ -154,6 +172,9 @@ def strict_progress_between($before; $after):
 
 def fact_active($mask; $bit):
   ((($mask / $bit) | floor) % 2) == 1;
+
+def frame_claimed:
+  fact_active((.host_work_flags // 0); 8);
 
 # Keep this projection numerically identical to
 # BObolLodControlRefinement::evaluate.  jq has no portable bitwise operators,
@@ -344,7 +365,8 @@ def complete_transition_trace_violations($samples; $required):
       ($entry.value.transition_event // "") as $event |
       select((["initial", "external_input", "interaction", "inventory",
                "availability", "publication", "planning", "presentation",
-               "handoff", "compaction", "cache_write", "idle_service"] |
+               "handoff", "compaction", "cache_write", "idle_service",
+               "producer_progress"] |
               index($event)) == null) |
       {kind: "unknown-or-unnamed-transition", sample: $entry.key,
        event: $event}
@@ -529,15 +551,19 @@ def capacity_search_certificate_violations($samples):
     ($entry.value.lod_capacity_search_candidate_limit // -1) as $candidate_limit |
     ($entry.value.lod_capacity_search_maximum_candidates // -1) as $maximum_candidates |
     ($entry.value.lod_capacity_search_sample_limit // -1) as $sample_limit |
+    ($entry.value.lod_capacity_search_invalid_frame_attempts // -1) as $invalid_attempts |
+    ($entry.value.lod_capacity_search_invalid_frame_attempt_limit // -1) as $invalid_attempt_limit |
     ($entry.value.lod_capacity_search_completed_units // -1) as $completed |
     ($entry.value.lod_capacity_search_total_units // -1) as $total |
-    ($sample_limit + 2) as $candidate_units |
+    (($invalid_attempt_limit + 1) * $sample_limit + 2) as $candidate_units |
     (if $phase == 0 then 0
      elif $phase == 1 then $total_measured * $candidate_units
-     elif $phase == 2 then $total_measured * $candidate_units + 1
+     elif $phase == 2 then
+       $total_measured * $candidate_units + 1 + $invalid_attempts
      elif $phase == 3 then
        $total_measured * $candidate_units + 2 +
-         ($sample_limit - $remaining)
+         (($sample_limit - $remaining) * ($invalid_attempt_limit + 1)) +
+         $invalid_attempts
      elif $phase == 4 then $total
      else -1
      end) as $expected_completed |
@@ -546,13 +572,16 @@ def capacity_search_certificate_violations($samples):
       ($goal < 0 or $goal > 1) or
       ($candidate_limit <= 0) or
       ($sample_limit <= 0) or
+      ($invalid_attempt_limit <= 0) or
+      ($invalid_attempts < 0 or $invalid_attempts > $invalid_attempt_limit) or
       ($measured < 0 or $measured > $candidate_limit) or
       ($total_measured < 0 or $total_measured > $maximum_candidates) or
       ($remaining < 0 or $remaining > $sample_limit) or
       ($completed < 0 or $completed > $total) or
       (if $phase == 0 then
          ($maximum_candidates != 0 or $completed != 0 or $total != 0 or
-          $remaining != 0 or $measured != 0 or $total_measured != 0)
+          $remaining != 0 or $measured != 0 or $total_measured != 0 or
+          $invalid_attempts != 0)
        else
          ($maximum_candidates <= 0 or
           ($maximum_candidates != $candidate_limit and
@@ -572,7 +601,9 @@ def capacity_search_certificate_violations($samples):
       total: $total,
       measured: $measured,
       total_measured: $total_measured,
-      samples_remaining: $remaining
+      samples_remaining: $remaining,
+      invalid_frame_attempts: $invalid_attempts,
+      invalid_frame_attempt_limit: $invalid_attempt_limit
     }
   ];
 
@@ -628,7 +659,10 @@ def terminal_reopen_violations($samples):
 # frame serial growth is deliberately insufficient: repeatedly drawing the
 # same two states is the failure this check is intended to expose.  Identical
 # repeated states are allowed because bounded worker or cache work can outlive
-# the diagnostic sampling interval.
+# the diagnostic sampling interval.  A claimed frame is an interior state of
+# the modeled BeginRender/completion transaction, not a reducer endpoint.  Its
+# return to the pre-claim fact mask therefore is not a completed A/B/A cycle:
+# the renderer still owns the sole successor.
 def nonprogress_cycle_violations($samples):
   [
     ($samples | group_by(.transition_controller // 0))[] as $group |
@@ -640,6 +674,7 @@ def nonprogress_cycle_violations($samples):
     select(($first | cycle_state) != ($middle | cycle_state)) |
     select(($first | revision_tuple) == ($middle | revision_tuple)) |
     select(strict_progress_between($first; $last) | not) |
+    select(all([$first, $middle, $last][]; (frame_claimed | not))) |
     select(all([$first, $middle, $last][];
       (.lod_interactive // false) == false)) |
     select(all([$first, $middle, $last][];

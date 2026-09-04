@@ -660,6 +660,8 @@ bobol_lod_control_transition_event_name(
 	    return "cache_write";
 	case BOBOL_LOD_CONTROL_TRANSITION_IDLE_SERVICE:
 	    return "idle_service";
+	case BOBOL_LOD_CONTROL_TRANSITION_PRODUCER_PROGRESS:
+	    return "producer_progress";
 	case BOBOL_LOD_CONTROL_TRANSITION_UNNAMED:
 	default:
 	    return "unnamed";
@@ -708,6 +710,10 @@ controller_lod_control_trace_state_equal(
 	a.capacitySearchMaximumCandidates ==
 	    b.capacitySearchMaximumCandidates &&
 	a.capacitySearchSampleLimit == b.capacitySearchSampleLimit &&
+	a.capacitySearchInvalidFrameAttempts ==
+	    b.capacitySearchInvalidFrameAttempts &&
+	a.capacitySearchInvalidFrameAttemptLimit ==
+	    b.capacitySearchInvalidFrameAttemptLimit &&
 	a.capacitySearchCompletedUnits == b.capacitySearchCompletedUnits &&
 	a.capacitySearchTotalUnits == b.capacitySearchTotalUnits &&
 	a.currentAllocationPlanSerial == b.currentAllocationPlanSerial &&
@@ -798,9 +804,47 @@ controller_lod_take_pending_transition_event(std::atomic<int> &pending)
     const int value = pending.exchange(BOBOL_LOD_CONTROL_TRANSITION_UNNAMED,
 	std::memory_order_acq_rel);
     return value > BOBOL_LOD_CONTROL_TRANSITION_UNNAMED &&
-	value <= BOBOL_LOD_CONTROL_TRANSITION_IDLE_SERVICE ?
+	value <= BOBOL_LOD_CONTROL_TRANSITION_PRODUCER_PROGRESS ?
 	static_cast<BObolLodControlTransitionEvent>(value) :
 	BOBOL_LOD_CONTROL_TRANSITION_UNNAMED;
+}
+
+static bool
+controller_lod_control_producer_progress(
+    const BObolLodControlTraceState &before,
+    const BObolLodControlTraceState &after)
+{
+    if (before.hostWork.frameClaimed() || after.hostWork.frameClaimed())
+	return true;
+
+    const BObolLodConvergenceStatus &a = before.convergence;
+    const BObolLodConvergenceStatus &b = after.convergence;
+    return a.pendingTasks != b.pendingTasks || a.inFlight != b.inFlight ||
+	a.queuedResults != b.queuedResults ||
+	a.queuedCacheWrites != b.queuedCacheWrites ||
+	a.rendererPreparationTargetSignature !=
+	    b.rendererPreparationTargetSignature ||
+	a.rendererPreparationTotalUnits != b.rendererPreparationTotalUnits ||
+	a.rendererPreparationCompletedUnits !=
+	    b.rendererPreparationCompletedUnits ||
+	a.rendererPreparationRemainingUnits !=
+	    b.rendererPreparationRemainingUnits ||
+	a.rendererPreparationTargetCount != b.rendererPreparationTargetCount ||
+	a.rendererPreparationPreparingTargetCount !=
+	    b.rendererPreparationPreparingTargetCount ||
+	a.rendererPreparationConstrainedTargetCount !=
+	    b.rendererPreparationConstrainedTargetCount ||
+	a.rendererPreparationFailedTargetCount !=
+	    b.rendererPreparationFailedTargetCount ||
+	a.rendererPreparationInvalidTargetCount !=
+	    b.rendererPreparationInvalidTargetCount ||
+	a.residentCompactionCount != b.residentCompactionCount ||
+	a.residentCompactionCandidateCount !=
+	    b.residentCompactionCandidateCount ||
+	a.sourcePreparationProviderCount != b.sourcePreparationProviderCount ||
+	a.sourcePreparationCompletedUnits !=
+	    b.sourcePreparationCompletedUnits ||
+	a.sourcePreparationTotalUnits != b.sourcePreparationTotalUnits;
 }
 
 void
@@ -834,6 +878,8 @@ BObolLodConvergenceStatus::clear(void)
     this->capacitySearchCandidateLimit = 0;
     this->capacitySearchMaximumCandidates = 0;
     this->capacitySearchSampleLimit = 0;
+    this->capacitySearchInvalidFrameAttempts = 0;
+    this->capacitySearchInvalidFrameAttemptLimit = 0;
     this->capacitySearchCompletedUnits = 0;
     this->capacitySearchTotalUnits = 0;
     this->currentAllocationPlanSerial = 0;
@@ -919,6 +965,9 @@ BObolLodConvergenceStatus::clear(void)
     this->gpuProgressiveEvictionCount = 0;
     this->gpuTriangleAtlasReclamationCount = 0;
     this->gpuResourceSampleSerial = 0;
+    this->progressEstimateAvailable = FALSE;
+    this->estimatedFraction = 0.0f;
+    this->estimatedRemainingMilliseconds = 0;
     this->fraction = 0.0f;
     this->terminal = TRUE;
     this->terminalError = FALSE;
@@ -1455,7 +1504,7 @@ BObolViewController::lodResultReadyCB(
 	controller->d->lodAvailabilityLedger.noteResultsReady(bu_gettime());
     }
     controller->d->lodControlPendingExternalEvent.store(
-	BOBOL_LOD_CONTROL_TRANSITION_PUBLICATION,
+	BOBOL_LOD_CONTROL_TRANSITION_PRODUCER_PROGRESS,
 	std::memory_order_release);
     controller->publishProgressiveWorkPending();
 }
@@ -6902,42 +6951,36 @@ BObolViewController::beginLodControlTransition(
     const BObolLodControlTraceState state =
 	this->captureLodControlTraceState();
     if (!this->d->lodControlTransitionFrames.empty()) {
-	const Impl::LodControlTransitionFrame &parent =
-	    this->d->lodControlTransitionFrames.back();
-	if (parent.suppressed ||
-	    (!parent.ownerEvent && parent.event ==
-		BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT)) {
-	    Impl::LodControlTransitionFrame frame;
-	    frame.token = bobol_nonzero_identity_take(
-		this->d->lodControlTransitionNextToken);
-	    frame.suppressed = TRUE;
-	    frame.state = state;
-	    this->d->lodControlTransitionFrames.push_back(frame);
-	    return frame.token;
-	}
-    }
-    if (this->d->lodControlTransitionFrames.empty()) {
-	const BObolLodControlTransitionEvent pendingEvent =
-	    controller_lod_take_pending_transition_event(
-		this->d->lodControlPendingExternalEvent);
-	if (this->d->lodControlTransitionHasEndpoint &&
-	    !controller_lod_control_trace_state_equal(
-		this->d->lodControlTransitionEndpoint, state)) {
-	    this->recordLodControlTransition(
-		pendingEvent,
-		this->d->lodControlTransitionEndpoint, state);
-	}
-    } else {
-	Impl::LodControlTransitionFrame &parent =
-	    this->d->lodControlTransitionFrames.back();
-	const BObolLodControlTransitionEvent parentEvent = parent.ownerEvent ?
-	    controller_lod_control_owner_event(parent.state, state) :
-	    parent.event;
-	this->recordLodControlTransition(parentEvent, parent.state, state);
-	parent.state = state;
+	/* Only the outer transaction is a refinement edge.  Public controller
+	 * operations call one another extensively, and the nested entry point can
+	 * occur after the outer operation has updated one half of a coupled
+	 * invariant (for example a selective plan before its cursor is armed).
+	 * Segmenting there turns a valid atomic update into an invalid trace. */
+	BObolLodControlTransitionFrame frame;
+	frame.token = bobol_nonzero_identity_take(
+	    this->d->lodControlTransitionNextToken);
+	frame.suppressed = TRUE;
+	frame.state = state;
+	this->d->lodControlTransitionFrames.push_back(frame);
+	return frame.token;
     }
 
-    Impl::LodControlTransitionFrame frame;
+    BObolLodControlTransitionEvent pendingEvent =
+	controller_lod_take_pending_transition_event(
+	    this->d->lodControlPendingExternalEvent);
+    if (this->d->lodControlTransitionHasEndpoint &&
+	!controller_lod_control_trace_state_equal(
+	    this->d->lodControlTransitionEndpoint, state)) {
+	if (pendingEvent == BOBOL_LOD_CONTROL_TRANSITION_UNNAMED &&
+	    controller_lod_control_producer_progress(
+		this->d->lodControlTransitionEndpoint, state))
+	    pendingEvent = BOBOL_LOD_CONTROL_TRANSITION_PRODUCER_PROGRESS;
+	this->recordLodControlTransition(
+	    pendingEvent,
+	    this->d->lodControlTransitionEndpoint, state);
+    }
+
+    BObolLodControlTransitionFrame frame;
     frame.token = bobol_nonzero_identity_take(
 	this->d->lodControlTransitionNextToken);
     frame.event = event;
@@ -6953,7 +6996,7 @@ BObolViewController::endLodControlTransition(uint64_t token)
     if (!this->d->lodControlTransitionTracing || token == 0 ||
 	this->d->lodControlTransitionFrames.empty())
 	return;
-    Impl::LodControlTransitionFrame frame =
+    BObolLodControlTransitionFrame frame =
 	this->d->lodControlTransitionFrames.back();
     if (frame.token != token) {
 	/* A mismatched scope is itself outside the named reducer relation.  Do
@@ -7034,12 +7077,17 @@ BObolViewController::drainLodControlTransitions(
 	this->d->lodControlTransitionFrames.empty()) {
 	const BObolLodControlTraceState state =
 	    this->captureLodControlTraceState();
-	const BObolLodControlTransitionEvent pendingEvent =
+	BObolLodControlTransitionEvent pendingEvent =
 	    controller_lod_take_pending_transition_event(
 		this->d->lodControlPendingExternalEvent);
 	if (this->d->lodControlTransitionHasEndpoint &&
 	    !controller_lod_control_trace_state_equal(
 		this->d->lodControlTransitionEndpoint, state)) {
+	    if (pendingEvent == BOBOL_LOD_CONTROL_TRANSITION_UNNAMED &&
+		controller_lod_control_producer_progress(
+		    this->d->lodControlTransitionEndpoint, state))
+		pendingEvent =
+		    BOBOL_LOD_CONTROL_TRANSITION_PRODUCER_PROGRESS;
 	    this->recordLodControlTransition(
 		pendingEvent,
 		this->d->lodControlTransitionEndpoint, state);
@@ -7097,6 +7145,10 @@ BObolViewController::getLodConvergenceStatus(
 	capacitySearch.maximumCandidateCount();
     status.capacitySearchSampleLimit =
 	BObolLodCapacitySearchCertificate::sampleLimit();
+    status.capacitySearchInvalidFrameAttempts =
+	capacitySearch.invalidSampleCount();
+    status.capacitySearchInvalidFrameAttemptLimit =
+	BObolLodCapacitySearchCertificate::invalidSampleLimit();
     status.capacitySearchCompletedUnits =
 	capacitySearch.progressCompletedUnits();
     status.capacitySearchTotalUnits = capacitySearch.progressTotalUnits();
@@ -7730,6 +7782,101 @@ BObolViewController::getLodConvergenceStatus(
     status.memoryLimited = convergence.memoryLimited ? TRUE : FALSE;
     status.performanceLimited =
 	convergence.performanceLimited ? TRUE : FALSE;
+
+    BObolLodProgressEstimator::Inputs estimateInputs;
+    estimateInputs.viewEpoch = this->d->lodViewRevision;
+    estimateInputs.policyEpoch = this->d->lodPolicyRevision;
+    estimateInputs.observationMicroseconds = bu_gettime();
+    estimateInputs.terminal = convergence.terminal;
+
+    BObolLodProgressEstimator::WorkRank &discoveryRank =
+	estimateInputs.rank(BObolLodProgressEstimator::Rank::DISCOVERY);
+    discoveryRank.present = status.expectedLeafCount > 0;
+    discoveryRank.completed = static_cast<uint64_t>(std::min(
+	status.availableLeafCount, status.expectedLeafCount));
+    discoveryRank.total = static_cast<uint64_t>(status.expectedLeafCount);
+
+    BObolLodProgressEstimator::WorkRank &sourceRank =
+	estimateInputs.rank(
+	    BObolLodProgressEstimator::Rank::SOURCE_PREPARATION);
+    sourceRank.present = status.sourcePreparationTotalUnits > 0;
+    sourceRank.completed = status.sourcePreparationCompletedUnits;
+    sourceRank.total = status.sourcePreparationTotalUnits;
+
+    BObolLodProgressEstimator::WorkRank &rendererRank =
+	estimateInputs.rank(
+	    BObolLodProgressEstimator::Rank::RENDERER_PREPARATION);
+    rendererRank.present = status.rendererPreparationTotalUnits > 0;
+    rendererRank.completed = status.rendererPreparationCompletedUnits;
+    rendererRank.total = status.rendererPreparationTotalUnits;
+
+    BObolLodProgressEstimator::WorkRank &visualRank =
+	estimateInputs.rank(
+	    BObolLodProgressEstimator::Rank::VISIBLE_RESOLUTION);
+    visualRank.present = this->d->lodCoveragePolicy.hasCompleteVisibleCount() &&
+	status.visibleTargetCount > 0;
+    const uint64_t visiblySatisfied = controller_lod_saturating_add_u64(
+	controller_lod_saturating_add_u64(
+	    static_cast<uint64_t>(status.satisfiedPayloadCount),
+	    static_cast<uint64_t>(status.presentedSubpixelOccurrenceCount)),
+	controller_lod_saturating_add_u64(
+	    static_cast<uint64_t>(status.memoryLimitedPayloadCount),
+	    controller_lod_saturating_add_u64(
+		static_cast<uint64_t>(status.terminalProxyOccurrenceCount),
+		static_cast<uint64_t>(
+		    status.terminalOccurrenceFailureCount))));
+    visualRank.completed = std::min(visiblySatisfied,
+	static_cast<uint64_t>(status.visibleTargetCount));
+    visualRank.total = static_cast<uint64_t>(status.visibleTargetCount);
+
+    BObolLodProgressEstimator::WorkRank &capacityRank =
+	estimateInputs.rank(
+	    BObolLodProgressEstimator::Rank::CAPACITY_SEARCH);
+    capacityRank.present = status.capacitySearchTotalUnits > 0;
+    capacityRank.completed = status.capacitySearchCompletedUnits;
+    capacityRank.total = status.capacitySearchTotalUnits;
+
+    bool hasIncompleteFiniteRank = false;
+    for (const BObolLodProgressEstimator::WorkRank &rank :
+	 estimateInputs.ranks) {
+	if (rank.present && rank.completed < rank.total) {
+	    hasIncompleteFiniteRank = true;
+	    break;
+	}
+    }
+    const bool sourceRankUnknown = sourcePreparationPending != FALSE &&
+	status.sourcePreparationTotalUnits == 0;
+    const bool rendererRankUnknown =
+	status.rendererPreparationPreparingTargetCount > 0 &&
+	status.rendererPreparationTotalUnits == 0;
+    const bool visibilityRankUnknown = convergence.visualPending &&
+	!this->d->lodCoveragePolicy.hasCompleteVisibleCount();
+    const bool unrankedControlWork = convergence.visualPending &&
+	!hasIncompleteFiniteRank &&
+	effectiveControl.owner != BObolLodControlRefinement::Owner::PRESENTATION &&
+	effectiveControl.owner != BObolLodControlRefinement::Owner::HANDOFF;
+    estimateInputs.unknownForegroundWork =
+	this->d->lodInteractionSession.active() || sourceRankUnknown ||
+	rendererRankUnknown || visibilityRankUnknown || unrankedControlWork;
+
+    if (!convergence.terminal) {
+	static constexpr uint64_t nanosecondsPerMicrosecond = 1000;
+	static constexpr long double microsecondsPerSecond = 1000000.0L;
+	const uint64_t observedFrameMicroseconds = std::max(
+	    this->d->lastSceneRenderTimeNanoseconds,
+	    this->d->lastRenderTimeNanoseconds) / nanosecondsPerMicrosecond;
+	const long double stableFps = std::max<long double>(1.0L,
+	    static_cast<long double>(this->d->lodStableTargetFps));
+	const uint64_t targetFrameMicroseconds = static_cast<uint64_t>(
+	    microsecondsPerSecond / stableFps);
+	estimateInputs.finalPresentationMicroseconds = std::max(
+	    observedFrameMicroseconds, targetFrameMicroseconds);
+    }
+    const BObolLodProgressEstimator::Estimate estimate =
+	this->d->lodProgressEstimator.evaluate(estimateInputs);
+    status.progressEstimateAvailable = estimate.available ? TRUE : FALSE;
+    status.estimatedFraction = estimate.fraction;
+    status.estimatedRemainingMilliseconds = estimate.remainingMilliseconds;
 }
 
 double
