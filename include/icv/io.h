@@ -53,6 +53,16 @@ __BEGIN_DECLS
 ICV_EXPORT extern icv_image_t *icv_create(size_t width, size_t height, ICV_COLOR_SPACE color_space);
 
 /**
+ * Allocate an image with an explicit channel layout.  RGB images may have
+ * three or four channels and grayscale images may have one or two channels.
+ * The alpha_channel member is set when an alpha channel is present.
+ *
+ * @return Image structure with allocated space and zeroed data, or NULL if
+ * the arguments are invalid or allocation fails.
+ */
+ICV_EXPORT extern icv_image_t *icv_create_with_channels(size_t width, size_t height, ICV_COLOR_SPACE color_space, size_t channels);
+
+/**
  * This function zeroes all the data entries of an image
  * @param bif Image Structure
  */

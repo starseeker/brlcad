@@ -34,6 +34,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <ctime>
+#include <atomic>
 #include <vector>
 
 #ifdef HAVE_SYS_TYPES_H
@@ -429,8 +430,9 @@ pkg_addr_is_ipc_listener(const char *addr)
 int
 pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
 {
-    static unsigned long counter = 0;
+    static std::atomic<unsigned long> counter(0);
     const char *hint = (name_hint && name_hint[0]) ? name_hint : "brlcad-pkg";
+    const unsigned long sequence = counter.fetch_add(1, std::memory_order_relaxed);
 #ifndef _WIN32
     const char *tmpdir = getenv("TMPDIR");
     time_t now = time(NULL);
@@ -443,14 +445,14 @@ pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
 	tmpdir = "/tmp";
 
     need = snprintf(addr, len, "fifo:%s/%s-%ld-%lld-%lu",
-		    tmpdir, hint, (long)getpid(), (long long)now, counter++);
+		    tmpdir, hint, (long)getpid(), (long long)now, sequence);
     if (need >= 0 && (size_t)need < len)
 	return 0;
 
 #  if defined(HAVE_SYS_UN_H)
 #  if defined(__linux__)
     need = snprintf(addr, len, "unix-abstract:%s-%ld-%lld-%lu",
-		    hint, (long)getpid(), (long long)now, counter++);
+		    hint, (long)getpid(), (long long)now, sequence);
     if (need >= 0 && (size_t)need < len &&
 	    strlen(addr + 14) < sizeof(((struct sockaddr_un *)0)->sun_path) - 1)
 	return 0;
@@ -466,7 +468,7 @@ pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
     if (strlen(addr + 5) >= sizeof(((struct sockaddr_un *)0)->sun_path)) {
 	if (strcmp(tmpdir, "/tmp") != 0) {
 	    need = snprintf(addr, len, "unix:/tmp/%s-%ld-%lld-%lu.sock",
-			    hint, (long)getpid(), (long long)now, counter++);
+			    hint, (long)getpid(), (long long)now, sequence);
 	    if (need < 0 || (size_t)need >= len ||
 		    strlen(addr + 5) >= sizeof(((struct sockaddr_un *)0)->sun_path)) {
 		addr[0] = '\0';
@@ -504,7 +506,7 @@ pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
 
     need = snprintf(addr, len, "npipe:\\\\.\\pipe\\%s-%lu-%lld-%lu",
 		    safe_hint, (unsigned long)GetCurrentProcessId(),
-		    (long long)now, counter++);
+		    (long long)now, sequence);
     if (need < 0 || (size_t)need >= len) {
 	addr[0] = '\0';
 	return -1;
@@ -628,9 +630,10 @@ pkg_connect_addr(const char *addr, const struct pkg_switch *switchp, pkg_errlog 
 
 #ifndef _WIN32
     if (strncmp(addr, "fifo:", 5) == 0) {
-	static unsigned long counter = 0;
+	static std::atomic<unsigned long> counter(0);
 	const char *base = addr + 5;
 	time_t now = time(NULL);
+	const unsigned long sequence = counter.fetch_add(1, std::memory_order_relaxed);
 	char c2s[MAXPATHLEN] = {0};
 	char s2c[MAXPATHLEN] = {0};
 	char msg[MAXPATHLEN * 2 + 8] = {0};
@@ -643,11 +646,11 @@ pkg_connect_addr(const char *addr, const struct pkg_switch *switchp, pkg_errlog 
 	    return PKC_ERROR;
 
 	need = snprintf(c2s, sizeof(c2s), "%s.%ld.%lld.%lu.c2s",
-			base, (long)getpid(), (long long)now, counter);
+			base, (long)getpid(), (long long)now, sequence);
 	if (need < 0 || (size_t)need >= sizeof(c2s))
 	    return PKC_ERROR;
 	need = snprintf(s2c, sizeof(s2c), "%s.%ld.%lld.%lu.s2c",
-			base, (long)getpid(), (long long)now, counter++);
+			base, (long)getpid(), (long long)now, sequence);
 	if (need < 0 || (size_t)need >= sizeof(s2c))
 	    return PKC_ERROR;
 
@@ -1111,15 +1114,15 @@ pkg_mux_wait(pkg_mux_t *m, int timeout_ms)
             sock_hidx[n_wsa]         = n_handles;
             wsa_evs[n_wsa]           = ev;
             ++n_handles; ++n_wsa;
-        } else if (e.pipe_h != INVALID_HANDLE_VALUE &&
-                   GetFileType(e.pipe_h) != FILE_TYPE_PIPE) {
-            /* Console and other genuinely waitable handles may use the native
-             * wait set.  Anonymous pipes are polled with PeekNamedPipe below:
-             * their handles do not provide a reliable readability signal to
-             * WaitForMultipleObjects. */
-            wait_handles[n_handles] = e.pipe_h;
-            entry_idx[n_handles] = i;
-            ++n_handles;
+	} else if (e.pipe_h != INVALID_HANDLE_VALUE &&
+		   GetFileType(e.pipe_h) != FILE_TYPE_PIPE) {
+	    /* Console and other genuinely waitable handles may use the native
+	     * wait set.  Anonymous pipes are polled with PeekNamedPipe below:
+	     * their handles do not provide a reliable readability signal to
+	     * WaitForMultipleObjects. */
+	    wait_handles[n_handles] = e.pipe_h;
+	    entry_idx[n_handles] = i;
+	    ++n_handles;
         }
     }
 
@@ -1127,64 +1130,64 @@ pkg_mux_wait(pkg_mux_t *m, int timeout_ms)
     int wait_error = 0;
     const ULONGLONG start = GetTickCount64();
     for (;;) {
-        /* Anonymous pipes must be tested for bytes, not waited on as kernel
-         * objects.  Treat a broken pipe as readable so the caller can consume
-         * EOF and retire the connection. */
-        for (int i = 0; i < (int)m->entries.size(); ++i) {
-            auto &e = m->entries[i];
-            if (e.is_socket || e.pipe_h == INVALID_HANDLE_VALUE ||
-                GetFileType(e.pipe_h) != FILE_TYPE_PIPE)
-                continue;
-            DWORD available = 0;
-            const BOOL peek_ok = PeekNamedPipe(e.pipe_h, NULL, 0, NULL,
-                &available, NULL);
-            if ((peek_ok && available > 0) ||
-                (!peek_ok && GetLastError() == ERROR_BROKEN_PIPE)) {
-                m->ready.push_back(e.fd);
-                ++n_ready;
-            }
-        }
-        if (n_ready > 0)
-            break;
+	/* Anonymous pipes must be tested for bytes, not waited on as kernel
+	 * objects.  Treat a broken pipe as readable so the caller can consume
+	 * EOF and retire the connection. */
+	for (int i = 0; i < (int)m->entries.size(); ++i) {
+	    auto &e = m->entries[i];
+	    if (e.is_socket || e.pipe_h == INVALID_HANDLE_VALUE ||
+		GetFileType(e.pipe_h) != FILE_TYPE_PIPE)
+		continue;
+	    DWORD available = 0;
+	    const BOOL peek_ok = PeekNamedPipe(e.pipe_h, NULL, 0, NULL,
+		&available, NULL);
+	    if ((peek_ok && available > 0) ||
+		(!peek_ok && GetLastError() == ERROR_BROKEN_PIPE)) {
+		m->ready.push_back(e.fd);
+		++n_ready;
+	    }
+	}
+	if (n_ready > 0)
+	    break;
 
-        DWORD slice = 10;
-        if (timeout_ms > 0) {
-            const ULONGLONG elapsed = GetTickCount64() - start;
-            if (elapsed >= (ULONGLONG)timeout_ms)
-                break;
-            const ULONGLONG remaining = (ULONGLONG)timeout_ms - elapsed;
-            if (remaining < slice)
-                slice = (DWORD)remaining;
-        } else if (timeout_ms == 0) {
-            /* Perform one nonblocking wait for sockets as well as pipes. */
-            slice = 0;
-        }
+	DWORD slice = 10;
+	if (timeout_ms > 0) {
+	    const ULONGLONG elapsed = GetTickCount64() - start;
+	    if (elapsed >= (ULONGLONG)timeout_ms)
+		break;
+	    const ULONGLONG remaining = (ULONGLONG)timeout_ms - elapsed;
+	    if (remaining < slice)
+		slice = (DWORD)remaining;
+	} else if (timeout_ms == 0) {
+	    /* Perform one nonblocking wait for sockets as well as pipes. */
+	    slice = 0;
+	}
 
-        if (n_handles > 0) {
-            DWORD ret = WaitForMultipleObjects((DWORD)n_handles, wait_handles,
-                FALSE, slice);
-            if (ret == WAIT_FAILED) {
-                wait_error = 1;
-                break;
-            }
-            if (ret >= WAIT_OBJECT_0 &&
-                ret < WAIT_OBJECT_0 + (DWORD)n_handles) {
-                for (int i = 0; i < n_handles; ++i) {
-                    if (WaitForSingleObject(wait_handles[i], 0) ==
-                        WAIT_OBJECT_0) {
-                        m->ready.push_back(m->entries[entry_idx[i]].fd);
-                        ++n_ready;
-                    }
-                }
-                if (n_ready > 0)
-                    break;
-            }
-        } else if (slice > 0) {
-            Sleep(slice);
-        }
+	if (n_handles > 0) {
+	    DWORD ret = WaitForMultipleObjects((DWORD)n_handles, wait_handles,
+		FALSE, slice);
+	    if (ret == WAIT_FAILED) {
+		wait_error = 1;
+		break;
+	    }
+	    if (ret >= WAIT_OBJECT_0 &&
+		ret < WAIT_OBJECT_0 + (DWORD)n_handles) {
+		for (int i = 0; i < n_handles; ++i) {
+		    if (WaitForSingleObject(wait_handles[i], 0) ==
+			WAIT_OBJECT_0) {
+			m->ready.push_back(m->entries[entry_idx[i]].fd);
+			++n_ready;
+		    }
+		}
+		if (n_ready > 0)
+		    break;
+	    }
+	} else if (slice > 0) {
+	    Sleep(slice);
+	}
 
-        if (timeout_ms == 0)
-            break;
+	if (timeout_ms == 0)
+	    break;
     }
 
     for (int j = 0; j < n_wsa; ++j) {

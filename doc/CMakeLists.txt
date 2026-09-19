@@ -30,9 +30,97 @@ set(
   notes/itcl4_migration.txt
   notes/mater.txt
   notes/matrix.txt
+  notes/brl_obol_matrices.txt
+  notes/brl_obol_view_lod.txt
+  notes/brl_obol_view_operations.txt
+  notes/ged_draw_api.md
+  notes/libbobol_active_debt.md
+  notes/libbobol_api_contract.md
+  notes/libbobol_architecture.md
+  notes/libbobol_engineering_lessons.md
+  notes/libbobol_formal_models.md
+  notes/libbobol_lod_state_contract.md
+  notes/live_spatial_publication.md
+  notes/libbobol_platform_threading_matrix.md
+  notes/libbobol_progressive_pipeline_contract.md
+  notes/libbobol_tla_conformance.md
+  notes/obol_20260905_resume_history.md
+  notes/obol_20260919_debt_history.md
+  notes/obol_20260919_handoff_history.md
+  notes/obol_20260919_readiness_history.md
+  notes/obol_20260919_rework_proposal.txt
+  notes/obol_production_readiness.md
+  notes/obol_session_handoff.md
+  notes/obol_main_integration.md
+  notes/obol_simplification_guide.md
+  notes/obol_endpoint_lifecycle.md
+  notes/obol_framebuffer_protocol.txt
+  notes/obol_grid_snap.txt
+  notes/obol_hosted_application_ownership.txt
+  notes/obol_legacy_dependency_inventory.txt
+  notes/obol_overlay_coverage.txt
+  notes/obol_realization_coverage.txt
+  notes/qged_editing.md
   pre_BRL-CAD.bib
 )
+
 add_doc(documentation_DATA ".")
+
+# models.json is the authoritative TLA+ inventory.  Deriving the package list
+# from it prevents a moved or newly cataloged model from silently disappearing
+# from source and binary documentation archives.
+set(
+  tla_documentation_DATA
+  notes/tla/README.md
+  notes/tla/GLOSSARY.md
+  notes/tla/AUDIT.md
+  notes/tla/FAIRNESS.md
+  notes/tla/TERMINOLOGY.md
+  notes/tla/RISK_COVERAGE.md
+  notes/tla/conformance.json
+  notes/tla/models.json
+  notes/tla/verification.md
+)
+add_doc(tla_documentation_DATA "tla")
+set(tla_baseline_DATA notes/tla/baselines/tlc-2.19.json)
+add_doc(tla_baseline_DATA "tla/baselines")
+unset(tla_baseline_DATA)
+
+set(tla_model_catalog "${CMAKE_CURRENT_SOURCE_DIR}/notes/tla/models.json")
+file(READ "${tla_model_catalog}" tla_model_catalog_json)
+string(JSON tla_model_count LENGTH "${tla_model_catalog_json}" models)
+math(EXPR tla_model_last "${tla_model_count} - 1")
+set(tla_model_directories)
+foreach(tla_model_index RANGE 0 ${tla_model_last})
+  string(JSON tla_model_path GET "${tla_model_catalog_json}" models ${tla_model_index} path)
+  string(JSON tla_config_path GET "${tla_model_catalog_json}" models ${tla_model_index} config)
+  get_filename_component(tla_model_directory "${tla_model_path}" DIRECTORY)
+  string(MAKE_C_IDENTIFIER "${tla_model_directory}" tla_model_group)
+  set(tla_model_group "tla_${tla_model_group}_DATA")
+  list(
+    APPEND ${tla_model_group}
+    "notes/tla/${tla_model_path}"
+    "notes/tla/${tla_config_path}"
+  )
+  list(APPEND tla_model_directories "${tla_model_directory}")
+endforeach()
+list(REMOVE_DUPLICATES tla_model_directories)
+foreach(tla_model_directory IN LISTS tla_model_directories)
+  string(MAKE_C_IDENTIFIER "${tla_model_directory}" tla_model_group)
+  set(tla_model_group "tla_${tla_model_group}_DATA")
+  add_doc(${tla_model_group} "tla/${tla_model_directory}")
+  unset(${tla_model_group})
+endforeach()
+unset(tla_model_group)
+unset(tla_model_directory)
+unset(tla_model_directories)
+unset(tla_config_path)
+unset(tla_model_path)
+unset(tla_model_index)
+unset(tla_model_last)
+unset(tla_model_count)
+unset(tla_model_catalog_json)
+unset(tla_model_catalog)
 
 set(
   documentation_mged_old_DATA

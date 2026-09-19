@@ -50,7 +50,7 @@ __declspec(dllimport) int __stdcall SetHandleInformation(void *, unsigned long, 
 #include "bu/ptbl.h"
 #include "bu/opt.h"
 #include "bu/str.h"
-#include "bv/vlist.h"
+#include "bg/vlist.h"
 #include "icv.h"
 #include "icv/anim.h"
 #include "pkg.h"
@@ -870,7 +870,7 @@ rtwizard_bound_leaf(struct db_tree_state *tsp, const struct db_full_path *UNUSED
 	struct bu_list vhead;
 	BU_LIST_INIT(&vhead);
 	if (ip->idb_meth->ft_plot(&vhead, ip, tsp->ts_ttol, tsp->ts_tol, NULL) >= 0 &&
-	    bv_vlist_bbox(&vhead, &bmin, &bmax, NULL, NULL) == 0)
+	    bg_vlist_bbox(&vhead, &bmin, &bmax, NULL, NULL) == 0)
 	    bret = 0;
     }
     if (bret < 0) {
@@ -1081,7 +1081,7 @@ rtwizard_cut_bounds_cmd(ClientData UNUSED(client_data), Tcl_Interp *interp, int 
 
 
 void
-Init_RtWizard_Vars(Tcl_Interp *interp, struct rtwizard_settings *s)
+Init_RtWizard_Vars(Tcl_Interp *interp, struct rtwizard_settings *s, char type)
 {
     struct bu_vls tcl_cmd = BU_VLS_INIT_ZERO;
 
@@ -1095,6 +1095,11 @@ Init_RtWizard_Vars(Tcl_Interp *interp, struct rtwizard_settings *s)
     if (s->no_gui) {
 	bu_vls_sprintf(&tcl_cmd, "set ::disable_gui 1");
 	(void)Tcl_Eval(interp, bu_vls_addr(&tcl_cmd));
+    }
+
+    if (type != '\0') {
+	char type_str[2] = {type, '\0'};
+	rtwizard_set_state(interp, "picture_type", type_str);
     }
 
     if (s->verbose) {
@@ -1447,7 +1452,7 @@ main(int argc, char **argv)
     /* RUNTIME BEHAVIOR (dev and non-dev) */
     BU_OPT(d[25],  "",  "gui",           "",             NULL,            &s->use_gui,    "Force use of GUI.");
     BU_OPT(d[26],  "",  "no-gui",        "",             NULL,            &s->no_gui,     "Do not use GUI, even if available information is insufficient to generate image.");
-    BU_OPT(d[27], "d", "fbserv-device", "<device>",     &bu_opt_vls,     s->fb_dev,      "Device for framebuffer viewing (e.g., -d /dev/wgl)");
+    BU_OPT(d[27], "d", "fbserv-device", "<device>",     &bu_opt_vls,     s->fb_dev,      "Framebuffer device for headless output (e.g., -d /dev/mem)");
     BU_OPT(d[28], "p", "fbserv-port",   "#",            &bu_opt_int,     &s->port,       "Port # for framebuffer");
     BU_OPT(d[29], "",  "benchmark",     "",             NULL,            &s->benchmark,  "Benchmark mode (no randomness)");
     BU_OPT(d[30], "",  "cpu-count",     "#",            &bu_opt_int,     &s->cpus,       "Specify the number of CPUs to use");
@@ -1619,7 +1624,11 @@ main(int argc, char **argv)
 		rtwizard_cut_bounds_cmd, NULL, NULL);
 
 	/* Normalize .g and output image file paths, since they're to be used
-	 * in Tcl scripts */
+	 * in Tcl scripts.  Tcl 8.6's Windows normalizer may replace a valid
+	 * long-name directory component with an empty string when resolving its
+	 * 8.3 alias.  Native absolute paths
+	 * already work in Tcl on Windows, so preserve them verbatim there. */
+#if !defined(_WIN32) || defined(__CYGWIN__)
 	if (bu_vls_strlen(s->input_file) > 0) {
 	    Tcl_Obj *initPath, *normalPath;
 	    initPath = Tcl_NewStringObj(bu_vls_addr(s->input_file), (int)bu_vls_strlen(s->input_file));
@@ -1636,6 +1645,7 @@ main(int argc, char **argv)
 	    bu_vls_sprintf(s->output_file, "%s", Tcl_GetString(normalPath));
 	    Tcl_DecrRefCount(initPath);
 	}
+#endif
 
 	/* Set a single argv so the Tcl scripts will run the main proc.  Not passing more args
 	 * because they can apparently cause problems with Tcl script execution. */
@@ -1645,7 +1655,7 @@ main(int argc, char **argv)
 	rtwizard_disable_std_handle_inheritance();
 #endif
 
-	Init_RtWizard_Vars(interp, s);
+	Init_RtWizard_Vars(interp, s, type);
 	if (s->port < 0) {
 	    (void)rtwizard_setup_ipc(interp);
 	}

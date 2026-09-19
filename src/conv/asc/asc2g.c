@@ -52,7 +52,7 @@
 
 /* maximum input line buffer size */
 #define BUFSIZE (16*1024)
-#define SIZE (128*1024*1024)
+#define TCL_BLOCK_TARGET (4*1024*1024)
 #define TYPE_LEN 255
 #define NAME_LEN 255
 
@@ -1467,7 +1467,6 @@ main(int argc, char *argv[])
 	bu_exit(1, "asc2g: can't open files.");
     }
 
-    bu_vls_extend(&line, SIZE);
     bu_vls_strcpy(&str_title, "title");
     bu_vls_strcpy(&str_put, "put ");
 
@@ -1508,6 +1507,7 @@ main(int argc, char *argv[])
 	bu_vls_trunc(&line, 0);
 
 	interp = Tcl_CreateInterp();
+	Tcl_SetVar(interp, "tclcad_disable_events", "1", TCL_GLOBAL_ONLY);
 	tret = Ged_Init(interp);
 	if (tret == TCL_ERROR) {
 	    bu_log("Ged_Init error: %s\n", Tcl_GetStringResult(interp));

@@ -26,15 +26,50 @@
 
 #include "common.h"
 #include "vmath.h"
+#include "bg/polygon_types.h"
+#include "bu/color.h"
 #include "bu/list.h"
 #include "bu/vls.h"
 #include "bn/tol.h"
-#include "bv/defines.h"
 #include "rt/defines.h"
 #include "rt/directory.h"
 #include "rt/db_instance.h"
 
 __BEGIN_DECLS
+
+struct bg_tess_tol;
+struct bn_tol;
+struct rt_db_internal;
+struct rt_primitive_lod_realization;
+struct rt_sketch_polygon;
+
+#define RT_SKETCH_POLYGON_GENERAL   0
+#define RT_SKETCH_POLYGON_CIRCLE    1
+#define RT_SKETCH_POLYGON_ELLIPSE   2
+#define RT_SKETCH_POLYGON_RECTANGLE 3
+#define RT_SKETCH_POLYGON_SQUARE    4
+
+/**
+ * Public value representation of view-polygon data stored in a SKETCH.
+ *
+ * The bg_polygon memory is caller-owned.  Initialize with
+ * rt_sketch_polygon_data_init, release with rt_sketch_polygon_data_free, and
+ * use rt_sketch_polygon_data_copy for deep copies.
+ */
+struct rt_sketch_polygon_data {
+    int type;
+    int fill_flag;
+    vect2d_t fill_dir;
+    fastf_t fill_delta;
+    struct bu_color fill_color;
+    point_t origin_point;
+    plane_t vp;
+    fastf_t vZ;
+    struct bg_polygon polygon;
+
+    int have_edge_color;
+    struct bu_color edge_color;
+};
 
 /* SKETCH specific editing info */
 struct rt_sketch_edit {
@@ -43,7 +78,49 @@ struct rt_sketch_edit {
     /* Mouse-proximity pick: ft_edit_xy stores cursor here; ft_edit reads it */
     point_t v_pos;      /* view-space cursor position set by ft_edit_xy */
     int v_pos_valid;    /* non-zero when v_pos holds a pending proximity query */
+    vect2d_t last_segment_delta; /* last applied segment motion, base units */
+    int last_segment_delta_valid;
 };
+
+/** Stable semantic kinds reported for edit-display sketch segments. */
+enum rt_sketch_edit_segment_type {
+    RT_SKETCH_EDIT_SEGMENT_UNKNOWN = 0,
+    RT_SKETCH_EDIT_SEGMENT_LINE,
+    RT_SKETCH_EDIT_SEGMENT_ARC,
+    RT_SKETCH_EDIT_SEGMENT_BEZIER,
+    RT_SKETCH_EDIT_SEGMENT_NURB
+};
+
+/**
+ * Caller-owned retained edit geometry for a sketch.
+ *
+ * vertices contains the exact 3-D model-space position of every sketch
+ * vertex.  line_points/line_commands contain a tessellated presentation of
+ * all curve segments.  line_segments maps every line command to its stable
+ * source segment index, allowing a renderer to present many line pieces as
+ * one selectable feature.  segment_types has segment_count entries.
+ *
+ * Initialize to zero, populate with rt_sketch_edit_geometry_get, and release
+ * with rt_sketch_edit_geometry_free.  Memory is allocated and released by
+ * librt so the contract is safe across Windows CRT boundaries.
+ */
+struct rt_sketch_edit_geometry {
+    point_t *vertices;
+    size_t vertex_count;
+    point_t *line_points;
+    int *line_commands;
+    int *line_segments;
+    size_t line_count;
+    int *segment_types;
+    size_t segment_count;
+};
+
+RT_EXPORT extern void
+rt_sketch_edit_geometry_free(struct rt_sketch_edit_geometry *geometry);
+
+RT_EXPORT extern int
+rt_sketch_edit_geometry_get(struct rt_sketch_edit_geometry *geometry,
+	struct rt_db_internal *ip, const struct bg_tess_tol *ttol);
 
 RT_EXPORT extern int rt_check_curve(const struct rt_curve *crv,
 				    const struct rt_sketch_internal *skt,
@@ -60,11 +137,49 @@ RT_EXPORT extern void rt_copy_curve(struct rt_curve *crv_out,
 				    const struct rt_curve *crv_in);
 RT_EXPORT extern struct rt_sketch_internal *rt_copy_sketch(const struct rt_sketch_internal *sketch_ip);
 
-RT_EXPORT extern struct bv_scene_obj *
-db_sketch_to_scene_obj(const char *sname, struct db_i *dbip, struct directory *dp, struct bview *sv, int flags);
+RT_EXPORT extern int rt_sketch_wireframe_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol);
+
+RT_EXPORT extern void rt_sketch_polygon_data_init(struct rt_sketch_polygon_data *poly);
+
+RT_EXPORT extern void rt_sketch_polygon_data_free(struct rt_sketch_polygon_data *poly);
+
+RT_EXPORT extern int rt_sketch_polygon_data_copy(struct rt_sketch_polygon_data *dest,
+						 const struct rt_sketch_polygon_data *src);
+
+RT_EXPORT extern int
+db_sketch_to_polygon_data(struct rt_sketch_polygon_data *poly,
+			  const char *sname,
+			  struct db_i *dbip,
+			  struct directory *dp);
 
 RT_EXPORT extern struct directory *
-db_scene_obj_to_sketch(struct db_i *dbip, const char *sname, struct bv_scene_obj *s);
+db_sketch_polygon_data_to_sketch(struct db_i *dbip,
+				 const char *sname,
+				 const struct rt_sketch_polygon_data *poly);
+
+/**
+ * Replace an existing sketch with polygon data.
+ *
+ * Unlike db_sketch_polygon_data_to_sketch(), this routine requires @p sname
+ * to identify an existing sketch.  It will not replace an object of another
+ * type and it will not create a missing object.
+ */
+RT_EXPORT extern struct directory *
+db_sketch_polygon_data_update_sketch(struct db_i *dbip,
+				     const char *sname,
+				     const struct rt_sketch_polygon_data *poly);
+
+RT_EXPORT extern struct directory *
+db_sketch_polygon_to_sketch(struct db_i *dbip, const char *sname, const struct rt_sketch_polygon *poly, const unsigned char edge_rgb[3]);
+
+RT_EXPORT extern struct rt_sketch_polygon *
+db_sketch_to_polygon(const char *sname, struct db_i *dbip, struct directory *dp);
+
+RT_EXPORT extern const struct bg_polygon *
+rt_sketch_polygon_bg_polygon(const struct rt_sketch_polygon *poly);
+
+RT_EXPORT extern void
+rt_sketch_polygon_destroy(struct rt_sketch_polygon *poly);
 
 __END_DECLS
 

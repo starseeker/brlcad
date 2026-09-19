@@ -23,7 +23,14 @@
 #include "rt/geom.h"
 #include "wdb.h"
 
-#include "../../ged_private.h"
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BSceneController.h"
+#include "BObol/BViewController.h"
+#include "ged/display_obol_private.h"
+#include "ged/view.h"
+#include "view_test_util.h"
+
 
 using Color = std::array<unsigned char, 3>;
 using ExpectedColors = std::map<std::string, Color>;
@@ -116,31 +123,47 @@ check_drawing(struct ged *gedp, const char *mode, const ExpectedColors &expected
 	return false;
     }
 
+    const char *autoview[] = {"autoview", NULL};
+    if (ged_exec_autoview(gedp, 1, autoview) != BRLCAD_OK)
+	return false;
+
     ExpectedColors remaining = expected;
     bool passed = true;
-    struct display_list *display;
-    for (BU_LIST_FOR(display, display_list, gedp->i->ged_gdp->gd_headDisplay)) {
-	struct bv_scene_obj *object;
-	for (BU_LIST_FOR(object, bv_scene_obj, &display->dl_head_scene_obj)) {
-	    const auto *data = static_cast<const struct ged_bv_data *>(object->s_u_data);
-	    if (!data || data->s_fullpath.fp_len == 0)
-		return false;
-	    const char *name = DB_FULL_PATH_CUR_DIR(&data->s_fullpath)->d_namep;
-	    const auto found = remaining.find(name);
-	    if (found == remaining.end()) {
-		bu_log("unexpected or duplicate drawn object: %s\n", name);
-		return false;
-	    }
-	    const Color &color = override_color ? override_rgb : found->second;
-	    if (BU_LIST_IS_EMPTY(&object->s_vlist) ||
-		!std::equal(color.begin(), color.end(), object->s_color)) {
-		bu_log("%s, mode %s, override %d: expected %d/%d/%d, got %d/%d/%d\n",
-		    name, mode, override_color,
-		    color[0], color[1], color[2], object->s_color[0], object->s_color[1], object->s_color[2]);
-		passed = false;
-	    }
-	    remaining.erase(found);
+    struct ged_view_context *view = ged_view_active_ctx(gedp);
+    if (!draw_test_obol_progressive_drain(gedp, view, 2000, 1)) {
+	bu_log("draw mode %s did not settle\n", mode);
+	return false;
+    }
+    BObolViewController *controller = static_cast<BObolViewController *>(
+	bobol_display_endpoint_controller(ged_view_context_obol_endpoint_get(view)));
+    if (!controller || !controller->getRenderSceneRoot())
+	return false;
+    BObolSceneController render_scene(controller->getRenderSceneRoot());
+    BObolSceneController *scene = &render_scene;
+    for (int i = 0; i < scene->getRealizedShapeSummaryCount(); ++i) {
+	BObolRealizedShapeSummary object;
+	if (!scene->getRealizedShapeSummary(i, object) || !object.valid)
+	    return false;
+	if (object.recordRole == "lod-overview")
+	    continue;
+	const char *name = object.sourceName.getString();
+	const auto found = remaining.find(name);
+	if (found == remaining.end()) {
+	    bu_log("unexpected or duplicate drawn object: %s, path %s, kind %s, role %s\n", name, object.path.getString(), object.geometryKind.getString(), object.recordRole.getString());
+	    return false;
 	}
+	const Color &color = override_color ? override_rgb : found->second;
+	const SbColor actual = object.colorOverride ? object.color : object.materialColor;
+	const SbColor expected_color(color[0] / 255.0f, color[1] / 255.0f, color[2] / 255.0f);
+	if ((!object.colorOverride && !object.materialColorValid) ||
+	    object.geometryKind.getLength() == 0 ||
+	    !actual.equals(expected_color, SMALL_FASTF)) {
+	    bu_log("%s, mode %s, override %d: expected %d/%d/%d, got %.0f/%.0f/%.0f\n",
+		name, mode, override_color, color[0], color[1], color[2],
+		actual[0] * 255.0f, actual[1] * 255.0f, actual[2] * 255.0f);
+	    passed = false;
+	}
+	remaining.erase(found);
     }
     if (!remaining.empty())
 	bu_log("draw mode %s omitted %zu fixture objects\n", mode, remaining.size());
@@ -168,9 +191,10 @@ main(int argc, char **argv)
     std::unique_ptr<struct ged, decltype(&ged_close)> context(
 	passed ? ged_open("db", path, 1) : NULL, ged_close);
     if (context) {
-	// Inspect actual legacy display-list colors without a window or image
-	// comparison.  Differently colored siblings also detect state leakage.
-	context->new_cmd_forms = 0;
+	// Differently colored siblings detect material state leaking between paths.
+	if (draw_test_obol_view_init(context.get(), ged_view_active_ctx(context.get()),
+	    512, 512) != BRLCAD_OK)
+	    return EXIT_FAILURE;
 	for (const char *mode : {"0", "1", "2"})
 	    for (bool override_color : {false, true})
 		passed = check_drawing(context.get(), mode, expected, override_color) && passed;

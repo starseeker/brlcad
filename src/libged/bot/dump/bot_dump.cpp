@@ -25,11 +25,14 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <string.h>
 #include <ctype.h>
+#include <vector>
 #include "bio.h"
 #include "bnetwork.h"
 
@@ -50,9 +53,11 @@
 
 #include "raytrace.h"
 
-#include "bv/defines.h"
-#include "dm.h"
-
+#include "ged/draw.h"
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BExportAction.h"
+#include "BObol/BViewController.h"
+#include <Inventor/SoViewport.h>
 #include "../../ged_private.h"
 #include "../ged_bot.h"
 #include "./ged_bot_dump.h"
@@ -460,8 +465,8 @@ bot_opt_unit(struct bu_vls *UNUSED(msg), size_t argc, const char **argv, void *s
 
 // TODO - right now this is not at all general, and in fact will only write out a few
 // Tcl specific data containers.  Needs to be rethought.  Probably should be revisited
-// after we switch to the new drawing path, which uses bview scene objects - that will
-// likely make writing out a scene simpler overall.
+// now that the drawing path exposes semantic Obol scene records - that should make
+// writing out a scene simpler overall.
 static int
 viewdata_dump(struct _ged_bot_dump_client_data *d, struct ged *gedp, FILE *fp)
 {
@@ -521,59 +526,100 @@ viewdata_dump(struct _ged_bot_dump_client_data *d, struct ged *gedp, FILE *fp)
 }
 
 static void
-dl_botdump(struct _ged_bot_dump_client_data *d)
+botdump_export_record(const SoBRLExportAction::ObjectRecord &rec,
+	const SoBRLExportAction &export_action,
+	struct _ged_bot_dump_client_data *d)
 {
-    struct bu_list *hdlp = (struct bu_list *)ged_dl(d->gedp);
+    if (!d || !rec.databaseIntent || rec.path.getLength() == 0)
+	return;
+
     struct db_i *dbip = d->gedp->dbip;
-    int ret;
+    struct directory *dp;
+    struct rt_db_internal intern;
+    struct rt_bot_internal *bot;
     mat_t mat;
-    struct display_list *gdlp;
+    int ret;
 
     MAT_IDN(mat);
 
-    for (BU_LIST_FOR(gdlp, display_list, hdlp)) {
-	struct bv_scene_obj *sp;
+    const char *path = rec.path.getString();
+    const char *leaf = path ? strrchr(path, '/') : NULL;
+    leaf = leaf ? leaf + 1 : path;
+    if (!leaf || !leaf[0])
+	return;
+    dp = db_lookup(dbip, leaf, LOOKUP_QUIET);
+    if (!dp)
+	return;
 
-	for (BU_LIST_FOR(sp, bv_scene_obj, &gdlp->dl_head_scene_obj)) {
-	    struct directory *dp;
-	    struct rt_db_internal intern;
-	    struct rt_bot_internal *bot;
+    /* get the internal form */
+    ret = rt_db_get_internal(&intern, dp, dbip, mat);
 
-	    if (!sp->s_u_data)
-		continue;
-	    struct ged_bv_data *bdata = (struct ged_bv_data *)sp->s_u_data;
-
-	    dp = bdata->s_fullpath.fp_names[bdata->s_fullpath.fp_len-1];
-
-	    /* get the internal form */
-	    ret = rt_db_get_internal(&intern, dp, dbip, mat);
-
-	    if (ret < 0) {
-		bu_log("rt_get_internal failure %d on %s\n", ret, dp->d_namep);
-		continue;
-	    }
-
-	    if (ret != ID_BOT) {
-		bu_log("%s is not a bot (ignored)\n", dp->d_namep);
-		rt_db_free_internal(&intern);
-		continue;
-	    }
-
-	    /* Write out object color */
-	    if (d->material_info) {
-		d->curr_obj_color_valid = 1;
-		d->curr_obj_red = sp->s_color[0];
-		d->curr_obj_green = sp->s_color[1];
-		d->curr_obj_blue = sp->s_color[2];
-		d->curr_obj_alpha = sp->s_os->transparency;
-	    }
-
-	    bot = (struct rt_bot_internal *)intern.idb_ptr;
-	    _ged_bot_dump(d, dp, NULL, bot);
-	    rt_db_free_internal(&intern);
-	}
+    if (ret < 0) {
+	bu_log("rt_get_internal failure %d on %s\n", ret, dp->d_namep);
+	return;
     }
 
+    if (ret != ID_BOT) {
+	bu_log("%s is not a bot (ignored)\n", dp->d_namep);
+	rt_db_free_internal(&intern);
+	return;
+    }
+
+    /* Write out object color */
+    if (d->output_type == OTYPE_OBJ) {
+	SbColor color = rec.color;
+	if (!rec.lineIndices.empty()) {
+	    const SoBRLExportAction::LineRecord &line =
+		export_action.getLine(rec.lineIndices.front());
+	    color = line.colorOverride ? line.color :
+		(line.materialColorValid ? line.materialColor : line.color);
+	} else if (!rec.pointIndices.empty()) {
+	    const SoBRLExportAction::PointRecord &point =
+		export_action.getPoint(rec.pointIndices.front());
+	    color = point.colorOverride ? point.color :
+		(point.materialColorValid ? point.materialColor : point.color);
+	} else if (!rec.triangleIndices.empty()) {
+	    const SoBRLExportAction::TriangleRecord &triangle =
+		export_action.getTriangle(rec.triangleIndices.front());
+	    color = triangle.colorOverride ? triangle.color :
+		(triangle.materialColorValid ? triangle.materialColor :
+		 triangle.color);
+	}
+	d->curr_obj_color_valid = 1;
+	d->curr_obj_red = color[0] * 255.0f;
+	d->curr_obj_green = color[1] * 255.0f;
+	d->curr_obj_blue = color[2] * 255.0f;
+	d->curr_obj_alpha = rec.transparency;
+    }
+
+    bot = (struct rt_bot_internal *)intern.idb_ptr;
+    _ged_bot_dump(d, dp, NULL, bot);
+    rt_db_free_internal(&intern);
+}
+
+static void
+dl_botdump(struct _ged_bot_dump_client_data *d)
+{
+    if (!d || !d->gedp)
+	return;
+    struct ged_view_context *view_ctx = ged_view_active_ctx(d->gedp);
+    bobol_display_endpoint_t *endpoint =
+	ged_view_context_obol_endpoint_get(view_ctx);
+    BObolViewController *controller = endpoint ?
+	static_cast<BObolViewController *>(
+	    bobol_display_endpoint_controller(endpoint)) : NULL;
+    if (!view_ctx || !controller || !controller->getViewport() ||
+	!controller->getViewport()->getRoot())
+	return;
+    SoBRLExportAction export_action;
+    export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
+    export_action.apply(controller->getViewport()->getRoot());
+    std::vector<SoBRLExportAction::ObjectRecord> records;
+    export_action.collectObjectRecords(records,
+	SoBRLExportAction::QUERY_VISIBLE_ONLY |
+	SoBRLExportAction::QUERY_DATABASE_OBJECTS);
+    for (const SoBRLExportAction::ObjectRecord &record : records)
+	botdump_export_record(record, export_action, d);
 }
 
 void

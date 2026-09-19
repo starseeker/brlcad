@@ -78,7 +78,7 @@
 #include "bu/mapped_file.h"
 #include "bu/str.h"
 
-#define EXPECTED_PLATFORM_SYMBOLS 140
+#define EXPECTED_PLATFORM_SYMBOLS 118
 #define DEFAULT_FALLBACK_THREADS 4
 
 /* -------- Environment helpers -------- */
@@ -536,6 +536,22 @@ init_repo_config(RepoConfig &cfg)
 	add_func_ex(".*/vls[.]c$", "strncpy");
 	add_func_ex(".*/wfobj/obj_util[.]cpp$", "strncpy");
 	add_func_ex(".*/libtermio[.]h$", "strncpy");
+
+	/* Togl is an upstream-vendored Tk/OpenGL component.  Keep its source
+	 * portable and independent of libbu rather than rewriting it to use
+	 * BRL-CAD wrappers. */
+	cfg.api.exemptions.emplace_back(std::make_pair(
+	    RegexExemption(".*/src/libtclcad/tkobol/vendor/togl/togl[.]c$"),
+	    std::string("")));
+	cfg.api.exemptions.emplace_back(std::make_pair(
+	    RegexExemption(".*/src/libtclcad/tkobol/vendor/togl/toglFont[.]c$"),
+	    std::string("")));
+
+	/* These are BObol public member names, not C remove(3) calls. */
+	add_func_ex(".*/include/BObol/BViewStore[.]h$", "remove");
+	add_func_ex(".*/src/libBObol/view_store[.]cpp$", "remove");
+	add_func_ex(".*/src/libged/ged_obol_presentation_private[.]cpp$", "remove");
+	add_func_ex(".*/src/qged/QgGuiTestDriver[.]cpp$", "remove");
     }
 
     /* DNU usage test (similar behavior to API) */
@@ -552,7 +568,6 @@ init_repo_config(RepoConfig &cfg)
 	    "brledit.cpp",
 	    "check_mann_docs.cpp",
 	    "debug2c.cpp",
-	    "dm_ogl_probe.c",
 	    "env2c.cpp",
 	    "embedded_check.cpp",
 	    "fftc.c",
@@ -1002,7 +1017,7 @@ main(int argc, const char *argv[])
 	    ".git",".log","/detria.hpp","/doc/","/fontstash/","/json.hpp",
 	    "/linenoise.hpp","/shapelib/","/spsr/","/whereami.c","/xxhash.h",
 	    "misc/CMake/Find","misc/debian","misc/opencl-raytracer-tests",
-	    "misc/tools","pkg.h","src/libdm/wgl/wintk/","src/libpkg","subprocess.h","~",nullptr
+	    "misc/tools","pkg.h","src/libpkg","subprocess.h","~",nullptr
 	};
 
 	std::regex codefile_regex(".*[.](c|cpp|cxx|cc|h|hpp|hxx|y|yy|l)([.]in)?$");

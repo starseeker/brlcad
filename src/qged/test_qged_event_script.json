@@ -1,0 +1,11 @@
+{
+  "schema": "brlcad.qtcad.events",
+  "version": 1,
+  "events": [
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 10 }
+    }
+  ]
+}

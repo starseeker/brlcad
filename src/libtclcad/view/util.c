@@ -32,6 +32,7 @@
 #include "common.h"
 #include "bu/units.h"
 #include "ged.h"
+#include "ged/view.h"
 #include "tclcad.h"
 
 /* Private headers */
@@ -39,11 +40,11 @@
 #include "../view/view.h"
 
 int
-to_is_viewable(struct bview *gdvp)
+to_is_viewable(struct ged_view_context *view_ctx)
 {
     int result_int;
 
-    const struct bu_vls *pathvls = dm_get_pathname((struct dm *)gdvp->dmp);
+    const struct bu_vls *pathvls = tclcad_view_pathname_vls(view_ctx);
     if (!pathvls || !bu_vls_strlen(pathvls)) {
 	return 0;
     }

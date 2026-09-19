@@ -30,7 +30,7 @@
  *   - ECMD_ANNOT_SET_POS sets the 3-D anchor V
  *   - ECMD_ANNOT_SET_TSEG_TXT_SIZE changes the text size
  *   - ECMD_ANNOT_VERT_MOVE moves a 2-D control vertex
- *   - rt_edit_annot_get_params returns correct values
+ *   - rt_edit_annot_get_values returns correct values
  */
 
 #include "common.h"
@@ -44,6 +44,7 @@
 #include "bu/malloc.h"
 #include "bu/vls.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
 #include "rt/geom.h"
 #include "wdb.h"
 
@@ -118,14 +119,10 @@ rt_edit_test_annot(void)
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    v->gv_size = 10.0; v->gv_isize = 0.1; v->gv_scale = 5.0;
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width = 512; v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init_identity_size(&v, 10.0);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
     s->local2base = 1.0;
     s->base2local = 1.0;
@@ -221,18 +218,37 @@ rt_edit_test_annot(void)
     }
 
     /* ================================================================
-     * Test 6: rt_edit_annot_get_params returns anchor position
+     * Test 6: rt_edit_annot_get_values returns anchor position
      * ================================================================*/
     VSET(aip->V, 3, 4, 5);
-    fastf_t vals[4] = {0};
-    int nv = (*EDOBJ[dp->d_minor_type].ft_edit_get_params)(s, ECMD_ANNOT_SET_POS, vals);
-    if (nv != 3 || !NEAR_EQUAL(vals[0], 3.0, SMALL_FASTF) ||
-	!NEAR_EQUAL(vals[1], 4.0, SMALL_FASTF) ||
-	!NEAR_EQUAL(vals[2], 5.0, SMALL_FASTF))
-	bu_exit(1, "ERROR: get_params(SET_POS): nv=%d vals=(%g,%g,%g)\n",
-		nv, vals[0], vals[1], vals[2]);
-    bu_log("TEST 6 PASS: get_params(SET_POS) = (%g,%g,%g)\n",
-	   vals[0], vals[1], vals[2]);
+    struct rt_edit_cmd_values vals;
+    int status = rt_edit_cmd_values_get(s, ECMD_ANNOT_SET_POS, &vals);
+    if (status != RT_EDIT_VALUE_OK || vals.value_count != 3 ||
+	!NEAR_EQUAL(vals.values[0], 3.0, SMALL_FASTF) ||
+	!NEAR_EQUAL(vals.values[1], 4.0, SMALL_FASTF) ||
+	!NEAR_EQUAL(vals.values[2], 5.0, SMALL_FASTF))
+	bu_exit(1, "ERROR: get_values(SET_POS): status=%d values=(%g,%g,%g)\n",
+		status, vals.values[0], vals.values[1], vals.values[2]);
+    bu_log("TEST 6 PASS: get_values(SET_POS) = (%g,%g,%g)\n",
+	   vals.values[0], vals.values[1], vals.values[2]);
+
+    /* ================================================================
+     * Test 7: string current-value readback reports the current label
+     * ================================================================*/
+    {
+	struct txt_seg *tsg = (struct txt_seg *)aip->ant.segments[0];
+	bu_vls_trunc(&tsg->label, 0);
+	bu_vls_strcpy(&tsg->label, "Current label");
+	status = rt_edit_cmd_values_get(s, ECMD_ANNOT_SET_TEXT, &vals);
+	if (status != RT_EDIT_VALUE_OK || vals.string_count != 1 ||
+	    !vals.string_valid[0] ||
+	    bu_strcmp(vals.strings[0], "Current label") != 0)
+	    bu_exit(1,
+		"ERROR: get_values(SET_TEXT): status=%d value='%s'\n",
+		status, vals.strings[0]);
+	bu_log("TEST 7 PASS: get_values(SET_TEXT) = '%s'\n",
+	    vals.strings[0]);
+    }
 
     /* Screen-space offsets are lengths; model-space offsets use the basis. */
     const fastf_t local2base = 25.4;

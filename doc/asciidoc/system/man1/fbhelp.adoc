@@ -17,9 +17,9 @@ fbhelp [-F framebuffer]
 [[description]]
 == DESCRIPTION
 
-*fbhelp* explains how to select a frame buffer display device, lists
-every frame buffer interface compiled into the *libdm*(3) library, then
-opens the selected device and prints its device-specific help.
+*fbhelp* explains how to select an image-stream framebuffer target, lists
+the supported target forms, then opens the selected target and reports its
+kind and dimensions.
 
 The device is chosen first from the *-F* _framebuffer_ option if given,
 otherwise from the *FB_FILE* environment variable, and finally from the
@@ -47,9 +47,8 @@ as *fb-pix*(1) and *pix-fb*(1), accept the same *-F* convention.
 ----
 fbhelp
 ----
-Prints the *FB_FILE* selection instructions, the list of frame buffer
-interfaces built into this installation (for example, the in-memory and
-file-backed devices), and the help text for the default device.
+Prints the *FB_FILE* selection instructions, supported in-memory, file,
+remote, and diagnostic target forms, and the default target's details.
 ====
 
 .Inspect a specific frame buffer before writing an image to it
@@ -68,7 +67,7 @@ display a *pix*(5) image on that same device.
 [[see_also]]
 == SEE ALSO
 
-*brlcad*(1), *fb-pix*(1), *pix-fb*(1), *fbclear*(1), *libdm*(3)
+*brlcad*(1), *fb-pix*(1), *pix-fb*(1), *fbclear*(1), *fbserv*(1)
 
 
 [[author]]

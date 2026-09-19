@@ -123,30 +123,87 @@ static const struct rt_edit_param_desc extr_b_params[] = {
 static const struct rt_edit_param_desc extr_skt_name_params[] = {
     { "sketch", "Referenced Sketch Name", RT_EDIT_PARAM_STRING, 0,
       RT_EDIT_PARAM_NO_LIMIT, RT_EDIT_PARAM_NO_LIMIT,
-      "", 0, NULL, NULL, NULL }
+      "", 0, NULL, NULL, "sketch_name" }
 };
 
 static const struct rt_edit_cmd_desc extr_cmds[] = {
-    { ECMD_EXTR_SCALE_H, "Set H",              "geometry", 1, extr_h_params,        1, 10, NULL },
-    { ECMD_EXTR_MOV_H,   "Move End H",         "move",     1, extr_endpoint_params, 1, 20, NULL },
-    { ECMD_EXTR_ROT_H,   "Rotate H",           "rotation", 1, extr_rot_deg_params,  1, 30, NULL },
-    { ECMD_EXTR_SCALE_A, "Set A",              "geometry", 1, extr_a_params,        1, 40, NULL },
-    { ECMD_EXTR_ROT_A,   "Rotate A",           "rotation", 1, extr_rot_deg_params,  1, 50, NULL },
-    { ECMD_EXTR_SCALE_B, "Set B",              "geometry", 1, extr_b_params,        1, 60, NULL },
-    { ECMD_EXTR_ROT_B,   "Rotate B",           "rotation", 1, extr_rot_deg_params,  1, 70, NULL },
-    { ECMD_EXTR_SKT_NAME, "Referenced Sketch", "reference",1, extr_skt_name_params, 1, 80, NULL },
+    { ECMD_EXTR_SCALE_H, RT_EDIT_CMD_NAME(ECMD_EXTR_SCALE_H), "Set H",              "geometry", 1, extr_h_params,        1, 10, NULL },
+    { ECMD_EXTR_MOV_H, RT_EDIT_CMD_NAME(ECMD_EXTR_MOV_H),   "Move End H",         "move",     1, extr_endpoint_params, 1, 20, NULL },
+    { ECMD_EXTR_ROT_H, RT_EDIT_CMD_NAME(ECMD_EXTR_ROT_H),   "Rotate H",           "rotation", 1, extr_rot_deg_params,  1, 30, NULL },
+    { ECMD_EXTR_SCALE_A, RT_EDIT_CMD_NAME(ECMD_EXTR_SCALE_A), "Set A",              "geometry", 1, extr_a_params,        1, 40, NULL },
+    { ECMD_EXTR_ROT_A, RT_EDIT_CMD_NAME(ECMD_EXTR_ROT_A),   "Rotate A",           "rotation", 1, extr_rot_deg_params,  1, 50, NULL },
+    { ECMD_EXTR_SCALE_B, RT_EDIT_CMD_NAME(ECMD_EXTR_SCALE_B), "Set B",              "geometry", 1, extr_b_params,        1, 60, NULL },
+    { ECMD_EXTR_ROT_B, RT_EDIT_CMD_NAME(ECMD_EXTR_ROT_B),   "Rotate B",           "rotation", 1, extr_rot_deg_params,  1, 70, NULL },
+    { ECMD_EXTR_SKT_NAME, RT_EDIT_CMD_NAME(ECMD_EXTR_SKT_NAME), "Referenced Sketch", "reference",1, extr_skt_name_params, 1, 80, NULL },
 };
+
+static const enum rt_edit_control_class extr_command_controls[] = {
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_ACTION,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_ACTION,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_ACTION,
+    RT_EDIT_CONTROL_INHERIT
+};
+_Static_assert(sizeof(extr_command_controls) / sizeof(extr_command_controls[0]) ==
+    sizeof(extr_cmds) / sizeof(extr_cmds[0]), "extrude command controls");
 
 static const struct rt_edit_prim_desc extr_prim_desc = {
     "extrude", "Extrusion", 8, extr_cmds,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_GENERATED,
+    extr_command_controls,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
 rt_edit_extrude_edit_desc(void)
 {
     return &extr_prim_desc;
+}
+
+C_DECL int
+rt_edit_extrude_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
+{
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    struct rt_extrude_internal *extr =
+	(struct rt_extrude_internal *)s->es_int.idb_ptr;
+    RT_EXTRUDE_CK_MAGIC(extr);
+
+    switch (cmd_id) {
+	case ECMD_EXTR_SCALE_H:
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(extr->h) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_EXTR_MOV_H: {
+	    point_t endpoint;
+	    VADD2(endpoint, extr->V, extr->h);
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    endpoint[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	}
+	case ECMD_EXTR_SCALE_A:
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(extr->u_vec) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_EXTR_SCALE_B:
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(extr->v_vec) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_EXTR_SKT_NAME:
+	    rt_edit_cmd_values_set_string(result, 0,
+		extr->sketch_name ? extr->sketch_name : "");
+	    return RT_EDIT_VALUE_OK;
+	default:
+	    return RT_EDIT_VALUE_UNAVAILABLE;
+    }
 }
 
 

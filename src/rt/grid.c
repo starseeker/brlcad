@@ -34,28 +34,6 @@
 
 #include "./ext.h"
 
-extern int cell_newsize;
-extern fastf_t cell_width;
-extern fastf_t cell_height;
-extern size_t width;
-extern size_t height;
-extern fastf_t aspect;
-extern fastf_t viewsize;
-extern mat_t Viewrotscale;
-extern mat_t model2view;
-extern mat_t view2model;
-extern fastf_t rt_perspective;
-extern int stereo;
-extern unsigned int jitter;
-extern point_t eye_model;
-extern point_t viewbase_model;
-extern vect_t dx_model;
-extern vect_t dy_model;
-extern vect_t dx_unit;
-extern vect_t dy_unit;
-extern point_t viewbase_model;
-extern struct application APP;
-
 /* globals */
 mat_t	view2model = MAT_INIT_IDN;
 mat_t	model2view = MAT_INIT_IDN;

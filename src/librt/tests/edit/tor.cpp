@@ -36,6 +36,8 @@
 #include "raytrace.h"
 #include "rt/rt_ecmds.h"
 
+#include "edit_test_view.h"
+
 
 struct directory *
 make_tor(struct rt_wdb *wdbp)
@@ -133,21 +135,11 @@ rt_edit_test_tor(void)
     struct db_full_path fp;
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size = 73.3197;
-    v->gv_isize = 1.0 / v->gv_size;
-    v->gv_scale = 0.5 * v->gv_size;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init(&v);
 
     // Set up rt_edit container
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
 
     // MGED normally has this set, but the user can explicitly disable
     // it.  For most of our testing, have it on.
@@ -414,7 +406,7 @@ rt_edit_test_tor(void)
     tor_reset(s, edit_tor, cmp_tor, orig_tor);
 
     // Prepare mousevec.  xpos and ypos coordinates should be in the range of
-    // BV_MIN <= val <= BV_MAX, which defines the outer limits of the pixel
+    // RT_VIEW_MIN <= val <= RT_VIEW_MAX, which defines the outer limits of the pixel
     // screen from which mouse inputs would come.
     //
     // In essense, xpos and ypos are intended to simulate what a GUI toolkit
@@ -423,8 +415,8 @@ rt_edit_test_tor(void)
     int ypos = 1383;
     vect_t mousevec;  /* float pt -1..+1 mouse pos vect */
     /* map xpos and ypos to the -1 to +1 range*/
-    mousevec[X] =  xpos * INV_BV;
-    mousevec[Y] =  ypos * INV_BV;
+    mousevec[X] =  xpos * RT_INV_VIEW;
+    mousevec[Y] =  ypos * RT_INV_VIEW;
     mousevec[Z] = 0;
 
     bu_vls_trunc(s->log_str, 0);
@@ -459,8 +451,8 @@ rt_edit_test_tor(void)
     xpos = 1482;
     ypos = 762;
     /* map xpos and ypos to the -1 to +1 range*/
-    mousevec[X] =  xpos * INV_BV;
-    mousevec[Y] =  ypos * INV_BV;
+    mousevec[X] =  xpos * RT_INV_VIEW;
+    mousevec[Y] =  ypos * RT_INV_VIEW;
     mousevec[Z] = 0;
 
     bu_vls_trunc(s->log_str, 0);
@@ -683,4 +675,3 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

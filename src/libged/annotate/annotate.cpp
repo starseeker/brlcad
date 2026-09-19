@@ -46,7 +46,10 @@
 #include "rt/primitives/annot.h"
 #include "wdb.h"
 
-#include "../dbi.h"
+#include "bv.h"
+#include "ged/event.h"
+#include "ged/scene.h"
+#include "ged/view.h"
 #include "../ged_private.h"
 
 
@@ -357,7 +360,10 @@ public:
 	bu_vls_free(&validation);
 
 	struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-	return mk_annot(wdbp, name, &annotation) ? BRLCAD_ERROR : BRLCAD_OK;
+	if (mk_annot(wdbp, name, &annotation))
+	    return BRLCAD_ERROR;
+	(void)ged_event_notify_object_added(gedp, name, NULL);
+	return BRLCAD_OK;
     }
 
 private:
@@ -515,8 +521,12 @@ remove_created(struct ged *gedp, const std::vector<std::string> &names)
     for (const std::string &name : names) {
 	struct directory *dp = db_lookup(gedp->dbip, name.c_str(), LOOKUP_QUIET);
 	if (dp != RT_DIR_NULL) {
-	    (void)db_delete(gedp->dbip, dp);
-	    (void)db_dirdelete(gedp->dbip, dp);
+	    if (db_delete(gedp->dbip, dp) || db_dirdelete(gedp->dbip, dp)) {
+		bu_vls_printf(gedp->ged_result_str, "Unable to remove temporary annotation '%s'\n",
+		    name.c_str());
+	    } else {
+		(void)ged_event_notify_object_removed(gedp, name.c_str(), NULL);
+	    }
 	}
     }
 }
@@ -595,12 +605,6 @@ draw_created(struct ged *gedp, const char *name, const create_options &opts)
     if (opts.no_draw)
 	return BRLCAD_OK;
 
-    /* A newly written directory entry must reach the view-state index before
-     * draw can resolve it.  Applications without a DbiState use the legacy
-     * display-list path and need no explicit synchronization here. */
-    if (gedp->dbi_state)
-	static_cast<DbiState *>(gedp->dbi_state)->update();
-
     struct bu_vls color = BU_VLS_INIT_ZERO;
     const char *draw_argv[5] = {"draw", name, NULL, NULL, NULL};
     int draw_argc = 2;
@@ -634,11 +638,20 @@ resolved_text_height(const create_options &opts, fastf_t reference_length,
 }
 
 
+static const struct bv *
+annotation_view(const struct ged *gedp)
+{
+    const struct ged_view_context *view = ged_view_active_ctx(gedp);
+    return view ? bv_context_view_const(ged_view_context_bv_const(view)) : NULL;
+}
+
+
 static fastf_t
 scene_reference_length(const struct ged *gedp)
 {
-    if (gedp->ged_gvp && gedp->ged_gvp->gv_scale > SMALL_FASTF)
-	return gedp->ged_gvp->gv_scale * 2.0;
+    const struct bv *view = annotation_view(gedp);
+    if (view && bv_scale_get(view) > SMALL_FASTF)
+	return bv_scale_get(view) * 2.0;
     return 40.0 * gedp->dbip->dbi_local2base;
 }
 
@@ -1015,7 +1028,7 @@ intersect_leader_bounds(fastf_t &entry, fastf_t &exit, const point_t origin,
 
 static fastf_t
 readable_leader_basis(vect_t u, vect_t v, const point_t target,
-		      const point_t label, const struct bview *view)
+		      const point_t label, const struct bv *view)
 {
     const fastf_t length = DIST_PNT_PNT(target, label);
     if (!view) {
@@ -1024,8 +1037,8 @@ readable_leader_basis(vect_t u, vect_t v, const point_t target,
     }
 
     point_t target_view, label_view;
-    MAT4X3PNT(target_view, view->gv_model2view, target);
-    MAT4X3PNT(label_view, view->gv_model2view, label);
+    MAT4X3PNT(target_view, view->model2view, target);
+    MAT4X3PNT(label_view, view->model2view, label);
     const fastf_t dx = label_view[X] - target_view[X];
     const fastf_t dy = label_view[Y] - target_view[Y];
     const bool reverse_baseline = dx < -SMALL_FASTF ||
@@ -1037,11 +1050,11 @@ readable_leader_basis(vect_t u, vect_t v, const point_t target,
     VUNITIZE(u);
 
     const vect_t view_up = {0.0, 1.0, 0.0};
-    MAT4X3VEC(v, view->gv_view2model, view_up);
+    MAT4X3VEC(v, view->view2model, view_up);
     VJOIN1(v, v, -VDOT(v, u), u);
     if (MAGNITUDE(v) <= SMALL_FASTF) {
 	const vect_t view_right = {1.0, 0.0, 0.0};
-	MAT4X3VEC(v, view->gv_view2model, view_right);
+	MAT4X3VEC(v, view->view2model, view_right);
 	VJOIN1(v, v, -VDOT(v, u), u);
     }
     VUNITIZE(v);
@@ -1049,8 +1062,8 @@ readable_leader_basis(vect_t u, vect_t v, const point_t target,
     point_t u_model, v_model, u_view, v_view;
     VADD2(u_model, target, u);
     VADD2(v_model, target, v);
-    MAT4X3PNT(u_view, view->gv_model2view, u_model);
-    MAT4X3PNT(v_view, view->gv_model2view, v_model);
+    MAT4X3PNT(u_view, view->model2view, u_model);
+    MAT4X3PNT(v_view, view->model2view, v_model);
     const fastf_t ux = u_view[X] - target_view[X];
     const fastf_t uy = u_view[Y] - target_view[Y];
     const fastf_t vx = v_view[X] - target_view[X];
@@ -1065,6 +1078,7 @@ static int
 cmd_leader(void *data, int argc, const char **argv)
 {
     struct ged *gedp = static_cast<struct ged *>(data);
+    const struct bv *view = annotation_view(gedp);
     if (annotate_command_messages(gedp, argc, argv,
 	"annotate leader [options] name text", "Create a text callout with a leader"))
 	return BRLCAD_OK;
@@ -1093,8 +1107,8 @@ cmd_leader(void *data, int argc, const char **argv)
     if (prepare_name(gedp, argv[0]) != BRLCAD_OK)
 	return BRLCAD_ERROR;
     if (opts.screen_space &&
-	(!gedp->ged_gvp || gedp->ged_gvp->gv_width <= 0 ||
-	 gedp->ged_gvp->gv_height <= 0)) {
+	(!view || bv_width_get(view) <= 0 ||
+	 bv_height_get(view) <= 0)) {
 	bu_vls_printf(gedp->ged_result_str,
 	    "Screen-space leaders require an active view");
 	return BRLCAD_ERROR;
@@ -1170,17 +1184,17 @@ cmd_leader(void *data, int argc, const char **argv)
     fastf_t label_x, label_y, text_height_in_plane;
     if (opts.screen_space) {
 	point_t target_view, label_view;
-	MAT4X3PNT(target_view, gedp->ged_gvp->gv_model2view, opts.target);
-	MAT4X3PNT(label_view, gedp->ged_gvp->gv_model2view, opts.at);
+	MAT4X3PNT(target_view, view->model2view, opts.target);
+	MAT4X3PNT(label_view, view->model2view, opts.at);
 	label_x = (label_view[X] - target_view[X]) *
-	    gedp->ged_gvp->gv_width / (2.0 * DISPLAY_PIXELS_PER_MM);
+	    bv_width_get(view) / (2.0 * DISPLAY_PIXELS_PER_MM);
 	label_y = (label_view[Y] - target_view[Y]) *
-	    gedp->ged_gvp->gv_height / (2.0 * DISPLAY_PIXELS_PER_MM);
+	    bv_height_get(view) / (2.0 * DISPLAY_PIXELS_PER_MM);
 	text_height_in_plane = text_height * opts.dpi / DEFAULT_SCREEN_DPI;
 	VSET(u, 1.0, 0.0, 0.0);
 	VSET(v, 0.0, 1.0, 0.0);
     } else {
-	label_x = readable_leader_basis(u, v, opts.target, opts.at, gedp->ged_gvp);
+	label_x = readable_leader_basis(u, v, opts.target, opts.at, view);
 	label_y = 0.0;
 	text_height_in_plane = text_height;
     }
@@ -1626,10 +1640,10 @@ autodim_corner(point_t point, const struct autodim_box &box, const int bits[3])
 
 
 static void
-project_xy(double projected[2], const struct bview *view, const point_t point)
+project_xy(double projected[2], const struct bv *view, const point_t point)
 {
     point_t view_point;
-    MAT4X3PNT(view_point, view->gv_model2view, point);
+    MAT4X3PNT(view_point, view->model2view, point);
     projected[X] = view_point[X];
     projected[Y] = view_point[Y];
 }
@@ -1678,7 +1692,7 @@ segments_cross(const double a0[2], const double a1[2],
 
 
 static screen_rect
-projected_box_rect(const struct autodim_box &box, const struct bview *view)
+projected_box_rect(const struct autodim_box &box, const struct bv *view)
 {
     screen_rect rect;
     for (const point_t &corner : box.corners) {
@@ -1691,7 +1705,7 @@ projected_box_rect(const struct autodim_box &box, const struct bview *view)
 
 
 static void
-orient_autodim_text(struct autodim_placement &placement, const struct bview *view)
+orient_autodim_text(struct autodim_placement &placement, const struct bv *view)
 {
     double from_2d[2], to_2d[2], outward_2d[2];
     project_xy(from_2d, view, placement.from);
@@ -1726,7 +1740,7 @@ static autodim_placement
 make_autodim_placement(const struct autodim_box &box, int dimension_axis,
 		       const int edge_bits[3], int offset_axis,
 		       fastf_t offset, fastf_t text_height,
-		       size_t label_length, const struct bview *view,
+		       size_t label_length, const struct bv *view,
 		       const screen_rect &box_rect)
 {
     autodim_placement placement;
@@ -1809,7 +1823,7 @@ make_autodim_placement(const struct autodim_box &box, int dimension_axis,
 
 static double
 placement_pair_score(const autodim_placement &a, const autodim_placement &b,
-		     const struct bview *view, double box_diagonal)
+		     const struct bv *view, double box_diagonal)
 {
     const double area_a = std::max(SMALL_FASTF,
 	(a.label_rect.xmax - a.label_rect.xmin) *
@@ -1840,7 +1854,7 @@ select_autodim_placements(const struct autodim_box &box,
 			  const std::vector<int> &dimension_axes,
 			  const std::array<size_t, 3> &label_lengths,
 			  fastf_t offset, fastf_t text_height,
-			  const struct bview *view)
+			  const struct bv *view)
 {
     std::vector<std::vector<autodim_placement>> candidates(dimension_axes.size());
     const screen_rect box_rect = projected_box_rect(box, view);
@@ -1895,6 +1909,7 @@ cmd_autodim_impl(void *data, int argc, const char **argv,
 		 const point_t cached_corners[8])
 {
     struct ged *gedp = static_cast<struct ged *>(data);
+    const struct bv *view = annotation_view(gedp);
     if (annotate_command_messages(gedp, argc, argv,
 	"annotate autodim [options] name [object ...]",
 	"Create dimensions on selected bounding-box edges"))
@@ -1963,12 +1978,15 @@ cmd_autodim_impl(void *data, int argc, const char **argv,
     for (int i = 1; i < remaining; ++i)
 	objects.push_back(argv[i]);
     if (objects.empty()) {
-	struct display_list *gdlp;
-	for (BU_LIST_FOR(gdlp, display_list, (struct bu_list *)ged_dl(gedp))) {
-	    if (((struct directory *)gdlp->dl_dp)->d_addr == RT_DIR_PHONY_ADDR)
-		continue;
-	    displayed.emplace_back(bu_vls_cstr(&gdlp->dl_path));
-	}
+	struct bu_vls paths = BU_VLS_INIT_ZERO;
+	(void)ged_scene_paths_append(gedp, ged_view_active_ctx(gedp),
+	    GED_SCENE_DRAW_DEFAULT, GED_SCENE_PATHS_DRAW_INTENTS, &paths);
+	std::istringstream input(bu_vls_cstr(&paths));
+	std::string path;
+	while (std::getline(input, path))
+	    if (!path.empty())
+		displayed.push_back(path);
+	bu_vls_free(&paths);
 	for (const std::string &object : displayed)
 	    objects.push_back(object.c_str());
     }
@@ -2032,10 +2050,10 @@ cmd_autodim_impl(void *data, int argc, const char **argv,
     }
 
     std::vector<autodim_placement> placements;
-    if (gedp->ged_gvp && automatic_corner) {
+    if (view && automatic_corner) {
 	placements = select_autodim_placements(box, dimension_axes, label_lengths,
 	    opts.offset * gedp->dbip->dbi_local2base,
-	    opts.text_height * gedp->dbip->dbi_local2base, gedp->ged_gvp);
+	    opts.text_height * gedp->dbip->dbi_local2base, view);
     }
     if (placements.size() != dimension_axes.size()) {
 	placements.clear();
@@ -2049,8 +2067,8 @@ cmd_autodim_impl(void *data, int argc, const char **argv,
 	    const int offset_axis = dimension_axis == X ? Y : X;
 	    VSCALE(placement.outward, box.axes[offset_axis],
 		edge_bits[offset_axis] ? 1.0 : -1.0);
-	    if (gedp->ged_gvp)
-		orient_autodim_text(placement, gedp->ged_gvp);
+	    if (view)
+		orient_autodim_text(placement, view);
 	    placements.push_back(placement);
 	}
     }
@@ -2105,6 +2123,7 @@ cmd_autodim_impl(void *data, int argc, const char **argv,
 	return BRLCAD_ERROR;
     }
     created.push_back(name);
+    (void)ged_event_notify_object_added(gedp, name, NULL);
     struct directory *group_dp = db_lookup(gedp->dbip, name, LOOKUP_QUIET);
     struct bu_attribute_value_set avs = BU_AVS_INIT_ZERO;
     int attr_ret = group_dp == RT_DIR_NULL ? BRLCAD_ERROR :
@@ -2231,6 +2250,9 @@ replace_from_temp(struct ged *gedp, const std::string &destination,
     int ret = db5_get_attributes(gedp->dbip, &avs, temporary_dp) ||
 	db5_replace_attributes(destination_dp, &avs, gedp->dbip);
     bu_avs_free(&avs);
+    // Geometry has changed even if its attribute replacement failed. Reconcile
+    // existing draw intents without erasing their visibility or appearance.
+    (void)ged_event_notify_object_modified(gedp, destination.c_str(), 1, NULL);
     return ret ? BRLCAD_ERROR : BRLCAD_OK;
 }
 
@@ -2288,44 +2310,6 @@ parse_stored_corners(point_t corners[8], const char *value)
 }
 
 
-static bool
-display_path_matches(struct db_i *dbip, const std::string &path,
-		     struct directory *annotation_dp)
-{
-    struct db_full_path full_path;
-    if (db_string_to_path(&full_path, dbip, path.c_str()))
-	return false;
-    const bool matches = full_path.fp_len > 0 &&
-	DB_FULL_PATH_GET(&full_path, full_path.fp_len - 1) == annotation_dp;
-    db_free_full_path(&full_path);
-    return matches;
-}
-
-
-static bool
-annotation_is_displayed(struct ged *gedp, struct directory *annotation_dp)
-{
-    if (gedp->dbi_state && gedp->ged_gvp) {
-	DbiState *dbis = static_cast<DbiState *>(gedp->dbi_state);
-	BViewState *view_state = dbis->get_view_state(gedp->ged_gvp);
-	if (view_state) {
-	    for (const std::string &path : view_state->list_drawn_paths(-1, true))
-		if (display_path_matches(gedp->dbip, path, annotation_dp))
-		    return true;
-	}
-    }
-    struct display_list *displayed;
-    for (BU_LIST_FOR(displayed, display_list, (struct bu_list *)ged_dl(gedp))) {
-	struct directory *display_dp = static_cast<struct directory *>(displayed->dl_dp);
-	if (display_dp == annotation_dp ||
-	    display_path_matches(gedp->dbip, bu_vls_cstr(&displayed->dl_path),
-		annotation_dp))
-	    return true;
-    }
-    return false;
-}
-
-
 static int
 update_leader(struct ged *gedp, const char *name, bool view_only)
 {
@@ -2334,7 +2318,6 @@ update_leader(struct ged *gedp, const char *name, bool view_only)
 	bu_vls_printf(gedp->ged_result_str, "Object '%s' does not exist", name);
 	return BRLCAD_ERROR;
     }
-    const bool was_displayed = annotation_is_displayed(gedp, leader_dp);
     struct bu_attribute_value_set avs = BU_AVS_INIT_ZERO;
     if (db5_get_attributes(gedp->dbip, &avs, leader_dp)) {
 	bu_vls_printf(gedp->ged_result_str, "Unable to read annotation '%s'", name);
@@ -2400,8 +2383,6 @@ update_leader(struct ged *gedp, const char *name, bool view_only)
 	bu_avs_free(&avs);
 	return BRLCAD_ERROR;
     }
-    if (gedp->dbi_state)
-	static_cast<DbiState *>(gedp->dbi_state)->update();
     if (!replacement_is_ready(gedp, name, temporary_name)) {
 	bu_avs_free(&avs);
 	remove_update_temporary(gedp, {temporary_name});
@@ -2409,8 +2390,6 @@ update_leader(struct ged *gedp, const char *name, bool view_only)
 	    "Unable to prepare replacement annotation '%s'", name);
 	return BRLCAD_ERROR;
     }
-    const char *erase_argv[] = {"erase", name, NULL};
-    (void)ged_exec_erase(gedp, 2, erase_argv);
     int ret = replace_from_temp(gedp, name, temporary_name);
     if (ret == BRLCAD_OK && view_only &&
 	db5_replace_attributes(leader_dp, &avs, gedp->dbip))
@@ -2418,17 +2397,8 @@ update_leader(struct ged *gedp, const char *name, bool view_only)
     bu_avs_free(&avs);
     remove_update_temporary(gedp, {temporary_name});
     if (ret != BRLCAD_OK) {
-	if (was_displayed) {
-	    create_options draw_opts;
-	    (void)draw_created(gedp, name, draw_opts);
-	}
 	bu_vls_printf(gedp->ged_result_str, "Unable to replace annotation '%s'", name);
 	return BRLCAD_ERROR;
-    }
-    if (was_displayed) {
-	create_options draw_opts;
-	if (draw_created(gedp, name, draw_opts) != BRLCAD_OK)
-	    return BRLCAD_ERROR;
     }
     bu_vls_printf(gedp->ged_result_str, view_only ?
 	"Updated leader '%s' for the current view" :
@@ -2445,7 +2415,6 @@ update_autodim(struct ged *gedp, const char *name, bool view_only)
 	bu_vls_printf(gedp->ged_result_str, "Object '%s' does not exist", name);
 	return BRLCAD_ERROR;
     }
-    const bool was_displayed = annotation_is_displayed(gedp, group_dp);
 
     struct bu_attribute_value_set avs = BU_AVS_INIT_ZERO;
     if (db5_get_attributes(gedp->dbip, &avs, group_dp)) {
@@ -2520,10 +2489,6 @@ update_autodim(struct ged *gedp, const char *name, bool view_only)
     if (cmd_autodim_impl(gedp, static_cast<int>(argv.size()), argv.data(),
 	view_only ? cached_corners : NULL) != BRLCAD_OK)
 	return BRLCAD_ERROR;
-    /* Creation callbacks retain directory pointers until the view-state index
-     * consumes them.  Flush additions before removing the temporary objects. */
-    if (gedp->dbi_state)
-	static_cast<DbiState *>(gedp->dbi_state)->update();
 
     const char axis_names[] = {'x', 'y', 'z'};
     bool replacements_ready = replacement_is_ready(gedp, name, temporary_name);
@@ -2545,8 +2510,6 @@ update_autodim(struct ged *gedp, const char *name, bool view_only)
 	    "Unable to prepare replacement annotation '%s'", name);
 	return BRLCAD_ERROR;
     }
-    const char *erase_argv[] = {"erase", name, NULL};
-    (void)ged_exec_erase(gedp, 2, erase_argv);
 
     std::vector<std::string> temporary_objects = {temporary_name};
     struct bu_vls real_members = BU_VLS_INIT_ZERO;
@@ -2573,23 +2536,15 @@ update_autodim(struct ged *gedp, const char *name, bool view_only)
 	 db5_replace_attributes(group_dp, &updated_avs, gedp->dbip)))
 	ret = BRLCAD_ERROR;
     bu_avs_free(&updated_avs);
+    (void)ged_event_notify_attribute_changed(gedp, name, 1, NULL);
     bu_vls_free(&real_members);
 
     remove_update_temporary(gedp, temporary_objects);
     if (ret != BRLCAD_OK) {
-	if (was_displayed) {
-	    create_options draw_opts;
-	    (void)draw_created(gedp, name, draw_opts);
-	}
 	bu_vls_printf(gedp->ged_result_str, "Unable to replace annotation '%s'", name);
 	return BRLCAD_ERROR;
     }
 
-    if (was_displayed) {
-	create_options draw_opts;
-	if (draw_created(gedp, name, draw_opts) != BRLCAD_OK)
-	    return BRLCAD_ERROR;
-    }
     if (view_only)
 	bu_vls_printf(gedp->ged_result_str,
 	    "Updated autodim '%s' from its stored bounds and current view", name);

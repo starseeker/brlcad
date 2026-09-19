@@ -10,7 +10,7 @@ screengrab - Save the current MGED display visual or framebuffer contents to an 
 
 [source]
 ----
-screengrab [-F] [-D name] [--format fmt] image_file
+screengrab [-F] [-V view] [--format fmt] image_file
 ----
 
 
@@ -25,11 +25,11 @@ This command is also available as *screen_grab* (with an underscore). Both names
 
 === Options
 
-*-F*, *--fb*::
-Capture the embedded framebuffer instead of the display manager scene.
+*-V view*, *--view view*::
+Capture the named GED view endpoint. If omitted, the active view endpoint is used.
 
-*-D name*, *--dm name*::
-Specify the name of the display manager to capture. If omitted, the active display manager is used.
+*-F*, *--fb*::
+Capture the retained framebuffer stream without scene or faceplate composition.
 
 *--format fmt*::
 Force the output image format (e.g. `png`, `jpg`). If not specified, the format is inferred from the file extension.
@@ -41,20 +41,12 @@ Print usage help.
 [[examples]]
 == EXAMPLES
 
-.Write a PNG image file of the MGED framebuffer contents.
+.Capture a specific named view endpoint
 [example]
 ====
-mged> **screengrab -F fb.png**
+mged> **screengrab -V Mged0 output.png**
 
-Writes the contents of the active MGED framebuffer to the image file _fb.png_.
-====
-
-.Capture a specific named display manager
-[example]
-====
-mged> **screengrab -D Mged0 output.png**
-
-Captures the display manager named `Mged0` to _output.png_.
+Captures the view endpoint named `Mged0` to _output.png_.
 ====
 
 .Capture the scene display (default, no flags needed)
@@ -62,7 +54,15 @@ Captures the display manager named `Mged0` to _output.png_.
 ====
 mged> **screengrab scene.png**
 
-Writes the current display manager's rendered scene to _scene.png_.
+Writes the active view endpoint's composed scene to _scene.png_.
+====
+
+.Capture only the retained framebuffer
+[example]
+====
+mged> **screengrab -F framebuffer.png**
+
+Writes the active view endpoint's framebuffer plane to _framebuffer.png_.
 ====
 
 .Force JPEG format regardless of extension

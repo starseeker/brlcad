@@ -19,8 +19,8 @@
  */
 /** @file fbtext.h
  *
- * Small wrapper around bu/vfont for drawing anti-aliased text into a libfb
- * framebuffer.  Coordinates use the libfb convention (origin lower-left).
+ * Small wrapper around bu/vfont for drawing anti-aliased text into a imgstream
+ * framebuffer.  Coordinates use the imgstream convention (origin lower-left).
  *
  */
 
@@ -30,7 +30,7 @@
 #include "common.h"
 
 #include "bu/vfont.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 __BEGIN_DECLS
 
@@ -49,7 +49,7 @@ extern int fbtext_line_height(struct fbtext *t);
 extern int fbtext_string_width(struct fbtext *t, const char *s);
 
 /* Draw string with lower-left baseline near (x,y) in the given color. */
-extern void fbtext_draw(struct fb *fbp, struct fbtext *t, int x, int y, const char *s, const RGBpixel color);
+extern void fbtext_draw(imgstream_fb_t *fbp, struct fbtext *t, int x, int y, const char *s, const unsigned char color[3]);
 
 __END_DECLS
 

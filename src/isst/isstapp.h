@@ -44,8 +44,9 @@ class ISSTApp : public QApplication
 
 	int load_g(const char *filename, int argc, const char **argv);
 
-	ISST_MainWindow w;
 	GFile g;
+	/* The canvas renderer consumes g.tie, so it must stop before g is freed. */
+	ISST_MainWindow w;
 };
 
 #endif // ISSTAPP_H
@@ -60,4 +61,3 @@ class ISSTApp : public QApplication
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-

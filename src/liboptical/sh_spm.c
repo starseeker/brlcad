@@ -32,7 +32,6 @@
 #include "vmath.h"
 #include "bn/spm.h"
 #include "raytrace.h"
-#include "dm.h"
 #include "optical.h"
 
 
@@ -128,7 +127,8 @@ spm_setup(register struct region *UNUSED(rp), struct bu_vls *matparm, void **dpp
     if (spp->sp_w < 0) spp->sp_w = 512;
     if (spp->sp_file[0] == '\0')
 	goto fail;
-    if ((spp->sp_map = bn_spm_init(spp->sp_w, sizeof(RGBpixel))) == BN_SPM_MAP_NULL)
+
+    if ((spp->sp_map = bn_spm_init(spp->sp_w, sizeof(unsigned char[3]))) == BN_SPM_MAP_NULL)
 	goto fail;
     if (bn_spm_load(spp->sp_map, spp->sp_file) < 0)
 	goto fail;

@@ -24,7 +24,7 @@ if(BRLCAD_ENABLE_TCL)
     brlcad_addexec(archer "${archer_srcs}" "${archer_libs}" GUI)
     target_compile_definitions(archer PRIVATE HAVE_TK)
     add_dependencies(archer rtwizard)
-    add_target_deps(archer Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld dm_plugins)
+    add_target_deps(archer Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld)
 
     # Archer needs a lot of files to be copied into place to work - just have it
     # depend on ALL the managed files, rather than trying to list specifics
@@ -72,14 +72,14 @@ set(archer_wizard_FILES
 )
 
 if(BRLCAD_ENABLE_TCL)
-  # Archer scans only the plugin category directories for registration scripts.
-  # Keep class definitions in their subdirectories so they are not sourced twice.
+  # The loader scans the top level for registration scripts.  Preserve each
+  # implementation's subdirectory so it cannot be sourced a second time.
   foreach(plugin_file IN LISTS archer_utility_FILES archer_wizard_FILES)
     get_filename_component(plugin_dir "${plugin_file}" DIRECTORY)
-    file(RELATIVE_PATH plugin_dir "${CMAKE_CURRENT_SOURCE_DIR}/plugins" "${CMAKE_CURRENT_SOURCE_DIR}/${plugin_dir}")
-    brlcad_adddata("${plugin_file}" "plugins/archer/${plugin_dir}")
+    string(REGEX REPLACE "^plugins/" "plugins/archer/" plugin_dir "${plugin_dir}")
+    brlcad_adddata("${plugin_file}" "${plugin_dir}")
   endforeach()
-  brlcad_adddata(plugins/Commands/README plugins/archer/Command)
+  brlcad_adddata(plugins/Commands/README plugins/archer/Commands)
   brlcad_adddata(plugins/Core/README plugins/archer/Core)
 endif(BRLCAD_ENABLE_TCL)
 

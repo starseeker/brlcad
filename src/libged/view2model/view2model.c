@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -38,12 +40,17 @@ ged_view2model_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     /* get the view2model matrix */
     if (argc == 1) {
-	bn_encode_mat(gedp->ged_result_str, gedp->ged_gvp->gv_view2model, 1);
+	mat_t view2model;
+	bv_view2model_get(view2model,
+		bv_context_view_const((const struct bv_context *)view_ctx));
+	bn_encode_mat(gedp->ged_result_str, view2model, 1);
 	return BRLCAD_OK;
     }
 

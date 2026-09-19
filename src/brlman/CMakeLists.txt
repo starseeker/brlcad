@@ -16,9 +16,9 @@ if(BRLCAD_ENABLE_QT)
   find_package_qt(REQUIRED)
 
   if(Qt6Widgets_FOUND)
-    set(brlman_libs libqtcad Qt6::Widgets Qt6::Gui ${brlman_libs})
+    set(brlman_libs Qt6::Widgets Qt6::Gui ${brlman_libs})
   else()
-    set(brlman_libs libqtcad Qt5::Widgets Qt5::Gui ${brlman_libs})
+    set(brlman_libs Qt5::Widgets Qt5::Gui ${brlman_libs})
   endif(Qt6Widgets_FOUND)
 endif(BRLCAD_ENABLE_QT)
 

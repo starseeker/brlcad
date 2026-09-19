@@ -41,6 +41,8 @@
 #include "bu/malloc.h"
 #include "bu/ptbl.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
+#include "rt/vlist.h"
 #include "nmg.h"
 #include "rt/geom.h"
 #include "rt/primitives/nmg.h"
@@ -184,7 +186,7 @@ make_nmg_tet(struct rt_wdb *wdbp)
     BU_LIST_INIT(&vlfree);
     nmg_fix_normals(s, &vlfree, &tol);
     /* free any vlists that nmg_fix_normals may have allocated */
-    BV_FREE_VLIST(&vlfree, &vlfree);
+    RT_FREE_VLIST(&vlfree, &vlfree);
 
     const char *objname = "nmg_tet";
     mk_nmg(wdbp, objname, m);  /* mk_nmg takes ownership of m */
@@ -495,15 +497,10 @@ rt_edit_test_nmg(void)
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size  = 73.3197;
-    v->gv_isize = 1.0 / v->gv_size;
+    struct rt_edit_view v;
+    rt_edit_test_view_init(&v);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     if (!s)
 	bu_exit(1, "ERROR: rt_edit_create failed\n");
 
@@ -645,7 +642,6 @@ rt_edit_test_nmg(void)
 
     rt_edit_destroy(s);
     db_free_full_path(&fp);
-    bv_free(v);
     db_close(dbip);
 
     /* ================================================================
@@ -672,17 +668,10 @@ rt_edit_test_nmg(void)
 	db_full_path_init(&wfp);
 	db_add_node_to_full_path(&wfp, wdp);
 
-	struct bview *wv;
-	BU_GET(wv, struct bview);
-	bv_init(wv, NULL);
-	wv->gv_size  = 10.0;
-	wv->gv_isize = 0.1;
-	wv->gv_scale = 5.0;
-	bv_update(wv);
-	bu_vls_sprintf(&wv->gv_name, "default");
-	wv->gv_width = wv->gv_height = 512;
+	struct rt_edit_view wv;
+	rt_edit_test_view_init_identity_size(&wv, 10.0);
 
-	struct rt_edit *ws = rt_edit_create(&wfp, wdbip, &tol, wv);
+	struct rt_edit *ws = rt_edit_create(&wfp, wdbip, &tol, &wv);
 	if (!ws || !NEAR_EQUAL(ws->local2base, local2base, VUNITIZE_TOL))
 	    bu_exit(1, "ERROR: NMG wire edit did not inherit database units\n");
 	ws->mv_context = 0;
@@ -701,7 +690,7 @@ rt_edit_test_nmg(void)
 	point_t edge_midpoint, pick_view;
 	VADD2SCALE(edge_midpoint, first_edge->vu_p->v_p->vg_p->coord,
 		first_edge->eumate_p->vu_p->v_p->vg_p->coord, 0.5);
-	MAT4X3PNT(pick_view, wv->gv_model2view, edge_midpoint);
+	MAT4X3PNT(pick_view, wv.gv_model2view, edge_midpoint);
 	vect_t knob_state;
 	VSET(knob_state, 7.0, 8.0, 9.0);
 	VMOVE(ws->k.tra_m_abs, knob_state);
@@ -712,7 +701,7 @@ rt_edit_test_nmg(void)
 	if (!wne->es_eu)
 	    bu_exit(1, "ERROR: NMG edge pick did not select an edge\n");
 	point_t view_target;
-	MAT4X3PNT(view_target, wv->gv_model2view, ws->curr_e_axes_pos);
+	MAT4X3PNT(view_target, wv.gv_model2view, ws->curr_e_axes_pos);
 	view_target[X] = pick_view[X];
 	view_target[Y] = pick_view[Y];
 	if (!edit_test_mouse_knobs_match(ws, view_target))
@@ -956,7 +945,6 @@ rt_edit_test_nmg(void)
 	    bu_exit(1, "ERROR: NMG edit reset retained the extrusion template\n");
 	rt_edit_destroy(ws);
 	db_free_full_path(&wfp);
-	bv_free(wv);
 	db_close(wdbip);
     }
 

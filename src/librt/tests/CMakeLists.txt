@@ -58,6 +58,13 @@ brlcad_add_test(NAME rt_default_object COMMAND rt_default_object)
 brlcad_addexec(rt_db_name db_name.c "librt;libbu" TEST)
 brlcad_add_test(NAME rt_db_name COMMAND rt_db_name)
 
+brlcad_addexec(rt_external_view external_view.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
+brlcad_add_test(NAME rt_external_view COMMAND rt_external_view)
+
+brlcad_addexec(rt_db_discovery db_discovery.cpp "librt;libwdb;libbu;${M_LIBRARY}" TEST)
+brlcad_add_test(NAME rt_db_discovery COMMAND rt_db_discovery
+  "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g")
+
 brlcad_addexec(rt_bound_internal bound_internal.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
 brlcad_add_test(NAME rt_bound_internal COMMAND rt_bound_internal)
 
@@ -72,21 +79,19 @@ brlcad_add_test(NAME rt_tree_prune COMMAND rt_tree_prune)
 
 brlcad_addexec(rt_reprep_prune reprep_prune.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
 
-# Note - this feature is not available in a BRLCAD_ENABLE_RUNTIME_DEBUG=OFF
-# build, since it has an unavoidable performance overhead in the hot loop to
-# check if the setting is enabled.
-if (BRLCAD_ENABLE_RUNTIME_DEBUG)
-  brlcad_addexec(rt_rtcmp_capture rtcmp_capture.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
-  brlcad_add_test(NAME rt_rtcmp_capture COMMAND rt_rtcmp_capture)
-  brlcad_add_test(NAME rt_rtcmp_capture_primitives COMMAND rt_rtcmp_capture primitives)
-  brlcad_add_test(NAME rt_reprep_prune COMMAND rt_reprep_prune)
-endif()
+brlcad_addexec(rt_rtcmp_capture rtcmp_capture.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
+brlcad_add_test(NAME rt_rtcmp_capture COMMAND rt_rtcmp_capture)
+brlcad_add_test(NAME rt_rtcmp_capture_primitives COMMAND rt_rtcmp_capture primitives)
+brlcad_add_test(NAME rt_reprep_prune COMMAND rt_reprep_prune)
 
 brlcad_addexec(rt_submodel_xform submodel_xform.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
 brlcad_add_test(NAME rt_submodel_xform COMMAND rt_submodel_xform)
 
 brlcad_addexec(rt_lcomb_large lcomb_large.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
 brlcad_add_test(NAME rt_lcomb_large COMMAND rt_lcomb_large)
+
+brlcad_addexec(rt_fullpath_color fullpath_color.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
+brlcad_add_test(NAME rt_fullpath_color COMMAND rt_fullpath_color)
 
 if(BRLCAD_ENABLE_BINARY_ATTRIBUTES)
   brlcad_addexec(rt_binary_attribute binary_attribute.c "${RT_TEST_LIBS}" TEST)
@@ -123,9 +128,16 @@ brlcad_add_test(NAME rt_cache_parallel_multiple_identical_objects  COMMAND rt_ca
 brlcad_add_test(NAME rt_cache_serial_multiple_different_objects COMMAND rt_cache 5 10)
 brlcad_add_test(NAME rt_cache_parallel_multiple_different_objects  COMMAND rt_cache 6 10)
 brlcad_add_test(NAME rt_cache_parallel_multiple_different_objects_hierarchy_1  COMMAND rt_cache 7 10)
-
-# lod testing
-brlcad_addexec(rt_lod lod.c "librt;libbg;${M_LIBRARY}" TEST)
+set_tests_properties(
+  rt_cache_serial_single_object
+  rt_cache_parallel_single_object
+  rt_cache_serial_multiple_identical_objects
+  rt_cache_parallel_multiple_identical_objects
+  rt_cache_serial_multiple_different_objects
+  rt_cache_parallel_multiple_different_objects
+  rt_cache_parallel_multiple_different_objects_hierarchy_1
+  PROPERTIES SKIP_RETURN_CODE 77
+)
 
 # VDS vertex tree construction and traversal.  Compile the private VDS
 # implementation into the test because its symbols are not part of librt's ABI.
@@ -135,8 +147,8 @@ target_include_directories(rt_vds_tree PRIVATE
 )
 brlcad_add_test(NAME rt_vds_tree COMMAND rt_vds_tree)
 
-# bv_polygon <-> sketch testing
-brlcad_addexec(rt_bv_poly_sketch bv_poly_sketch.c "librt;libbv;${M_LIBRARY}" TEST)
+# view polygon <-> sketch testing
+brlcad_addexec(rt_poly_sketch poly_sketch.c "librt;libbg;libbu;${M_LIBRARY}" TEST)
 
 # arb8 testing
 brlcad_addexec(rt_arb8 arb8_tests.c "librt;libwdb;libbg;libbu;${M_LIBRARY}" TEST)
@@ -193,6 +205,16 @@ brlcad_add_test(NAME rt_primitive_brep COMMAND rt_primitive_brep)
 brlcad_addexec(rt_brep_io brep_io.cpp "librt;libbrep;libbu;Threads::Threads;${M_LIBRARY}" TEST)
 brlcad_add_test(NAME rt_brep_io COMMAND rt_brep_io)
 
+# Direct renderer-facing primitive mesh providers
+brlcad_addexec(rt_indexed_face_set indexed_face_set.c "librt;libbu;${M_LIBRARY}" TEST)
+brlcad_add_test(NAME rt_indexed_face_set COMMAND rt_indexed_face_set)
+
+brlcad_addexec(rt_eto_wireframe eto_wireframe.c "librt;libbu;${M_LIBRARY}" TEST)
+brlcad_add_test(NAME rt_eto_wireframe COMMAND rt_eto_wireframe)
+
+brlcad_addexec(rt_obj_dispatch obj_dispatch.c "librt;libbu;${M_LIBRARY}" TEST)
+brlcad_add_test(NAME rt_obj_dispatch COMMAND rt_obj_dispatch)
+
 # stand-alone Crofton estimator tests
 brlcad_addexec(rt_crofton crofton.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
 brlcad_add_test(NAME rt_crofton COMMAND rt_crofton)
@@ -217,36 +239,40 @@ brlcad_add_test(NAME rt_metaball_adjust COMMAND rt_metaball_adjust)
 set(
   distcheck_files
   CMakeLists.txt
-  arb_intersect.g
   ars_inside.c
+  arb_intersect.g
   binary_attribute.c
   binunif.c
-  bound_internal.c
-  brep_boolean_tests.g
   brep_io.cpp
+  bound_internal.c
   crofton.c
-  cyclic_tests.g
-  datum_annot_semantics.c
   db_name.c
   default_object.c
+  datum_annot_semantics.c
   dsp_raytrace_check.c
   dsp_sa_vol_check.c
+  eto_wireframe.c
+  fullpath_color.c
+  indexed_face_set.c
+  primitive_brep.cpp
+  reprep_prune.c
+  brep_boolean_tests.g
+  cyclic_tests.g
   extreme_ssi_test.g
   invalid_inmem.c
   lcomb_large.c
   matrix_tests.g
   metaball_adjust.c
   nurbs_surfaces.g
+  obj_dispatch.c
   pnts_bounds.c
   prim_tess.c
-  primitive_brep.cpp
-  reprep_prune.c
   rt_datum.c
   rt_perturb.c
   rtcmp_capture.c
   search_stress.c
-  sketch.g
   static_init.cpp
+  sketch.g
   submodel_xform.c
   tess_timing.c
   tree_prune.c

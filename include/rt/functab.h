@@ -34,10 +34,10 @@
 
 #include "common.h"
 #include "vmath.h"
+#include "bu/list.h"
 #include "bu/parse.h"
 #include "bu/vls.h"
 #include "bn/tol.h"
-#include "bv.h"
 #include "rt/geom.h"
 #include "rt/defines.h"
 #include "rt/application.h"
@@ -61,6 +61,52 @@
 __BEGIN_DECLS
 
 struct rt_piecestate; /* forward declaration for ft_piece_shot / ft_piece_hitsegs */
+
+/* Keep command encodings aligned with BG line-layer and vlist streams. */
+enum rt_primitive_line_command {
+    RT_PRIMITIVE_LINE_MOVE = 0,
+    RT_PRIMITIVE_LINE_DRAW = 1,
+    RT_PRIMITIVE_POINT_DRAW = 12
+};
+
+struct rt_primitive_lod_realization {
+    point_t *line_points;
+    int *line_commands;
+    size_t line_count;
+    size_t line_capacity;
+    int has_line_set;
+    uint64_t source_identity;
+    uint64_t geometry_revision;
+};
+
+struct rt_primitive_indexed_face_set {
+    point_t *points;
+    size_t point_count;
+    vect_t *normals;
+    size_t normal_count;
+    int *indices;
+    size_t index_count;
+    /* Optional authoritative bounds of the represented source object.  These
+     * are deliberately distinct from the bounds of the emitted vertices:
+     * sampled, clipped, or otherwise approximate display geometry need not
+     * contain every source extremum. */
+    int source_bounds_valid;
+    point_t source_bounds_min;
+    point_t source_bounds_max;
+    uint64_t source_identity;
+    uint64_t geometry_revision;
+};
+
+/**
+ * Release display arrays on the same library side that allocated them.
+ * Besides making ownership explicit, this avoids cross-CRT frees when librt
+ * is a DLL on Windows.
+ */
+RT_EXPORT extern void
+rt_primitive_lod_realization_free(struct rt_primitive_lod_realization *realization);
+
+RT_EXPORT extern void
+rt_primitive_indexed_face_set_free(struct rt_primitive_indexed_face_set *face_set);
 
 /**
  * This needs to be at the end of the raytrace.h header file, so that
@@ -131,15 +177,15 @@ struct rt_functab {
 		   struct rt_db_internal * /*ip*/,
 		   const struct bg_tess_tol * /*ttol*/,
 		   const struct bn_tol * /*tol*/,
-		   const struct bview * /*view info*/);
-#define RTFUNCTAB_FUNC_PLOT_CAST(_func) ((int (*)(struct bu_list *, struct rt_db_internal *, const struct bg_tess_tol *, const struct bn_tol *, const struct bview *))((void (*)(void))_func))
+		   const struct bv_view_info * /*view info*/);
+#define RTFUNCTAB_FUNC_PLOT_CAST(_func) ((int (*)(struct bu_list *, struct rt_db_internal *, const struct bg_tess_tol *, const struct bn_tol *, const struct bv_view_info *))((void (*)(void))_func))
 
-    int (*ft_adaptive_plot)(struct bu_list * /*vhead*/,
-	                    struct rt_db_internal * /*ip*/,
-			    const struct bn_tol * /*tol*/,
-			    const struct bview * /* view info */,
-			    fastf_t /* s_size */);
-#define RTFUNCTAB_FUNC_ADAPTIVE_PLOT_CAST(_func) ((int (*)(struct bu_list *, struct rt_db_internal *, const struct bn_tol *, const struct bview *, fastf_t))((void (*)(void))_func))
+    int (*ft_lod_realize)(struct rt_primitive_lod_realization * /*realization*/,
+			  struct rt_db_internal * /*ip*/,
+			  const struct bn_tol * /*tol*/,
+			  const struct bv_view_info * /* view info */,
+			  fastf_t /* s_size */);
+#define RTFUNCTAB_FUNC_LOD_REALIZE_CAST(_func) ((int (*)(struct rt_primitive_lod_realization *, struct rt_db_internal *, const struct bn_tol *, const struct bv_view_info *, fastf_t))((void (*)(void))_func))
 
     void (*ft_vshot)(struct soltab * /*stp*/[],
 		     struct xray *[] /*rp*/,
@@ -298,31 +344,26 @@ struct rt_functab {
     int (*ft_perturb)(struct rt_db_internal **oip, const struct rt_db_internal *ip, int planar_only, fastf_t factor);
 #define RTFUNCTAB_FUNC_PERTURB_CAST(_func) ((int (*)(struct rt_db_internal **, const struct rt_db_internal *, int, fastf_t))((void (*)(void))_func))
 
-    /* Populate a scene object with the appropriate visualization data.  Unlike
-     * ft_plot, this routine handles multiple drawing modes (e.g. shaded) and
-     * adaptive plotting based on a view. If NULL parameters are passed for
-     * tolerance, defaults will be used.  If no view info is available, adaptive
-     * settings are ignored and the standard visuals will be generated.
-     *
-     * Unlike most functab methods, we deliberately use a directory pointer and
-     * the database instance pointer as inputs rather than the rt_db_internal.
-     * This is for performance reasons - some primitives cache drawing data
-     * in a way that lets them draw more quickly than they could trying to process
-     * the full rt_db_internal primitive data, and in those cases we want to avoid
-     * the memory overhead of populating an rt_db_internal unless it is actually
-     * needed.
-     *
-     * TODO - for combs, we either need the evaluated tree output or an agglomeration
-     * of all the leaf wireframes.  Normally the latter won't be what apps want,
-     * since it wouldn't reuse solid leaf wireframes, but from an API perspective
-     * it's what this function would return... */
-    int (*ft_scene_obj)(struct bv_scene_obj * /*s*/,
-		   struct directory * /*dp*/,
-		   struct db_i * /*dbip*/,
-		   const struct bg_tess_tol * /*ttol*/,
-		   const struct bn_tol * /*tol*/,
-		   const struct bview * /*v*/);
-#define RTFUNCTAB_FUNC_SCENE_OBJ_CAST(_func) ((int (*)(struct bv_scene_obj *, struct directory *, struct db_i *, const struct bg_tess_tol *, const struct bn_tol *, const struct bview *))((void (*)(void))_func))
+    int (*ft_indexed_face_set)(struct rt_primitive_indexed_face_set * /*face_set*/,
+			       struct rt_db_internal * /*ip*/,
+			       const struct bg_tess_tol * /*ttol*/,
+			       const struct bn_tol * /*tol*/,
+			       const struct bv_view_info * /*view info*/);
+#define RTFUNCTAB_FUNC_INDEXED_FACE_SET_CAST(_func) ((int (*)(struct rt_primitive_indexed_face_set *, struct rt_db_internal *, const struct bg_tess_tol *, const struct bn_tol *, const struct bv_view_info *))((void (*)(void))_func))
+
+    /** Canonical, view-independent CAD wire source for retained LoD. */
+#ifdef __cplusplus
+    int (*ft_wireframe_line_set)(struct rt_primitive_lod_realization * /*realization*/,
+				 struct rt_db_internal * /*ip*/,
+				 const struct bg_tess_tol * /*ttol*/,
+				 const struct bn_tol * /*tol*/) = nullptr;
+#else
+    int (*ft_wireframe_line_set)(struct rt_primitive_lod_realization * /*realization*/,
+				 struct rt_db_internal * /*ip*/,
+				 const struct bg_tess_tol * /*ttol*/,
+				 const struct bn_tol * /*tol*/);
+#endif
+#define RTFUNCTAB_FUNC_WIREFRAME_LINE_SET_CAST(_func) ((int (*)(struct rt_primitive_lod_realization *, struct rt_db_internal *, const struct bg_tess_tol *, const struct bn_tol *))((void (*)(void))_func))
 
     /**
      * Validate the geometry of a primitive.
@@ -441,22 +482,16 @@ struct rt_edit_functab {
 #define EDFUNCTAB_FUNC_EDIT_DESC_CAST(_func) ((const struct rt_edit_prim_desc *(*)(void))((void (*)(void))_func))
 
     /**
-     * Pre-read current primitive parameter values into vals[].
+     * Read source-neutral current inputs for one descriptor command.
      *
-     * For each parameter of @p cmd_id, writes the current value (in local
-     * units) to vals[param.index], following the same index convention as
-     * s->e_para[].  For POINT/VECTOR params three consecutive slots starting
-     * at param.index are filled.  STRING params are not represented here.
-     *
-     * @param s       Active rt_edit session (es_int must be valid).
-     * @param cmd_id  Which command's parameters to read.
-     * @param vals    Caller-provided array; caller must ensure it is at least
-     *                RT_EDIT_MAXPARA elements long.
-     * @return  Number of scalar slots written (>= 0), or -1 on error.
-     *          Returns 0 if cmd_id is not recognised by this primitive.
+     * The caller initializes @p result.  The primitive marks each numeric or
+     * string slot it can read.  Return RT_EDIT_VALUE_OK when the command has
+     * meaningful current values, RT_EDIT_VALUE_UNAVAILABLE for an action or
+     * unrecognized command, and RT_EDIT_VALUE_ERROR on failure.
      */
-    int (*ft_edit_get_params)(struct rt_edit *s, int cmd_id, fastf_t *vals);
-#define EDFUNCTAB_FUNC_GET_PARAMS_CAST(_func) ((int(*)(struct rt_edit *, int, fastf_t *))((void (*)(void))_func))
+    int (*ft_edit_get_values)(struct rt_edit *s, int cmd_id,
+	    struct rt_edit_cmd_values *result);
+#define EDFUNCTAB_FUNC_GET_VALUES_CAST(_func) ((int(*)(struct rt_edit *, int, struct rt_edit_cmd_values *))((void (*)(void))_func))
 
     /**
      * Attempt to repair an invalid primitive.

@@ -1,0 +1,396 @@
+{
+  "schemaVersion": 1,
+  "observation": {
+    "type": "BObolModelConformanceState",
+    "source": "src/libBObol/tests/model_conformance_harness_private.h"
+  },
+  "stateVector": [
+    {
+      "id": "control",
+      "fields": ["controlFactMask", "controlObligationMask", "controlOwner", "controlViolationMask", "presentationWitnessMask", "inventoryEpoch", "availabilityEpoch", "visibilityEpoch", "capacityEpoch", "cadEpoch", "residentDemandEpoch", "allocationPlanIdentity"],
+      "formalConcepts": ["facts", "work", "owner", "progress witness", "revision tuple", "retained allocation identity"]
+    },
+    {
+      "id": "generation",
+      "fields": ["activeGeneration"],
+      "formalConcepts": ["consumer generation", "producer lease"]
+    },
+    {
+      "id": "request-identity",
+      "fields": ["sourceRoutingId", "sourcePopulationEpoch", "viewEpoch", "policyEpoch"],
+      "formalConcepts": ["source route", "source population", "demand"]
+    },
+    {
+      "id": "authenticated-result",
+      "fields": ["resultMismatchMask", "resultDisposition"],
+      "formalConcepts": ["current result", "publish", "terminal failure", "retry", "supersede"]
+    },
+    {
+      "id": "lifecycle",
+      "fields": ["terminal", "terminalError", "viewReady", "constraintEvidenceMask", "hostWork", "hasLodState"],
+      "formalConcepts": ["ready", "constrained", "failed", "host progress witness"]
+    },
+    {
+      "id": "transaction",
+      "fields": ["transactionActive", "transactionBarrierPending", "transactionIdentity", "requiredRenderSerial", "completedRenderSerial", "presentedFrameIdentity", "publicationFramePending", "refinementFramePending"],
+      "formalConcepts": ["presentation transaction", "exact frame barrier", "completed render clock", "publication retirement"]
+    },
+    {
+      "id": "semantic-presentation",
+      "fields": ["semanticPresentationPending", "semanticRequestRequired", "semanticFramePending"],
+      "formalConcepts": ["semantic presentation debt", "requested successor", "queued or in-flight frame"]
+    },
+    {
+      "id": "source-identity",
+      "fields": ["sourceIdentity"],
+      "formalConcepts": ["non-reused source identity", "ABA prevention"]
+    },
+    {
+      "id": "evidence-validity",
+      "fields": ["evidenceIdentity", "evidenceValue", "evidenceValid"],
+      "formalConcepts": ["exact evidence set", "coherent timing evidence", "timing evidence validity"]
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "control-owner-discharge",
+      "kind": "stepwise",
+      "model": "ObolControlRefinement",
+      "actions": ["DischargeOwner"],
+      "testName": "libBObol_conformance_control_refinement",
+      "source": "src/libBObol/tests/test_model_conformance.cpp",
+      "tier": "core",
+      "checks": ["CorrectFactMap", "OwnerIsValid", "TerminalHasNoForegroundWork", "ReadyIsValid", "DischargeStrictlyReduces", "EventuallyAllWorkRetires"]
+    },
+    {
+      "id": "result-late-supersession",
+      "kind": "stepwise",
+      "model": "ObolResultAuthentication",
+      "actions": ["ApplyCurrentResult", "RecordCurrentFailure", "RetryCurrentResult", "RejectSupersededResult", "ReplacePopulation", "ChangeDemand", "ChangeRoute"],
+      "testName": "libBObol_conformance_result_authentication",
+      "source": "src/libBObol/tests/test_model_conformance.cpp",
+      "tier": "core",
+      "checks": ["AuthenticatedResultIsCurrent", "AcceptedOutcomeIsTyped", "StaleResultCannotApply", "SupersededResultCreatesNoOutcome"]
+    },
+    {
+      "id": "ged-source-route-supersession",
+      "kind": "regression",
+      "model": "ObolResultAuthentication",
+      "actions": ["ChangeRoute", "ReplacePopulation", "RejectSupersededResult"],
+      "testName": "ged_test_obol_draw_sync",
+      "source": "src/libged/tests/draw/obol_sync.cpp",
+      "tier": "core",
+      "checks": ["new source owner with reused key path and numeric stamps rejects queued old publication", "in-place path and population replacement with reused numeric stamps reject queued old publication", "database rebinding including A to B to A and representation key or any tessellation tolerance change reject old publication without replacing the population", "replacement bounds geometry placement population and realization status remain unchanged", "cancelled delivery retires without a replacement error or pending preparation"]
+    },
+    {
+      "id": "result-request-lifecycle",
+      "kind": "regression",
+      "model": "ObolResultAuthentication",
+      "actions": ["SubmitCurrent", "CompleteResult"],
+      "testName": "libBObol_lod_service",
+      "source": "src/libBObol/tests/test_lod_service.cpp",
+      "tier": "sanitizer",
+      "checks": ["submitted request identity is copied unchanged into the asynchronous result"]
+    },
+    {
+      "id": "identity-and-exact-evidence",
+      "kind": "stepwise",
+      "model": "ObolIdentityExhaustion",
+      "actions": ["RequestMutation", "Advance", "FailStop", "AuthenticateEvidence"],
+      "testName": "libBObol_conformance_identity_evidence",
+      "source": "src/libBObol/tests/test_model_conformance.cpp",
+      "tier": "core",
+      "checks": ["accepted evidence matches the current exact set", "reordering does not create identity", "mutation and invalidation do create identity", "the final identity is issued once and exhaustion is reported without wrap"]
+    },
+    {
+      "id": "cad-evidence-replay",
+      "kind": "stepwise",
+      "model": "ObolCadTimingEvidence",
+      "actions": ["CompleteInitialCadFrame", "CompleteReusableCadReplay", "RecordNonCadFrame"],
+      "testName": "libBObol_conformance_identity_evidence",
+      "source": "src/libBObol/tests/test_model_conformance.cpp",
+      "tier": "core",
+      "checks": ["first upload is not reusable timing evidence", "unchanged replay publishes threshold-and-cost-coherent evidence", "non-CAD timing preserves retained CAD evidence"]
+    },
+    {
+      "id": "completed-frame-measurement-preserved",
+      "kind": "regression",
+      "model": "ObolCadTimingEvidence",
+      "actions": ["CompleteReusableCadReplay"],
+      "testName": "libBObol_lod_update_action",
+      "source": "src/libBObol/tests/test_lod_update_action.cpp",
+      "tier": "core",
+      "checks": ["completed traversal retains its supplied duration despite later delivery", "on-time and late exact frames share the same duration consumer", "incomplete traversal retains its separate interruption path", "numeric duration equality is checked in C++ beyond the model's outcome classes"]
+    },
+    {
+      "id": "source-repair-shared-minimum",
+      "kind": "regression",
+      "model": "ObolStructuralFrontierOwnership",
+      "actions": ["ClaimStructuralRepair", "CompleteStructuralRepairSuccess"],
+      "testName": "libBObol_lod_update_action",
+      "source": "src/libBObol/tests/test_lod_update_action.cpp",
+      "tier": "core",
+      "checks": ["structural repair tries the minimum shared prefix before rejecting mesh capacity", "source replacement refreshes retained visible entries beyond the consumed census prefix", "current allocation redistributes cuts by projected importance within its certified budget", "actual rendered triangles match selected cuts", "a current exact frame authorizes replacement allocation and the finite transaction retires", "numeric cost and prefix fidelity are checked in C++ beyond the model's rejection outcome"]
+    },
+    {
+      "id": "semantic-frame-transaction",
+      "kind": "stepwise",
+      "model": "ObolSemanticPresentation",
+      "actions": ["MutateStyle", "QueueFrame", "BeginFrame", "CompleteCurrentFrame", "CompleteStaleFrame"],
+      "testName": "libBObol_conformance_presentation_transaction",
+      "source": "src/libBObol/tests/test_model_conformance.cpp",
+      "tier": "core",
+      "checks": ["StaleFrameCannotCommit", "SemanticFrameIsPresentationOnly", "OwnedSuccessorNeedsNoRecovery"]
+    },
+    {
+      "id": "result-to-presentation-trace",
+      "kind": "regression",
+      "model": "ObolControlLifecycleComposition",
+      "actions": ["CompleteProvider", "QueueExactFrame", "BeginRender", "CompleteCurrentRender"],
+      "testName": "libBObol_lod_update_action",
+      "source": "src/libBObol/tests/test_lod_update_action.cpp",
+      "tier": "core",
+      "checks": ["complete journal with no loss or unnamed transitions", "independent concrete-fact refinement", "result publication arms one exact-frame barrier", "barrier identity remains stable until its required completed render", "manual publication remains nonterminal without creating automatic planning work"]
+    },
+    {
+      "id": "visibility-plan-supersession",
+      "kind": "regression",
+      "model": "ObolProgressivePipeline",
+      "actions": ["ChangeVisibility", "AbortStalePlan"],
+      "testName": "libBObol_lod_update_action",
+      "source": "src/libBObol/tests/test_lod_update_action.cpp",
+      "tier": "core",
+      "checks": ["stale six-domain plan and cursor cannot commit"]
+    },
+    {
+      "id": "allocation-terminal-outcome",
+      "kind": "regression",
+      "model": "ObolLodArbitration",
+      "actions": ["Complete", "Constrain"],
+      "testName": "libBObol_retained_allocation_oracle",
+      "source": "src/libBObol/tests/test_retained_allocation_oracle.cpp",
+      "tier": "core",
+      "checks": ["coverage priority and typed constraint evidence"]
+    },
+    {
+      "id": "source-observation-consumption",
+      "kind": "regression",
+      "model": "ObolSourceEvidence",
+      "actions": ["Observe", "BeginSubmission", "FinishSubmission", "ReplacePopulation"],
+      "testName": "libBObol_lod_source_evidence",
+      "source": "src/libBObol/tests/test_lod_source_evidence.cpp",
+      "tier": "core",
+      "checks": ["distinct pending observations publish their exact domain", "duplicate observation and consumption are inert", "superseded submission cannot consume current evidence", "current snapshots share immutable source storage"]
+    },
+    {
+      "id": "source-notification-production-ordering",
+      "kind": "regression",
+      "model": "ObolSourceEvidence",
+      "actions": ["MutateVisibility", "MutateInventory", "Observe", "BeginSubmission", "FinishSubmission"],
+      "testName": "libBObol_lod_update_action",
+      "source": "src/libBObol/tests/test_lod_update_action.cpp",
+      "tier": "core",
+      "checks": ["two visibility notifications before submission remain distinct", "both inventory/visibility orderings preserve admission domains", "notification-free submission observes its current input", "replacement and empty-source retirement do not duplicate publication"]
+    },
+    {
+      "id": "static-completed-frame-decision",
+      "kind": "regression",
+      "model": "ObolStaticQuality",
+      "actions": ["CompleteFrame", "AcceptCompletedBoundedFrame", "RejectMarginal"],
+      "testName": "libBObol_lod_coordinator",
+      "source": "src/libBObol/tests/test_lod_coordinator.cpp",
+      "tier": "core",
+      "checks": ["actual production policy distinguishes transient preparation from steady evidence", "fractional acceptance requires a completed exact frame", "a predicted miss retains the measured cut for reconciliation", "unavailable numeric prediction is neither guard-release nor rejection evidence"]
+    },
+    {
+      "id": "static-configuration-input-identity",
+      "kind": "regression",
+      "model": "ObolStaticQuality",
+      "actions": ["BeginInput", "EndInput"],
+      "testName": "libBObol_lod_update_action",
+      "source": "src/libBObol/tests/test_lod_update_action.cpp",
+      "tier": "core",
+      "checks": ["repeating automatic submission preserves a settled constrained view without new work", "a changed frame deadline invalidates policy evidence and supplies a requested frame", "the expanded deadline produces a richer exact three-occurrence presentation and finite retirement; numeric deadline effects are outside the abstract model"]
+    },
+    {
+      "id": "static-frame-occurrence-handoff",
+      "kind": "regression",
+      "model": "ObolCapacityPresentationHandoff",
+      "actions": ["RequestReconciliation"],
+      "testName": "libBObol_lod_update_action",
+      "source": "src/libBObol/tests/test_lod_update_action.cpp",
+      "tier": "core",
+      "checks": ["live submission and handoff owners prevent repeated frame consumption", "one measured budget arms occurrence allocation without releasing the renderer guard", "capacity revision advances exactly once at the production effect boundary", "two real progressive occurrences produce an unavailable single-cut prediction and transfer ownership without a fabricated constraint"]
+    },
+    {
+      "id": "submission-input-retarget-prefix",
+      "kind": "regression",
+      "model": "ObolSubmissionPass",
+      "actions": ["FinishCoveragePass", "FinishRescanPass"],
+      "testName": "libBObol_lod_update_action",
+      "source": "src/libBObol/tests/test_lod_update_action.cpp",
+      "tier": "core",
+      "checks": ["an untouched automatic cursor does not invent replay debt on a policy change", "a scale change visits the complete new-view census once", "retarget after a consumed prefix preserves the suffix and owes exactly one full rescan", "existing sparse append and visibility regressions preserve consumed prefixes and bounded delta work"]
+    },
+    {
+      "id": "presentation-repair-preserves-demand",
+      "kind": "regression",
+      "model": "ObolSubmissionPass",
+      "actions": ["FinishVisibilityPresentation", "ResumeDemand", "FinishDemandPass"],
+      "testName": "libBObol_lod_update_action",
+      "source": "src/libBObol/tests/test_lod_update_action.cpp",
+      "tier": "core",
+      "checks": ["a normal-style repair supersedes an actual automatic demand cursor", "visiting the complete repair population does not consume ordinary demand", "one complete ordinary successor consumes demand and terminates", "no provider tasks or cache writes are needed to reproduce the control error"]
+    },
+    {
+      "id": "source-coverage-preserves-demand",
+      "kind": "regression",
+      "model": "ObolSubmissionPass",
+      "actions": ["MutateVisibility", "FinishCoveragePass", "FinishVisibilityPresentation", "ResumeDemand", "FinishDemandPass"],
+      "testName": "libBObol_lod_update_action",
+      "source": "src/libBObol/tests/test_lod_update_action.cpp",
+      "tier": "core",
+      "checks": ["inventory append and visibility mutation interrupt an actual automatic demand prefix before normals repair", "repair preserves demand over the revised population", "one complete ordinary successor retires demand and its cursor", "idle exact visibility edits retain bounded delta work"]
+    },
+    {
+      "id": "source-coverage-demand-priority",
+      "kind": "regression",
+      "model": "ObolSubmissionPass",
+      "actions": ["FinishCoveragePass", "ResumeDemand", "FinishDemandPass"],
+      "testName": "libBObol_lod_coordinator",
+      "source": "src/libBObol/tests/test_lod_coordinator.cpp",
+      "tier": "core",
+      "checks": ["source coverage defers optional refinement while preserving pending demand", "camera changes cannot bypass incomplete source coverage", "view-only census permits retained refinement after prior coverage", "source invalidation supersedes view admission until coverage completes"]
+    },
+    {
+      "id": "source-delivery-denial",
+      "kind": "regression",
+      "model": "ObolControlLifecycleComposition",
+      "actions": ["FailProvider", "TogglePolicy", "PublishProviderWork", "CompleteProvider"],
+      "testName": "ged_test_obol_draw_sync",
+      "source": "src/libged/tests/draw/obol_sync.cpp",
+      "tier": "core",
+      "checks": ["denied merge after worker completion cannot adopt the detached registry", "source failure preserves actual retained preview and expected population", "expected population certification does not allocate an instance index", "initial overview wire vertices retain their geometry transform", "generic exact overview publishes before denied leaf delivery", "same-part overview replacement publishes changed placement and retains actual whole-source extent", "current source failures retire preparation and cannot report ready", "rendering across policy off-on-off preserves failure and reaches a terminal error", "ordinary representation fallback retires the unused LoD assembly from frame completion", "fresh drawing reaches real occurrences and retires the failure"]
+    },
+    {
+      "id": "policy-off-source-outcome",
+      "kind": "regression",
+      "model": "ObolControlLifecycleComposition",
+      "actions": ["TogglePolicy", "FailProvider", "PublishProviderWork", "CompleteProvider"],
+      "testName": "libBObol_lod_coordinator",
+      "source": "src/libBObol/tests/test_lod_coordinator.cpp",
+      "tier": "core",
+      "checks": ["explicit source preparation remains active with automatic LoD off", "policy-off failure is an error and preserves other pending preparation", "retired source failure permits recovery"]
+    },
+    {
+      "id": "empty-submission-retirement",
+      "kind": "regression",
+      "model": "ObolLodConvergence",
+      "actions": ["RetireEmptySubmission"],
+      "testName": "libBObol_lod_coordinator",
+      "source": "src/libBObol/tests/test_lod_coordinator.cpp",
+      "tier": "core",
+      "checks": ["empty bounded cursor retires its planning owner"]
+    },
+    {
+      "id": "retained-payload-presentation-repair",
+      "kind": "regression",
+      "model": "ObolLodConvergence",
+      "actions": ["CompleteFrameWithoutPayload", "RepairPayloadPresentation"],
+      "testName": "libBObol_lod_coordinator",
+      "source": "src/libBObol/tests/test_lod_coordinator.cpp",
+      "tier": "core",
+      "checks": ["a populated retained payload without a concrete current primitive presentation cannot become ready and owns a bounded resubmission repair"]
+    },
+    {
+      "id": "occurrence-retry-and-repair",
+      "kind": "regression",
+      "model": "ObolOccurrenceControl",
+      "actions": ["CompleteLoadSuccess", "CompleteLoadRetryable", "CompleteLoadTerminalFailure", "RequestRepair", "SourceIdentityChange"],
+      "testName": "libBObol_lod_update_action",
+      "source": "src/libBObol/tests/test_lod_update_action.cpp",
+      "tier": "core",
+      "checks": ["terminal failure, retry, repair, and source identity are independent"]
+    },
+    {
+      "id": "shared-producer-consumer-lifetime",
+      "kind": "regression",
+      "model": "ObolSharedAssetLease",
+      "actions": ["CompleteSharedBuild", "PublishTo", "CloseConsumer", "JoinConsumer", "CancelUnownedBuild"],
+      "testName": "libBObol_lod_service",
+      "source": "src/libBObol/tests/test_lod_service.cpp",
+      "tier": "sanitizer",
+      "checks": ["surviving and late consumers retain producer and queued result ownership"]
+    },
+    {
+      "id": "interaction-close",
+      "kind": "regression",
+      "model": "ObolInteractionSession",
+      "actions": ["EndGesture", "CloseInput"],
+      "testName": "libBObol_window_host",
+      "source": "src/libBObol/tests/test_window_host.cpp",
+      "tier": "sanitizer",
+      "checks": ["finite handoff remains owned through callback and endpoint teardown"]
+    },
+    {
+      "id": "endpoint-close",
+      "kind": "regression",
+      "model": "ObolHostWork",
+      "actions": ["CloseEndpoint"],
+      "testName": "libBObol_window_host",
+      "source": "src/libBObol/tests/test_window_host.cpp",
+      "tier": "sanitizer",
+      "checks": ["endpoint closure retires provider, render, timer, pump, and claimed-frame work"]
+    },
+    {
+      "id": "point-terminal-evidence",
+      "kind": "regression",
+      "model": "ObolPointTerminalEvidence",
+      "actions": ["RejectFinerCandidate", "ObserveUnchangedCensus", "ChangeSemanticPopulation", "Finish"],
+      "testName": "libBObol_lod_coordinator",
+      "source": "src/libBObol/tests/test_lod_coordinator.cpp",
+      "tier": "core",
+      "checks": ["terminal point evidence is current and population-bound"]
+    },
+    {
+      "id": "spatial-producer-atomic-publication",
+      "kind": "regression",
+      "model": "ObolSpatialProducer",
+      "actions": ["BuildLeaf", "PublishDescriptor", "Cancel"],
+      "testName": "libBObol_mesh_lod_cache",
+      "source": "src/libBObol/tests/test_mesh_lod_cache.cpp",
+      "tier": "sanitizer",
+      "checks": ["partial pages remain unreachable until the complete descriptor publishes"]
+    },
+    {
+      "id": "durable-cache-publication-fault",
+      "kind": "regression",
+      "model": "ObolLiveSpatialPublication",
+      "actions": ["MarkCache", "DenyCacheCommit"],
+      "testName": "libBObol_mesh_lod_cache",
+      "source": "src/libBObol/tests/test_mesh_lod_cache.cpp",
+      "tier": "sanitizer",
+      "checks": ["open, payload-write, and mapping-commit failures cannot expose partial or replacement data"]
+    },
+    {
+      "id": "cad-mutation-denial",
+      "kind": "regression",
+      "model": "ObolCadMutation",
+      "actions": ["StageInvalid", "StageUnavailable", "RejectInvalid", "RejectUnavailable", "CloseCommit"],
+      "testName": "libBObol_render",
+      "source": "src/libBObol/tests/test_render.cpp",
+      "tier": "graphics",
+      "checks": ["invalid or unavailable staged CAD cannot become committed scene state"]
+    },
+    {
+      "id": "asset-publication-outcomes",
+      "kind": "regression",
+      "model": "ObolAssetPublicationComposition",
+      "actions": ["FinalizeAsset", "PublishFinal", "DenyCacheCommit", "Constrain", "Fail", "RestartConstrained", "RestartFailed", "Cancel"],
+      "testName": "libBObol_lod_service",
+      "source": "src/libBObol/tests/test_lod_service.cpp",
+      "tier": "sanitizer",
+      "checks": ["publication requires a complete authenticated asset and exactly one typed outcome"]
+    }
+  ]
+}

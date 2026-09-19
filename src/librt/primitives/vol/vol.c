@@ -29,18 +29,24 @@
 
 #include "common.h"
 
+#include <limits.h>
 #include <stddef.h>
 #include <ctype.h>
 #include <math.h>
 #include <string.h>
 #include "bio.h"
 
+#include "bu/file.h"
 #include "bu/parallel.h"
+#include "bu/path.h"
+#include "bu/vls.h"
 #include "vmath.h"
 #include "rt/db4.h"
 #include "nmg.h"
 #include "rt/geom.h"
+#include "rt/primitives/vol.h"
 #include "raytrace.h"
+#include "rt/vlist.h"
 
 #include "../fixpt.h"
 #include "../../librt_private.h"
@@ -65,7 +71,7 @@ struct rt_vol_specific {
 
 #define VOL_O(m) bu_offsetof(struct rt_vol_internal, m)
 
-EXTERNCPP const struct bu_structparse rt_vol_parse[] = {
+const struct bu_structparse rt_vol_parse[] = {
     {"%s", RT_VOL_NAME_LEN, "file", bu_offsetof(struct rt_vol_internal, name), BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     {"%s", RT_VOL_NAME_LEN, "name", bu_offsetof(struct rt_vol_internal, name), BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     {"%c", 1, "src",	VOL_O(datasrc),	BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
@@ -79,13 +85,11 @@ EXTERNCPP const struct bu_structparse rt_vol_parse[] = {
     {"", 0, (char *)0, 0, BU_STRUCTPARSE_FUNC_NULL, NULL, NULL }
 };
 
-__BEGIN_DECLS
+
 extern void rt_vol_plate(point_t a, point_t b, point_t c, point_t d,
 			 mat_t mat, struct bu_list *vlfree, struct bu_list *vhead, struct rt_vol_internal *vip);
 extern int rt_retrieve_binunif(struct rt_db_internal *intern, const struct db_i *dbip, const char *name);
 extern int rt_binunif_describe(struct bu_vls  *str, const struct rt_db_internal *ip, int verbose, double mm2local);
-__END_DECLS
-
 /*
  * Codes to represent surface normals.
  * In a bitmap, there are only 4 possible normals.
@@ -127,7 +131,7 @@ static int rt_vol_normtab[3] = { NORM_XPOS, NORM_YPOS, NORM_ZPOS };
  * Return intersection segments.
  *
  */
-C_DECL int
+int
 rt_vol_shot(struct soltab *stp, register struct xray *rp, struct application *ap, struct seg *seghead)
 {
     register struct rt_vol_specific *volp =
@@ -559,7 +563,7 @@ rt_vol_vshot(struct soltab *stp[], struct xray *rp[], struct seg *segp, int n, s
  * Then, as a service to the application, read in the bitmap
  * and set up some of the associated internal variables.
  */
-C_DECL int
+int
 rt_vol_import4(struct rt_db_internal *ip, const struct bu_external *ep, const fastf_t *mat, const struct db_i *dbip)
 {
     union record *rp;
@@ -629,7 +633,7 @@ rt_vol_import4(struct rt_db_internal *ip, const struct bu_external *ep, const fa
 /**
  * The name will be added by the caller.
  */
-C_DECL int
+int
 rt_vol_export4(struct bu_external *ep, const struct rt_db_internal *ip, double local2mm, const struct db_i *dbip)
 {
     struct rt_vol_internal *vip;
@@ -793,7 +797,7 @@ get_vol_data(struct rt_vol_internal *vip, const struct db_i *dbip)
     return 1;
 }
 
-C_DECL int
+int
 rt_vol_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_internal *ip)
 {
     if (!rop || !ip || !mat)
@@ -817,7 +821,7 @@ rt_vol_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_inter
  * Then, as a service to the application, read in the bitmap
  * and set up some of the associated internal variables.
  */
-C_DECL int
+int
 rt_vol_import5(struct rt_db_internal *ip, const struct bu_external *ep, const fastf_t *mat, const struct db_i *dbip)
 {
     register struct rt_vol_internal *vip;
@@ -879,7 +883,7 @@ rt_vol_import5(struct rt_db_internal *ip, const struct bu_external *ep, const fa
 /**
  * The name will be added by the caller.
  */
-C_DECL int
+int
 rt_vol_export5(struct bu_external *ep, const struct rt_db_internal *ip, double local2mm, const struct db_i *dbip)
 {
     struct rt_vol_internal *vip;
@@ -915,7 +919,7 @@ rt_vol_export5(struct bu_external *ep, const struct rt_db_internal *ip, double l
  * First line describes type of solid.
  * Additional lines are indented one tab, and give parameter values.
  */
-C_DECL int
+int
 rt_vol_describe(struct bu_vls *str, const struct rt_db_internal *ip, int UNUSED(verbose), double mm2local)
 {
     struct rt_vol_internal *vip = (struct rt_vol_internal *)ip->idb_ptr;
@@ -962,7 +966,7 @@ rt_vol_describe(struct bu_vls *str, const struct rt_db_internal *ip, int UNUSED(
 /**
  * Free the storage associated with the rt_db_internal version of this solid.
  */
-C_DECL void
+void
 rt_vol_ifree(struct rt_db_internal *ip)
 {
     register struct rt_vol_internal *vip;
@@ -986,7 +990,7 @@ rt_vol_ifree(struct rt_db_internal *ip)
 /**
  * Calculate bounding RPP for vol
  */
-C_DECL int
+int
 rt_vol_bbox(struct rt_db_internal *ip, point_t *min, point_t *max, const struct bn_tol *UNUSED(tol))
 {
     register struct rt_vol_internal *vip;
@@ -1013,7 +1017,7 @@ rt_vol_bbox(struct rt_db_internal *ip, point_t *min, point_t *max, const struct 
  * A struct rt_vol_specific is created, and its address is stored
  * in stp->st_specific for use by rt_vol_shot().
  */
-C_DECL int
+int
 rt_vol_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
 {
     struct rt_vol_internal *vip;
@@ -1072,7 +1076,7 @@ rt_vol_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
 }
 
 
-C_DECL void
+void
 rt_vol_print(register const struct soltab *stp)
 {
     register const struct rt_vol_specific *volp =
@@ -1093,7 +1097,7 @@ rt_vol_print(register const struct soltab *stp)
  * This is mostly a matter of translating the stored
  * code into the proper normal.
  */
-C_DECL void
+void
 rt_vol_norm(register struct hit *hitp, struct soltab *stp, register struct xray *rp)
 {
     register struct rt_vol_specific *volp =
@@ -1135,7 +1139,7 @@ rt_vol_norm(register struct hit *hitp, struct soltab *stp, register struct xray 
 /**
  * Everything has sharp edges.  This makes things easy.
  */
-C_DECL void
+void
 rt_vol_curve(register struct curvature *cvp, register struct hit *hitp, struct soltab *stp)
 {
     if (!cvp || !hitp)
@@ -1152,7 +1156,7 @@ rt_vol_curve(register struct curvature *cvp, register struct hit *hitp, struct s
  * Map the hit point in 2-D into the range 0..1
  * untransformed X becomes U, and Y becomes V.
  */
-C_DECL void
+void
 rt_vol_uv(struct application *ap, struct soltab *stp, register struct hit *hitp, register struct uvcoord *uvp)
 {
     if (ap) RT_CK_APPLICATION(ap);
@@ -1165,7 +1169,7 @@ rt_vol_uv(struct application *ap, struct soltab *stp, register struct hit *hitp,
 }
 
 
-C_DECL void
+void
 rt_vol_free(struct soltab *stp)
 {
     register struct rt_vol_specific *volp =
@@ -1180,18 +1184,115 @@ rt_vol_free(struct soltab *stp)
 }
 
 
-C_DECL int
-rt_vol_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct bview *UNUSED(info))
+#define VOL_FACE_INITIAL_CAPACITY 64
+
+struct vol_geometry_sink {
+    struct bu_list *vlfree;
+    struct bu_list *vhead;
+    struct rt_primitive_lod_realization *realization;
+    struct rt_primitive_indexed_face_set *face_set;
+    size_t face_count;
+    size_t face_capacity;
+    int ok;
+};
+
+
+static void
+rt_vol_geometry_sink_append(struct vol_geometry_sink *sink, const point_t p,
+			int command)
 {
-    register struct rt_vol_internal *vip;
+    if (!sink || !sink->ok)
+	return;
+
+    if (sink->realization) {
+	if (!primitive_lod_line_set_append(sink->realization, p, command))
+	    sink->ok = 0;
+	return;
+    }
+
+    if (!sink->vlfree || !sink->vhead) {
+	sink->ok = 0;
+	return;
+    }
+
+    if (command == RT_PRIMITIVE_LINE_MOVE) {
+	RT_ADD_VLIST(sink->vlfree, sink->vhead, p, RT_VLIST_LINE_MOVE);
+    } else if (command == RT_PRIMITIVE_LINE_DRAW) {
+	RT_ADD_VLIST(sink->vlfree, sink->vhead, p, RT_VLIST_LINE_DRAW);
+    } else {
+	sink->ok = 0;
+    }
+}
+
+
+static void
+rt_vol_plate_geometry_sink(point_t a, point_t b, point_t c, point_t d,
+	register mat_t mat, register struct rt_vol_internal *vip,
+	struct vol_geometry_sink *sink, int reverse)
+{
+    point_t s;		/* scaled original point */
+    point_t transformed[4];
+    const fastf_t *corners[4] = {a, b, c, d};
+
+    if (!sink || !sink->ok)
+	return;
+
+    for (int i = 0; i < 4; ++i) {
+	VELMUL(s, vip->cellsize, corners[i]);
+	MAT4X3PNT(transformed[i], mat, s);
+    }
+
+    if (sink->face_set) {
+	if (sink->face_count >= (size_t)INT_MAX / 4) {
+	    sink->ok = 0;
+	    return;
+	}
+	if (sink->face_count == sink->face_capacity) {
+	    size_t capacity = sink->face_capacity ?
+		sink->face_capacity * 2 : VOL_FACE_INITIAL_CAPACITY;
+	    if (capacity < sink->face_capacity ||
+		capacity > (size_t)INT_MAX / 4) {
+		sink->ok = 0;
+		return;
+	    }
+	    sink->face_set->points = (point_t *)bu_realloc(
+		sink->face_set->points, capacity * 4 * sizeof(point_t),
+		"VOL indexed-face points");
+	    sink->face_set->indices = (int *)bu_realloc(
+		sink->face_set->indices, capacity * 5 * sizeof(int),
+		"VOL indexed-face indices");
+	    sink->face_capacity = capacity;
+	}
+	const int base = (int)(sink->face_count * 4);
+	for (int i = 0; i < 4; ++i)
+	    VMOVE(sink->face_set->points[base + i], transformed[i]);
+	const size_t index = sink->face_count * 5;
+	for (int i = 0; i < 4; ++i)
+	    sink->face_set->indices[index + i] =
+		reverse ? base + 3 - i : base + i;
+	sink->face_set->indices[index + 4] = -1;
+	sink->face_count++;
+	return;
+    }
+
+    rt_vol_geometry_sink_append(sink, transformed[0], RT_PRIMITIVE_LINE_MOVE);
+    rt_vol_geometry_sink_append(sink, transformed[1], RT_PRIMITIVE_LINE_DRAW);
+    rt_vol_geometry_sink_append(sink, transformed[2], RT_PRIMITIVE_LINE_DRAW);
+    rt_vol_geometry_sink_append(sink, transformed[3], RT_PRIMITIVE_LINE_DRAW);
+    rt_vol_geometry_sink_append(sink, transformed[0], RT_PRIMITIVE_LINE_DRAW);
+}
+
+
+static int
+rt_vol_standard_line_set(struct vol_geometry_sink *sink,
+			 register struct rt_vol_internal *vip)
+{
     int x, y, z;
     register short v1, v2;
     point_t a, b, c, d;
 
-    BU_CK_LIST_HEAD(vhead);
-    RT_CK_DB_INTERNAL(ip);
-    struct bu_list *vlfree = &rt_vlfree;
-    vip = (struct rt_vol_internal *)ip->idb_ptr;
+    if (!sink || !vip)
+	return -1;
     RT_VOL_CK_MAGIC(vip);
 
     if (!vip->map) {
@@ -1220,7 +1321,7 @@ rt_vol_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_te
 		/* End of run of edge.  One cell beyond. */
 		VSET(c, x+0.5, y-0.5, z+0.5);
 		VSET(d, x+0.5, y-0.5, z-0.5);
-		rt_vol_plate(a, b, c, d, vip->mat, vlfree, vhead, vip);
+		rt_vol_plate_geometry_sink(a, b, c, d, vip->mat, vip, sink, 0);
 	    }
 	}
     }
@@ -1246,7 +1347,7 @@ rt_vol_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_te
 		/* End of run of edge.  One cell beyond */
 		VSET(c, (x-0.5), (y+0.5), (z+0.5));
 		VSET(d, (x-0.5), (y+0.5), (z-0.5));
-		rt_vol_plate(a, b, c, d, vip->mat, vlfree, vhead, vip);
+		rt_vol_plate_geometry_sink(a, b, c, d, vip->mat, vip, sink, 0);
 	    }
 	}
     }
@@ -1272,39 +1373,314 @@ rt_vol_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_te
 		/* End of run of edge.  One cell beyond */
 		VSET(c, (x+0.5), (y-0.5), (z+0.5));
 		VSET(d, (x-0.5), (y-0.5), (z+0.5));
-		rt_vol_plate(a, b, c, d, vip->mat, vlfree, vhead, vip);
+		rt_vol_plate_geometry_sink(a, b, c, d, vip->mat, vip, sink, 0);
 	    }
 	}
     }
-    return 0;
+    return sink->ok ? 0 : -1;
+}
+
+
+struct vol_sample_grid {
+    size_t step[3];
+    size_t dim[3];
+    unsigned char *occupied;
+};
+
+
+static void
+rt_vol_sample_grid_free(struct vol_sample_grid *grid)
+{
+    if (!grid)
+	return;
+    if (grid->occupied)
+	bu_free(grid->occupied, "VOL wire sample grid");
+    memset(grid, 0, sizeof(*grid));
+}
+
+
+static int
+rt_vol_sample_grid_init(struct vol_sample_grid *grid,
+	const struct rt_vol_internal *vip, const struct bg_tess_tol *ttol)
+{
+    vect_t cell_axis, model_axis;
+    fastf_t cell_length[3];
+    fastf_t diagonal_sq = 0.0;
+
+    if (!grid || !vip || !ttol || !vip->map)
+	return 0;
+    memset(grid, 0, sizeof(*grid));
+
+    for (int axis = 0; axis < 3; ++axis) {
+	VSETALL(cell_axis, 0.0);
+	cell_axis[axis] = vip->cellsize[axis];
+	MAT4X3VEC(model_axis, vip->mat, cell_axis);
+	cell_length[axis] = MAGNITUDE(model_axis);
+	if (!(cell_length[axis] > SMALL_FASTF))
+	    cell_length[axis] = fabs(vip->cellsize[axis]);
+	if (!(cell_length[axis] > SMALL_FASTF))
+	    cell_length[axis] = 1.0;
+    }
+
+    const size_t source_dim[3] = {vip->xdim, vip->ydim, vip->zdim};
+    if (!source_dim[X] || !source_dim[Y] || !source_dim[Z])
+	return 0;
+    for (int axis = 0; axis < 3; ++axis) {
+	const fastf_t extent = cell_length[axis] * source_dim[axis];
+	diagonal_sq += extent * extent;
+    }
+    const fastf_t sampling_tolerance = primitive_get_absolute_tolerance(
+	ttol, sqrt(diagonal_sq));
+    for (int axis = 0; axis < 3; ++axis) {
+	size_t step = sampling_tolerance > cell_length[axis] ?
+	    (size_t)(sampling_tolerance / cell_length[axis]) : 1;
+	if (step < 1)
+	    step = 1;
+	if (step > source_dim[axis])
+	    step = source_dim[axis];
+	grid->step[axis] = step;
+	grid->dim[axis] = (source_dim[axis] + step - 1) / step;
+    }
+
+    if (!grid->dim[X] || !grid->dim[Y] || !grid->dim[Z] ||
+	grid->dim[X] > SIZE_MAX / grid->dim[Y] ||
+	grid->dim[X] * grid->dim[Y] > SIZE_MAX / grid->dim[Z])
+	return 0;
+    const size_t block_count = grid->dim[X] * grid->dim[Y] * grid->dim[Z];
+    grid->occupied = (unsigned char *)bu_calloc(block_count, 1,
+	"VOL wire sample grid");
+
+    for (size_t z = 0; z < vip->zdim; ++z) {
+	const size_t block_z = z / grid->step[Z];
+	for (size_t y = 0; y < vip->ydim; ++y) {
+	    const size_t block_y = y / grid->step[Y];
+	    for (size_t x = 0; x < vip->xdim; ++x) {
+		if (!OK(vip, (size_t)VOL(vip, x, y, z)))
+		    continue;
+		const size_t block_x = x / grid->step[X];
+		grid->occupied[(block_z * grid->dim[Y] + block_y) *
+		    grid->dim[X] + block_x] = 1;
+	    }
+	}
+    }
+    return 1;
+}
+
+
+static int
+rt_vol_sample_grid_occupied(const struct vol_sample_grid *grid,
+	long x, long y, long z)
+{
+    if (!grid || !grid->occupied || x < 0 || y < 0 || z < 0 ||
+	(size_t)x >= grid->dim[X] || (size_t)y >= grid->dim[Y] ||
+	(size_t)z >= grid->dim[Z])
+	return 0;
+    return grid->occupied[((size_t)z * grid->dim[Y] + (size_t)y) *
+	grid->dim[X] + (size_t)x] != 0;
+}
+
+
+static fastf_t
+rt_vol_sample_grid_boundary(size_t boundary, size_t step, size_t source_dim)
+{
+    const size_t coordinate = boundary > source_dim / step ?
+	source_dim : boundary * step;
+    return (fastf_t)coordinate - 0.5;
+}
+
+
+static int
+rt_vol_sampled_geometry(struct vol_geometry_sink *sink,
+	struct rt_vol_internal *vip, const struct bg_tess_tol *ttol)
+{
+    struct vol_sample_grid grid;
+    const size_t source_dim[3] = {vip->xdim, vip->ydim, vip->zdim};
+    point_t a, b, c, d;
+
+    if (!sink || !vip || !ttol)
+	return -1;
+    if (!vip->map)
+	return 1;
+    if (!rt_vol_sample_grid_init(&grid, vip, ttol))
+	return -1;
+
+    /* Axis, run, and slice form a right-handed coordinate permutation.
+     * The emitted winding faces the negative axis; reverse it when the
+     * occupied block is on that side of the boundary. */
+    for (int axis = X; axis <= Z && sink->ok; ++axis) {
+	const int run_axis = (axis + 1) % 3;
+	const int slice_axis = (axis + 2) % 3;
+	for (size_t slice = 0;
+	     slice < grid.dim[slice_axis] && sink->ok; ++slice) {
+	    const fastf_t slice_low = rt_vol_sample_grid_boundary(slice,
+		grid.step[slice_axis], source_dim[slice_axis]);
+	    const fastf_t slice_high = rt_vol_sample_grid_boundary(slice + 1,
+		grid.step[slice_axis], source_dim[slice_axis]);
+	    for (size_t boundary = 0;
+		 boundary <= grid.dim[axis] && sink->ok; ++boundary) {
+		long block[3] = {0, 0, 0};
+		int run_side = 0;
+		size_t run_start = 0;
+		block[slice_axis] = (long)slice;
+		for (size_t run = 0; run <= grid.dim[run_axis]; ++run) {
+		    int side = 0;
+		    if (run < grid.dim[run_axis]) {
+			block[run_axis] = (long)run;
+			block[axis] = (long)boundary - 1;
+			const int negative = rt_vol_sample_grid_occupied(
+			    &grid, block[X], block[Y], block[Z]);
+			block[axis] = (long)boundary;
+			const int positive = rt_vol_sample_grid_occupied(
+			    &grid, block[X], block[Y], block[Z]);
+			if (negative != positive)
+			    side = negative ? 1 : -1;
+		    }
+		    if (side == run_side)
+			continue;
+		    if (run_side) {
+			VSETALL(a, 0.0);
+			VMOVE(b, a);
+			VMOVE(c, a);
+			VMOVE(d, a);
+			const fastf_t face = rt_vol_sample_grid_boundary(
+			    boundary, grid.step[axis], source_dim[axis]);
+			const fastf_t run_low = rt_vol_sample_grid_boundary(
+			    run_start, grid.step[run_axis],
+			    source_dim[run_axis]);
+			const fastf_t run_high = rt_vol_sample_grid_boundary(
+			    run, grid.step[run_axis], source_dim[run_axis]);
+			a[axis] = b[axis] = c[axis] = d[axis] = face;
+			a[run_axis] = b[run_axis] = run_low;
+			c[run_axis] = d[run_axis] = run_high;
+			a[slice_axis] = d[slice_axis] = slice_low;
+			b[slice_axis] = c[slice_axis] = slice_high;
+			rt_vol_plate_geometry_sink(a, b, c, d, vip->mat, vip,
+			    sink, run_side > 0);
+		    }
+		    if (side)
+			run_start = run;
+		    run_side = side;
+		}
+	    }
+	}
+    }
+
+    rt_vol_sample_grid_free(&grid);
+    return sink->ok ? 0 : -1;
+}
+
+
+int
+rt_vol_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
+	struct rt_db_internal *ip, const struct bg_tess_tol *ttol,
+	const struct bn_tol *UNUSED(tol),
+	const struct bv_view_info *UNUSED(info))
+{
+    struct rt_vol_internal *vip;
+    struct vol_geometry_sink sink;
+
+    if (face_set)
+	memset(face_set, 0, sizeof(*face_set));
+    if (!face_set || !ip || !ttol)
+	return BRLCAD_ERROR;
+    RT_CK_DB_INTERNAL(ip);
+    BG_CK_TESS_TOL(ttol);
+    vip = (struct rt_vol_internal *)ip->idb_ptr;
+    RT_VOL_CK_MAGIC(vip);
+
+    memset(&sink, 0, sizeof(sink));
+    sink.face_set = face_set;
+    sink.ok = 1;
+    if (rt_vol_sampled_geometry(&sink, vip, ttol) < 0 ||
+	!sink.face_count) {
+	rt_primitive_indexed_face_set_free(face_set);
+	return BRLCAD_ERROR;
+    }
+
+    face_set->point_count = sink.face_count * 4;
+    face_set->index_count = sink.face_count * 5;
+    face_set->source_identity = (uint64_t)(uintptr_t)vip;
+    face_set->geometry_revision = 1;
+    point_t bounds_min, bounds_max;
+    if (rt_vol_bbox(ip, &bounds_min, &bounds_max, NULL) == 0) {
+	face_set->source_bounds_valid = 1;
+	VMOVE(face_set->source_bounds_min, bounds_min);
+	VMOVE(face_set->source_bounds_max, bounds_max);
+    }
+    return BRLCAD_OK;
+}
+
+
+int
+rt_vol_wireframe_line_set(struct rt_primitive_lod_realization *realization,
+			  struct rt_db_internal *ip,
+			  const struct bg_tess_tol *ttol,
+			  const struct bn_tol *UNUSED(tol))
+{
+    struct rt_vol_internal *vip;
+    struct vol_geometry_sink sink;
+    int ret;
+
+    if (!realization || !ip || !ttol)
+	return -1;
+    RT_CK_DB_INTERNAL(ip);
+    BG_CK_TESS_TOL(ttol);
+    if (!primitive_lod_line_set_begin(realization))
+	return -1;
+    vip = (struct rt_vol_internal *)ip->idb_ptr;
+    RT_VOL_CK_MAGIC(vip);
+
+    memset(&sink, 0, sizeof(sink));
+    sink.vlfree = NULL;
+    sink.vhead = NULL;
+    sink.realization = realization;
+    sink.ok = 1;
+
+    ret = rt_vol_sampled_geometry(&sink, vip, ttol);
+    if (ret < 0)
+	return ret;
+    return primitive_lod_line_set_finish(realization) ? ret : -1;
+}
+
+
+C_DECL int
+rt_vol_plot(struct bu_list *vhead, struct rt_db_internal *ip,
+	    const struct bg_tess_tol *UNUSED(ttol),
+	    const struct bn_tol *UNUSED(tol),
+	    const struct bv_view_info *UNUSED(info))
+{
+    struct rt_vol_internal *vip;
+    struct vol_geometry_sink sink;
+
+    BU_CK_LIST_HEAD(vhead);
+    RT_CK_DB_INTERNAL(ip);
+    vip = (struct rt_vol_internal *)ip->idb_ptr;
+    RT_VOL_CK_MAGIC(vip);
+
+    memset(&sink, 0, sizeof(sink));
+    sink.vlfree = &rt_vlfree;
+    sink.vhead = vhead;
+    sink.realization = NULL;
+    sink.ok = 1;
+
+    return rt_vol_standard_line_set(&sink, vip);
 }
 
 
 void
 rt_vol_plate(point_t a, point_t b, point_t c, point_t d, register mat_t mat, struct bu_list *vlfree, register struct bu_list *vhead, register struct rt_vol_internal *vip)
 {
-    point_t s;		/* scaled original point */
-    point_t arot, prot;
+    struct vol_geometry_sink sink;
 
     BU_CK_LIST_HEAD(vhead);
 
-    VELMUL(s, vip->cellsize, a);
-    MAT4X3PNT(arot, mat, s);
-    BV_ADD_VLIST(vlfree, vhead, arot, BV_VLIST_LINE_MOVE);
+    memset(&sink, 0, sizeof(sink));
+    sink.vlfree = vlfree;
+    sink.vhead = vhead;
+    sink.realization = NULL;
+    sink.ok = 1;
 
-    VELMUL(s, vip->cellsize, b);
-    MAT4X3PNT(prot, mat, s);
-    BV_ADD_VLIST(vlfree, vhead, prot, BV_VLIST_LINE_DRAW);
-
-    VELMUL(s, vip->cellsize, c);
-    MAT4X3PNT(prot, mat, s);
-    BV_ADD_VLIST(vlfree, vhead, prot, BV_VLIST_LINE_DRAW);
-
-    VELMUL(s, vip->cellsize, d);
-    MAT4X3PNT(prot, mat, s);
-    BV_ADD_VLIST(vlfree, vhead, prot, BV_VLIST_LINE_DRAW);
-
-    BV_ADD_VLIST(vlfree, vhead, arot, BV_VLIST_LINE_DRAW);
+    rt_vol_plate_geometry_sink(a, b, c, d, mat, vip, &sink, 0);
 }
 
 
@@ -1358,7 +1734,7 @@ struct vol_patch_rect {
 };
 
 
-C_DECL int
+int
 rt_vol_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol)
 {
     struct rt_vol_internal *vip;
@@ -1633,7 +2009,7 @@ fail:
 }
 
 
-C_DECL int
+int
 rt_vol_params(struct pc_pc_set *UNUSED(ps), const struct rt_db_internal *ip)
 {
     if (ip) RT_CK_DB_INTERNAL(ip);
@@ -1642,7 +2018,7 @@ rt_vol_params(struct pc_pc_set *UNUSED(ps), const struct rt_db_internal *ip)
 }
 
 
-C_DECL void
+void
 rt_vol_centroid(point_t *cent, const struct rt_db_internal *ip)
 {
     register struct rt_vol_internal *vip;
@@ -1684,7 +2060,7 @@ rt_vol_centroid(point_t *cent, const struct rt_db_internal *ip)
  * the matrix and then summing the area of the faces of each cell necessary.
  * The vertices are numbered from left to right, front to back, bottom to top.
  */
-C_DECL void
+void
 rt_vol_surf_area(fastf_t *area, const struct rt_db_internal *ip)
 {
     struct rt_vol_internal *vip;
@@ -1784,7 +2160,7 @@ rt_vol_surf_area(fastf_t *area, const struct rt_db_internal *ip)
  * The eight vertices are calculated, then transformed by the matrix and the
  * volume calculated from that.
  */
-C_DECL void
+void
 rt_vol_volume(fastf_t *volume, const struct rt_db_internal *ip)
 {
     struct rt_vol_internal *vip;
@@ -1852,7 +2228,7 @@ rt_vol_volume(fastf_t *volume, const struct rt_db_internal *ip)
     *volume = fabs(_vol);
 }
 
-C_DECL const char *
+const char *
 rt_vol_keypoint(point_t *pt, const char *keystr, const mat_t mat, const struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol))
 {
     if (!pt || !ip)

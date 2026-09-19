@@ -33,16 +33,17 @@
 #include "bio.h"
 
 #include "bu/app.h"
+#include "bu/getopt.h"
 #include "bu/str.h"
 #include "bu/exit.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 long bin[256];
 int verbose = 0;
-struct fb *fbp;
+imgstream_fb_t *fbp;
 
-static const char *Usage = "Usage: bwhist [-v] [file.bw]\n";
+static const char *Usage = "Usage: bwhist [-F framebuffer] [-v] [file.bw]\n";
 
 
 int
@@ -56,33 +57,32 @@ main(int argc, char **argv)
     unsigned char *bp;
     unsigned char white[3*512];
     FILE *fp;
+    const char *framebuffer = NULL;
+    int c;
 
     bu_setprogname(argv[0]);
     setmode(fileno(stdin), O_BINARY);
     setmode(fileno(stdout), O_BINARY);
 
-    if (BU_STR_EQUAL(argv[1], "-h") || BU_STR_EQUAL(argv[1], "-?"))
-	bu_exit(1, "%s", Usage);
-
-    /* check for verbose flag */
-    if (argc > 1 && BU_STR_EQUAL(argv[1], "-v")) {
-	verbose++;
-	argv++;
-	argc--;
+    while ((c = bu_getopt(argc, argv, "F:vh?")) != -1) {
+	switch (c) {
+	    case 'F': framebuffer = bu_optarg; break;
+	    case 'v': verbose++; break;
+	    default: bu_exit(1, "%s", Usage);
+	}
     }
 
     /* look for optional input file */
-    if (argc > 1) {
-	if ((fp = fopen(argv[1], "rb")) == 0) {
-	    bu_exit(1, "bwhist: can't open '%s'\n", argv[1]);
+    if (bu_optind < argc) {
+	if ((fp = fopen(argv[bu_optind], "rb")) == 0) {
+	    bu_exit(1, "bwhist: can't open '%s'\n", argv[bu_optind]);
 	}
-	argv++;
-	argc--;
+	bu_optind++;
     } else {
 	fp = stdin;
     }
     /* check usage */
-    if (argc > 1 || isatty(fileno(fp)))
+    if (bu_optind < argc || isatty(fileno(fp)))
 	bu_exit(1, "%s", Usage);
 
     for (i = 0; i < 3*512; i++)
@@ -103,7 +103,7 @@ main(int argc, char **argv)
     /* Display the max? */
     printf("Full screen = %ld pixels\n", max);
 
-    if ((fbp = fb_open(NULL, 512, 512)) == NULL) {
+    if ((fbp = imgstream_fb_open(framebuffer, 512, 512)) == NULL) {
 	bu_exit(12, "fb_open failed\n");
     }
 
@@ -112,13 +112,13 @@ main(int argc, char **argv)
 	int value;
 	value = bin[i]*scale;
 	if (value == 0 && bin[i] != 0) value = 1;
-	fb_write(fbp, 0, 2*i, white, value);
-	fb_write(fbp, 0, 2*i+1, white, value);
+	imgstream_fb_write(fbp, 0, (int)(2*i), white, (size_t)value);
+	imgstream_fb_write(fbp, 0, (int)(2*i+1), white, (size_t)value);
 	if (verbose)
 	    printf("%3lu: %10ld (%10f)\n", (long unsigned)i, bin[i], (float)bin[i]/(float)max);
     }
 
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
     return 0;
 }
 

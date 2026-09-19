@@ -1,8 +1,10 @@
 set(PLUGIN_LIBS libged libbu)
+set_source_files_properties(bigE.cpp draw.cpp TARGET_DIRECTORY libged
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 set(DRAW_SRCS
-  bigE.c
-  draw.c
+  bigE.cpp
+  draw.cpp
   draw2.cpp
   loadview.cpp
   preview.cpp
