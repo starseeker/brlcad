@@ -30,9 +30,10 @@
 #define TCLCAD_MISC_H
 
 #include "common.h"
+#include "bu/hash.h"
 #include "bu/process.h"
+#include "bu/vls.h"
 #include "tcl.h"
-#include "dm.h"
 #include "ged.h"
 #include "tclcad/defines.h"
 
@@ -48,7 +49,9 @@ struct tclcad_ged_data {
     // tclcad_view_data.
     struct bu_vls	go_rt_end_callback;
     int                 go_rt_end_callback_cnt;
-    struct dm_view_data go_dmv;
+    struct bu_hash_tbl	*go_edited_paths;
+    struct bu_vls	*go_prim_label_list;
+    int			go_prim_label_list_size;
 };
 
 struct tclcad_obj {
@@ -177,6 +180,10 @@ TCLCAD_EXPORT extern struct application *to_rt_gettrees_application(struct ged *
  */
 TCLCAD_EXPORT extern int
 tclcad_listen_ipc(struct fbserv_obj *fbsp, Tcl_Interp *interp);
+
+/** Install Tcl/Tk event-loop transport callbacks on an fbserv object. */
+TCLCAD_EXPORT extern void
+tclcad_fbserv_set_transport(struct fbserv_obj *fbsp);
 
 /**
  * Tcl specific I/O handlers

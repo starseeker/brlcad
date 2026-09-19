@@ -227,17 +227,21 @@ static const struct rt_edit_param_desc bspline_knot_param[] = {
 };
 
 static const struct rt_edit_cmd_desc bspline_cmds[] = {
-    { ECMD_SPLINE_VPICK,      "Pick Vertex",      "selection", 0, NULL,                  1, 10, NULL },
-    { ECMD_BSPLINE_PICK_CP,   "Pick CP by Index", "selection", 3, bspline_cp_index_params, 1, 20, NULL },
-    { ECMD_VTRANS,            "Move Vertex",      "movement",  1, bspline_point_param, 1, 30, NULL },
-    { ECMD_BSPLINE_PICK_KNOT, "Pick Knot",        "selection", 3, bspline_knot_index_params, 1, 40, NULL },
-    { ECMD_BSPLINE_SET_KNOT,  "Set Knot Value",   "topology",  1, bspline_knot_param,  1, 50, NULL }
+    { ECMD_SPLINE_VPICK, RT_EDIT_CMD_NAME(ECMD_SPLINE_VPICK),      "Pick Vertex",      "selection", 0, NULL,                    1, 10, NULL },
+    { ECMD_BSPLINE_PICK_CP, RT_EDIT_CMD_NAME(ECMD_BSPLINE_PICK_CP),   "Pick CP by Index", "selection", 3, bspline_cp_index_params, 1, 20, NULL },
+    { ECMD_VTRANS, RT_EDIT_CMD_NAME(ECMD_VTRANS),            "Move Vertex",      "movement",  1, bspline_point_param, 1, 30, NULL },
+    { ECMD_BSPLINE_PICK_KNOT, RT_EDIT_CMD_NAME(ECMD_BSPLINE_PICK_KNOT), "Pick Knot",        "selection", 3, bspline_knot_index_params, 1, 40, NULL },
+    { ECMD_BSPLINE_SET_KNOT, RT_EDIT_CMD_NAME(ECMD_BSPLINE_SET_KNOT),  "Set Knot Value",   "topology",  1, bspline_knot_param,  1, 50, NULL }
 };
 
 static const struct rt_edit_prim_desc bspline_prim_desc = {
     "bspline", "B-Spline", 5, bspline_cmds,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_UNSUPPORTED,
+    NULL,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
@@ -374,10 +378,10 @@ sedit_vpick(struct rt_edit *s)
     /* draw arrow, etc. */
     bu_clbk_t f = NULL;
     void *d = NULL;
-    int vs_flag = 1;
+    int view_update_request = 1;
     rt_edit_map_clbk_get(&f, &d, s->m, ECMD_VIEW_SET_FLAG, BU_CLBK_DURING);
     if (f)
-	(*f)(0, NULL, d, &vs_flag);
+	(*f)(0, NULL, d, &view_update_request);
 }
 
 C_DECL void

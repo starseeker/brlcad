@@ -41,7 +41,7 @@
 #include "bu/malloc.h"
 #include "bu/exit.h"
 #include "bn.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 #define ACHROMATIC -1.0
@@ -579,7 +579,7 @@ main (int argc, char **argv)
     if (fileinput && autosize) {
 	size_t w, h;
 
-	if (fb_common_file_size(&w, &h, file_name, 3)) {
+	if (imgstream_image_file_size(&w, &h, file_name, 3)) {
 	    file_width = (long)w;
 	    file_height = (long)h;
 	} else

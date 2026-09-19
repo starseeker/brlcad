@@ -19,7 +19,7 @@
 #
 ###
 #
-#	Procedures to apply commands to one or more display managers.
+#	Procedures to apply commands to one or more graphics views.
 #
 
 proc mged_apply { id cmd } {
@@ -34,7 +34,7 @@ proc mged_apply { id cmd } {
     } elseif {$mged_gui($id,apply_to) == 2} {
 	mged_apply_using_list $id $cmd
     } elseif {$mged_gui($id,apply_to) == 3} {
-	mged_apply_all $mged_gui($id,active_dm) $cmd
+	mged_apply_all $mged_gui($id,active_pane) $cmd
     } else {
 	mged_apply_active $id $cmd
     }
@@ -43,7 +43,7 @@ proc mged_apply { id cmd } {
 proc mged_apply_active { id cmd } {
     global mged_gui
 
-    catch {winset $mged_gui($id,active_dm)} msg
+    catch {winset $mged_gui($id,active_pane)} msg
     catch {uplevel \#0 $cmd} msg
 
     return $msg
@@ -64,7 +64,7 @@ proc mged_apply_local { id cmd } {
     winset $mged_gui($id,top).lr
     catch { uplevel \#0 $cmd } msg
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
 
     return $msg
 }
@@ -73,20 +73,20 @@ proc mged_apply_using_list { id cmd } {
     global mged_gui
 
     set msg ""
-    foreach dm $mged_gui($id,apply_list) {
-	winset $dm
+    foreach display_path $mged_gui($id,apply_list) {
+	winset $display_path
 	catch { uplevel \#0 $cmd } msg
     }
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
 
     return $msg
 }
 
 proc mged_apply_all { win cmd } {
     set msg ""
-    foreach dm [get_dm_list] {
-	winset $dm
+    foreach display_path [get_display_list] {
+	winset $display_path
 	catch { uplevel \#0 $cmd } msg
     }
 
@@ -124,7 +124,7 @@ proc mged_shaded_mode_helper {val} {
 	set mged_gui($id,zclip) $val
 	set mged_gui($id,lighting) $val
 
-	mged_apply_local $id "dm set zbuffer $val; dm set zclip $val; dm set lighting $val"
+	mged_apply_local $id "dm set renderer.depth_test $val; dm set view.zclip $val; dm set renderer.lighting $val"
     }
 
     return ""

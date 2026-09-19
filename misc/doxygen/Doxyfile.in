@@ -204,7 +204,6 @@ ALIASES                =
 # "class=itcl::class" will allow you to use the command class in the
 # itcl::class meaning.
 
-TCL_SUBST              =
 
 # Set the OPTIMIZE_OUTPUT_FOR_C tag to YES if your project consists of C
 # sources only. Doxygen will then generate output that is more tailored for C.
@@ -351,7 +350,7 @@ LOOKUP_CACHE_SIZE      = 0
 # Private class members and static file members will be hidden unless
 # the EXTRACT_PRIVATE respectively EXTRACT_STATIC tags are set to YES
 
-EXTRACT_ALL            = YES
+EXTRACT_ALL            = @DOXY_EXTRACT_ALL@
 
 # If the EXTRACT_PRIVATE tag is set to YES all private members of a class
 # will be included in the documentation.
@@ -609,6 +608,11 @@ QUIET                  = YES
 
 WARNINGS               = YES
 
+# The new libBObol module enables this gate independently.  The aggregate
+# documentation retains the historical warning policy while legacy debt is
+# reduced.
+WARN_AS_ERROR          = @DOXY_WARN_AS_ERROR@
+
 # If WARN_IF_UNDOCUMENTED is set to YES, then doxygen will generate warnings
 # for undocumented members. If EXTRACT_ALL is set to YES then this flag will
 # automatically be disabled.
@@ -855,7 +859,6 @@ ALPHABETICAL_INDEX     = YES
 # the COLS_IN_ALPHA_INDEX tag can be used to specify the number of columns
 # in which this list will be split (can be a number in the range [1..20])
 
-COLS_IN_ALPHA_INDEX    = 5
 
 # In case all classes in a project start with a common prefix, all
 # classes will be put under the same header in the alphabetical index.
@@ -961,7 +964,6 @@ HTML_COLORSTYLE_GAMMA  = 80
 # page will contain the date and time when the page was generated. Setting
 # this to NO can help when comparing the output of multiple runs.
 
-HTML_TIMESTAMP         = YES
 
 # If the HTML_DYNAMIC_SECTIONS tag is set to YES then the generated HTML
 # documentation will contain sections that can be hidden and shown after the
@@ -1183,7 +1185,6 @@ FORMULA_FONTSIZE       = 10
 # Note that when changing this option you need to delete any form_*.png files
 # in the HTML output before the changes have effect.
 
-FORMULA_TRANSPARENT    = YES
 
 # Enable the USE_MATHJAX option to render LaTeX formulas using MathJax
 # (see http://www.mathjax.org) which uses client side Javascript for the
@@ -1322,7 +1323,7 @@ COMPACT_LATEX          = NO
 # by the printer. Possible values are: a4, letter, legal and
 # executive. If left blank a4 will be used.
 
-PAPER_TYPE             = a4wide
+PAPER_TYPE             = a4
 
 # The EXTRA_PACKAGES tag can be to specify one or more names of LaTeX
 # packages that should be included in the LaTeX output.
@@ -1381,7 +1382,6 @@ LATEX_HIDE_INDICES     = NO
 # Note that which sources are shown also depends on other settings
 # such as SOURCE_BROWSER.
 
-LATEX_SOURCE_CODE      = NO
 
 # The LATEX_BIB_STYLE tag can be used to specify the style to use for the
 # bibliography, e.g. plainnat, or ieeetr. The default style is "plain". See
@@ -1596,7 +1596,7 @@ INCLUDE_FILE_PATTERNS  =
 PREDEFINED             = "UNUSED(x)=x"
 PREDEFINED            += "__BEGIN_DECLS="
 PREDEFINED            += "__END_DECLS="
-PREDEFINED            += "__cplusplus"
+PREDEFINED            += "@DOXY_CPP_PREDEFINE@"
 @PREDEFINES@
 
 # If the MACRO_EXPANSION and EXPAND_ONLY_PREDEF tags are set to YES then
@@ -1667,7 +1667,6 @@ EXTERNAL_PAGES         = YES
 # this option also works with HAVE_DOT disabled, but it is recommended to
 # install and use dot, since it yields more powerful graphs.
 
-CLASS_DIAGRAMS         = NO
 
 # If set to YES, the inheritance and collaboration graphs will hide
 # inheritance and usage relations if the target is undocumented
@@ -1697,12 +1696,10 @@ DOT_NUM_THREADS        = 0
 # the DOTFONTPATH environment variable or by setting DOT_FONTPATH to the
 # directory containing the font.
 
-DOT_FONTNAME           =
 
 # The DOT_FONTSIZE tag can be used to set the size of the font of dot graphs.
 # The default size is 10pt.
 
-DOT_FONTSIZE           = 10
 
 # By default doxygen will tell dot to use the Helvetica font.
 # If you specify a different font using DOT_FONTNAME you can use DOT_FONTPATH to
@@ -1851,7 +1848,6 @@ MAX_DOT_GRAPH_DEPTH    = 2
 # enabling this option may lead to badly anti-aliased labels on the edges of
 # a graph (i.e. they become hard to read).
 
-DOT_TRANSPARENT        = NO
 
 # Set the DOT_MULTI_TARGETS tag to YES allow dot to generate multiple output
 # files in one run (i.e. multiple -o and -T options on the command line). This

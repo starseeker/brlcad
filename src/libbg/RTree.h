@@ -32,9 +32,10 @@
 #include <type_traits>
 #include <cmath>
 #include <set>
+#include <vector>
 #include "vmath.h"
 #include "bu/color.h"
-#include "bv/plot3.h"
+#include "bg/plot3.h"
 #include "bg/aabb_ray.h"
 
 #define RTreeAssert assert // RTree uses RTreeAssert( condition )
@@ -137,6 +138,13 @@ public:
 
     // Find the overlapping leaves between this rtree and another rtree, returning the pairs in result.
     size_t Overlaps(RTree &other, std::set<std::pair<DataType, DataType>> *result);
+
+    // Find overlapping leaves between this rtree and another rtree, returning
+    // the pairs in result.  The optional tolerance expands overlap checks
+    // during traversal without modifying stored bounds.
+    size_t Overlaps(RTree &other,
+	    std::vector<std::pair<DataType, DataType>> *result,
+	    ElementType tolerance = ElementType(0));
 
     /// Remove all entries from tree
     void RemoveAll();
@@ -419,6 +427,7 @@ protected:
     ListNode* AllocListNode();
     void FreeListNode(ListNode* a_listNode);
     bool Overlap(Rect* a_rectA, Rect* a_rectB) const;
+    bool Overlap(Rect* a_rectA, Rect* a_rectB, ElementType tolerance) const;
     bool Intersect(Rect* a_rect, Ray* a_ray) const;
     void ReInsert(Node* a_node, ListNode** a_listNode);
     bool Search(Node* a_node, Rect* a_rect, int& a_foundCount, std::function<bool(const DataType&, void *)> callback, void *a_context) const;
@@ -432,6 +441,7 @@ protected:
 
     size_t CheckNodes(Node *a_nodeA, Node *a_nodeB, std::set<DataType> *a_result, std::set<DataType> *b_result);
     size_t CheckNodes(Node *a_nodeA, Node *a_nodeB, std::set<std::pair<DataType, DataType>> *result);
+    size_t CheckNodes(Node *a_nodeA, Node *a_nodeB, std::vector<std::pair<DataType, DataType>> *result, ElementType tolerance);
 
     size_t IsectNode(Node *a_node, Ray *a_ray, std::set<DataType> *result);
 
@@ -1549,6 +1559,23 @@ bool RTREE_QUAL::Overlap(Rect* a_rectA, Rect* a_rectB) const
 }
 
 
+RTREE_TEMPLATE
+bool RTREE_QUAL::Overlap(Rect* a_rectA, Rect* a_rectB, ElementType tolerance) const
+{
+    RTreeAssert(a_rectA && a_rectB);
+
+    const ElementType tol = (tolerance > ElementType(0)) ? tolerance : ElementType(0);
+
+    for (int index = 0; index < kNumDimensions; ++index) {
+	if (a_rectA->m_min[index] > a_rectB->m_max[index] + tol ||
+	    a_rectB->m_min[index] > a_rectA->m_max[index] + tol) {
+	    return false;
+	}
+    }
+    return true;
+}
+
+
 // Decide whether a ray intersect a Rect.
 RTREE_TEMPLATE
 bool RTREE_QUAL::Intersect(Rect* a_rect, Ray* a_ray) const
@@ -1680,6 +1707,45 @@ size_t RTREE_QUAL::Overlaps(RTree &other, std::set<std::pair<DataType, DataType>
 {
     if (!m_root || !other.m_root) return 0;
     size_t ovlp_cnt = CheckNodes(m_root, other.m_root, result);
+    return ovlp_cnt;
+}
+
+
+RTREE_TEMPLATE
+size_t RTREE_QUAL::CheckNodes(Node *a_nodeA, Node *a_nodeB, std::vector<std::pair<DataType, DataType>> *result, ElementType tolerance)
+{
+    size_t ocnt = 0;
+    for (int index = 0; index < a_nodeA->m_count; ++index) {
+	for (int index2 = 0; index2 < a_nodeB->m_count; ++index2) {
+	    if (Overlap(&(a_nodeA->m_branch[index].m_rect), &(a_nodeB->m_branch[index2].m_rect), tolerance)) {
+		if (a_nodeA->m_level > 0) {
+		    if (a_nodeB->m_level > 0) {
+			ocnt += CheckNodes(a_nodeA->m_branch[index].m_child, a_nodeB->m_branch[index2].m_child, result, tolerance);
+		    } else {
+			ocnt += CheckNodes(a_nodeA->m_branch[index].m_child, a_nodeB, result, tolerance);
+		    }
+		} else if (a_nodeB->m_level > 0) {
+		    ocnt += CheckNodes(a_nodeA, a_nodeB->m_branch[index2].m_child, result, tolerance);
+		} else {
+		    result->push_back(std::pair<DataType, DataType>(a_nodeA->m_branch[index].m_data, a_nodeB->m_branch[index2].m_data));
+		    ocnt++;
+		}
+	    }
+	}
+    }
+    return ocnt;
+}
+
+// Loosely based on the openNURBS idea of searching two R-trees for every
+// element pair whose bounding boxes overlap.
+RTREE_TEMPLATE
+size_t RTREE_QUAL::Overlaps(RTree &other,
+	std::vector<std::pair<DataType, DataType>> *result,
+	ElementType tolerance)
+{
+    if (!m_root || !other.m_root || !result)
+	return 0;
+    size_t ovlp_cnt = CheckNodes(m_root, other.m_root, result, tolerance);
     return ovlp_cnt;
 }
 

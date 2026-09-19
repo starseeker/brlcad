@@ -31,6 +31,7 @@
 #include "bu/opt.h"
 #include "bu/app.h"
 #include "vmath.h"
+#include "rt/vlist.h"
 #include "../librt_private.h"
 
 /* -----------------------------------------------------------------------
@@ -143,6 +144,117 @@ primitive_clamp_tess_tol(fastf_t *dtol, fastf_t *ntol, fastf_t bbox_diag)
     }
 }
 
+void
+primitive_lod_line_set_free(struct rt_primitive_lod_realization *realization)
+{
+    if (!realization)
+	return;
+    if (realization->line_points)
+	bu_free(realization->line_points, "primitive LoD line-set points");
+    if (realization->line_commands)
+	bu_free(realization->line_commands, "primitive LoD line-set commands");
+    realization->line_points = NULL;
+    realization->line_commands = NULL;
+    realization->line_count = 0;
+    realization->line_capacity = 0;
+    realization->has_line_set = 0;
+}
+
+void
+rt_primitive_lod_realization_free(struct rt_primitive_lod_realization *realization)
+{
+    primitive_lod_line_set_free(realization);
+    if (!realization)
+	return;
+    realization->source_identity = 0;
+    realization->geometry_revision = 0;
+}
+
+void
+rt_primitive_indexed_face_set_free(struct rt_primitive_indexed_face_set *face_set)
+{
+    if (!face_set)
+	return;
+    if (face_set->points)
+	bu_free(face_set->points, "primitive indexed-face points");
+    if (face_set->normals)
+	bu_free(face_set->normals, "primitive indexed-face normals");
+    if (face_set->indices)
+	bu_free(face_set->indices, "primitive indexed-face indices");
+    memset(face_set, 0, sizeof(*face_set));
+}
+
+int
+primitive_lod_line_set_begin(struct rt_primitive_lod_realization *realization)
+{
+    if (!realization)
+	return 0;
+
+    primitive_lod_line_set_free(realization);
+    realization->has_line_set = 1;
+    realization->geometry_revision++;
+    return 1;
+}
+
+static int
+primitive_lod_line_set_reserve(struct rt_primitive_lod_realization *realization,
+			       size_t capacity)
+{
+    if (!realization)
+	return 0;
+    if (capacity <= realization->line_capacity)
+	return 1;
+
+    size_t new_capacity = realization->line_capacity ?
+	realization->line_capacity : 64;
+    while (new_capacity < capacity) {
+	if (new_capacity > ((size_t)-1) / 2)
+	    return 0;
+	new_capacity *= 2;
+    }
+
+    realization->line_points = (point_t *)bu_realloc(realization->line_points,
+	    new_capacity * sizeof(point_t), "primitive LoD line-set points");
+    realization->line_commands = (int *)bu_realloc(realization->line_commands,
+	    new_capacity * sizeof(int), "primitive LoD line-set commands");
+    realization->line_capacity = new_capacity;
+    return 1;
+}
+
+int
+primitive_lod_line_set_append(struct rt_primitive_lod_realization *realization,
+			      const point_t point,
+			      int command)
+{
+    if (!realization || !realization->has_line_set)
+	return 0;
+    switch (command) {
+	case RT_PRIMITIVE_LINE_MOVE:
+	case RT_PRIMITIVE_LINE_DRAW:
+	case RT_PRIMITIVE_POINT_DRAW:
+	    break;
+	default:
+	    return 0;
+    }
+    if (!primitive_lod_line_set_reserve(realization,
+		realization->line_count + 1))
+	return 0;
+
+    VMOVE(realization->line_points[realization->line_count], point);
+    realization->line_commands[realization->line_count] = command;
+    realization->line_count++;
+    return 1;
+}
+
+int
+primitive_lod_line_set_finish(struct rt_primitive_lod_realization *realization)
+{
+    if (!realization || !realization->has_line_set)
+	return 0;
+    realization->source_identity = (uint64_t)(uintptr_t)realization->line_points;
+    return 1;
+}
+
 
 /**
  * Sort an array of hits into ascending order.
@@ -216,7 +328,7 @@ primitive_get_absolute_tolerance(
 fastf_t
 primitive_diagonal_samples(
 	struct rt_db_internal *ip,
-	const struct bview *v,
+	const struct bv_view_info *v,
 	const struct bn_tol *tol,
 	fastf_t s_size)
 {
@@ -227,7 +339,7 @@ primitive_diagonal_samples(
     ip->idb_meth->ft_bbox(ip, &bbox_min, &bbox_max, tol);
     primitive_diagonal_mm = DIST_PNT_PNT(bbox_min, bbox_max);
 
-    fastf_t point_spacing = solid_point_spacing(v, s_size);
+    fastf_t point_spacing = bv_view_solid_point_spacing(v, s_size);
     samples_per_mm = 1.0 / point_spacing;
     diagonal_samples = samples_per_mm * primitive_diagonal_mm;
 
@@ -514,15 +626,51 @@ plot_ellipse(
 
     ellipse_point_at_radian(p, center, axis_a, axis_b,
 	    radian_step * (num_points - 1));
-    BV_ADD_VLIST(vlfree, vhead, p, BV_VLIST_LINE_MOVE);
+    RT_ADD_VLIST(vlfree, vhead, p, RT_VLIST_LINE_MOVE);
 
     radian = 0;
     for (i = 0; i < num_points; ++i) {
 	ellipse_point_at_radian(p, center, axis_a, axis_b, radian);
-	BV_ADD_VLIST(vlfree, vhead, p, BV_VLIST_LINE_DRAW);
+	RT_ADD_VLIST(vlfree, vhead, p, RT_VLIST_LINE_DRAW);
 
 	radian += radian_step;
     }
+}
+
+int
+primitive_lod_append_ellipse(
+	struct rt_primitive_lod_realization *realization,
+	const vect_t center,
+	const vect_t axis_a,
+	const vect_t axis_b,
+	int num_points)
+{
+    int i;
+    point_t p;
+    fastf_t radian, radian_step;
+
+    if (!realization || num_points <= 0)
+	return 0;
+
+    radian_step = M_2PI / num_points;
+
+    ellipse_point_at_radian(p, center, axis_a, axis_b,
+	    radian_step * (num_points - 1));
+    if (!primitive_lod_line_set_append(realization, p,
+		RT_PRIMITIVE_LINE_MOVE))
+	return 0;
+
+    radian = 0;
+    for (i = 0; i < num_points; ++i) {
+	ellipse_point_at_radian(p, center, axis_a, axis_b, radian);
+	if (!primitive_lod_line_set_append(realization, p,
+		    RT_PRIMITIVE_LINE_DRAW))
+	    return 0;
+
+	radian += radian_step;
+    }
+
+    return 1;
 }
 
 int

@@ -40,7 +40,6 @@
 #include "vmath.h"
 #include "bn/spm.h"
 #include "raytrace.h"
-#include "dm.h"
 #include "optical.h"
 
 

@@ -40,6 +40,7 @@
 
 #include "ged/commands.h"
 #include "ged/database.h"
+#include "ged/event.h"
 #include "ged/objects.h"
 #include "./ged_bot.h"
 
@@ -141,6 +142,7 @@ _bot_cmd_decimate(void* bs, int argc, const char** argv)
 	/* use the old decimation routine */
 	if (rt_bot_decimate(input_bot, max_chord_error, max_normal_error, min_edge_length) < 0) {
 	    bu_vls_printf(gedp->ged_result_str, "rt_bot_decimate error\n");
+	    bu_vls_free(&output_bot_name);
 	    return BRLCAD_ERROR;
 	}
 
@@ -149,13 +151,15 @@ _bot_cmd_decimate(void* bs, int argc, const char** argv)
 	    bu_vls_free(&output_bot_name);
 	    return BRLCAD_ERROR;
 	}
-	bu_vls_free(&output_bot_name);
 
 	if (rt_db_put_internal(dp, dbip, gb->intern) < 0) {
 	    bu_log("Failed to write %s to database\n", bu_vls_cstr(&output_bot_name));
+	    bu_vls_free(&output_bot_name);
 	    return BRLCAD_ERROR;
 	}
 
+	(void)ged_event_notify_object_added(gedp, bu_vls_cstr(&output_bot_name), NULL);
+	bu_vls_free(&output_bot_name);
 	return BRLCAD_OK;
     }
 
@@ -217,6 +221,7 @@ _bot_cmd_decimate(void* bs, int argc, const char** argv)
 	    bu_vls_free(&output_bot_name);
 	    return BRLCAD_ERROR;
 	}
+	(void)ged_event_notify_object_added(gedp, bu_vls_cstr(&output_bot_name), NULL);
 	bu_vls_free(&output_bot_name);
 
 	return BRLCAD_OK;
@@ -229,9 +234,9 @@ _bot_cmd_decimate(void* bs, int argc, const char** argv)
 	bu_vls_free(&output_bot_name);
 	return BRLCAD_ERROR;
     }
-    bu_vls_free(&output_bot_name);
 
     if (rt_db_put_internal(dp, dbip, gb->intern) < 0) {
+	bu_vls_free(&output_bot_name);
 	return BRLCAD_ERROR;
     }
     struct rt_db_internal intern;
@@ -248,9 +253,12 @@ _bot_cmd_decimate(void* bs, int argc, const char** argv)
     // Write decimation to disk
     if (rt_db_put_internal(dp, dbip, &intern) < 0) {
 	rt_db_free_internal(&intern);
+	bu_vls_free(&output_bot_name);
 	return BRLCAD_ERROR;
     }
 
+    (void)ged_event_notify_object_added(gedp, bu_vls_cstr(&output_bot_name), NULL);
+    bu_vls_free(&output_bot_name);
     return BRLCAD_OK;
 }
 

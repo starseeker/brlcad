@@ -179,10 +179,11 @@ preferred.
   insufficient.  Overridden by *--gui* if both are given.
 
 *-d* _device_, *--fbserv-device* _device_::
-  Framebuffer device for *fbserv*(1) to use instead of the default
-  memory-only interface (e.g. -d /dev/wgl).  See *fbhelp*(1) for available
-  devices.  A framebuffer started by *rtwizard* is closed automatically
-  after image generation.
+  Imgstream target for headless *fbserv*(1) output instead of the default
+  memory stream (for example, `-d /dev/mem` or a file target). Visible GUI
+  preview uses rtwizard's endpoint-owned Obol view, not a standalone graphics
+  device. A framebuffer started by *rtwizard* is closed automatically after
+  image generation.
 
 *-p* _#_, *--fbserv-port* _#_::
   TCP port for the *fbserv*(1) framebuffer.  An existing framebuffer server
@@ -231,14 +232,14 @@ in every .g file in the current directory, naming each output after its
 database.  *--no-gui* ensures the script never blocks on the GUI.
 ====
 
-.Live preview on a framebuffer
+.GUI preview
 ====
 [source,bash]
 ----
-rtwizard -d /dev/wgl -i m35.g -l component
+rtwizard --gui -i m35.g -l component
 ----
-Display a line drawing of the m35 truck in an OpenGL framebuffer window
-rather than writing it to a file.
+Display a line drawing of the m35 truck in rtwizard's endpoint-owned Obol
+view rather than writing it to a file.
 ====
 
 .Cutting-plane animation

@@ -18,10 +18,8 @@ fbfree [-F _framebuffer_]
 == DESCRIPTION
 
 *fbfree* opens the specified frame buffer and immediately releases any
-resources associated with it. Its most common use is to shut down an
-*fbserv*(1) process and free the shared memory or display resources it
-holds. Internally the command simply calls the *fb_free*() routine after
-opening the frame buffer.
+resources associated with it. It validates and closes an image-stream target;
+it does not control the lifecycle of a separate display-manager process.
 
 If no frame buffer is given with *-F*, the default is used, normally
 taken from the *FB_FILE* environment variable.
@@ -43,20 +41,21 @@ taken from the *FB_FILE* environment variable.
 ====
 [source,bash]
 ----
-fbserv -S 1024 0 /dev/X &
+fbserv -S 1024 0 /dev/mem &
 export FB_FILE=:0
 pix-fb image.pix
 fbfree
 ----
-Start an *fbserv*(1) listening on port 0, point *FB_FILE* at it, display
-a *pix*(5) image into it with *pix-fb*(1), then release the frame buffer
-and tear down the server with *fbfree* once you are finished viewing.
+Start an *fbserv*(1) listening on port 0, point *FB_FILE* at it, and write a
+*pix*(5) image into its memory stream with *pix-fb*(1). Then release the
+client-side target with *fbfree*. Server lifetime is controlled by the
+*fbserv* process, not by a framebuffer device close.
 ====
 
 [[see_also]]
 == SEE ALSO
 
-*brlcad*(1), *fbserv*(1), *fbclear*(1), *fb-fb*(1), *libdm*(3)
+*brlcad*(1), *fbserv*(1), *fbclear*(1), *fb-fb*(1)
 
 
 [[author]]

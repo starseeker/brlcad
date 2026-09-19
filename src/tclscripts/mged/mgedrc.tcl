@@ -188,15 +188,8 @@ proc dump_mged_state {fd} {
     puts $fd "# Combines geometry and command windows"
     puts $fd "set mged_default(comb) $mged_gui($id,comb)"
     puts $fd ""
-    puts $fd "# Activate/deactivate display lists. Note - display lists"
-    puts $fd "# increase the interactivity with the geometry, especially if"
-    puts $fd "# displaying remotely. However, if the geometry is huge"
-    puts $fd "# w.r.t. the amount of RAM on the machine used to display"
-    puts $fd "# the geometry, it may cause the machine to thrash."
-    puts $fd "set mged_default(dlist) $mged_gui($id,dlist)"
-    puts $fd ""
-    puts $fd "# Display manager type (X, ogl, wgl, etc.)"
-    puts $fd "set mged_default(dm_type) $mged_gui($id,dtype)"
+    puts $fd "# Obol GUI host type (tkobol)"
+    puts $fd "set mged_default(host_type) $mged_gui($id,host_type)"
     puts $fd ""
     puts $fd "# Sets the type of command line editing (emacs or vi)"
     puts $fd "set mged_default(edit_style) $mged_gui($id,edit_style)"
@@ -215,14 +208,14 @@ proc dump_mged_state {fd} {
     puts $fd "set mged_default(zclip) $mged_gui($id,zclip)"
     puts $fd ""
     puts $fd "# zbuffer"
-    if { $mged_gui($id,dtype) == "ogl" } {
+    if {[info exists mged_gui($id,zbuffer)]} {
 	puts $fd "set mged_default(zbuffer) $mged_gui($id,zbuffer)"
     } else {
 	puts $fd "set mged_default(zbuffer) $mged_default(zbuffer)"
     }
     puts $fd ""
     puts $fd "# lighting"
-    if { $mged_gui($id,dtype) == "ogl" } {
+    if {[info exists mged_gui($id,lighting)]} {
 	puts $fd "set mged_default(lighting) $mged_gui($id,lighting)"
     } else {
 	puts $fd "set mged_default(lighting) $mged_default(lighting)"
@@ -241,7 +234,7 @@ proc dump_mged_state {fd} {
     puts $fd "set mged_default(orig_gui) $mged_gui($id,orig_gui)"
     puts $fd ""
     puts $fd "# Specifies the active pane"
-    puts $fd "set mged_default(pane) [lindex [split $mged_gui($id,active_dm) .] 2]"
+    puts $fd "set mged_default(pane) [lindex [split $mged_gui($id,active_pane) .] 2]"
     puts $fd ""
     puts $fd "# Activate/deactivate multi-pane mode (i.e. four geometry windows or one)"
     puts $fd "set mged_default(multi_pane) $mged_gui($id,multi_pane)"
@@ -465,11 +458,6 @@ proc dump_mged_state {fd} {
     puts $fd "rset cs grid [rset cs grid]"
     puts $fd "rset cs grid_a [rset cs grid_a]"
     puts $fd "rset cs grid_ia [rset cs grid_ia]"
-    puts $fd ""
-    puts $fd "# Predictor Colors"
-    puts $fd "rset cs predictor [rset cs predictor]"
-    puts $fd "rset cs predictor_a [rset cs predictor_a]"
-    puts $fd "rset cs predictor_ia [rset cs predictor_ia]"
     puts $fd ""
     puts $fd "# Faceplate Menu Colors"
     puts $fd "rset cs menu_line [rset cs menu_line]"

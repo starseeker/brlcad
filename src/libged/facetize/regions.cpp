@@ -50,6 +50,7 @@
 #include "rt/search.h"
 #include "raytrace.h"
 #include "wdb.h"
+#include "ged/event.h"
 #include "../ged_private.h"
 #include "./ged_facetize.h"
 #include "./process.h"
@@ -2084,6 +2085,8 @@ _ged_facetize_regions(struct _ged_facetize_state *s, const FacetizePlan &plan)
     }
     affix = (use_prefix) ? bu_vls_cstr(&prefix_str) : bu_vls_cstr(&suffix_str);
 
+    int final_event_batch_opened = (ged_event_batch_begin(s->gedp) == GED_EVENT_OK);
+
     // Import with an affix so the original hierarchy remains unchanged.
     av[0] = "dbconcat";
     av[1] = "-L";
@@ -2101,6 +2104,8 @@ _ged_facetize_regions(struct _ged_facetize_state *s, const FacetizePlan &plan)
 	bu_ptbl_free(ar);
 	bu_free(ar, "ar table");
 	bu_free(dpa, "free dpa");
+	if (final_event_batch_opened)
+	    ged_event_batch_end(s->gedp, NULL);
 	return BRLCAD_ERROR;
     }
 
@@ -2134,6 +2139,8 @@ _ged_facetize_regions(struct _ged_facetize_state *s, const FacetizePlan &plan)
 		if (s->verbosity >= 0) {
 		    bu_log("regions.cpp:%d unable to generate name - FAIL\n", __LINE__);
 		}
+		if (final_event_batch_opened)
+		    ged_event_batch_end(s->gedp, NULL);
 		bu_vls_free(&nname);
 		bu_ptbl_free(ar);
 		bu_free(ar, "ar table");
@@ -2152,6 +2159,8 @@ _ged_facetize_regions(struct _ged_facetize_state *s, const FacetizePlan &plan)
 	    bu_ptbl_free(ar);
 	    bu_free(ar, "ar table");
 	    bu_free(dpa, "free dpa");
+	    if (final_event_batch_opened)
+	        ged_event_batch_end(s->gedp, NULL);
 	    return BRLCAD_ERROR;
 	}
 	new_tobjs.erase(std::string(oname));
@@ -2172,11 +2181,16 @@ _ged_facetize_regions(struct _ged_facetize_state *s, const FacetizePlan &plan)
 	bu_ptbl_free(ar);
 	bu_free(ar, "ar table");
 	bu_free(dpa, "free dpa");
+	if (final_event_batch_opened)
+	    ged_event_batch_end(s->gedp, NULL);
 	return BRLCAD_ERROR;
     }
+    (void)ged_event_notify_object_added(s->gedp, oname, NULL);
 
     /* Done importing stuff - update nref. */
     db_update_nref(dbip);
+    if (final_event_batch_opened)
+	ged_event_batch_end(s->gedp, NULL);
 
     bu_ptbl_free(ar);
     bu_free(ar, "ar table");

@@ -83,18 +83,26 @@ int
 db_dirhash(const char *str)
 {
     const unsigned char *s = (unsigned char *)str;
-    size_t sum = 0;
-    int i = 1;
+    /* Directory hashes are process-local bucket selectors; no value is
+     * serialized.  The historical weighted-character sum clustered families
+     * of numbered CAD objects very heavily (part_000001, part_000002, ...).
+     * On a 150k-object database, tree walking then spent a material fraction
+     * of its time chasing one linked bucket during every member lookup.
+     * FNV-1a has equally cheap streaming arithmetic but avalanches the varying
+     * suffix into the low bits consumed by RT_DBHASH.  Keep the fixed-width
+     * state so bucket placement is deterministic on 32- and 64-bit hosts. */
+    uint64_t hash = UINT64_C(14695981039346656037);
 
     /* sanity */
     if (!str)
 	return 0;
 
-    /* BSD name hashing starts i=0, discarding first char.  why? */
-    while (*s)
-	sum += (size_t)*s++ * i++;
+    while (*s) {
+	hash ^= (uint64_t)*s++;
+	hash *= UINT64_C(1099511628211);
+    }
 
-    return RT_DBHASH(sum);
+    return (int)RT_DBHASH(hash);
 }
 
 

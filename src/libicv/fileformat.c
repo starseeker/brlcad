@@ -621,7 +621,7 @@ icv_image_for_write(const icv_image_t *src, ICV_COLOR_SPACE color_space, size_t 
 	}
 
 	if (src->color_space == ICV_COLOR_SPACE_RGB && (src->channels == 3 || src->channels == 4)) {
-	    dst = icv_create_with_channels(src->width, src->height, ICV_COLOR_SPACE_RGB, 3);
+    dst = icv_create_with_channels(src->width, src->height, ICV_COLOR_SPACE_RGB, 3);
 	    if (!dst)
 		return NULL;
 	    npix = src->width * src->height;

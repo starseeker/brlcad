@@ -57,8 +57,18 @@
 #include "bu/vls.h"
 #include "vmath.h"
 #include "raytrace.h"
-#include "dm.h"
 #include "pkg.h"
+#include "BObol/BDisplaySession.h"
+#if defined(HAVE_QTCAD_OBOL_DISPLAY_PROVIDER)
+#  include "qtcad/display_provider.h"
+#elif defined(HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER)
+#  include "tclcad/setup.h"
+#endif
+
+#if defined(HAVE_QTCAD_OBOL_DISPLAY_PROVIDER) || \
+    defined(HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER)
+#  define HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER 1
+#endif
 
 /* private */
 #include "./rtuif.h"
@@ -73,11 +83,83 @@ extern const char title[];
 
 
 /***** Variables shared with viewing model *** */
-struct fb	*fbp = FB_NULL;	/* Framebuffer handle */
+imgstream_fb_t *fbp = NULL;	/* Framebuffer handle */
+int rt_fb_output_enabled = 1;	/* /dev/null keeps setup metadata but no pixels */
+#ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
+static bobol_display_session_t *fb_display_session = NULL;
+#endif
 FILE		*outfp = NULL;		/* optional pixel output file */
 struct icv_image *bif = NULL;
 
 /***** end of sharing with viewing model *****/
+
+#ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
+static int
+rt_obol_display_provider_register(void)
+{
+#ifdef HAVE_QTCAD_OBOL_DISPLAY_PROVIDER
+    return qtcad_obol_display_provider_register();
+#elif defined(HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER)
+    return tclcad_obol_display_provider_register();
+#else
+    return 0;
+#endif
+}
+#endif
+
+#ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
+struct rt_display_frame_task {
+    rt_frame_execute_callback execute;
+    int framenumber;
+    void *data;
+};
+
+static int
+rt_display_frame_task_run(void *data)
+{
+    struct rt_display_frame_task *task =
+	(struct rt_display_frame_task *)data;
+    return task && task->execute ? task->execute(task->framenumber,
+	task->data) : -1;
+}
+
+static int
+rt_display_frame_runner(rt_frame_execute_callback execute, int framenumber,
+	void *data)
+{
+    if (!fb_display_session)
+	return execute ? execute(framenumber, data) : -1;
+    struct rt_display_frame_task task = {execute, framenumber, data};
+    return bobol_display_session_run(fb_display_session,
+	rt_display_frame_task_run, &task);
+}
+
+static void
+rt_display_progressive_flush(void *UNUSED(data))
+{
+    if (fb_display_session && fbp)
+	(void)imgstream_fb_flush(fbp);
+}
+#endif
+
+static void
+rt_fb_close(void)
+{
+#ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
+    if (fb_display_session) {
+	rt_frame_runner_set(NULL, NULL);
+	rt_framebuffer_flush_callback_set(NULL, NULL);
+	bobol_display_session_close(fb_display_session);
+	fb_display_session = NULL;
+	fbp = NULL;
+	return;
+    }
+#endif
+    if (fbp) {
+	imgstream_fb_close(fbp);
+	fbp = NULL;
+    }
+}
 
 
 /***** variables shared with worker() ******/
@@ -128,7 +210,6 @@ memory_summary(void)
 
 int fb_setup(void) {
     /* Framebuffer is desired */
-    static const char disk_file_interface[] = "Disk File Interface";
     static const size_t minimum_framebuffer_dimension = 512;
     static const int framebuffer_open_error = 12;
     size_t xx, yy;
@@ -137,43 +218,55 @@ int fb_setup(void) {
     /* make sure width/height are set via -g/-G */
     grid_sync_dimensions(viewsize);
 
-    bu_semaphore_acquire(BU_SEM_SYSCALL);
-    fbp = fb_open(framebuffer, width, height);
-    bu_semaphore_release(BU_SEM_SYSCALL);
-    if (fbp == FB_NULL) {
+    enum imgstream_fb_spec_kind framebuffer_kind = imgstream_fb_spec_kind(framebuffer);
+
+    /* Interactive postage stamps need a usable window size.  File and memory
+     * targets retain the exact requested image dimensions. */
+    xx = (size_t)width;
+    yy = (size_t)height;
+    if (framebuffer_kind == IMGSTREAM_FB_SPEC_DISPLAY) {
+	if (xx < minimum_framebuffer_dimension)
+	    xx = minimum_framebuffer_dimension;
+	if (yy < minimum_framebuffer_dimension)
+	    yy = minimum_framebuffer_dimension;
+    }
+
+    imgstream_fb_spec_info_t framebuffer_info;
+    rt_fb_output_enabled = imgstream_fb_spec_info(framebuffer,
+	&framebuffer_info) != 0 ||
+	framebuffer_info.diagnostic != IMGSTREAM_FB_DIAGNOSTIC_NULL;
+
+    if (framebuffer_kind == IMGSTREAM_FB_SPEC_DISPLAY) {
+#ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
+	if (!rt_obol_display_provider_register()) {
+	    fprintf(stderr, "rt:  selected UI toolkit has no usable Obol display provider\n");
+	    return 12;
+	}
+	fb_display_session = bobol_display_session_open(framebuffer, xx, yy,
+	    "BRL-CAD rt");
+	fbp = bobol_display_session_framebuffer(fb_display_session);
+	if (fbp) {
+	    rt_frame_runner_set(rt_display_frame_runner, NULL);
+	    rt_framebuffer_flush_callback_set(rt_display_progressive_flush, NULL);
+	}
+#else
+	fprintf(stderr, "rt: display targets require a Qt or Tcl/Tk Obol provider; use file or memory output\n");
+	return 12;
+#endif
+    } else {
+	bu_semaphore_acquire(BU_SEM_SYSCALL);
+	fbp = imgstream_fb_open(framebuffer, (size_t)xx, (size_t)yy);
+	bu_semaphore_release(BU_SEM_SYSCALL);
+    }
+    if (fbp == NULL) {
 	fprintf(stderr, "rt:  can't open frame buffer\n");
 	return framebuffer_open_error;
     }
 
     bu_semaphore_acquire(BU_SEM_SYSCALL);
-    /* Enlarge small interactive framebuffers so MGED-invoked postage
-     * stamps remain visible.  Disk framebuffers intentionally ignore
-     * window configuration and retain the requested image dimensions.
-     */
-    xx = width > minimum_framebuffer_dimension ? width : minimum_framebuffer_dimension;
-    yy = height > minimum_framebuffer_dimension ? height : minimum_framebuffer_dimension;
-    if ((size_t)fb_getwidth(fbp) < xx || (size_t)fb_getheight(fbp) < yy) {
-	(void)fb_configure_window(fbp, (int)xx, (int)yy);
-
-	/* Some non-window framebuffers cannot be resized after opening.
-	 * Reopen those with the historical minimum dimensions, while
-	 * preserving exact dimensions for disk output.
-	 */
-	if (((size_t)fb_getwidth(fbp) < xx || (size_t)fb_getheight(fbp) < yy)
-	    && !BU_STR_EQUAL(fb_gettype(fbp), disk_file_interface)) {
-	    (void)fb_close(fbp);
-	    fbp = fb_open(framebuffer, xx, yy);
-	    if (fbp == FB_NULL) {
-		bu_semaphore_release(BU_SEM_SYSCALL);
-		fprintf(stderr, "rt:  can't reopen frame buffer\n");
-		return framebuffer_open_error;
-	    }
-	}
-    }
-
     /* If fb came out smaller than requested, do less work */
-    size_t fbwidth = (size_t)fb_getwidth(fbp);
-    size_t fbheight = (size_t)fb_getheight(fbp);
+    size_t fbwidth = imgstream_fb_width(fbp);
+    size_t fbheight = imgstream_fb_height(fbp);
     if (width > fbwidth)
 	width = fbwidth;
     if (height > fbheight)
@@ -183,9 +276,9 @@ int fb_setup(void) {
     if (width > 0 && height > 0) {
 	zoom = fbwidth/width;
 	if (fbheight/height < (size_t)zoom) {
-	    zoom = fb_getheight(fbp)/height;
+	    zoom = (int)imgstream_fb_height(fbp)/height;
 	}
-	(void)fb_view(fbp, width/2, height/2, zoom, zoom);
+	(void)imgstream_fb_view(fbp, width/2, height/2, zoom, zoom);
     }
     bu_semaphore_release(BU_SEM_SYSCALL);
 
@@ -632,8 +725,8 @@ int main(int argc, char *argv[])
 	frame_retval = do_frame(curframe);
 	if (frame_retval != 0) {
 	    /* Release the framebuffer, if any */
-	    if (fbp != FB_NULL) {
-		fb_close(fbp);
+	    if (fbp != NULL) {
+		rt_fb_close();
 	    }
 	    ret = 1;
 	    goto rt_cleanup;
@@ -734,8 +827,8 @@ int main(int argc, char *argv[])
     }
 
     /* Release the framebuffer, if any */
-    if (fbp != FB_NULL) {
-	fb_close(fbp);
+    if (fbp != NULL) {
+	rt_fb_close();
     }
 
 rt_cleanup:

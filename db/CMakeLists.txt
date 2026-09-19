@@ -253,6 +253,23 @@ foreach(g_input ${G_SAMPLE_MODELS})
   g_target(${g_input} "BRL-CAD Geometry Models/Sample")
 endforeach(g_input ${G_SAMPLE_MODELS})
 
+# These test targets are declared before the sample geometry generators.
+if(TARGET m35.g)
+  foreach(test_target ged_test_annotate tclcad_check_multi_interp)
+    if(TARGET ${test_target})
+      add_dependencies(${test_target} m35.g)
+    endif()
+  endforeach()
+endif()
+
+# gtools is configured before the sample database targets exist.  Add the
+# performance fixtures here, after both the root and FAA conversions have been
+# declared, so a direct qualification build cannot silently skip every case.
+if(TARGET bobol_performance_qualification)
+  add_dependencies(bobol_performance_qualification
+    moss.g m35.g havoc.g Generic_Twin.g)
+endif()
+
 if(BRLCAD_INSTALL_EXAMPLE_GEOMETRY AND TARGET gcv)
   brlcad_adddata(1647260.dsp db)
   brlcad_adddata(ebm_logo.bw db)

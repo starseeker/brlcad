@@ -22,9 +22,8 @@
  * The BRL-CAD application launcher.  Serves as the "main" BRL-CAD application
  * on platforms that expect one, presenting the GUI programs and a command
  * shell as a menu.  The set of entries is discovered at run time from manifest
- * files (see registry.c); the presentation is a libfb window (ui_fb.c) with an
- * automatic console fallback (ui_text.c).  It uses only existing BRL-CAD
- * libraries -- no Tcl/Tk or Qt.
+ * files (see registry.c); the presentation is an Obol display session (ui_fb.c) with an
+ * automatic console fallback (ui_text.c).  The configured Qt or TclCAD provider owns the native window.
  *
  */
 

@@ -33,7 +33,7 @@
 
 #include "bu/color.h"
 #include "bu/vfont.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 #include "fbtext.h"
 
@@ -46,7 +46,7 @@
 
 static int filterbuf[FONTBUFSZ][FONTBUFSZ];
 static float resbuf[FONTBUFSZ];
-static RGBpixel fbline[FONTBUFSZ];
+static unsigned char fbline[FONTBUFSZ][3];
 
 
 static void
@@ -81,8 +81,8 @@ fill_buf(int wid, int *buf, char *bitrow)
 
 
 static void
-draw_char(struct fb *fbp, struct vfont *vfp, struct vfont_dispatch *vdp,
-	  int x, int y, const RGBpixel color, int cw, int ch)
+draw_char(imgstream_fb_t *fbp, struct vfont *vfp, struct vfont_dispatch *vdp,
+	  int x, int y, const unsigned char color[3], int cw, int ch)
 {
     int i, j, base, ln;
     int totwid = cw;
@@ -104,7 +104,7 @@ draw_char(struct fb *fbp, struct vfont *vfp, struct vfont_dispatch *vdp,
 
     for (i = ch + base; i >= base; i--) {
 	squash(filterbuf[i - 1], filterbuf[i], filterbuf[i + 1], resbuf, totwid + 4);
-	fb_read(fbp, x, y - vdp->vd_down + i, (unsigned char *)fbline, totwid + 3);
+	imgstream_fb_read(fbp, x, y - vdp->vd_down + i, (unsigned char *)fbline, totwid + 3);
 	for (j = 0; j < (totwid + 3) - 1; j++) {
 	    int tmp;
 	    tmp = fbline[j][RED] & 0377;
@@ -114,7 +114,7 @@ draw_char(struct fb *fbp, struct vfont *vfp, struct vfont_dispatch *vdp,
 	    tmp = fbline[j][BLU] & 0377;
 	    fbline[j][BLU] = (int)(color[BLU] * resbuf[j] + (1 - resbuf[j]) * tmp) & 0377;
 	}
-	(void)fb_write(fbp, x, y - vdp->vd_down + i, (unsigned char *)fbline, totwid + 3);
+	(void)imgstream_fb_write(fbp, x, y - vdp->vd_down + i, (unsigned char *)fbline, totwid + 3);
     }
 }
 
@@ -172,7 +172,7 @@ fbtext_string_width(struct fbtext *t, const char *s)
 
 
 void
-fbtext_draw(struct fb *fbp, struct fbtext *t, int x, int y, const char *s, const RGBpixel color)
+fbtext_draw(imgstream_fb_t *fbp, struct fbtext *t, int x, int y, const char *s, const unsigned char color[3])
 {
     int currx = x;
     const char *p;
@@ -190,7 +190,7 @@ fbtext_draw(struct fb *fbp, struct fbtext *t, int x, int y, const char *s, const
 	    currx += 8;
 	    continue;
 	}
-	if (currx + cw > fb_getwidth(fbp) - 1)
+	if (currx >= 0 && (size_t)currx + (size_t)cw >= imgstream_fb_width(fbp))
 	    break;
 
 	draw_char(fbp, t->vfp, vdp, currx, y, color, cw, ch);

@@ -44,6 +44,12 @@ brlcad_add_test(NAME bg_polygon_sort COMMAND bg_polygon_sort)
 # Temporary testing program
 brlcad_addexec(bgpoly2tri poly2tri.c "${BG_TEST_LIBS}" TEST)
 
+brlcad_addexec(bg_vlist vlist.c "${BG_TEST_LIBS}" TEST)
+brlcad_add_test(NAME bg_vlist_basic COMMAND bg_vlist)
+
+brlcad_addexec(bg_line_layer line_layer.c "${BG_TEST_LIBS}" TEST)
+brlcad_add_test(NAME bg_line_layer_basic COMMAND bg_line_layer)
+
 #  ************ obr.c tests *************
 
 brlcad_addexec(bg_obr obr.c "${BG_TEST_LIBS}" TEST)
@@ -457,6 +463,17 @@ brlcad_add_test(NAME bg_trimesh_split COMMAND bg_trimesh_split_test)
 brlcad_addexec(bg_trimesh_decimate_test trimesh_decimate.cpp "${BG_TEST_LIBS}" TEST)
 
 brlcad_add_test(NAME bg_trimesh_decimate COMMAND bg_trimesh_decimate_test)
+#  ************ trimesh_diff.cpp tests ***********
+
+brlcad_addexec(bg_trimesh_diff trimesh_diff.cpp "${BG_TEST_LIBS}" TEST)
+
+brlcad_add_test(NAME bg_trimesh_diff  COMMAND bg_trimesh_diff)
+
+#  ************ pca.cpp tests ***********
+
+brlcad_addexec(bg_pca pca.cpp "${BG_TEST_LIBS}" TEST)
+
+brlcad_add_test(NAME bg_pca  COMMAND bg_pca)
 
 #  ************ triangle area tests ***********
 
@@ -499,6 +516,12 @@ if(BUILD_TESTING AND TARGET bg_trimesh_repair)
   set_tests_properties(bg_trimesh_repair PROPERTIES TIMEOUT 30)
 endif()
 
+#  ************ trimesh topology tests ***********
+
+brlcad_addexec(bg_trimesh_topology trimesh_topology.cpp "${BG_TEST_LIBS}" TEST)
+
+brlcad_add_test(NAME bg_trimesh_topology  COMMAND bg_trimesh_topology)
+
 #  ************ trimesh_remesh tests ***********
 
 brlcad_addexec(bg_trimesh_remesh trimesh_remesh.cpp "${BG_TEST_LIBS}" TEST)
@@ -520,6 +543,10 @@ cmakefiles(
   plane_dist.c
   plane_isect.c
   plane_pt.c
+  pca.cpp
+  trimesh_diff.cpp
+  trimesh_topology.cpp
+  vlist.c
   CMakeLists.txt
 )
 

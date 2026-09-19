@@ -64,7 +64,7 @@
 #include "bu/getopt.h"
 #include "bu/interrupt.h"
 #include "vmath.h"
-#include "dm.h"			/* BRL-CAD package libfb.a interface */
+#include "imgstream/fb_compat.h"
 #include "pkg.h"
 
 
@@ -78,17 +78,17 @@ typedef int bool_t;
 static bool_t hires = 0;		/* set for 1024x1024; clear for 512x512 */
 static char *in_fb_file = NULL;		/* input image name */
 static char *out_fb_file = NULL;	/* output frame buffer name */
-static struct fb *fbp = FB_NULL;		/* libfb input/output handle */
+static imgstream_fb_t *fbp = NULL;	/* framebuffer input/output handle */
 static int src_width = 0;		/* input image width */
 static int src_height = 0;		/* input image height */
 static int dst_width = 0;		/* output frame buffer size */
 static int dst_height = 0;		/* output frame buffer size */
-static RGBpixel *pix;			/* input image */
-static RGBpixel bg = { 0, 0, 0 };	/* background */
+static unsigned char (*pix)[3];		/* input image */
+static unsigned char bg[3] = { 0, 0, 0 };	/* background */
 
 /* in ioutil.c */
 extern void Message(const char *format, ...);
-extern void Fatal(struct fb *fbiop, const char *format, ...);
+extern void Fatal(imgstream_fb_t *fbiop, const char *format, ...);
 
 
 static void
@@ -220,30 +220,30 @@ main(int argc, char **argv)
 
     if (in_fb_file != NULL) {
 
-	if ((fbp = fb_open(in_fb_file, src_width, src_height)) == FB_NULL)
+	if ((fbp = imgstream_fb_open(in_fb_file, (size_t)src_width,
+				      (size_t)src_height)) == NULL)
 	    Fatal(fbp, "Couldn't open input frame buffer");
 	else {
 	    int y;
-	    int wt = fb_getwidth(fbp);
-	    int ht = fb_getheight(fbp);
+	    int wt = (int)imgstream_fb_width(fbp);
+	    int ht = (int)imgstream_fb_height(fbp);
 
 	    /* Use smaller actual input size instead of request. */
 
 	    V_MIN(src_width, wt);
 	    V_MIN(src_height, ht);
 
-	    if ((pix = (RGBpixel *)malloc((size_t)src_width * (size_t)src_height * sizeof(RGBpixel))) == NULL)
+	    if ((pix = (unsigned char (*)[3])malloc((size_t)src_width * (size_t)src_height * sizeof(*pix))) == NULL)
 		Fatal(fbp, "Not enough memory for pixel array");
 
 	    for (y = 0; y < src_height; ++y) {
-		if (fb_read(fbp, 0, y, pix[y * src_width], src_width) == -1)
+		if (imgstream_fb_read(fbp, 0, y, pix[y * src_width],
+				      (size_t)src_width) < 0)
 		    Fatal(fbp, "Error reading raster");
 	    }
 
-	    if (fb_close(fbp) == -1) {
-		fbp = FB_NULL;	/* avoid second try */
-		Fatal(fbp, "Error closing input frame buffer");
-	    }
+	    imgstream_fb_close(fbp);
+	    fbp = NULL;
 	}
     }
 
@@ -255,11 +255,12 @@ main(int argc, char **argv)
     if (dst_height == 0)
 	dst_height = src_height;	/* default */
 
-    if ((fbp = fb_open(out_fb_file, dst_width, dst_height)) == FB_NULL)
+    if ((fbp = imgstream_fb_open(out_fb_file, (size_t)dst_width,
+				 (size_t)dst_height)) == NULL)
 	Fatal(fbp, "Couldn't open output frame buffer");
     else {
-	int wt = fb_getwidth(fbp);
-	int ht = fb_getheight(fbp);
+	int wt = (int)imgstream_fb_width(fbp);
+	int ht = (int)imgstream_fb_height(fbp);
 
 	/* Use smaller actual frame buffer size for output. */
 
@@ -301,7 +302,9 @@ main(int argc, char **argv)
 	    long x = loc[r] % dst_width;
 	    long y = loc[r] / dst_width;
 
-	    if (fb_write(fbp, (int)x, (int)y, in_fb_file == NULL ? bg : pix[x + y * src_width], 1) == -1) {
+	    if (imgstream_fb_write(fbp, (int)x, (int)y,
+				   in_fb_file == NULL ? bg : pix[x + y * src_width],
+				   1) < 0) {
 		Fatal(fbp, "Error writing pixel");
 	    }
 
@@ -311,10 +314,8 @@ main(int argc, char **argv)
 
     /* Close the frame buffer. */
 
-    if (fb_close(fbp) == -1) {
-	fbp = FB_NULL;	/* avoid second try */
-	Fatal(fbp, "Error closing output frame buffer");
-    }
+    imgstream_fb_close(fbp);
+    fbp = NULL;
 
     return 0;
 }

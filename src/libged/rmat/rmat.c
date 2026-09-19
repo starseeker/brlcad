@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -41,20 +43,25 @@ ged_rmat_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     /* get the rotation matrix */
     if (argc == 1) {
-	bn_encode_mat(gedp->ged_result_str, gedp->ged_gvp->gv_rotation, 1);
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+	bv_rotation_get(rotation, view);
+	bn_encode_mat(gedp->ged_result_str, rotation, 1);
 	return BRLCAD_OK;
     } else if (argc == 2) {
 	/* set rotation matrix */
 	if (bn_decode_mat(rotation, argv[1]) != 16)
 	    return BRLCAD_ERROR;
 
-	MAT_COPY(gedp->ged_gvp->gv_rotation, rotation);
-	bv_update(gedp->ged_gvp);
+	struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+	bv_rotation_set(view, rotation);
+	ged_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }
