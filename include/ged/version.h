@@ -29,7 +29,6 @@
 #ifndef GED_VERSION_H
 #define GED_VERSION_H
 
-#include "common.h"
 #include "ged/defines.h"
 
 __BEGIN_DECLS

@@ -172,6 +172,7 @@ namespace eval ArcherCoreBootstrap {
 	method rtcntrl             {args}
 	method setStatusString     {_str}
 	method getSelectedTreePaths {}
+	method syncTreeSelection {}
 
 	# Commands exposed to the user via the command line.
 	# More to be added later...
@@ -352,7 +353,6 @@ namespace eval ArcherCoreBootstrap {
 	variable mTarget ""
 	variable mTargetCopy ""
 	variable mTargetOldCopy ""
-	variable mDisplayType
 	variable mLighting 1
 	variable mRenderMode -1
 	variable mActivePane
@@ -488,19 +488,8 @@ namespace eval ArcherCoreBootstrap {
 	variable mMaxCombMembersShownPref ""
 	variable mCombWarningList ""
 
-	variable mZClipBack 100.0
-	variable mZClipBackPref 100.0
-	variable mZClipFront 100.0
-	variable mZClipFrontPref 100.0
-	variable mZClipBackMax 1000
-	variable mZClipBackMaxPref 1000
-	variable mZClipFrontMax 1000
-	variable mZClipFrontMaxPref 1000
-
 	variable mLightingMode 1
 	variable mLightingModePref ""
-	variable mDisplayListMode 1
-	variable mDisplayListModePref ""
 	variable mWireframeMode 0
 	variable mWireframeModePref ""
 	variable mHideSubtractions 0
@@ -666,14 +655,7 @@ namespace eval ArcherCoreBootstrap {
 	method updateDisplaySettings {}
 	method updateLightingMode {}
 	method updatePerspective {_unused}
-	method updateZClipPlanes {_front _front_max _back _back_max}
-	method updateZClipPlanesFromSettings {}
-	method updateZClipPlanesFromPreferences {{_unused 0.0}}
-	method calculateZClipMax {}
-	method calculateZClipBackMax {}
-	method calculateZClipFrontMax {}
 	method pushPerspectiveSettings {}
-	method validateZClipMax {_d}
 
 	method shootRay_doit {_start _op _target _prep _no_bool _onehit _bot_dflag _objects}
 
@@ -1099,9 +1081,6 @@ namespace delete ::ArcherCoreBootstrap
     if {[llength $args] == 1} {
 	set args [lindex $args 0]
     }
-
-    set dm_list [split [dm_list] ',']
-    set mDisplayType [lindex $dm_list 0]
 
     # horizontal panes
     itk_component add hpane {
@@ -2022,7 +2001,6 @@ namespace delete ::ArcherCoreBootstrap
 	}
 
 	cadwidgets::Ged $itk_component(canvasF).mged $_target \
-	    -type $mDisplayType \
 	    -showhandle 0 \
 	    -sashcursor sb_v_double_arrow \
 	    -hsashcursor sb_h_double_arrow \
@@ -2046,14 +2024,13 @@ namespace delete ::ArcherCoreBootstrap
 	$itk_component(ged) set_outputHandler "$itk_component(cmd) putstring"
     }
     $itk_component(ged) transparency_all 1
-    $itk_component(ged) bounds_all "-4096 4095 -4096 4095 -4096 4095"
     $itk_component(ged) more_args_callback [::itcl::code $this handleMoreArgs]
     $itk_component(ged) history_callback {*}[::itcl::code $this addHistory]
 
 
     # RT Control Panel
     itk_component add rtcntrl {
-	RtControl $itk_interior.rtcp -mged $itk_component(ged)
+	RtControl $itk_interior.rtcp -ged $itk_component(ged)
     } {
 	usual
     }
@@ -2817,11 +2794,11 @@ namespace delete ::ArcherCoreBootstrap
 	if {$mEnableListView} {
 	    set ditem [regsub {^/} $ditem {}]
 	    set dlist [split $ditem /]
-	    set dlen [llength $dlist]
+	    set dlen [llength $cache]
 	    if {$dlen == 1} {
 		eval lappend mNodeDrawList [lindex [lindex $mText2Node($ditem) 0] 0]
 	    } else {
-		eval lappend mNodePDrawList [lindex [lindex $mText2Node([lindex $dlist 0]) 0] 0]
+		eval lappend mNodePDrawList [lindex [lindex $mText2Node([lindex $cache 0]) 0] 0]
 	    }
 	} else {
 	    set nodesList [getTreeNodes $ditem $_cflag]
@@ -3737,7 +3714,18 @@ namespace delete ::ArcherCoreBootstrap
 }
 
 ::itcl::body ArcherCore::gedCmd {args} {
-    return [eval $itk_component(ged) $args]
+    set ret [eval $itk_component(ged) $args]
+
+    # The GED selection service is the authoritative selection state shared
+    # by command-line editing and retained scene presentation.  Commands
+    # entered through Archer must be reflected by the hierarchy widget too,
+    # but selection is intentionally the only command that pays this cost.
+    if {!$mNoTree && [llength $args] &&
+	    [lindex $args 0] == "select"} {
+	syncTreeSelection
+    }
+
+    return $ret
 }
 
 
@@ -4170,7 +4158,7 @@ namespace delete ::ArcherCoreBootstrap
 ::itcl::body ArcherCore::doMultiPane {} {
     gedCmd configure -multi_pane $mMultiPane
 
-    if {$mMultiPane && $mDisplayListMode} {
+    if {$mMultiPane} {
 	::update
 	redrawWho
     }
@@ -4576,7 +4564,7 @@ namespace delete ::ArcherCoreBootstrap
     $color add command -label "Select..." \
 	-command [::itcl::code $this selectDisplayColor $_node]
 
-    if {($mDisplayType == "wgl" || $mDisplayType == "ogl") && ($_nodeType != "leaf" || 0 < $mRenderMode)} {
+    if {$_nodeType != "leaf" || 0 < $mRenderMode} {
 	# Build transparency menu
 	$_menu add cascade -label "Transparency" \
 	    -menu $_menu.trans
@@ -4881,6 +4869,30 @@ namespace delete ::ArcherCoreBootstrap
     return [getTreePath [$itk_component(newtree) selection]]
 }
 
+::itcl::body ArcherCore::syncTreeSelection {} {
+    if {$mNoTree || ![info exists itk_component(newtree)]} {
+	return
+    }
+
+    # A ttk treeview has one active row while the GED default selection set
+    # may contain many paths.  Preserve the active row when it is still in
+    # the set; otherwise make the first selected path active.  Scene
+    # highlighting continues to represent the complete GED set.
+    set selected [string trim [$itk_component(ged) select list default]]
+    if {$selected == ""} {
+	$itk_component(newtree) selection set {}
+	return
+    }
+
+    set paths [split $selected "\n"]
+    set active [getSelectedTreePaths]
+    if {[lsearch -exact $paths $active] != -1} {
+	return
+    }
+
+    selectTreePath [lindex $paths 0]
+}
+
 ::itcl::body ArcherCore::handleTreeClose {} {
 }
 
@@ -5034,6 +5046,11 @@ namespace delete ::ArcherCoreBootstrap
     set snode [$itk_component(newtree) selection]
 
     if {$snode == ""} {
+	set mPrevSelectedObjPath $mSelectedObjPath
+	set mPrevSelectedObj $mSelectedObj
+	set mSelectedObjPath ""
+	set mSelectedObj ""
+	$itk_component(ged) select clear
 	return 1
     }
 
@@ -5041,6 +5058,17 @@ namespace delete ::ArcherCoreBootstrap
     set mPrevSelectedObj $mSelectedObj
     set mSelectedObjPath [getTreePath $snode]
     set mSelectedObj $mNode2Text($snode)
+
+    # Selecting a hierarchy row replaces Archer's active/default semantic
+    # selection.  Avoid republishing when syncTreeSelection is merely
+    # reflecting an already-selected command-line path (including one member
+    # of a multi-path set).
+    set shared_paths [split \
+	[string trim [$itk_component(ged) select list default]] "\n"]
+    if {[lsearch -exact $shared_paths $mSelectedObjPath] == -1} {
+	$itk_component(ged) select clear
+	$itk_component(ged) select add $mSelectedObjPath
+    }
 
     # label the object if it's being drawn
     set mRenderMode [gedCmd how $mSelectedObjPath]
@@ -5979,23 +6007,33 @@ namespace delete ::ArcherCoreBootstrap
 ::itcl::body ArcherCore::launchRtApp {app size} {
     global tcl_platform
 
-    if {![string is digit $size]} {
-	set size [winfo width $itk_component(ged)]
+    if {[string is digit $size]} {
+	# Fixed-size menu entries traditionally open a separate framebuffer
+	# window.  An explicit -F also tells libged not to auto-route this render
+	# into Archer's embedded Obol endpoint.
+	if {$tcl_platform(platform) eq "windows"} {
+	    set devtype "/dev/wgl"
+	} elseif {[llength [info commands dm_list]]} {
+	    set dm_types [split [dm_list] ',']
+	    set devtype "/dev/[lindex $dm_types 0]"
+	} else {
+	    set devtype "/dev/ogl"
+	}
+	$itk_component(ged) $app -s $size -F $devtype
+    } else {
+	# The Window Size entry is the embedded-rendering path.  Preserve both
+	# pane dimensions rather than forcing the result square.
+	set pane_size [$itk_component(ged) win_size]
+	$itk_component(ged) $app -w [lindex $pane_size 0] \
+	    -n [lindex $pane_size 1]
     }
-
-    set dm_list [split [dm_list] ',']
-    set devtype "/dev/"
-    append devtype [lindex $dm_list 0]
-    $itk_component(ged) $app -s $size -F $devtype
 }
 
 ::itcl::body ArcherCore::updateDisplaySettings {} {
     $itk_component(ged) refresh_off
 
-    updateZClipPlanesFromSettings
     updatePerspective 0
     doLighting
-    gedCmd dlist_on $mDisplayListMode
     gedCmd configure -hideSubtractions $mHideSubtractions
 
     if {$mWireframeMode} {
@@ -6018,64 +6056,6 @@ namespace delete ::ArcherCoreBootstrap
 
 ::itcl::body ArcherCore::updatePerspective {_unused} {
     $itk_component(ged) perspective_all $mPerspectivePref
-}
-
-::itcl::body ArcherCore::updateZClipPlanes {_front _front_max _back _back_max} {
-    set near [expr {0.01 * $_front * $_front_max}]
-    set far [expr {0.01 * $_back * $_back_max}]
-    $itk_component(ged) bounds_all "-1.0 1.0 -1.0 1.0 -$near $far"
-    $itk_component(ged) refresh_all
-}
-
-::itcl::body ArcherCore::updateZClipPlanesFromSettings {} {
-    updateZClipPlanes $mZClipFront $mZClipFrontMax $mZClipBack $mZClipBackMax
-}
-
-# Note: This method is used by scale widgets in the Archer Preferences
-# dialog, which is why it has an unused parameter.
-::itcl::body ArcherCore::updateZClipPlanesFromPreferences {{_unused 0.0}} {
-    updateZClipPlanes $mZClipFrontPref $mZClipFrontMaxPref $mZClipBackPref \
-	$mZClipBackMaxPref
-}
-
-::itcl::body ArcherCore::calculateZClipMax {} {
-    set size [$itk_component(ged) size]
-    set autoview_l [$itk_component(ged) get_autoview]
-    set asize [lindex $autoview_l end]
-
-    set max [expr {($asize / $size) * 0.5}]
-    set maxSq [expr {$max * $max}]
-
-    # return the length of the diagonal
-    return [expr {sqrt($maxSq + $maxSq)}]
-}
-
-::itcl::body ArcherCore::calculateZClipBackMax {} {
-    set mZClipBackMaxPref [calculateZClipMax]
-    updateZClipPlanesFromPreferences
-}
-
-::itcl::body ArcherCore::calculateZClipFrontMax {} {
-    set mZClipFrontMaxPref [calculateZClipMax]
-    updateZClipPlanesFromPreferences
-}
-
-::itcl::body ArcherCore::validateZClipMax {_d} {
-    if {[::cadwidgets::Ged::validateDouble $_d]} {
-
-	if {$_d == "" || $_d == "."} {
-	    return 1
-	}
-
-	if {$_d < 0} {
-	    return 0
-	}
-
-	after idle [::itcl::code $this updateZClipPlanesFromPreferences]
-	return 1
-    }
-
-    return 0
 }
 
 ::itcl::body ArcherCore::pushPerspectiveSettings {} {

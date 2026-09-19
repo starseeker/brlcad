@@ -1,5 +1,13 @@
 # Primitives have their own individual editing requirements
 add_subdirectory(ell)
+add_subdirectory(arb)
+add_subdirectory(sketch)
+
+# Primitive editors publish transient feedback through the neutral GED edit
+# transaction and Obol view-feature contract.
+add_subdirectory(extrude)
+add_subdirectory(revolve)
+add_subdirectory(bot)
 
 # Things to check include:
 #
@@ -16,7 +24,11 @@ add_subdirectory(ell)
 # https://github.com/peizhan/psketcher
 # https://github.com/cmerrill/sketchsolve
 
-cmakefiles(CMakeLists.txt)
+cmakefiles(
+  CMakeLists.txt
+  qged_edit_preview_util.cpp
+  qged_edit_preview_util.h
+)
 
 # Local Variables:
 # tab-width: 8

@@ -445,18 +445,22 @@ static const struct rt_edit_param_desc arbn_plane_param[] = {
 };
 
 static const struct rt_edit_cmd_desc arbn_cmds[] = {
-    { ECMD_ARBN_PLANE_SELECT,   "Select Plane",      "plane", 1, arbn_index_param,  0, 10, NULL },
-    { ECMD_ARBN_PLANE_SET_DIST, "Set Plane Distance","plane", 1, arbn_dist_param,   1, 20, NULL },
-    { ECMD_ARBN_PLANE_SET_NORM, "Set Plane Normal",  "plane", 1, arbn_normal_param, 1, 30, NULL },
-    { ECMD_ARBN_PLANE_ROTATE,   "Rotate Plane Normal","plane",1, arbn_angles_param, 1, 40, NULL },
-    { ECMD_ARBN_PLANE_ADD,      "Add Plane",         "plane", 4, arbn_plane_param,  1, 50, NULL },
-    { ECMD_ARBN_PLANE_DEL,      "Delete Plane",      "plane", 0, NULL,              0, 60, NULL }
+    { ECMD_ARBN_PLANE_SELECT, RT_EDIT_CMD_NAME(ECMD_ARBN_PLANE_SELECT),   "Select Plane",      "plane", 1, arbn_index_param,  0, 10, NULL },
+    { ECMD_ARBN_PLANE_SET_DIST, RT_EDIT_CMD_NAME(ECMD_ARBN_PLANE_SET_DIST), "Set Plane Distance","plane", 1, arbn_dist_param,   1, 20, NULL },
+    { ECMD_ARBN_PLANE_SET_NORM, RT_EDIT_CMD_NAME(ECMD_ARBN_PLANE_SET_NORM), "Set Plane Normal",  "plane", 1, arbn_normal_param, 1, 30, NULL },
+    { ECMD_ARBN_PLANE_ROTATE, RT_EDIT_CMD_NAME(ECMD_ARBN_PLANE_ROTATE),   "Rotate Plane Normal","plane",1, arbn_angles_param, 1, 40, NULL },
+    { ECMD_ARBN_PLANE_ADD, RT_EDIT_CMD_NAME(ECMD_ARBN_PLANE_ADD),      "Add Plane",         "plane", 4, arbn_plane_param,  1, 50, NULL },
+    { ECMD_ARBN_PLANE_DEL, RT_EDIT_CMD_NAME(ECMD_ARBN_PLANE_DEL),      "Delete Plane",      "plane", 0, NULL,              0, 60, NULL }
 };
 
 static const struct rt_edit_prim_desc arbn_prim_desc = {
     "arbn", "ARBN", 6, arbn_cmds,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_CUSTOM,
+    NULL,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
@@ -466,8 +470,8 @@ rt_edit_arbn_edit_desc(void)
 }
 
 
-C_DECL int
-rt_edit_arbn_get_params(struct rt_edit *s, int cmd_id, fastf_t *vals)
+static int
+arbn_current_numbers(struct rt_edit *s, int cmd_id, fastf_t *vals)
 {
     if (!s || !vals) return 0;
 
@@ -498,6 +502,21 @@ rt_edit_arbn_get_params(struct rt_edit *s, int cmd_id, fastf_t *vals)
 	default:
 	    return 0;
     }
+}
+
+C_DECL int
+rt_edit_arbn_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
+{
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    fastf_t values[RT_EDIT_MAXPARA] = {0.0};
+    const int count = arbn_current_numbers(s, cmd_id, values);
+    if (count <= 0)
+	return RT_EDIT_VALUE_UNAVAILABLE;
+    for (int i = 0; i < count; i++)
+	rt_edit_cmd_values_set_value(result, i, values[i]);
+    return RT_EDIT_VALUE_OK;
 }
 
 

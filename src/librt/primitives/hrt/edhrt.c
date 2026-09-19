@@ -123,57 +123,67 @@ rt_edit_hrt_edit(struct rt_edit *s)
     struct rt_hrt_internal *h = (struct rt_hrt_internal *)s->es_int.idb_ptr;
     RT_HRT_CK_MAGIC(h);
 
+    /* Handler rejection is transactional.  Validate a proposed value in a
+     * stack copy, then publish it in one assignment.  rt_edit_process_result
+     * intentionally does not clone the whole primitive on every mouse event. */
+    struct rt_hrt_internal candidate = *h;
+
     switch (s->edit_flag) {
 	case ECMD_HRT_SET_CENTER:
 	    if (s->e_inpara < 3) {
 		bu_vls_printf(s->log_str, "set_center requires x y z\n");
 		return BRLCAD_ERROR;
 	    }
-	    VSET(h->v,
+	    VSET(candidate.v,
 		s->e_para[0] * s->local2base,
 		s->e_para[1] * s->local2base,
 		s->e_para[2] * s->local2base);
-	    return _hrt_validate(s, h);
+	    break;
 	case ECMD_HRT_SET_XDIR:
 	    if (s->e_inpara < 3) {
 		bu_vls_printf(s->log_str, "set_xdir requires x y z\n");
 		return BRLCAD_ERROR;
 	    }
-	    VSET(h->xdir,
+	    VSET(candidate.xdir,
 		s->e_para[0] * s->local2base,
 		s->e_para[1] * s->local2base,
 		s->e_para[2] * s->local2base);
-	    return _hrt_validate(s, h);
+	    break;
 	case ECMD_HRT_SET_YDIR:
 	    if (s->e_inpara < 3) {
 		bu_vls_printf(s->log_str, "set_ydir requires x y z\n");
 		return BRLCAD_ERROR;
 	    }
-	    VSET(h->ydir,
+	    VSET(candidate.ydir,
 		s->e_para[0] * s->local2base,
 		s->e_para[1] * s->local2base,
 		s->e_para[2] * s->local2base);
-	    return _hrt_validate(s, h);
+	    break;
 	case ECMD_HRT_SET_ZDIR:
 	    if (s->e_inpara < 3) {
 		bu_vls_printf(s->log_str, "set_zdir requires x y z\n");
 		return BRLCAD_ERROR;
 	    }
-	    VSET(h->zdir,
+	    VSET(candidate.zdir,
 		s->e_para[0] * s->local2base,
 		s->e_para[1] * s->local2base,
 		s->e_para[2] * s->local2base);
-	    return _hrt_validate(s, h);
+	    break;
 	case ECMD_HRT_SET_D:
 	    if (s->e_inpara < 1) {
 		bu_vls_printf(s->log_str, "set_d requires a scalar value\n");
 		return BRLCAD_ERROR;
 	    }
-	    h->d = s->e_para[0] * s->local2base;
-	    return _hrt_validate(s, h);
+	    candidate.d = s->e_para[0] * s->local2base;
+	    break;
 	default:
 	    return edit_generic(s);
     }
+
+    if (_hrt_validate(s, &candidate) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+    *h = candidate;
+    return BRLCAD_OK;
 }
 
 C_DECL int
@@ -198,17 +208,21 @@ static const struct rt_edit_param_desc hrt_d_param[] = {
 };
 
 static const struct rt_edit_cmd_desc hrt_cmds[] = {
-    { ECMD_HRT_SET_CENTER, "Set Center",        "geometry", 1, hrt_point_param, 1, 10, NULL },
-    { ECMD_HRT_SET_XDIR,   "Set X Direction",   "axes",     1, hrt_vec_param,   1, 20, NULL },
-    { ECMD_HRT_SET_YDIR,   "Set Y Direction",   "axes",     1, hrt_vec_param,   1, 30, NULL },
-    { ECMD_HRT_SET_ZDIR,   "Set Z Direction",   "axes",     1, hrt_vec_param,   1, 40, NULL },
-    { ECMD_HRT_SET_D,      "Set Cusp Distance", "shape",    1, hrt_d_param,     1, 50, NULL }
+    { ECMD_HRT_SET_CENTER, RT_EDIT_CMD_NAME(ECMD_HRT_SET_CENTER), "Set Center",        "geometry", 1, hrt_point_param, 1, 10, NULL },
+    { ECMD_HRT_SET_XDIR, RT_EDIT_CMD_NAME(ECMD_HRT_SET_XDIR),   "Set X Direction",   "axes",     1, hrt_vec_param,   1, 20, NULL },
+    { ECMD_HRT_SET_YDIR, RT_EDIT_CMD_NAME(ECMD_HRT_SET_YDIR),   "Set Y Direction",   "axes",     1, hrt_vec_param,   1, 30, NULL },
+    { ECMD_HRT_SET_ZDIR, RT_EDIT_CMD_NAME(ECMD_HRT_SET_ZDIR),   "Set Z Direction",   "axes",     1, hrt_vec_param,   1, 40, NULL },
+    { ECMD_HRT_SET_D, RT_EDIT_CMD_NAME(ECMD_HRT_SET_D),      "Set Cusp Distance", "shape",    1, hrt_d_param,     1, 50, NULL }
 };
 
 static const struct rt_edit_prim_desc hrt_prim_desc = {
     "hrt", "Heart", 5, hrt_cmds,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_GENERATED,
+    NULL,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
@@ -218,30 +232,40 @@ rt_edit_hrt_edit_desc(void)
 }
 
 C_DECL int
-rt_edit_hrt_get_params(struct rt_edit *s, int cmd_id, fastf_t *vals)
+rt_edit_hrt_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
 {
-    if (!s || !vals)
-	return 0;
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
     struct rt_hrt_internal *h = (struct rt_hrt_internal *)s->es_int.idb_ptr;
     RT_HRT_CK_MAGIC(h);
 
     switch (cmd_id) {
 	case ECMD_HRT_SET_CENTER:
-	    VSCALE(vals, h->v, s->base2local);
-	    return 3;
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    h->v[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_HRT_SET_XDIR:
-	    VSCALE(vals, h->xdir, s->base2local);
-	    return 3;
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    h->xdir[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_HRT_SET_YDIR:
-	    VSCALE(vals, h->ydir, s->base2local);
-	    return 3;
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    h->ydir[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_HRT_SET_ZDIR:
-	    VSCALE(vals, h->zdir, s->base2local);
-	    return 3;
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    h->zdir[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_HRT_SET_D:
-	    vals[0] = h->d * s->base2local;
-	    return 1;
+	    rt_edit_cmd_values_set_value(result, 0,
+		h->d * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	default:
-	    return 0;
+	    return RT_EDIT_VALUE_UNAVAILABLE;
     }
 }

@@ -28,7 +28,7 @@
 #include "vmath.h"
 #include "raytrace.h"
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 
 void

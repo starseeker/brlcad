@@ -938,13 +938,18 @@ db_fp_op(const struct db_full_path *pp,
 }
 
 // NOTE - this will probably wind up being expensive enough that we'll
-// still want to track it through the draw tree walk - the point of this
-// function is to a) let us get the information locally when we're NOT
-// doing a tree walk and b) concisely and clearly outline ALL the rules
-// for setting object color.
+// still want to track it through the draw tree walk.  The point of this
+// function is to get the effective display color locally when we're NOT doing
+// a tree walk, while matching the color rules used by db_apply_state_from_comb
+// and _rt_gettree_region_end:
 //
-// See if we can just use the attributes - not sure if we need to crack
-// the comb, but it's possible (particularly if attributes aren't synced)
+// 1. Explicit color/rgb on combinations above the active region overrides
+//    previous explicit colors unless an inherited color already locked the
+//    path state.
+// 2. Once a region is active, lower combination color specifications are
+//    ignored.
+// 3. The region-id color table is only a fallback at region end if no explicit
+//    color was valid.
 void
 db_full_path_color(
 	struct bu_color *c,
@@ -961,77 +966,62 @@ db_full_path_color(
     unsigned char rgb_default[3] = {255, 0, 0};
     bu_color_from_rgb_chars(c, rgb_default);
 
-    // Things we have to check for:
-    //
-    // 1. region_id attribute (only with region flag?) + db_mater_head table (see color_soltab)
-    // 2. color attribute
-    // 3. rgb attribute
-    // 4. inherit attribute - if set, children don't override parent
+    int explicit_color_valid = 0;
+    int color_inherit = DB_INH_LOWER;
+    int in_region = 0;
+    int region_id = -1;
+
     for (size_t i = 0; i < pathp->fp_len; i++) {
-	int have_color = 0;
-	struct bu_attribute_value_set c_avs;
-	db5_get_attributes(dbip, &c_avs, pathp->fp_names[i]);
+	const int is_comb = (pathp->fp_names[i]->d_flags & RT_DIR_COMB) ? 1 : 0;
+	if (!is_comb)
+	    continue;
 
-	// Inherit flag tells us whether this dp overrides its children
-	int inherit = (BU_STR_EQUAL(bu_avs_get(&c_avs, "inherit"), "1")) ? 1 : 0;
+	struct rt_db_internal intern;
+	RT_DB_INTERNAL_INIT(&intern);
+	if (rt_db_get_internal(&intern, pathp->fp_names[i], dbip, NULL) < 0)
+	    continue;
 
-	if (db_mater_head(dbip)) {
-	    // TODO - if region_id is set but region flag isn't, do we still
-	    // use db_mater_head to color?
-	    int region_id = -1;
-	    const char *region_id_val = bu_avs_get(&c_avs, "region_id");
-	    if (region_id_val) {
-		bu_opt_int(NULL, 1, &region_id_val, (void *)&region_id);
-	    } else if (pathp->fp_names[i]->d_flags & RT_DIR_REGION) {
-		// If we have a region flag but no region_id, for color table
-		// purposes treat the region_id as 0
-		region_id = 0;
+	if (intern.idb_type != ID_COMBINATION || !intern.idb_ptr) {
+	    rt_db_free_internal(&intern);
+	    continue;
+	}
+
+	const struct rt_comb_internal *comb =
+	    (const struct rt_comb_internal *)intern.idb_ptr;
+	RT_CK_COMB(comb);
+
+	if (!in_region && color_inherit == DB_INH_LOWER) {
+	    if (comb->rgb_valid == 1) {
+		c->buc_rgb[RED] = ((fastf_t)comb->rgb[RED]) / 255.0;
+		c->buc_rgb[GRN] = ((fastf_t)comb->rgb[GRN]) / 255.0;
+		c->buc_rgb[BLU] = ((fastf_t)comb->rgb[BLU]) / 255.0;
+		explicit_color_valid = 1;
+		color_inherit = comb->inherit;
 	    }
-	    if (region_id >= 0) {
-		// If we have both a region_id and an db_mater_head table, that is (?) highest precedence
-		// for color?
-		const struct mater *mp;
-		for (mp = db_mater_head(dbip); mp != MATER_NULL; mp = mp->mt_forw) {
-		    if (region_id > mp->mt_high || region_id < mp->mt_low) {
-			continue;
-		    }
-		    unsigned char mt[3];
-		    mt[0] = mp->mt_r;
-		    mt[1] = mp->mt_g;
-		    mt[2] = mp->mt_b;
-		    bu_color_from_rgb_chars(c, mt);
-		}
-		// TODO - do we stop only if we have a color with inherit?
-		if (have_color && inherit) {
-		    // Inherit flag set, no point checking child nodes
-		    bu_avs_free(&c_avs);
-		    return;
-		} else {
-		    continue;
-		}
+	}
+
+	if (!in_region) {
+	    const int is_region = comb->region_flag ? 1 : 0;
+	    if (is_region) {
+		region_id = comb->region_id;
+		in_region = 1;
 	    }
-
 	}
 
-	// If we aren't overridden by region_id, check for locally set colors
-	const char *color_val = bu_avs_get(&c_avs, "color");
-	if (!color_val) {
-	    color_val = bu_avs_get(&c_avs, "rgb");
-	}
-	if (color_val) {
-	    bu_opt_color(NULL, 1, &color_val, (void *)c);
-	    have_color = 1;
-	}
-
-	bu_avs_free(&c_avs);
-
-	// If we have inherit (TODO - do we also have to have a non-default
-	// color?), there's no point in checking children for more settings -
-	// they will not override.
-	if (have_color && inherit)
-	    return;
+	rt_db_free_internal(&intern);
     }
 
+    if (!explicit_color_valid && region_id >= 0) {
+	struct region rp;
+	memset(&rp, 0, sizeof(rp));
+	rp.reg_regionid = region_id;
+	db_mater_color_region(dbip, &rp);
+	if (rp.reg_mater.ma_color_valid) {
+	    c->buc_rgb[RED] = rp.reg_mater.ma_color[0];
+	    c->buc_rgb[GRN] = rp.reg_mater.ma_color[1];
+	    c->buc_rgb[BLU] = rp.reg_mater.ma_color[2];
+	}
+    }
 }
 
 /** @} */

@@ -116,7 +116,6 @@ pixfields           src/util/pixfields.c
 pixfieldsep         src/util/pixfieldsep.c
 pixflip-fb          src/fb/pixflip-fb.c
 pixpaste            src/util/pixpaste.c
-plot3-dm            src/util/plot3-dm.c
 plot3stat           src/util/plot3stat.c
 pyramid             src/proc-db/pyramid.c
 raw-g

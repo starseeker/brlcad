@@ -178,7 +178,19 @@ DEPREC=0
 workers=0
 pids=""
 dir="`dirname $RT`"
-for cmd in $dir/* ; do
+cmd_pattern="$dir/*"
+# A Windows build puts DLLs and PDBs beside its executables.  Git's sh marks
+# those files executable as well, so an executable-bit test cannot distinguish
+# them and attempts to interpret PDB contents as shell commands.  Restrict the
+# scan to the platform's executable suffix.
+if test "x$WINDIR" != "x" ; then
+    cmd_pattern="$dir/*.exe"
+    # Avoid exhausting the Windows commit limit when many DLL-heavy programs
+    # initialize at once.  The usage test remains parallel, just at a bounded
+    # level appropriate for desktop Windows builds.
+    NPSW=12
+fi
+for cmd in $cmd_pattern ; do
     test_usage "$cmd" &
 
     pids="$pids $!"

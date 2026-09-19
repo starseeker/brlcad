@@ -39,8 +39,6 @@
 
 #define ECMD_TGC_MV_H		2005
 #define ECMD_TGC_MV_HH		2006
-#define ECMD_TGC_MV_H_CD	2081 /* move end of tgc, while scaling CD */
-#define ECMD_TGC_MV_H_V_AB	2082 /* move vertex end of tgc, while scaling AB */
 #define ECMD_TGC_ROT_AB		2008
 #define ECMD_TGC_ROT_H		2007
 #define ECMD_TGC_SCALE_A	2029
@@ -68,8 +66,6 @@ rt_edit_tgc_set_edit_mode(struct rt_edit *s, int mode)
     switch(mode) {
 	case ECMD_TGC_MV_H:
 	case ECMD_TGC_MV_HH:
-	case ECMD_TGC_MV_H_CD:
-	case ECMD_TGC_MV_H_V_AB:
 	    s->edit_mode = RT_PARAMS_EDIT_TRANS;
 	    break;
 	case ECMD_TGC_ROT_AB:
@@ -269,7 +265,7 @@ static const struct rt_edit_param_desc tgc_rot_deg_params[] = {
 
 static const struct rt_edit_cmd_desc tgc_cmds[] = {
     {
-	ECMD_TGC_SCALE_H,     /* cmd_id       */
+	ECMD_TGC_SCALE_H, RT_EDIT_CMD_NAME(ECMD_TGC_SCALE_H),     /* cmd_id       */
 	"Set H",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -278,7 +274,7 @@ static const struct rt_edit_cmd_desc tgc_cmds[] = {
 	10 /* display_order */, "tgc,trc,tec,rec,rcc" /* req_types */
     },
     {
-	ECMD_TGC_SCALE_H_V,   /* cmd_id       */
+	ECMD_TGC_SCALE_H_V, RT_EDIT_CMD_NAME(ECMD_TGC_SCALE_H_V),   /* cmd_id       */
 	"Set H (move V)",     /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -287,7 +283,7 @@ static const struct rt_edit_cmd_desc tgc_cmds[] = {
 	20 /* display_order */, "tgc,trc,tec,rec,rcc" /* req_types */
     },
     {
-	ECMD_TGC_SCALE_H_CD,  /* cmd_id       */
+	ECMD_TGC_SCALE_H_CD, RT_EDIT_CMD_NAME(ECMD_TGC_SCALE_H_CD),  /* cmd_id       */
 	"Set H (adj C,D)",    /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -296,7 +292,7 @@ static const struct rt_edit_cmd_desc tgc_cmds[] = {
 	30 /* display_order */, "tgc,trc,tec,rec,rcc" /* req_types */
     },
     {
-	ECMD_TGC_SCALE_H_V_AB, /* cmd_id      */
+	ECMD_TGC_SCALE_H_V_AB, RT_EDIT_CMD_NAME(ECMD_TGC_SCALE_H_V_AB), /* cmd_id      */
 	"Set H (move V, adj A,B)", /* label   */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -305,7 +301,7 @@ static const struct rt_edit_cmd_desc tgc_cmds[] = {
 	40 /* display_order */, "tgc,trc,tec,rec,rcc" /* req_types */
     },
     {
-	ECMD_TGC_SCALE_A,     /* cmd_id       */
+	ECMD_TGC_SCALE_A, RT_EDIT_CMD_NAME(ECMD_TGC_SCALE_A),     /* cmd_id       */
 	"Set A",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -314,7 +310,7 @@ static const struct rt_edit_cmd_desc tgc_cmds[] = {
 	50 /* display_order */, "tgc,tec,rec" /* req_types */
     },
     {
-	ECMD_TGC_SCALE_B,     /* cmd_id       */
+	ECMD_TGC_SCALE_B, RT_EDIT_CMD_NAME(ECMD_TGC_SCALE_B),     /* cmd_id       */
 	"Set B",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -323,7 +319,7 @@ static const struct rt_edit_cmd_desc tgc_cmds[] = {
 	60 /* display_order */, "tgc,tec,rec" /* req_types */
     },
     {
-	ECMD_TGC_SCALE_C,     /* cmd_id       */
+	ECMD_TGC_SCALE_C, RT_EDIT_CMD_NAME(ECMD_TGC_SCALE_C),     /* cmd_id       */
 	"Set C",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -332,7 +328,7 @@ static const struct rt_edit_cmd_desc tgc_cmds[] = {
 	70 /* display_order */, "tgc,tec" /* req_types */
     },
     {
-	ECMD_TGC_SCALE_D,     /* cmd_id       */
+	ECMD_TGC_SCALE_D, RT_EDIT_CMD_NAME(ECMD_TGC_SCALE_D),     /* cmd_id       */
 	"Set D",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -341,7 +337,7 @@ static const struct rt_edit_cmd_desc tgc_cmds[] = {
 	80 /* display_order */, "tgc,tec" /* req_types */
     },
     {
-	ECMD_TGC_SCALE_AB,    /* cmd_id       */
+	ECMD_TGC_SCALE_AB, RT_EDIT_CMD_NAME(ECMD_TGC_SCALE_AB),    /* cmd_id       */
 	"Set A,B",            /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -350,7 +346,7 @@ static const struct rt_edit_cmd_desc tgc_cmds[] = {
 	90 /* display_order */, "tgc,trc,tec,rec,rcc" /* req_types */
     },
     {
-	ECMD_TGC_SCALE_CD,    /* cmd_id       */
+	ECMD_TGC_SCALE_CD, RT_EDIT_CMD_NAME(ECMD_TGC_SCALE_CD),    /* cmd_id       */
 	"Set C,D",            /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -359,7 +355,7 @@ static const struct rt_edit_cmd_desc tgc_cmds[] = {
 	100 /* display_order */, "tgc,trc,tec" /* req_types */
     },
     {
-	ECMD_TGC_SCALE_ABCD,  /* cmd_id       */
+	ECMD_TGC_SCALE_ABCD, RT_EDIT_CMD_NAME(ECMD_TGC_SCALE_ABCD),  /* cmd_id       */
 	"Set A,B,C,D",        /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -368,7 +364,7 @@ static const struct rt_edit_cmd_desc tgc_cmds[] = {
 	110 /* display_order */, "tgc,trc,tec,rec,rcc" /* req_types */
     },
     {
-	ECMD_TGC_MV_H,        /* cmd_id       */
+	ECMD_TGC_MV_H, RT_EDIT_CMD_NAME(ECMD_TGC_MV_H),        /* cmd_id       */
 	"Move End H(rt)",     /* label        */
 	"move",               /* category     */
 	1,                    /* nparam       */
@@ -377,7 +373,7 @@ static const struct rt_edit_cmd_desc tgc_cmds[] = {
 	120 /* display_order */, "tgc,trc,tec,rec,rcc" /* req_types */
     },
     {
-	ECMD_TGC_MV_HH,       /* cmd_id       */
+	ECMD_TGC_MV_HH, RT_EDIT_CMD_NAME(ECMD_TGC_MV_HH),       /* cmd_id       */
 	"Move End H",         /* label        */
 	"move",               /* category     */
 	1,                    /* nparam       */
@@ -386,40 +382,22 @@ static const struct rt_edit_cmd_desc tgc_cmds[] = {
 	130 /* display_order */, "tgc,trc,tec,rec,rcc" /* req_types */
     },
     {
-	ECMD_TGC_MV_H_CD,     /* cmd_id       */
-	"Move End H (adj C,D)", /* label      */
-	"move",               /* category     */
-	1,                    /* nparam       */
-	tgc_endpoint_params,  /* params       */
-	1,                    /* interactive  */
-	140 /* display_order */, "tgc,trc,tec,rec,rcc" /* req_types */
-    },
-    {
-	ECMD_TGC_MV_H_V_AB,   /* cmd_id       */
-	"Move End H (move V, adj A,B)", /* label */
-	"move",               /* category     */
-	1,                    /* nparam       */
-	tgc_endpoint_params,  /* params       */
-	1,                    /* interactive  */
-	150 /* display_order */, "tgc,trc,tec,rec,rcc" /* req_types */
-    },
-    {
-	ECMD_TGC_ROT_H,       /* cmd_id       */
+	ECMD_TGC_ROT_H, RT_EDIT_CMD_NAME(ECMD_TGC_ROT_H),       /* cmd_id       */
 	"Rotate H",           /* label        */
 	"rotation",           /* category     */
 	1,                    /* nparam       */
 	tgc_rot_deg_params,   /* params       */
 	1,                    /* interactive  */
-	160 /* display_order */, "tgc,trc,tec,rec,rcc" /* req_types */
+	140 /* display_order */, "tgc,trc,tec,rec,rcc" /* req_types */
     },
     {
-	ECMD_TGC_ROT_AB,      /* cmd_id       */
+	ECMD_TGC_ROT_AB, RT_EDIT_CMD_NAME(ECMD_TGC_ROT_AB),      /* cmd_id       */
 	"Rotate AxB",         /* label        */
 	"rotation",           /* category     */
 	1,                    /* nparam       */
 	tgc_rot_deg_params,   /* params       */
 	1,                    /* interactive  */
-	170 /* display_order */, "tgc,trc,tec,rec,rcc" /* req_types */
+	150 /* display_order */, "tgc,trc,tec,rec,rcc" /* req_types */
     }
 };
 
@@ -427,19 +405,92 @@ static const struct rt_edit_opt_desc tgc_opts[] = {
     { "type", "Type Override", "Set primitive type override (e.g. type=rcc)", RT_EDIT_PARAM_STRING }
 };
 
+static const enum rt_edit_control_class tgc_command_controls[] = {
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_ACTION,
+    RT_EDIT_CONTROL_ACTION
+};
+_Static_assert(sizeof(tgc_command_controls) / sizeof(tgc_command_controls[0]) ==
+    sizeof(tgc_cmds) / sizeof(tgc_cmds[0]), "tgc command controls");
+
 static const struct rt_edit_prim_desc tgc_prim_desc = {
     "tgc",                /* prim_type    */
     "Truncated General Cone", /* prim_label */
-    17,                   /* ncmd         */
+    15,                   /* ncmd         */
     tgc_cmds,             /* cmds         */
     1,                    /* nopt         */
-    tgc_opts              /* opts         */
+    tgc_opts,             /* opts         */
+    RT_EDIT_CONTROL_GENERATED,
+    tgc_command_controls,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
 rt_edit_tgc_edit_desc(void)
 {
     return &tgc_prim_desc;
+}
+
+C_DECL int
+rt_edit_tgc_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
+{
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    struct rt_tgc_internal *tgc =
+	(struct rt_tgc_internal *)s->es_int.idb_ptr;
+    RT_TGC_CK_MAGIC(tgc);
+
+    fastf_t value = 0.0;
+    switch (cmd_id) {
+	case ECMD_TGC_SCALE_H:
+	case ECMD_TGC_SCALE_H_V:
+	case ECMD_TGC_SCALE_H_CD:
+	case ECMD_TGC_SCALE_H_V_AB:
+	    value = MAGNITUDE(tgc->h);
+	    break;
+	case ECMD_TGC_SCALE_A:
+	case ECMD_TGC_SCALE_AB:
+	case ECMD_TGC_SCALE_ABCD:
+	    value = MAGNITUDE(tgc->a);
+	    break;
+	case ECMD_TGC_SCALE_B:
+	    value = MAGNITUDE(tgc->b);
+	    break;
+	case ECMD_TGC_SCALE_C:
+	case ECMD_TGC_SCALE_CD:
+	    value = MAGNITUDE(tgc->c);
+	    break;
+	case ECMD_TGC_SCALE_D:
+	    value = MAGNITUDE(tgc->d);
+	    break;
+	case ECMD_TGC_MV_H:
+	case ECMD_TGC_MV_HH: {
+	    point_t endpoint;
+	    VADD2(endpoint, tgc->v, tgc->h);
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    endpoint[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	}
+	default:
+	    return RT_EDIT_VALUE_UNAVAILABLE;
+    }
+    rt_edit_cmd_values_set_value(result, 0, value * s->base2local);
+    return RT_EDIT_VALUE_OK;
 }
 
 C_DECL void
@@ -1234,8 +1285,6 @@ rt_edit_tgc_edit_xy(
 	    break;
 	case ECMD_TGC_MV_H:
 	case ECMD_TGC_MV_HH:
-	case ECMD_TGC_MV_H_CD:
-	case ECMD_TGC_MV_H_V_AB:
 	    ecmd_tgc_mv_h_mousevec(s, mousevec);
 	    break;
 	case ECMD_TGC_ROT_H:

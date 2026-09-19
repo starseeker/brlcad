@@ -36,12 +36,14 @@
 #include "bg/spsr.h"
 #include "bg/trimesh.h"
 #include "rt/db4.h"
+#include "rt/view.h"
 #include "raytrace.h"
 #include "rt/geom.h"
-#include "bv/defines.h"
-#include "bv/util.h"
 #include "ged.h"
+#include "./ged_scene_record_api_private.h"
 #include "include/plugin.h"
+#include "./ged_draw_private.h"
+#include "./ged_draw_plugin_private.h"
 
 #ifdef __cplusplus
 
@@ -49,9 +51,12 @@
 #include <stack>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "rt/edit.h"
 #include "rt/db_fullpath.h"
+#include "ged/edit.h"
+#include "ged/event.h"
 
 #endif
 
@@ -66,16 +71,75 @@ struct ged_qray_fmt {
     struct bu_vls fmt;
 };
 
+struct ged_db_index;
+struct ged_event_service;
+struct ged_selection_state;
+
+struct ged_scene_edit_internal_result {
+    int status;
+    ged_scene_edit_scope_ref scope;
+    size_t occurrence_count;
+    size_t replaced_root_count;
+    size_t replacement_path_count;
+    size_t conflict_count;
+    uint64_t scene_revision_before;
+    uint64_t scene_revision_after;
+    struct bu_vls paths;
+    struct bu_vls errors;
+};
+
 struct vd_curve {
     struct bu_list      l;
     char                vdc_name[RT_VDRW_MAXNAME+1];    /**< @brief name array */
     long                vdc_rgb;        /**< @brief color */
-    struct bu_list      vdc_vhd;        /**< @brief head of list of vertices */
+    point_t            *vdc_points;     /**< @brief command point buffer */
+    int                *vdc_commands;   /**< @brief command opcode buffer */
+    size_t              vdc_count;      /**< @brief active command count */
+    size_t              vdc_capacity;   /**< @brief allocated command count */
 };
 #define VD_CURVE_NULL   ((struct vd_curve *)NULL)
 
+/* Edit previews are view-local retained Obol features.  They may reuse source
+ * geometry with a transform while an edit is in progress, but must never
+ * mutate or replace the shared drawn source: other occurrences can continue
+ * to use it.  When an edit requires regenerated geometry, its preview owns
+ * that temporary payload until the edit commits or is abandoned. */
+
 struct ged_drawable {
-    struct bu_list              *gd_headDisplay;        /**< @brief  head of display list */
+    ged_draw_group_ref           gd_scene_root_group_ref; /**< @brief cache-style typed handle for the draw-scene root of the drawn-set tree */
+    uint64_t                     gd_draw_rev;           /**< @brief  monotonic revision counter; bumped on every structural mutation of the draw tree; reset to 0 by ged_draw_clear */
+    struct bu_ptbl               gd_draw_registry;      /**< @brief GED-owned draw record registry; refs store stable registry ids */
+    uint64_t                     gd_draw_next_token;    /**< @brief next non-zero registry token */
+    int                          gd_draw_registry_init; /**< @brief non-zero once gd_draw_registry is initialized */
+    struct bu_hash_tbl          *gd_draw_shapes_by_component_hash;
+    struct bu_hash_tbl          *gd_draw_shapes_by_path_hash;
+    struct bu_hash_tbl          *gd_draw_groups_by_component_hash;
+    struct bu_hash_tbl          *gd_draw_groups_by_path_hash;
+    uint64_t                     gd_draw_index_shape_component_queries;
+    uint64_t                     gd_draw_index_shape_component_candidates;
+    uint64_t                     gd_draw_index_group_component_queries;
+    uint64_t                     gd_draw_index_group_component_candidates;
+    uint64_t                     gd_draw_index_path_queries;
+    uint64_t                     gd_draw_index_path_candidates;
+    uint64_t                     gd_draw_index_slow_path_shape_scans;
+    uint64_t                     gd_draw_index_slow_path_group_scans;
+    struct bu_ptbl               gd_draw_observers;     /**< @brief GED-owned post-transaction draw observer records */
+    uintptr_t                    gd_draw_next_observer_token;
+    int                          gd_draw_observers_init;
+    int                          gd_draw_observer_dispatch_depth;
+    void                        *gd_obol_state; /**< @brief C++ owner for the shared Obol scene */
+    struct bu_ptbl               gd_obol_context_tokens; /**< @brief GED-owned Obol scene-node records resolved by value handles */
+    int                          gd_obol_context_tokens_init;
+    uint64_t                     gd_obol_context_owner;
+    uint64_t                     gd_obol_next_context_token;
+    uintptr_t                    gd_highlight_token;     /**< @brief active highlighted draw-shape ref token, or 0 */
+    uint64_t                     gd_highlight_scene_rev; /**< @brief draw-scene revision captured with gd_highlight_token */
+    /* Monotonic highlight-state revision counter.  Bumped on highlight
+     * selection transitions.  Callers cache a snapshot and compare against
+     * the live counter to detect "highlight may have changed since I last
+     * looked". */
+    uint64_t                     gd_highlight_rev;
+    uint64_t                     gd_mater_rev;          /**< @brief  mater-table revision counter; bumped whenever color_from_soltab runs; lazy-color consumers compare against a saved value to skip redundant sweeps (B4) */
     struct bu_list              *gd_headVDraw;          /**< @brief  head of vdraw list */
     struct vd_curve             *gd_currVHead;          /**< @brief  current vdraw head */
 
@@ -96,6 +160,19 @@ struct ged_drawable {
     int                         gd_shaded_mode;         /**< @brief  1 - draw bots shaded by default */
 };
 
+__BEGIN_DECLS
+
+ged_draw_group_ref ged_scene_root_group_ref(struct ged *gedp);
+void ged_scene_root_group_ref_set(struct ged *gedp, ged_draw_group_ref root);
+void ged_scene_root_ref_clear(struct ged *gedp);
+void ged_view_state_init(struct ged *gedp);
+void ged_view_state_free(struct ged *gedp);
+int ged_obol_fbserv_ensure_for_view(struct ged *gedp, struct ged_view_context *view_ctx);
+int ged_obol_fbserv_present(struct ged *gedp);
+int ged_obol_fbserv_composition_set(struct ged *gedp, int mode);
+void ged_obol_fbserv_release(struct ged *gedp);
+__END_DECLS
+
 
 #ifdef __cplusplus
 
@@ -103,7 +180,7 @@ class Ged_Internal {
     public:
 	~Ged_Internal();
 
-	struct ged *gedp;
+	struct ged *gedp = nullptr;
 	std::map<ged_func_ptr, std::pair<bu_clbk_t, void *>> cmd_prerun_clbk;
 	std::map<ged_func_ptr, std::pair<bu_clbk_t, void *>> cmd_during_clbk;
 	std::map<ged_func_ptr, std::pair<bu_clbk_t, void *>> cmd_postrun_clbk;
@@ -113,26 +190,6 @@ class Ged_Internal {
 	std::map<std::string, int> cmd_recursion_depth_cnt;
 
 	std::stack<std::string> exec_stack;
-
-	std::map<std::string, void *> dm_map;
-
-	/* Normalized paths represented by the legacy display-list chain.  The
-	 * index handles ordinary hierarchy queries; instance-qualified or malformed
-	 * paths retain the established database-parser and linked-list behavior.
-	 * The endpoint sentinels detect additions made through the legacy API. */
-	std::map<std::string, struct display_list *> display_paths;
-	const void *display_paths_first = nullptr;
-	const void *display_paths_last = nullptr;
-	size_t display_paths_complex = 0;
-
-	/* Canonical scene paths within each display root.  List endpoints
-	 * detect append-only legacy users that bypass the indexed API. */
-	struct scene_path_index {
-	    std::multimap<std::string, struct bv_scene_obj *> paths;
-	    const void *first = nullptr;
-	    const void *last = nullptr;
-	};
-	std::map<struct display_list *, scene_path_index> display_scene_paths;
 
 	// Persisting state between loadview and preview
 	// commands and subcommands.
@@ -146,8 +203,60 @@ class Ged_Internal {
 	struct ged_edit_buf_entry {
 	    struct db_full_path dfp;
 	    struct rt_edit *s;
+	    /* Immutable path identity retained independently of directory
+	     * pointers.  Database remove/rename notifications arrive after librt
+	     * has mutated the directory, so invalidation must not dereference the
+	     * db_full_path while handling those events. */
+	    std::vector<std::string> path_names;
+	    std::vector<int> path_instances;
+	    /* Exact drawn occurrences represented by the edit preview.  The
+	     * requested path may be a bare primitive name while its visible
+	     * occurrences live below one or more retained draw roots. */
+	    std::vector<std::string> presentation_paths;
+	    uint64_t id = 0;
+	    uint64_t generation = 1;
+	    uint64_t revision = 0;
+	    int last_cmd = 0;
+	    bool dirty = false;
+	    bool checkpoint_dirty = false;
+	    bool committing = false;
+	    ged_scene_edit_scope_ref edit_scope =
+		GED_SCENE_EDIT_SCOPE_REF_NULL;
 	};
 	std::unordered_map<std::string, ged_edit_buf_entry> edit_buf;
+
+	struct ged_edit_pending_event {
+	    enum ged_edit_session_event_kind kind;
+	    ged_edit_session_ref session;
+	    std::string path;
+	    std::string replacement_path;
+	    enum ged_edit_session_invalidation_reason invalidation_reason =
+		GED_EDIT_INVALIDATION_NONE;
+	    uint64_t revision;
+	    int command_id;
+	};
+	uint64_t edit_owner = 0;
+	uint64_t edit_next_id = 1;
+	uint64_t edit_next_observer = 1;
+	int edit_dispatch_depth = 0;
+	std::map<ged_edit_observer_token,
+	    std::pair<ged_edit_observer_func_t, void *> > edit_observers;
+	std::vector<ged_edit_pending_event> edit_pending_events;
+	ged_event_observer_token edit_event_observer = 0;
+	bool edit_closing = false;
+
+	// Backend-neutral semantic edit scopes.  The concrete C++ state is
+	// private to ged_draw_frontier.cpp so renderer and application headers do
+	// not inherit its implementation.
+	void *draw_frontier_state = nullptr;
+
+	// Optional owner-scoped backend override used by non-rendering consumers
+	// and reducer contract tests.  Null selects the private Obol adapter.  The
+	// operations table is an owned copy; client data is borrowed through the
+	// adapter's detach callback.
+	struct ged_scene_backend_ops *scene_backend_ops = nullptr;
+	void *scene_backend_data = nullptr;
+	bool scene_backend_transition = false;
 };
 
 #else
@@ -160,10 +269,24 @@ struct ged_impl {
     uint32_t magic;
     Ged_Internal *i;
 
+    /* GED-owned view state storage, hidden behind ged_view_state.cpp. */
+    void *ged_view_state_ctx;
+
+    struct ged_db_index *ged_db_indexp;
+    struct ged_event_service *ged_event_servicep;
+    struct ged_selection_state *ged_selection_statep;
     struct ged_drawable *ged_gdp;
 };
 
 __BEGIN_DECLS
+
+struct ged_db_index *ged_db_index_create(struct ged *gedp);
+void ged_db_index_destroy(struct ged_db_index *index);
+struct ged_event_service *ged_event_service_create(struct ged *gedp);
+void ged_event_service_destroy(struct ged_event_service *state);
+struct ged_selection_state *ged_selection_state_create(struct ged *gedp);
+void ged_selection_state_destroy(struct ged_selection_state *state);
+int ged_selection_present_private(struct ged *gedp);
 
 #ifndef FALSE
 #  define FALSE 0
@@ -205,9 +328,6 @@ __BEGIN_DECLS
 
 /* Callback management related structures */
 #define GED_REFRESH_FUNC_NULL ((ged_refresh_func_t)0)
-#define GED_CREATE_VLIST_SOLID_FUNC_NULL ((ged_create_vlist_solid_func_t)0)
-#define GED_CREATE_VLIST_DISPLAY_LIST_FUNC_NULL ((ged_create_vlist_display_list_func_t)0)
-#define GED_DESTROY_VLIST_FUNC_NULL ((ged_destroy_vlist_func_t)0)
 
 /* Common flags used by multiple GED commands for help printing */
 #define HELPFLAG "--print-help"
@@ -217,9 +337,6 @@ __BEGIN_DECLS
 struct ged_callback_state {
     int ged_refresh_handler_cnt;
     int ged_output_handler_cnt;
-    int ged_create_vlist_scene_obj_callback_cnt;
-    int ged_create_vlist_display_list_callback_cnt;
-    int ged_destroy_vlist_callback_cnt;
     int ged_io_handler_callback_cnt;
 };
 
@@ -229,23 +346,31 @@ struct ged_callback_state {
  */
 GED_EXPORT extern void ged_refresh_cb(struct ged *);
 GED_EXPORT extern void ged_output_handler_cb(struct ged *, char *);
-GED_EXPORT extern void ged_create_vlist_solid_cb(struct ged *, struct bv_scene_obj *);
-GED_EXPORT extern void ged_create_vlist_display_list_cb(struct ged *, struct display_list *);
-GED_EXPORT extern void ged_destroy_vlist_cb(struct ged *, unsigned int, int);
 GED_EXPORT extern void ged_io_handler_cb(struct ged *, void *, int);
+
+/* Launch an external image renderer through an active endpoint framebuffer. */
+GED_EXPORT extern int _ged_external_rt_to_endpoint(
+	struct ged *gedp,
+	int argc,
+	const char *argv[],
+	const char *program,
+	const char *callback_command);
+extern void ged_draw_registry_free(struct ged *gedp);
+extern void ged_scene_observers_free(struct ged *gedp);
+extern void ged_edit_sessions_close_private(struct ged *gedp);
+extern void ged_edit_sessions_database_close_private(struct ged *gedp);
 
 /* Data for tree walk */
 struct draw_data_t {
+    struct ged *gedp;
     struct db_i *dbip;
-    struct bv_scene_group *g;
-    struct bview *v;
-    struct bv_obj_settings *vs;
+    struct ged_view_context *view_ctx;
+    struct ged_draw_appearance_settings *vs;
     const struct bn_tol *tol;
     const struct bg_tess_tol *ttol;
     struct bu_color c;
     int color_inherit;
     int bool_op;
-    struct bv_mesh_lod_context *mesh_c;
 
     /* To avoid the need for multiple subtree walking
      * functions, we also set up to support a bounding
@@ -257,6 +382,7 @@ struct draw_data_t {
     point_t max;
 #ifdef __cplusplus
     std::map<struct directory *, fastf_t> *s_size;
+    struct ged_bobol_publication_context *bobol_publication;
 #endif
 };
 
@@ -268,6 +394,12 @@ GED_EXPORT void vls_col_eol(struct bu_vls *str);
 /* defined in ged.c */
 GED_EXPORT extern struct db_i *_ged_open_dbip(const char *filename,
 				   int existing_only);
+struct rt_db_hierarchy;
+GED_EXPORT extern struct db_i *_ged_open_dbip_discover(
+	const char *filename, int existing_only,
+	struct rt_db_hierarchy **hierarchy);
+GED_EXPORT extern int ged_db_index_adopt_discovery(
+	struct ged *gedp, const struct rt_db_hierarchy *hierarchy);
 
 /* defined in comb.c */
 GED_EXPORT extern struct directory *_ged_combadd(struct ged *gedp,
@@ -287,41 +419,6 @@ GED_EXPORT extern int _ged_combadd2(struct ged *gedp,
 			 int air,
 			 matp_t m,
 			 int validate);
-
-/* defined in display_list.c */
-extern struct display_list *_ged_dl_addToDisplay(struct ged *gedp, const char *name);
-GED_EXPORT extern void _dl_eraseAllNamesFromDisplay(struct ged *gedp, const char *name, const int skip_first);
-GED_EXPORT extern void _dl_eraseAllPathsFromDisplay(struct ged *gedp, const char *path, const int skip_first);
-GED_EXPORT extern void _ged_erase_legacy_overlap_plot(struct ged *gedp);
-extern void _dl_freeDisplayListItem(struct ged *gedp, struct display_list *gdlp);
-GED_EXPORT extern int dl_bounding_sph(struct bu_list *hdlp, vect_t *min, vect_t *max, int pflag);
-
-/* defined in ged.cpp */
-extern void _ged_dl_path_sync(struct ged *gedp);
-extern int _ged_dl_path_lookup(struct ged *gedp, const char *path,
-                               struct display_list **ancestor, int *exact);
-extern int _ged_dl_path_has_related(struct ged *gedp, const char *path);
-extern void _ged_dl_path_insert(struct ged *gedp, const char *path, struct display_list *entry);
-extern void _ged_dl_path_remove(struct ged *gedp, const char *path);
-extern void _ged_dl_path_invalidate(struct ged *gedp);
-extern void _ged_dl_path_clear(struct ged *gedp);
-extern int _ged_dl_scene_path_matches(struct ged *gedp,
-	struct display_list *entry, const struct db_full_path *path,
-	struct bu_ptbl *matches);
-extern void _ged_dl_scene_path_insert(struct ged *gedp,
-	struct display_list *entry, struct bv_scene_obj *sp);
-extern void _ged_dl_scene_path_remove(struct ged *gedp,
-	struct display_list *entry, struct bv_scene_obj *sp);
-extern void _ged_dl_scene_path_invalidate(struct ged *gedp,
-	struct display_list *entry);
-
-GED_EXPORT extern void color_soltab(struct db_i *dbip, struct bv_scene_obj *sp);
-
-/* defined in draw.c */
-GED_EXPORT extern void _ged_cvt_vlblock_to_solids(struct ged *gedp,
-				       struct bv_vlblock *vbp,
-				       const char *name,
-				       int copy);
 
 /* defined in editit.c */
 GED_EXPORT extern int _ged_editit(struct ged *gedp,
@@ -465,9 +562,6 @@ GED_EXPORT extern void _ged_vls_col_pr4v(struct bu_vls *vls,
 			      int no_decorate,
 			      int ssflag);
 
-
-GED_EXPORT extern int invent_solid(struct ged *gedp, char *name, struct bu_list *vhead, long int rgb, int copy, fastf_t transparency, int dmode, int csoltab);
-
 #if 0
 /**
  * Characterize a path specification (search command style).
@@ -505,7 +599,7 @@ GED_EXPORT extern void _ged_cmd_help(struct ged *gedp, const char *usage, struct
  */
 GED_EXPORT extern int _ged_read_densities(struct analyze_densities **dens, char **den_src, struct ged *gedp, const char *filename, int fault_tolerant);
 
-#define GED_DB_DENSITY_OBJECT "_DENSITIES" 
+#define GED_DB_DENSITY_OBJECT "_DENSITIES"
 
 /**
  * Routine for checking argc/argv list for existing objects and sorting anything
@@ -518,13 +612,10 @@ GED_EXPORT extern int
 _ged_sort_existing_objs(struct db_i *dbip, int argc, const char *argv[], struct directory **dpa);
 
 
-GED_EXPORT extern int ged_view_data_lines(struct ged *gedp, int argc, const char *argv[]);
-
 GED_EXPORT extern int ged_repair(struct ged *gedp, int argc, const char **argv);
 
 
-GED_EXPORT extern void ged_push_scene_obj(struct ged *gedp, struct bv_scene_obj *sp);
-GED_EXPORT extern struct bv_scene_obj *ged_pop_scene_obj(struct ged *gedp);
+GED_EXPORT extern const struct bu_opt_cmd_desc *_ged_cmd_schema(const char *cmd);
 
 GED_EXPORT extern int
 _ged_subcmd_help(struct ged *gedp, struct bu_opt_desc *gopts, const struct bu_cmdtab *cmds,
@@ -534,6 +625,21 @@ GED_EXPORT extern int
 _ged_subcmd_exec(struct ged *gedp, struct bu_opt_desc *gopts, const struct bu_cmdtab *cmds,
 	const char *cmdname, const char *cmdargs, void *gd, int argc, const char **argv,
        	int help, int cmd_pos);
+
+/* Dynamic plugins may register a qualified command such as
+ * view.mytool.control.  Namespace dispatchers use these helpers to expose it
+ * as `view mytool control` without adding implementation keys to GED's
+ * top-level command namespace.  The longest registered argv prefix wins. */
+GED_EXPORT extern int
+_ged_cmd_namespace_has_child(const char *namespace_path, const char *child);
+
+GED_EXPORT extern int
+_ged_cmd_namespace_exec(struct ged *gedp, const char *namespace_path,
+	int argc, const char **argv, int *result);
+
+GED_EXPORT extern void
+_ged_cmd_namespace_help(struct ged *gedp, const char *namespace_path,
+	const struct bu_cmdtab *builtins);
 
 
 // TODO:  alternative approach to the command structure supported by
@@ -572,11 +678,117 @@ _ged_subcmd2_help(struct ged *gedp, struct bu_opt_desc *gopts, std::map<std::str
  * ged_edit_buf_abandon- call rt_edit_destroy(), remove entry (no disk write)
  * ged_edit_buf_flush  - promote ALL entries to disk (call before db close)
  */
-GED_EXPORT extern struct rt_edit *ged_edit_buf_get(struct ged *gedp, const struct db_full_path *dfp);
-GED_EXPORT extern void            ged_edit_buf_set(struct ged *gedp, const struct db_full_path *dfp, struct rt_edit *s);
-GED_EXPORT extern int             ged_edit_buf_promote(struct ged *gedp, const struct db_full_path *dfp);
-GED_EXPORT extern void            ged_edit_buf_abandon(struct ged *gedp, const struct db_full_path *dfp);
-GED_EXPORT extern void            ged_edit_buf_flush(struct ged *gedp);
+/* Draw-frontier internals (ged_draw_frontier.cpp). */
+struct ged_draw_frontier_root_record {
+    const char *path;
+    struct ged_view_context *view;
+    int mode;
+    const struct ged_draw_appearance_settings *appearance;
+};
+
+struct ged_draw_frontier_visibility_record {
+    const char *root_path;
+    struct ged_view_context *view;
+    int mode;
+    const char *const *paths;
+    const int *visible;
+    size_t rule_count;
+    int clear;
+};
+
+struct ged_draw_frontier_presentation_record {
+    const char *root_path;
+    const char *path;
+    struct ged_view_context *view;
+    int mode;
+    enum ged_scene_reducer_operation kind;
+    enum ged_scene_path_match match;
+    double value;
+};
+
+typedef int (*ged_draw_frontier_root_cb)(
+    const struct ged_draw_frontier_root_record *record,
+    void *userdata);
+
+typedef int (*ged_draw_frontier_visibility_cb)(
+    const struct ged_draw_frontier_visibility_record *record,
+    void *userdata);
+
+typedef int (*ged_draw_frontier_presentation_cb)(
+    const struct ged_draw_frontier_presentation_record *record,
+    void *userdata);
+
+extern void ged_draw_frontier_state_destroy(struct ged *gedp);
+extern void ged_scene_edit_internal_result_init(
+	struct ged_scene_edit_internal_result *result);
+extern void ged_scene_edit_internal_result_free(
+	struct ged_scene_edit_internal_result *result);
+extern int ged_scene_edit_acquire_internal(
+	struct ged *gedp, const struct ged_scene_edit_request *request,
+	ged_scene_edit_scope_ref *scope,
+	struct ged_scene_edit_internal_result *result);
+extern int ged_scene_edit_release_internal(
+	struct ged *gedp, ged_scene_edit_scope_ref scope,
+	enum ged_scene_edit_outcome outcome,
+	struct ged_scene_edit_internal_result *result);
+extern int ged_draw_frontier_has_roots(
+	struct ged *gedp, struct ged_view_context *view_ctx, int mode);
+extern int ged_draw_frontier_root_count(struct ged *gedp);
+extern int ged_draw_frontier_clear(struct ged *gedp,
+	struct ged_view_context *view_ctx, int mode);
+extern int ged_draw_frontier_source_affected(
+	struct ged *gedp, const char *path, const char *const *paths,
+	size_t path_count, struct ged_view_context *view_ctx, int mode);
+extern int ged_draw_frontier_source_rename(
+	struct ged *gedp, const char *old_path, const char *new_path);
+extern int ged_draw_frontier_foreach_root(
+	struct ged *gedp, struct ged_view_context *view_ctx, int mode,
+	ged_draw_frontier_root_cb callback, void *userdata);
+extern int ged_draw_frontier_visibility_changes_foreach(
+    struct ged *gedp, ged_draw_frontier_visibility_cb callback,
+    void *userdata);
+extern void ged_draw_frontier_visibility_changes_discard(struct ged *gedp);
+extern int ged_draw_frontier_visibility_snapshot_foreach(
+	struct ged *gedp, ged_draw_frontier_visibility_cb callback,
+	void *userdata);
+extern int ged_draw_frontier_presentation_snapshot_foreach(
+	struct ged *gedp, ged_draw_frontier_presentation_cb callback,
+	void *userdata);
+extern int ged_draw_frontier_presentation_set(
+	struct ged *gedp, const struct ged_scene_reducer_request *txn,
+	const char *resolved_path);
+extern int ged_draw_frontier_highlights_clear(struct ged *gedp);
+extern int ged_draw_frontier_erase_path(
+	struct ged *gedp, const char *path, struct ged_view_context *view_ctx,
+	int mode, int prefix, struct ged_scene_reducer_result *result);
+extern int ged_draw_frontier_list_paths(
+	struct ged *gedp, struct ged_view_context *view_ctx, int mode,
+	struct bu_vls *result, size_t result_start);
+/* Returns -1 when no retained frontier owns path, otherwise the public
+ * ged_draw_path_state value: 0 hidden, 1 fully visible, 2 partially visible. */
+extern int ged_draw_frontier_path_state(
+	struct ged *gedp, struct ged_view_context *view_ctx,
+	const char *path, int mode);
+extern void ged_edit_buf_sync_visibility(struct ged *gedp);
+extern int ged_draw_frontier_absorb_draw(
+	struct ged *gedp, const struct ged_scene_reducer_request *txn,
+	const char *resolved_path, struct ged_scene_reducer_result *result);
+extern void ged_draw_frontier_note_transaction(
+	struct ged *gedp, const struct ged_scene_reducer_request *txn,
+	const char *resolved_path);
+
+/* Obol presentation mask for one retained database-source draw root. */
+extern int ged_draw_obol_source_visibility_frontier_set(
+	struct ged *gedp, const char *root_path,
+	struct ged_view_context *view_ctx, int mode,
+	const char *const *paths, size_t path_count);
+extern int ged_draw_obol_source_visibility_overrides_set(
+	struct ged *gedp, const char *root_path,
+	struct ged_view_context *view_ctx, int mode,
+	const char *const *paths, const int *visible, size_t rule_count);
+extern int ged_draw_obol_source_visibility_frontier_clear(
+	struct ged *gedp, const char *root_path,
+	struct ged_view_context *view_ctx, int mode);
 
 __END_DECLS
 

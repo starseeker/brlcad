@@ -20,8 +20,9 @@
 
 #include "common.h"
 
-#include <unordered_set>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include "vmath.h"
 #include "bu/app.h"
@@ -32,44 +33,16 @@
 #include "bg/trimesh.h"
 #include "raytrace.h"
 
-struct rt_bot_internal *
-pca_bot(struct rt_bot_internal *bot)
-{
-    point_t *vp = (point_t *)bot->vertices;
-    point_t center;
-    vect_t xaxis, yaxis, zaxis;
-
-    if (bg_pca(&center, &xaxis, &yaxis, &zaxis, bot->num_vertices, vp) != BRLCAD_OK)
-        return bot;
-
-    mat_t R, T, RT;
-    // Rotation
-    MAT_IDN(R);
-    VMOVE(&R[0], xaxis);
-    VMOVE(&R[4], yaxis);
-    VMOVE(&R[8], zaxis);
-    // Translation
-    MAT_IDN(T);
-    MAT_DELTAS_VEC_NEG(T, center);
-    // Combine
-    bn_mat_mul(RT, R, T);
-
-    struct rt_bot_internal *moved_bot = rt_bot_dup(bot);
-    for (size_t i = 0; i < moved_bot->num_vertices; i++) {
-	vect_t v1;
-	VMOVE(v1, &moved_bot->vertices[i*3]);
-	vect_t v2;
-	MAT4X3PNT(v2, RT, v1);
-	VMOVE(&moved_bot->vertices[i*3], v2);
-    }
-
-    return moved_bot;
-}
+struct bot_signature {
+    struct bg_trimesh_pca_signature pca;
+    size_t vertex_count;
+    size_t face_count;
+};
 
 struct hash_results {
-    std::unordered_map<struct directory *, unsigned long long> dp_hash;
-    std::unordered_map<unsigned long long, struct directory *> hash_dp;
+    std::unordered_map<struct directory *, struct bot_signature> signatures;
     std::unordered_map<unsigned long long, std::unordered_set<struct directory *>> bot_groups_hashed;
+    size_t rejected = 0;
 };
 
 // Test hash method
@@ -91,27 +64,25 @@ test_hash(struct hash_results *h, struct db_i *dbip, std::vector<struct director
 	    msgtime = bu_gettime();
 	}
 
-	// Make a PCA version of the BoT
 	struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;
-	rt_db_get_internal(&intern, wdp, dbip, NULL);
+	if (rt_db_get_internal(&intern, wdp, dbip, NULL) < 0)
+	    continue;
 	struct rt_bot_internal *orig_bot = (struct rt_bot_internal *)(intern.idb_ptr);
-	struct rt_bot_internal *pca_nbot = pca_bot(orig_bot);
-
-	// Hash the PCA version
-	point_t *ovp = (point_t *)pca_nbot->vertices;
-	unsigned long long ohash = bg_trimesh_hash(
-		pca_nbot->faces, pca_nbot->num_faces, ovp, pca_nbot->num_vertices,
-		VUNITIZE_TOL
-		);
-
-	// Done with PCA bot
-	rt_bot_internal_free(pca_nbot);
+	struct bot_signature signature;
+	signature.vertex_count = orig_bot->num_vertices;
+	signature.face_count = orig_bot->num_faces;
+	if (bg_trimesh_pca_get_signature(&signature.pca, orig_bot->faces,
+		orig_bot->num_faces, (const point_t *)orig_bot->vertices,
+		orig_bot->num_vertices, VUNITIZE_TOL, 1.0e-6) != BRLCAD_OK) {
+	    h->rejected++;
+	    rt_db_free_internal(&intern);
+	    continue;
+	}
 	rt_db_free_internal(&intern);
 
-	// Record the results
-	h->dp_hash[wdp] = ohash;
-	h->hash_dp[ohash] = wdp;
-	h->bot_groups_hashed[ohash].insert(wdp);
+	// The signature is a candidate key only; test_diff validates every match.
+	h->signatures[wdp] = signature;
+	h->bot_groups_hashed[signature.pca.hash].insert(wdp);
     }
 
     std::unordered_map<unsigned long long, std::unordered_set<struct directory *>>::iterator b_it;
@@ -130,7 +101,7 @@ test_hash(struct hash_results *h, struct db_i *dbip, std::vector<struct director
     int64_t elapsed = bu_gettime() - start;
     fastf_t seconds = elapsed / 1000000.0;
 
-    bu_log("Hashing complete (%f sec) - %zd match groups found, %zd of %zd BoTs are part of a group.\n", seconds, gcnt, gobjs, bots.size());
+    bu_log("PCA signature complete (%f sec) - %zd candidate groups found, %zd of %zd BoTs are part of a group (%zd PCA-ambiguous BoTs skipped).\n", seconds, gcnt, gobjs, bots.size(), h->rejected);
 }
 
 struct diff_results {
@@ -139,121 +110,55 @@ struct diff_results {
 
 // Test diff method
 void
-test_diff(struct diff_results *d, struct db_i *dbip, std::vector<struct directory *> &vbots, struct hash_results *h)
+test_diff(struct diff_results *d, struct db_i *dbip, const struct hash_results *h)
 {
-    if (!d || !dbip)
+
+    if (!d || !dbip || !h)
 	return;
 
     int64_t start = bu_gettime();
-
-    // Build a set of BoTs
-    std::unordered_set<struct directory *> bots;
-    for(size_t i = 0; i < vbots.size(); i++) {
-        bots.insert(vbots[i]);
-    }
-
-    // We can't afford to load everything into memory and leave it there, and most
-    // BoTs won't be matches trivially based on counts, so make a single up front pass
-    // to collect face and vert counts once.  This will let us avoid a lot of I/O
-    // during the comparisons.
-    std::unordered_map<struct directory *, size_t> bot_vert_cnts;
-    std::unordered_map<struct directory *, size_t> bot_face_cnts;
-    std::unordered_set<struct directory *>::iterator d_it;
-    for (d_it = bots.begin(); d_it != bots.end(); ++d_it) {
-	struct directory *dp = *d_it;
-	struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;
-	rt_db_get_internal(&intern, dp, dbip, NULL);
-	struct rt_bot_internal *bot = (struct rt_bot_internal *)(intern.idb_ptr);
-	bot_vert_cnts[dp] = bot->num_vertices;
-	bot_face_cnts[dp] = bot->num_faces;
-	rt_db_free_internal(&intern);
-    }
-
-    // Work through the set of BoTs looking for matches
-    unsigned long long ohash = 0;
-    unsigned long long chash = 0;
-    std::unordered_set<struct directory *> clear_dps;
-    size_t bots_processed = 0;
-    int64_t msgtime = bu_gettime();
-    while (!bots.empty()) {
-	// Pop the next BoT off the set
-	struct directory *wdp = *bots.begin();
-	if (h)
-	    ohash = h->dp_hash[wdp];
-	bots.erase(bots.begin());
-	bots_processed++;
-
-	if (bu_gettime() - msgtime > 5000000.0) {
-	    bu_log("Processing %s (%zd of %zd)\n", wdp->d_namep, bots_processed, vbots.size());
-	    msgtime = bu_gettime();
-	}
-
-	// Make a pca version of the BoT
-	struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;
-	rt_db_get_internal(&intern, wdp, dbip, NULL);
-	struct rt_bot_internal *orig_bot = (struct rt_bot_internal *)(intern.idb_ptr);
-	struct rt_bot_internal *pca_orig_bot = pca_bot(orig_bot);
-	point_t *ovp = (point_t *)pca_orig_bot->vertices;
-
-	// For each of the remaining BoTs, see if its PCA version matches pca_g
-	for (d_it = bots.begin(); d_it != bots.end(); ++d_it) {
-
-	    struct directory *cdp = *d_it;
-	    if (h)
-		chash = h->dp_hash[cdp];
-
-	    // Can we trivially rule it out?
-	    if (bot_face_cnts[cdp] != orig_bot->num_faces || bot_vert_cnts[cdp] != orig_bot->num_vertices) {
-		// Did the hashes think these matched?
-		if (h && ohash == chash)
-		    bu_log("WARNING!  BoTs %s and %s are different, but their hashes match! (%llu)\n", wdp->d_namep, cdp->d_namep, chash);
+    size_t comparisons = 0;
+    for (const auto &bucket : h->bot_groups_hashed) {
+	if (bucket.second.size() < 2)
+	    continue;
+	std::vector<struct directory *> candidates(bucket.second.begin(), bucket.second.end());
+	std::vector<bool> matched(candidates.size(), false);
+	for (size_t i = 0; i < candidates.size(); i++) {
+	    if (matched[i])
 		continue;
+	    struct directory *wdp = candidates[i];
+	    const struct bot_signature &firstSignature = h->signatures.at(wdp);
+	    struct rt_db_internal firstInternal = RT_DB_INTERNAL_INIT_ZERO;
+	    if (rt_db_get_internal(&firstInternal, wdp, dbip, NULL) < 0)
+		continue;
+	    const struct rt_bot_internal *firstBot =
+		(const struct rt_bot_internal *)firstInternal.idb_ptr;
+	    for (size_t j = i + 1; j < candidates.size(); j++) {
+		if (matched[j])
+		    continue;
+		struct directory *cdp = candidates[j];
+		const struct bot_signature &secondSignature = h->signatures.at(cdp);
+		if (firstSignature.vertex_count != secondSignature.vertex_count ||
+		    firstSignature.face_count != secondSignature.face_count)
+		    continue;
+		struct rt_db_internal secondInternal = RT_DB_INTERNAL_INIT_ZERO;
+		if (rt_db_get_internal(&secondInternal, cdp, dbip, NULL) < 0)
+		    continue;
+		const struct rt_bot_internal *secondBot =
+		    (const struct rt_bot_internal *)secondInternal.idb_ptr;
+		comparisons++;
+		if (bg_trimesh_pca_equal(&firstSignature.pca, firstBot->faces,
+			firstBot->num_faces, (const point_t *)firstBot->vertices,
+			firstBot->num_vertices, &secondSignature.pca, secondBot->faces,
+			secondBot->num_faces, (const point_t *)secondBot->vertices,
+			secondBot->num_vertices, VUNITIZE_TOL) == 0) {
+		    d->bot_groups[wdp].insert(cdp);
+		    matched[j] = true;
+		}
+		rt_db_free_internal(&secondInternal);
 	    }
-
-	    // Passes the trivial checks - time for PCA and bg_trimesh_diff
-	    struct rt_db_internal cintern = RT_DB_INTERNAL_INIT_ZERO;
-	    rt_db_get_internal(&cintern, cdp, dbip, NULL);
-	    struct rt_bot_internal *cbot = (struct rt_bot_internal *)(cintern.idb_ptr);
-	    struct rt_bot_internal *pca_cbot = pca_bot(cbot);
-	    point_t *cvp = (point_t *)pca_cbot->vertices;
-
-	    int is_diff = bg_trimesh_diff(
-		    pca_orig_bot->faces, pca_orig_bot->num_faces, ovp, pca_orig_bot->num_vertices,
-		    pca_cbot->faces, pca_cbot->num_faces, cvp, pca_cbot->num_vertices,
-		    VUNITIZE_TOL
-		    );
-
-	    // We have our diff answer - free up the internal memory for cdp
-	    if (cbot != pca_cbot)
-		rt_bot_internal_free(pca_cbot);
-	    rt_db_free_internal(&cintern);
-
-	    // If there is no difference per bg_trimesh_diff, we found a PCA
-	    // match - record it
-	    if (!is_diff) {
-		d->bot_groups[wdp].insert(cdp);
-		clear_dps.insert(cdp);
-		bots_processed++;
-		// Difference found - did the hashes think these didn't match?
-		if (h && ohash != chash)
-		    bu_log("WARNING!  BoTs %s and %s are the same, but their hashes differ! (%llu and %llu)\n", wdp->d_namep, cdp->d_namep, ohash, chash);
-
-	    } else {
-		// Difference found - did the hashes think these matched?
-		if (h && ohash == chash)
-		    bu_log("WARNING!  BoTs %s and %s are different, but their hashes match! (%llu)\n", wdp->d_namep, cdp->d_namep, chash);
-	    }
+	    rt_db_free_internal(&firstInternal);
 	}
-
-	// Free up the internal memory for wdp
-	if (orig_bot != pca_orig_bot)
-	    rt_bot_internal_free(pca_orig_bot);
-	rt_db_free_internal(&intern);
-
-	// Remove anything we found a match for from the working bots set
-	for (d_it = clear_dps.begin(); d_it != clear_dps.end(); ++d_it)
-	    bots.erase(*d_it);
-	clear_dps.clear();
     }
 
     int64_t elapsed = bu_gettime() - start;
@@ -267,7 +172,7 @@ test_diff(struct diff_results *d, struct db_i *dbip, std::vector<struct director
 	gobjs += bg_it->second.size(); // Add the matches
     }
 
-    bu_log("Diff matching check complete (%f sec) - %zd match groups found, %zd of %zd BoTs are part of a group.\n",seconds, d->bot_groups.size(), gobjs, vbots.size());
+    bu_log("Candidate validation complete (%f sec, %zd comparisons) - %zd match groups found, %zd BoTs are part of a group.\n",seconds, comparisons, d->bot_groups.size(), gobjs);
 }
 
 
@@ -325,16 +230,11 @@ main(int argc, char *argv[])
 
     bu_log("Initial BoT search time: %g seconds\n", seconds);
 
-    // Note that the hash test may be slower than the diff test in some cases
-    // due to the diff test being able to skip processing once it identifies a
-    // difference.  The hash calculation must always process the whole of the
-    // mesh data to arrive at its value.
     struct hash_results h;
     test_hash(&h, dbip, bots);
 
     struct diff_results d;
-    //test_diff(&d, dbip, bots, &h);
-    test_diff(&d, dbip, bots, NULL);
+    test_diff(&d, dbip, &h);
 
 #if 0
     // Print any groups found

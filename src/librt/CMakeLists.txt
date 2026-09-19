@@ -38,6 +38,7 @@ set(
   primitives/nmg/ednmg.c
   primitives/part/edpart.c
   primitives/pipe/edpipe.c
+  primitives/rec/edrec.c
   primitives/rhc/edrhc.c
   primitives/rpc/edrpc.c
   primitives/sketch/edsketch.c
@@ -94,7 +95,6 @@ set(
   bool_tess.c
   bundle.c
   cache.c
-  cache_lod.c
   cache_lz4.c
   cmd.c
   cyclic.c
@@ -123,6 +123,8 @@ set(
   db_anim.c
   db_corrupt.c
   db_diff.c
+  db_discovery.cpp
+  display_bounds.cpp
   db_flags.c
   db_flip.c
   db_fullpath.cpp
@@ -138,6 +140,7 @@ set(
   dir.c
   dspline.c
   edit.cpp
+  eval_wireframe.cpp
   fortray.c
   globals.c
   htbl.c
@@ -310,7 +313,6 @@ set(
   uv.c
   vds/vds.c
   vers.c
-  view.c
   vlist.c
   vshoot.c
   wdb.c
@@ -472,6 +474,8 @@ brlcad_addlib(librt "${LIBRT_SOURCES}" "${RT_INCLUDE_DIRS}" "${RT_LOCAL_INCLUDE_
   #   twice.  The many other direct-.c-include patterns in bot make the whole
   #   subdirectory unsafe to batch.
   UNITY_BUILD_SKIP
+    db_discovery.cpp
+    display_bounds.cpp
     rt_init.cpp
     search.cpp
     search_old.cpp

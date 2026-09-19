@@ -145,7 +145,7 @@ static const struct rt_edit_param_desc superell_abc_params[] = {
 
 static const struct rt_edit_cmd_desc superell_cmds[] = {
     {
-	ECMD_SUPERELL_SCALE_A, /* cmd_id      */
+	ECMD_SUPERELL_SCALE_A, RT_EDIT_CMD_NAME(ECMD_SUPERELL_SCALE_A), /* cmd_id      */
 	"Set A",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -155,7 +155,7 @@ static const struct rt_edit_cmd_desc superell_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_SUPERELL_SCALE_B, /* cmd_id      */
+	ECMD_SUPERELL_SCALE_B, RT_EDIT_CMD_NAME(ECMD_SUPERELL_SCALE_B), /* cmd_id      */
 	"Set B",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -165,7 +165,7 @@ static const struct rt_edit_cmd_desc superell_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_SUPERELL_SCALE_C, /* cmd_id      */
+	ECMD_SUPERELL_SCALE_C, RT_EDIT_CMD_NAME(ECMD_SUPERELL_SCALE_C), /* cmd_id      */
 	"Set C",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -175,7 +175,7 @@ static const struct rt_edit_cmd_desc superell_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_SUPERELL_SCALE_ABC, /* cmd_id    */
+	ECMD_SUPERELL_SCALE_ABC, RT_EDIT_CMD_NAME(ECMD_SUPERELL_SCALE_ABC), /* cmd_id    */
 	"Set A,B,C",          /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -192,13 +192,46 @@ static const struct rt_edit_prim_desc superell_prim_desc = {
     4,                    /* ncmd         */
     superell_cmds         /* cmds         */,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_GENERATED,
+    NULL,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
 rt_edit_superell_edit_desc(void)
 {
     return &superell_prim_desc;
+}
+
+C_DECL int
+rt_edit_superell_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
+{
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    struct rt_superell_internal *superell =
+	(struct rt_superell_internal *)s->es_int.idb_ptr;
+    RT_SUPERELL_CK_MAGIC(superell);
+
+    switch (cmd_id) {
+	case ECMD_SUPERELL_SCALE_A:
+	case ECMD_SUPERELL_SCALE_ABC:
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(superell->a) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_SUPERELL_SCALE_B:
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(superell->b) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_SUPERELL_SCALE_C:
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(superell->c) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	default:
+	    return RT_EDIT_VALUE_UNAVAILABLE;
+    }
 }
 
 #define V3BASE2LOCAL(_pt) (_pt)[X]*base2local, (_pt)[Y]*base2local, (_pt)[Z]*base2local

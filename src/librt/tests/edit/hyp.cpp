@@ -52,6 +52,7 @@
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
 #include "rt/rt_ecmds.h"
 
 
@@ -163,31 +164,26 @@ main(int argc, char *argv[])
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size = 73.3197;
-    v->gv_isize = 1.0 / v->gv_size;
-    v->gv_scale = 0.5 * v->gv_size;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init(&v);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
 
     struct rt_hyp_internal *edit_hyp = (struct rt_hyp_internal *)s->es_int.idb_ptr;
 
+    if (!rt_edit_test_scalar_value(s, ECMD_HYP_H, 10.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_HYP_SCALE_A, 4.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_HYP_SCALE_B, 3.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_HYP_C, 0.5))
+	bu_exit(1, "ERROR: HYP descriptor current-value readback failed\n");
+
     vect_t mousevec;
 
     /* ================================================================
-     * ECMD_HYP_H  (scale Hi; note: e_para[0] is es_scale, not |Hi|)
-     * MGED: es_scale = e_para[0] (scale factor); Hi' = Hi * es_scale
-     * es_scale=2: Hi'=(0,0,20)
-     * Restore: e_para[0]=0.5, es_scale=0.5, Hi'=(0,0,10)
+     * ECMD_HYP_H  (scale Hi; typed e_para[0] is absolute |Hi|)
+     * Interactive es_scale=2: Hi'=(0,0,20)
+     * Restore: e_para[0]=10, derived es_scale=0.5, Hi'=(0,0,10)
      * ================================================================*/
     EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_HYP_H);
     s->e_inpara = 0;
@@ -199,9 +195,9 @@ main(int argc, char *argv[])
 	bu_exit(1, "ERROR: ECMD_HYP_H failed\n");
     bu_log("ECMD_HYP_H SUCCESS: Hi=%g,%g,%g\n", V3ARGS(edit_hyp->hyp_Hi));
 
-    /* Restore via e_inpara (e_para[0] = scale factor 0.5, Hi goes from 20→10) */
+    /* Restore via the absolute current-value contract. */
     s->e_inpara = 1;
-    s->e_para[0] = 0.5;
+    s->e_para[0] = 10.0;
     VMOVE(cmp_hyp->hyp_Hi, orig_hyp->hyp_Hi);
     rt_edit_process(s);
     if (hyp_diff("ECMD_HYP_H restore", cmp_hyp, edit_hyp))
@@ -223,7 +219,7 @@ main(int argc, char *argv[])
     bu_log("ECMD_HYP_SCALE_A SUCCESS: A=%g,%g,%g\n", V3ARGS(edit_hyp->hyp_A));
 
     s->e_inpara = 1;
-    s->e_para[0] = 0.5;
+    s->e_para[0] = 4.0;
     VMOVE(cmp_hyp->hyp_A, orig_hyp->hyp_A);
     rt_edit_process(s);
     if (hyp_diff("ECMD_HYP_SCALE_A restore", cmp_hyp, edit_hyp))
@@ -245,7 +241,7 @@ main(int argc, char *argv[])
     bu_log("ECMD_HYP_SCALE_B SUCCESS: b=%g\n", edit_hyp->hyp_b);
 
     s->e_inpara = 1;
-    s->e_para[0] = 0.5;
+    s->e_para[0] = 3.0;
     cmp_hyp->hyp_b = 3;
     rt_edit_process(s);
     if (hyp_diff("ECMD_HYP_SCALE_B restore", cmp_hyp, edit_hyp))
@@ -253,10 +249,9 @@ main(int argc, char *argv[])
     bu_log("ECMD_HYP_SCALE_B SUCCESS: b restored to %g\n", edit_hyp->hyp_b);
 
     /* ================================================================
-     * ECMD_HYP_C  (scale bnr; allowed only if bnr*s <= 1.0)
+     * ECMD_HYP_C  (set bnr; absolute typed value must be <= 1.0)
      * Initial bnr=0.5; es_scale=1.5: bnr'=0.5*1.5=0.75 <= 1.0 ✓
-     * Restore: e_para[0] = 1/1.5 * 1/(0.75/0.5) = e_para[0] to get bnr=0.5
-     *   es_scale = 1/1.5 ≈ 0.6667; bnr'=0.75*(1/1.5)=0.5 ✓
+     * Restore: e_para[0]=0.5 derives es_scale=2/3 and returns to 0.5.
      * ================================================================*/
     hyp_reset(s, edit_hyp, orig_hyp, cmp_hyp);
     EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_HYP_C);
@@ -269,9 +264,9 @@ main(int argc, char *argv[])
 	bu_exit(1, "ERROR: ECMD_HYP_C failed\n");
     bu_log("ECMD_HYP_C SUCCESS: bnr=%g\n", edit_hyp->hyp_bnr);
 
-    /* Restore: scale by 1/1.5 to go from 0.75 back to 0.5 */
+    /* Restore the absolute ratio. */
     s->e_inpara = 1;
-    s->e_para[0] = 1.0 / 1.5;
+    s->e_para[0] = 0.5;
     cmp_hyp->hyp_bnr = 0.5;
     rt_edit_process(s);
     if (hyp_diff("ECMD_HYP_C restore", cmp_hyp, edit_hyp))
@@ -391,8 +386,8 @@ main(int argc, char *argv[])
     {
 	int xpos = 1372;
 	int ypos = 1383;
-	mousevec[X] = xpos * INV_BV;
-	mousevec[Y] = ypos * INV_BV;
+	mousevec[X] = xpos * RT_INV_VIEW;
+	mousevec[Y] = ypos * RT_INV_VIEW;
 	mousevec[Z] = 0;
     }
 
@@ -418,8 +413,8 @@ main(int argc, char *argv[])
     {
 	int xpos = 1482;
 	int ypos = 762;
-	mousevec[X] = xpos * INV_BV;
-	mousevec[Y] = ypos * INV_BV;
+	mousevec[X] = xpos * RT_INV_VIEW;
+	mousevec[Y] = ypos * RT_INV_VIEW;
 	mousevec[Z] = 0;
     }
 

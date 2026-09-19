@@ -279,25 +279,25 @@ edit_generic(
 	case RT_MATRIX_EDIT_SCALE_Y:
 	case RT_MATRIX_EDIT_SCALE_Z:
 	    // Scale only takes one parameter, and uses the Y mousevec position
-	    mousevec[Y] =  s->e_para[0] * INV_BV;
+	    mousevec[Y] =  s->e_para[0] * RT_INV_VIEW;
 	    edit_mscale_xy(s, mousevec);
 	    return BRLCAD_OK;
 	case RT_MATRIX_EDIT_TRANS_VIEW_XY:
 	    // XY translation takes two parameters
-	    mousevec[X] =  s->e_para[0] * INV_BV;
-	    mousevec[Y] =  s->e_para[1] * INV_BV;
+	    mousevec[X] =  s->e_para[0] * RT_INV_VIEW;
+	    mousevec[Y] =  s->e_para[1] * RT_INV_VIEW;
 	    edit_tra_xy(&pos_view, s, mousevec);
 	    edit_abs_tra(s, pos_view);
 	    return BRLCAD_OK;
 	case RT_MATRIX_EDIT_TRANS_VIEW_X:
 	    // X-only translation takes one parameter
-	    mousevec[X] =  s->e_para[0] * INV_BV;
+	    mousevec[X] =  s->e_para[0] * RT_INV_VIEW;
 	    edit_tra_xy(&pos_view, s, mousevec);
 	    edit_abs_tra(s, pos_view);
 	    return BRLCAD_OK;
 	case RT_MATRIX_EDIT_TRANS_VIEW_Y:
 	    // Y-only translation takes one parameter
-	    mousevec[Y] =  s->e_para[0] * INV_BV;
+	    mousevec[Y] =  s->e_para[0] * RT_INV_VIEW;
 	    edit_tra_xy(&pos_view, s, mousevec);
 	    edit_abs_tra(s, pos_view);
 	    return BRLCAD_OK;
@@ -611,7 +611,7 @@ edit_mtra(
  * rotation is processed through the knob accumulator with incr_flag=1.
  * The X mousevec component drives the "ay" (azimuth about model Y) knob
  * and the Y component drives the "ax" (elevation about model X) knob.
- * Angles are in the range -512..+512 (BV units, scale factor INV_BV).
+ * Angles are in the range -512..+512 (view units, scale factor RT_INV_VIEW).
  *
  * matrix_edit=0 → solid rotation (RT_PARAMS_EDIT_ROT)
  * matrix_edit=1 → matrix rotation (RT_MATRIX_EDIT_ROT)
@@ -626,14 +626,14 @@ edit_mrot_xy(struct rt_edit *s, const vect_t mousevec, int matrix_edit)
     int do_sca = 0;
 
     if (!NEAR_ZERO(mousevec[X], SMALL_FASTF)) {
-	fastf_t x = mousevec[X] / INV_BV;
+	fastf_t x = mousevec[X] / RT_INV_VIEW;
 	rt_edit_knob_cmd_process(s, &rvec, &do_rot, &tvec, &do_tran, &do_sca,
-		s->vp, "ay", x, s->vp->gv_rotate_about, 1, NULL);
+		NULL, "ay", x, s->vp->gv_rotate_about, 1, NULL);
     }
     if (!NEAR_ZERO(mousevec[Y], SMALL_FASTF)) {
-	fastf_t y = mousevec[Y] / INV_BV;
+	fastf_t y = mousevec[Y] / RT_INV_VIEW;
 	rt_edit_knob_cmd_process(s, &rvec, &do_rot, &tvec, &do_tran, &do_sca,
-		s->vp, "ax", y, s->vp->gv_rotate_about, 1, NULL);
+		NULL, "ax", y, s->vp->gv_rotate_about, 1, NULL);
     }
 
     if (do_rot) {

@@ -228,6 +228,7 @@ set(
   bitv.h
   bu_plugin.h
   charclass.h
+  concurrentqueue.h
   date.h
   fort.h
   json.hpp

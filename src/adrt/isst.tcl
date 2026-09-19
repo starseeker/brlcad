@@ -19,14 +19,12 @@
 #
 ###
 
-# open_dm uses this callback, but we don't load the tclscripts/libdm.tcl stuff any more
-proc _init_dm { func w } { }
-
 # create ::isst namespace
 namespace eval ::isst {
 }
 
 set oglwin .w0
+set isst_photo ::isst::render_photo
 
 proc ::isst::overwin {x y W} {
     global selectedobjs
@@ -107,7 +105,7 @@ proc ::isst::cut {} {
 }
 
 proc ::isst::setup {} {
-    global resolution oglwin fullscreenmode
+    global resolution oglwin isst_photo fullscreenmode
     set resolution 20
     set fullscreenmode 0
     wm title . "ISST - Interactive Geometry Viewing"
@@ -153,7 +151,9 @@ proc ::isst::setup {} {
     bind . <Key-Escape> { exit }
 
     isst_init
-    open_dm
+    image create photo $isst_photo -width 800 -height 600
+    label $oglwin -image $isst_photo -background #000030 -borderwidth 0 -highlightthickness 0
+    isst_bind_photo $isst_photo
     bind $oglwin <Configure> { reshape %w %h }
     pack $oglwin -expand true -fill both
 }
@@ -224,9 +224,16 @@ update
 walk $oglwin 1
 walk $oglwin -1
 update
+if {[info exists ::env(BRLCAD_ISST_SMOKE)]} {
+    if {[llength [info commands open_dm]] || [llength [info commands refresh_ogl]] ||
+	[image width $isst_photo] != 800 || [image height $isst_photo] != 600} {
+	exit 1
+    }
+    exit 0
+}
 while 1 {
     update
-    refresh_ogl $oglwin
+    refresh_isst $oglwin
 }
 
 # Local Variables:

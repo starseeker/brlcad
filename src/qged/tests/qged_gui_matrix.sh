@@ -1,0 +1,3775 @@
+#!/usr/bin/env bash
+#
+# Exercise qged through its real Qt canvas and write reproducible screenshots,
+# LoD/timing reports, logs, cache inventories, and optional perf/apitrace data.
+# By default cold and warm are a pair: the cold run starts with a newly
+# created, empty BU_DIR_CACHE (no format or data children), and the warm run
+# reuses exactly what that run produced.  Focused cold-only diagnostics retain
+# the same cold-cache and validation contracts without paying for a second
+# process.
+
+set -uo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source_root="$(cd "$script_dir/../../.." && pwd)"
+build_dir="$source_root/.build"
+main_build_dir="/home/cyapp/brlcad/.build"
+artifact_dir=""
+profile="full"
+case_list=""
+backend_list="system,osmesa"
+mode_list="shaded,wire"
+swap_list="default"
+run_baseline=1
+baseline_only=0
+perf_case=""
+perf_phase="cold"
+perf_frequency=499
+apitrace_case=""
+run_timeout=180
+run_timeout_explicit=0
+process_kill_grace=5
+settle_override_ms=""
+capture_apng=0
+warm_cache=""
+cold_only=0
+canvas_ready_timeout_ms=5000
+# A true-cold Lucy cache builds a globally ordered 28M-face PoP hierarchy,
+# which is materially different from reopening a cache.  This is nevertheless
+# a user-visible first-content bound: the structural overview must give way to
+# one globally representative PoP cut before background cache persistence.
+lucy_cold_payload_deadline_ms=15000
+# Lucy's first coherent view intentionally precedes construction and
+# persistence of its reusable 28M-face hierarchy.  Exercise the GUI while
+# that optional work is active, then retain one explicit qualification bound
+# which proves a cold run can still produce a complete warm cache.
+large_asset_cache_completion_deadline_ms=150000
+# A quiet retained framebuffer may use this one-shot, interruptible quality
+# allowance.  Active input keeps its independent 250 ms qualification bound.
+static_quality_render_limit_ms=400
+# Coin abort checks run between resumable draw commands, so the observed
+# interruption may exceed its requested wall-clock deadline by a small
+# scheduling/command-boundary interval.  This is a qualification tolerance,
+# not additional controller rendering time.
+presentation_interrupt_deadline_tolerance_ms=5
+# Generic Twin is the bounded ordinary-model latency sentinel.  This is a
+# terminal draw-to-idle deadline, not merely a first-pixel allowance: its
+# complete 4 MiB scene must not inherit the multi-second progressive pacing
+# intended for high-cardinality or exceptional-mesh inputs.
+generic_twin_terminal_deadline_ms=5000
+# The managed Generic Twin population is 709 BoT occurrences plus four ELL
+# occurrences.  Keeping the corpus cardinality explicit catches a provider
+# silently dropping a supported leaf without confusing newly supported
+# canonical geometry with duplicate scene entries.
+generic_twin_managed_occurrence_count=713
+
+# The scale scripts deliberately exercise several independent settle points:
+# draw, camera release, zoom, selection, and subpath redraw.  Their process
+# deadline must cover that complete lifecycle rather than a single view's
+# convergence allowance.  These are qualification bounds, not expected run
+# times; normal warm runs should finish well below them.
+scale_50k_process_timeout=600
+scale_150k_process_timeout=900
+
+CACHE_READY_MARKER_DIRECTORY=".qged-gui-cache-ready-v2"
+LEGACY_CACHE_READY_MARKER=".qged-gui-cache-ready-v1"
+# Retained PoP cuts are deliberately hysteretic: an existing cut may remain
+# visible until its certified projected error exceeds the requested target by
+# this factor.  Validate the physical error certificate, rather than treating
+# the requested scalar as an exact representation of a discrete cut.
+LOD_SCREEN_ERROR_HYSTERESIS_FACTOR=1.25
+LOD_SCREEN_ERROR_ROUNDOFF_PIXELS=0.002
+
+cache_database_signature()
+{
+    local db="$1"
+    local canonical
+    canonical="$(realpath -e "$db")" || return 1
+    printf '%s\n%s\n' "$canonical" "$(stat -c '%d:%i:%s:%Y:%Z' "$canonical")"
+}
+
+cache_ready_marker()
+{
+    local cache="$1"
+    local db="$2"
+    local signature
+    local signature_hash
+    signature="$(cache_database_signature "$db")" || return 1
+    signature_hash="$(printf '%s' "$signature" | sha256sum)" || return 1
+    signature_hash="${signature_hash%% *}"
+    printf '%s/%s/%s\n' "$cache" "$CACHE_READY_MARKER_DIRECTORY" \
+	"$signature_hash"
+}
+
+cache_mark_ready()
+{
+    local cache="$1"
+    local db="$2"
+    local marker
+    marker="$(cache_ready_marker "$cache" "$db")" || return 1
+    mkdir -p "$(dirname "$marker")" || return 1
+    local temporary
+    temporary="$(mktemp "${marker}.XXXXXX")" || return 1
+    {
+	printf '%s\n' "$CACHE_READY_MARKER_DIRECTORY"
+	cache_database_signature "$db"
+    } > "$temporary" || {
+	rm -f "$temporary"
+	return 1
+    }
+    mv "$temporary" "$marker"
+}
+
+cache_is_ready()
+{
+    local cache="$1"
+    local db="$2"
+    local marker
+    marker="$(cache_ready_marker "$cache" "$db")" || return 1
+    local expected
+    expected="$CACHE_READY_MARKER_DIRECTORY"$'\n'"$(cache_database_signature "$db")" ||
+	return 1
+    if [[ -f "$marker" && "$(<"$marker")" == "$expected" ]]; then
+	return 0
+    fi
+
+    # Recognize the exact database certified by the former singleton marker.
+    # A successful warm run below writes the per-database form, after which
+    # this compatibility path is no longer involved.
+    marker="$cache/$LEGACY_CACHE_READY_MARKER"
+    expected="$LEGACY_CACHE_READY_MARKER"$'\n'"$(cache_database_signature "$db")" ||
+	return 1
+    [[ -f "$marker" && "$(<"$marker")" == "$expected" ]]
+}
+
+usage()
+{
+    cat <<'EOF'
+Usage: qged_gui_matrix.sh [options]
+
+  --build-dir DIR          Current build (default: ./.build)
+  --main-build-dir DIR     Production baseline build
+  --artifact-dir DIR       New results directory (never cleared)
+  --profile smoke|full|stress
+  --cases LIST             Comma-separated case names
+  --backends LIST          system,osmesa (default: both)
+  --modes LIST             shaded,wire (default: both)
+  --swap-intervals LIST    default,0,1,-1 (default: default)
+  --no-baseline            Do not capture the production qged baseline
+  --baseline-only          Capture production baselines without current runs
+  --perf CASE              Record the selected backend case with perf
+  --perf-phase PHASE       cold, warm, or both (default: cold)
+  --perf-frequency HZ      Sampling frequency (default: 499)
+  --apitrace CASE          Trace one cold System GL case with apitrace
+  --capture-apng           Capture every presented frame into an APNG
+  --cold-only              Run and validate cold without the warm replay
+  --warm-cache DIR         Run only warm using an existing cache directory
+  --timeout SECONDS        Per-process timeout (default: 180)
+  --settle-ms MSEC         Override the per-view convergence deadline
+
+Cases: generic_twin, lucy, buddha, multi_lucy, multi_lucy_xpush, stanford, bigboy,
+       havoc, hubble, nist, many_lucy_stress, unique_mesh_stress,
+       unique_mesh_50k_stress, unique_mesh_150k_stress
+
+The smoke profile uses generic_twin and lucy.  Full adds havoc and Hubble.
+Stress adds the shared/expanded Lucy scenes and the combined Stanford scene.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+	--build-dir) build_dir="$2"; shift 2 ;;
+	--main-build-dir) main_build_dir="$2"; shift 2 ;;
+	--artifact-dir) artifact_dir="$2"; shift 2 ;;
+	--profile) profile="$2"; shift 2 ;;
+	--cases) case_list="$2"; shift 2 ;;
+	--backends) backend_list="$2"; shift 2 ;;
+	--modes) mode_list="$2"; shift 2 ;;
+	--swap-intervals) swap_list="$2"; shift 2 ;;
+	--no-baseline) run_baseline=0; shift ;;
+	--baseline-only) run_baseline=1; baseline_only=1; shift ;;
+	--perf) perf_case="$2"; shift 2 ;;
+	--perf-phase) perf_phase="$2"; shift 2 ;;
+	--perf-frequency) perf_frequency="$2"; shift 2 ;;
+	--apitrace) apitrace_case="$2"; shift 2 ;;
+	--capture-apng) capture_apng=1; shift ;;
+	--cold-only) cold_only=1; shift ;;
+	--warm-cache) warm_cache="$2"; shift 2 ;;
+	--timeout) run_timeout="$2"; run_timeout_explicit=1; shift 2 ;;
+	--settle-ms) settle_override_ms="$2"; shift 2 ;;
+	--help|-h) usage; exit 0 ;;
+	*) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+if [[ "$perf_phase" != "cold" && "$perf_phase" != "warm" &&
+	"$perf_phase" != "both" ]]; then
+    echo "ERROR: --perf-phase must be cold, warm, or both" >&2
+    exit 2
+fi
+if [[ ! "$perf_frequency" =~ ^[1-9][0-9]*$ ]] ||
+    (( perf_frequency > 100000 )); then
+    echo "ERROR: --perf-frequency must be an integer from 1 through 100000" >&2
+    exit 2
+fi
+if [[ -n "$settle_override_ms" ]] &&
+    [[ ! "$settle_override_ms" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: --settle-ms must be a positive integer" >&2
+    exit 2
+fi
+
+case "$profile" in
+    smoke) default_cases="generic_twin,lucy" ;;
+    full) default_cases="generic_twin,lucy,havoc,hubble,nist" ;;
+    stress)
+	default_cases="generic_twin,lucy,multi_lucy,multi_lucy_xpush,stanford,havoc,hubble"
+	if [[ -f "$build_dir/unique_mesh_stress.g" ]]; then
+	    default_cases+=",unique_mesh_stress"
+	fi
+	;;
+    *) echo "ERROR: unknown profile '$profile'" >&2; exit 2 ;;
+esac
+[[ -n "$case_list" ]] || case_list="$default_cases"
+
+if [[ -n "$warm_cache" ]]; then
+    if [[ "$cold_only" -eq 1 ]]; then
+	echo "ERROR: --cold-only and --warm-cache are mutually exclusive" >&2
+	exit 2
+    fi
+    if [[ ! -d "$warm_cache" ]]; then
+	echo "ERROR: --warm-cache is not a directory: $warm_cache" >&2
+	exit 2
+    fi
+    if [[ "$case_list" == *,* || "$backend_list" == *,* ||
+	    "$mode_list" == *,* || "$swap_list" == *,* ]]; then
+	echo "ERROR: --warm-cache requires one case, backend, mode, and swap interval" >&2
+	exit 2
+    fi
+    warm_cache="$(realpath -m "$warm_cache")"
+fi
+
+build_dir="$(realpath -m "$build_dir")"
+main_build_dir="$(realpath -m "$main_build_dir")"
+if [[ -z "$artifact_dir" ]]; then
+    artifact_dir="$build_dir/qged-gui-matrix/$(date +%Y%m%d-%H%M%S)"
+fi
+artifact_dir="$(realpath -m "$artifact_dir")"
+
+qged="$build_dir/bin/qged"
+gsh="$build_dir/bin/gsh"
+apng_encoder="$build_dir/bin/qged_apng_encode"
+if [[ ! -x "$apng_encoder" ]]; then
+    apng_encoder="$build_dir/src/qged/qged_apng_encode"
+fi
+baseline_qged="$main_build_dir/bin/qged"
+if [[ ! -x "$qged" || ! -x "$gsh" ]]; then
+    echo "ERROR: qged and gsh are required in $build_dir/bin" >&2
+    exit 2
+fi
+if [[ "$capture_apng" -eq 1 && ! -x "$apng_encoder" ]]; then
+    echo "ERROR: APNG frame encoder is required: $apng_encoder" >&2
+    exit 2
+fi
+for required_tool in jq identify convert compare; do
+    if ! command -v "$required_tool" >/dev/null 2>&1; then
+	echo "ERROR: $required_tool is required for GUI report validation" >&2
+	exit 2
+    fi
+done
+if [[ -e "$artifact_dir" ]]; then
+    echo "ERROR: artifact directory already exists: $artifact_dir" >&2
+    echo "Choose a new directory; the runner never clears prior evidence." >&2
+    exit 2
+fi
+mkdir -p "$artifact_dir"/{cases,caches,events,inventory,baseline}
+
+screensaver_inhibit_pid=""
+active_test_pid=""
+cleanup_gui_processes()
+{
+    if [[ -n "$active_test_pid" ]] && kill -0 "$active_test_pid" 2>/dev/null; then
+	# GNU timeout owns a separate process group unless --foreground is used.
+	# Terminate the complete wrapper/QGED/perf/apitrace group when the matrix
+	# itself is interrupted; killing only the wrapper can orphan a busy GUI.
+	kill -TERM -- "-$active_test_pid" 2>/dev/null ||
+	    kill -TERM "$active_test_pid" 2>/dev/null || true
+	wait "$active_test_pid" 2>/dev/null || true
+	active_test_pid=""
+    fi
+    if [[ -n "$screensaver_inhibit_pid" ]]; then
+	kill "$screensaver_inhibit_pid" 2>/dev/null || true
+	wait "$screensaver_inhibit_pid" 2>/dev/null || true
+	screensaver_inhibit_pid=""
+    fi
+}
+trap cleanup_gui_processes EXIT
+if [[ "$run_baseline" -eq 1 ]] &&
+	command -v xfce4-screensaver-command >/dev/null 2>&1; then
+    xfce4-screensaver-command --deactivate >/dev/null 2>&1 || true
+    xfce4-screensaver-command --inhibit \
+	--application-name qged-gui-matrix \
+	--reason "BRL-CAD GUI validation" >/dev/null 2>&1 &
+    screensaver_inhibit_pid=$!
+fi
+
+case_spec()
+{
+    local case_name="$1"
+    local generic="$build_dir/Generic_Twin.g"
+    # The shared stanford.g asset may intentionally be a symlink to archival
+    # storage.  Prefer the explicitly maintained local copy so cold-start
+    # latency measures discovery rather than an unrelated removable disk.
+    local stanford="$build_dir/stanford_local.g"
+    [[ -r "$stanford" ]] || stanford="$build_dir/stanford.g"
+    [[ -z "${BOBOL_STANFORD_DB:-}" ]] || stanford="$BOBOL_STANFORD_DB"
+    if [[ ! -f "$generic" ]] || [[ "$(stat -c %s "$generic")" -lt 1000 ]]; then
+	generic="$build_dir/share/db/faa/Generic_Twin.g"
+    fi
+    case "$case_name" in
+	generic_twin)
+	    printf '%s|%s|%s|%s|%s\n' "$generic" "all" \
+		"all" "0xxx_series" "all/0xxx_series"
+	    ;;
+	lucy)
+	    printf '%s|%s|%s|%s|%s\n' \
+		"${BOBOL_LUCY_DB:-$build_dir/lucy.g}" "all" \
+		"all" "r.stl" "all/r.stl"
+	    ;;
+	buddha)
+	    local buddha="${BOBOL_BUDDHA_DB:-$build_dir/Happy_Buddha.g}"
+	    if [[ ! -r "$buddha" ]]; then
+		buddha="/media/cyapp/Backup 2023/Unversioned/brlobol5/.build/stanford_sources/Happy_Buddha.g"
+	    fi
+	    printf '%s|%s|%s|%s|%s\n' "$buddha" "happy_vrip.bot.r" \
+		"happy_vrip.bot.r" "happy_vrip.bot" \
+		"happy_vrip.bot.r/happy_vrip.bot"
+	    ;;
+	bigboy)
+	    printf '%s|%s|||\n' \
+		"${BOBOL_BIGBOY_DB:-$build_dir/bigboy.g}" \
+		"${BOBOL_BIGBOY_OBJECT:-Default}"
+	    ;;
+	multi_lucy)
+	    printf '%s|%s|||\n' "$stanford" "multi_lucy"
+	    ;;
+	multi_lucy_xpush)
+	    printf '%s|%s|||\n' "$stanford" "multi_lucy_xpush"
+	    ;;
+	many_lucy_stress)
+	    printf '%s|%s|||\n' \
+		"${BOBOL_MANY_LUCY_STRESS_DB:-$build_dir/many_lucy_stress.g}" \
+		"many_lucy_stress"
+	    ;;
+	unique_mesh_stress)
+	    printf '%s|%s|%s|%s|%s|%s\n' \
+		"${BOBOL_UNIQUE_MESH_STRESS_DB:-$build_dir/unique_mesh_stress.g}" \
+		"unique_mesh_stress" "unique_mesh_stress" \
+		"unique_level_02_000000.c" \
+		"unique_mesh_stress/unique_level_02_000000.c/unique_level_01_000000.c/unique_level_00_000000.c/unique_region_000000.r" \
+		"unique_mesh_stress/unique_level_02_000000.c/unique_level_01_000000.c/unique_level_00_000001.c/unique_region_000012.r/unique_closed_000199.bot"
+	    ;;
+	unique_mesh_50k_stress)
+	    printf '%s|%s|%s|%s|%s\n' \
+		"${BOBOL_UNIQUE_MESH_50K_STRESS_DB:-$build_dir/unique_mesh_50k_stress.g}" \
+		"unique_mesh_stress" "unique_mesh_stress" \
+		"unique_level_03_000000.c" \
+		"unique_mesh_stress/unique_level_03_000000.c/unique_level_02_000000.c/unique_level_01_000000.c/unique_level_00_000000.c/unique_region_000000.r"
+	    ;;
+	unique_mesh_150k_stress)
+	    printf '%s|%s|%s|%s|%s\n' \
+		"${BOBOL_UNIQUE_MESH_150K_STRESS_DB:-$build_dir/unique_mesh_150k_stress.g}" \
+		"unique_mesh_stress" "unique_mesh_stress" \
+		"unique_level_04_000000.c" \
+		"unique_mesh_stress/unique_level_04_000000.c/unique_level_03_000000.c/unique_level_02_000000.c/unique_level_01_000000.c/unique_level_00_000000.c/unique_region_000000.r"
+	    ;;
+	stanford)
+	    printf '%s|%s|%s|%s|%s\n' "$stanford" "all" \
+		"all" "Armadillo.bot.r" "all/Armadillo.bot.r"
+	    ;;
+	nist)
+	    local nist_db="${BOBOL_NIST_DB:-}"
+	    if [[ -z "$nist_db" ]]; then
+		nist_db="$(find "$build_dir/share/db/nist" -type f \
+		    -name 'NIST_MBE_PMI_*.g' -print -quit 2>/dev/null)"
+	    fi
+	    [[ -n "$nist_db" && -r "$nist_db" ]] || return 1
+	    printf '%s|%s|||\n' "$nist_db" "Document"
+	    ;;
+	havoc)
+	    printf '%s|%s|%s|%s|%s\n' "$build_dir/share/db/havoc.g" "havoc" \
+		"havoc" "havoc_front" "havoc/havoc_front"
+	    ;;
+	hubble)
+	    printf '%s|%s|%s|%s|%s\n' \
+		"/home/cyapp/models/NASA/Hubble/Hubble_Space_Telescope.g" \
+		"all.g" "all.g" "PANEL_C01" "all.g/PANEL_C01"
+	    ;;
+	*) return 1 ;;
+    esac
+}
+
+database_path_center()
+{
+    local db="$1"
+    local path="$2"
+    local output
+    local center
+
+    output="$(printf 'bb -m %s\nq\n' "$path" | "$gsh" "$db" 2>&1)" ||
+	return 1
+    center="$(sed -n 's/^Mid Point: (\([^)]*\))$/\1/p' <<< "$output" |
+	tail -n 1)"
+    # Only pass the three numeric fields into the generated JSON command.
+    # Besides rejecting a stale fixture path, this prevents diagnostic text
+    # from becoming part of an executable qged command.
+    if [[ ! "$center" =~ ^[[:space:]]*-?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?[[:space:]]+-?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?[[:space:]]+-?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?[[:space:]]*$ ]]; then
+	printf 'ERROR: could not resolve bounding-box center for %s in %s\n%s\n' \
+	    "$path" "$db" "$output" >&2
+	return 1
+    fi
+    printf '%s\n' "$center"
+}
+
+contains_csv()
+{
+    local values=",$1,"
+    [[ "$values" == *",$2,"* ]]
+}
+
+write_inventory()
+{
+    local case_name="$1"
+    local db="$2"
+    local object="$3"
+    local hierarchy_root="$4"
+    local hierarchy_child="$5"
+    local hierarchy_path="$6"
+    local out="$artifact_dir/inventory/$case_name.txt"
+    {
+	printf 'case=%s\n' "$case_name"
+	printf 'database=%s\n' "$db"
+	printf 'object=%s\n' "$object"
+	printf 'hierarchy_root=%s\n' "$hierarchy_root"
+	printf 'hierarchy_child=%s\n' "$hierarchy_child"
+	printf 'hierarchy_path=%s\n' "$hierarchy_path"
+	stat -c $'size=%s\nmtime=%Y\nmode=%a' "$db"
+	printf 'first_mib_sha256='
+	head -c 1048576 "$db" | sha256sum | cut -d' ' -f1
+	printf 'tops:\n'
+	"$gsh" "$db" tops 2>&1
+    } > "$out"
+}
+
+canvas_target="./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas"
+
+write_event_script()
+{
+    local output="$1"
+    local image_dir="$2"
+    local mode="$3"
+    local object="$4"
+    local settle_ms="$5"
+    local hierarchy_root="$6"
+    local hierarchy_child="$7"
+    local hierarchy_path="$8"
+    local case_name="$9"
+    local cache_state="${10}"
+    local smooth_zoom_center="${11}"
+    local initial_settle_ms="$settle_ms"
+    local draw_mode=1
+    [[ "$mode" == "wire" ]] && draw_mode=0
+    local hierarchy_events=""
+    local hierarchy_expand_events=""
+    local first_coverage_events=""
+    local background_completion_events=""
+    local initial_observation_events=""
+
+    # A cold single, very large BoT first presents a globally representative
+    # occupancy payload while its worker constructs spatial PoP pages.  Record
+    # that useful-coverage milestone separately from the first real mesh and
+    # from terminal cache persistence.  Calling the occupancy payload a mesh
+    # hid a 20+ second first-shaded-mesh delay in otherwise passing reports.
+    if [[ "$case_name" == "lucy" ]]; then
+	first_coverage_events=$(cat <<EOF
+    {"target": ".", "action": "wait_progressive_payload_ready",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+	"arguments": {"name": "${image_dir}/first-coverage-ready.png"}},
+EOF
+)
+    fi
+    local hierarchy_selection_labels=""
+    local working_set_events=""
+    local smooth_zoom_events=""
+    local lighting_events=""
+    local normal_policy_events=""
+    local history_events=""
+    local view_events=""
+    local label_index
+
+    # Shared and expanded multi-Lucy fixtures contain one or more 28M-face
+    # source assets.  A true-cold run must distinguish useful early pixels
+    # from the bounded one-time source characterization which precedes its
+    # first terminal view.  Later interaction barriers retain the ordinary
+    # settle deadline so a regression cannot hide behind this cold allowance.
+    if [[ "$cache_state" == "cold" &&
+	    ("$case_name" == "multi_lucy" ||
+	     "$case_name" == "multi_lucy_xpush") ]]; then
+	initial_settle_ms="$large_asset_cache_completion_deadline_ms"
+    fi
+    # Qt::ControlModifier forces BRL-CAD's rotate binding independently of
+    # the operator's currently selected left-mouse toolbar mode.
+    local rotate_modifier=67108864
+    if [[ "$object" == "multi_lucy" ]]; then
+	# Focus the view on the first transformed Lucy, then orbit far enough
+	# around that focus for other occurrences to enter and leave the
+	# frustum.  This is deliberately distinct from the overview rotation
+	# below: it verifies working-set turnover while a small visible subset
+	# has a much richer pixel-exact cut.
+	working_set_events=$(cat <<EOF
+	    {"target": ".", "action": "qged_command_batch",
+	     "arguments": {"commands": ["ae 90 0",
+		"center -2400 -1600 300", "size 2500"]}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-focus-stable.png"}},
+    {"target": "${canvas_target}", "action": "mouse_press",
+     "arguments": {"x": 0.32, "y": 0.48, "button": 1, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.46, "y": 0.43, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.60, "y": 0.52, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.72, "y": 0.61, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-turnover-held.png"}},
+    {"target": "${canvas_target}", "action": "mouse_release",
+     "arguments": {"x": 0.72, "y": 0.61, "button": 1, "buttons": 0,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-turnover-motion.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-turnover-stable.png"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "size 2500"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "ae 0 0"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-direction-0-motion.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-direction-0-stable.png"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "size 2500"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "ae 90 0"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-direction-90-motion.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-direction-90-stable.png"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "autoview"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 850}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-turnover-return.png"}},
+EOF
+)
+    fi
+
+    if [[ "$mode" == "shaded" &&
+	    ("$case_name" == "generic_twin" || "$case_name" == "lucy") ]]; then
+	# Lighting is shared view policy, not a qged-only preference.  Capture both
+	# named profiles through the public command and restore the studio default
+	# before any later selection/hierarchy probes.
+	lighting_events=$(cat <<EOF
+,
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "view lighting profile mged"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/lighting-mged.png"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "view lighting profile studio"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/lighting-studio.png"}}
+EOF
+)
+    fi
+    if [[ "$case_name" == "lucy" ]]; then
+	if [[ "$mode" == "shaded" ]]; then
+	    # Spatial-page normals are assembled from immutable page payloads on
+	    # workers.  Exercise all public policies only after the source cache is
+	    # complete, so this verifies the policy transition rather than confusing
+	    # it with cold availability.  A different renderer cost may select a
+	    # different cut.  Let the first flat presentation establish any
+	    # deadline-driven backoff, then capture authored at that safe cut so the
+	    # smooth/return pixel comparison measures normals rather than topology.
+	    normal_policy_events=$(cat <<EOF
+,
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "view shading normals flat"}},
+    {"target": ".", "action": "wait_progressive_view_ready",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": ".", "action": "wait_progressive_cache_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": ".", "action": "wait_progressive_view_ready",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/normals-flat.png"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "view shading normals authored"}},
+    {"target": ".", "action": "wait_progressive_view_ready",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": ".", "action": "wait_progressive_cache_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": ".", "action": "wait_progressive_view_ready",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/normals-authored-reference.png"}},
+    {"target": ".", "action": "qged_command_batch",
+     "arguments": {"commands": ["view shading crease 35",
+                                  "view shading normals smooth"]}},
+    {"target": ".", "action": "wait_progressive_view_ready",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": ".", "action": "wait_progressive_cache_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": ".", "action": "wait_progressive_view_ready",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/normals-smooth.png"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "view shading normals authored"}},
+    {"target": ".", "action": "wait_progressive_view_ready",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": ".", "action": "wait_progressive_cache_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": ".", "action": "wait_progressive_view_ready",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/normals-authored-return.png"}}
+EOF
+)
+	fi
+	# Exercise cold-preview interactivity before joining optional source work,
+	# but qualify mode-specific rendering only after the real progressive asset
+	# exists.  In shaded mode this also keeps an unlit spatial preview from
+	# masquerading as a lighting-profile failure.
+	background_completion_events=$(cat <<EOF
+,
+    {"target": ".", "action": "wait_progressive_cache_idle",
+     "arguments": {"timeout_ms": ${large_asset_cache_completion_deadline_ms}, "quiet_ms": 100}}
+${lighting_events}
+,
+    {"target": ".", "action": "wait_progressive_view_ready",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/background-cache-complete.png"}}
+${normal_policy_events}
+EOF
+)
+	lighting_events=""
+    fi
+    if [[ "$case_name" == "generic_twin" ]]; then
+	# Exercise an exact pose round trip before changing the view scale.  Do not
+	# use ae 90 0 here: elevation zero is an A/E singularity, so a trip through
+	# ae 0 0 can legitimately select a different roll even when both commands
+	# spell the same angles.  This non-singular reference keeps center, size,
+	# projection, and camera matrix unchanged, so a history miss cannot be
+	# explained by an almost-equal camera.  The returned settled view must reuse
+	# its terminal quality proof rather than repeat the calibration staircase.
+	history_events=$(cat <<EOF
+    {"target": ".", "action": "qged_command_batch",
+	     "arguments": {"commands": ["ae 45 25"]}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+	     "arguments": {"name": "${image_dir}/history-reference-stable.png"}},
+    {"target": ".", "action": "qged_command_batch",
+	     "arguments": {"commands": ["ae 0 0"]}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+	     "arguments": {"name": "${image_dir}/history-alternate-stable.png"}},
+    {"target": ".", "action": "qged_command_batch",
+     "arguments": {"commands": ["ae 45 25"]}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/history-return-stable.png"}},
+EOF
+)
+    fi
+
+    if [[ "$case_name" == "generic_twin" ]]; then
+	# A fixed sleep inside the GUI driver's nested event loop may leave a
+	# coalesced System GL update unpresented until the next scripted action.
+	# Use the endpoint's level-triggered idle barrier so the measured latency
+	# includes every required source, LoD, and presentation obligation without
+	# making the harness itself postpone the calibration frame.
+	initial_observation_events=$(cat <<EOF
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${initial_settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/initial-ready.png"}},
+EOF
+)
+    else
+	# Retain deterministic transient samples for exceptional and scale cases;
+	# their evolving presentation is part of the qualification evidence.
+	initial_observation_events=$(cat <<EOF
+    {"target": ".", "action": "wait", "arguments": {"ms": 1300}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/ae90-1500ms.png"}},
+EOF
+)
+    fi
+    if [[ "$case_name" == "unique_mesh_stress" ||
+	    "$case_name" == "lucy" ]]; then
+	# Approach a large mesh with actual wheel events so every intermediate
+	# camera, admission decision, presentation, and post-quiet resident
+	# compaction is measured instead of jumping between command-line sizes.
+	# unique_closed_000199.bot is a deterministic 100,352-face leaf whose
+	# principal orientation faces ae 90 0; Lucy supplies the corresponding
+	# single-asset memory-reclamation stress.
+	local smooth_zoom_steps=12
+	if [[ "$case_name" == "unique_mesh_stress" ]]; then
+	    local smooth_zoom_initial_size=2500
+	    if [[ -z "$smooth_zoom_center" ]]; then
+		printf 'ERROR: unique-mesh smooth zoom has no target center\n' >&2
+		return 1
+	    fi
+	    smooth_zoom_steps=16
+	    smooth_zoom_events=$(cat <<EOF
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "ae 90 0"}},
+    {"target": ".", "action": "qged_command",
+	 "arguments": {"command": "center ${smooth_zoom_center}"}},
+    {"target": ".", "action": "qged_command",
+	 "arguments": {"command": "size ${smooth_zoom_initial_size}"}},
+EOF
+)
+	else
+	    smooth_zoom_events=$(cat <<EOF
+    {"target": ".", "action": "qged_command_batch",
+     "arguments": {"commands": ["ae 90 0", "autoview"]}},
+    {"target": ".", "action": "wait_progressive_cad_mesh_ready",
+     "arguments": {"timeout_ms": ${large_asset_cache_completion_deadline_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/first-cad-mesh-ready.png"}},
+EOF
+)
+	fi
+	smooth_zoom_events+=$(cat <<EOF
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-start-stable.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-start-stable.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-start-stable.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-start-stable.png"}},
+EOF
+)
+	if [[ "$case_name" == "lucy" ]]; then
+	    # Keep the interaction explicitly bracketed beyond one exceptional
+	    # suffix's measured load/build latency.  The later low-amplitude wheel
+	    # events also keep the scale epoch changing at less than the 150 ms
+	    # quiet debounce, distinguishing refinement during continuous input
+	    # from a result released only after zoom has stopped.
+	    smooth_zoom_events+=$(cat <<EOF
+    {"target": "${canvas_target}", "action": "mouse_press",
+     "arguments": {"x": 0.5, "y": 0.5, "button": 1, "buttons": 1,
+                   "modifiers": 0}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.52, "y": 0.5, "button": 0, "buttons": 1,
+                   "modifiers": 0}},
+EOF
+)
+	fi
+	for ((label_index = 1;
+		label_index <= smooth_zoom_steps; ++label_index)); do
+	    smooth_zoom_events+=$(cat <<EOF
+    {"target": "${canvas_target}", "action": "wheel",
+     "arguments": {"x": 0.5, "y": 0.5, "pixel_x": 0, "pixel_y": 0,
+                   "angle_x": 0, "angle_y": 120, "modifiers": 0}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 16}},
+EOF
+)
+	    if ((label_index % 4 == 0)); then
+		smooth_zoom_events+=$(cat <<EOF
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-in-${label_index}.png"}},
+EOF
+)
+	    fi
+	done
+	if [[ "$case_name" == "lucy" ]]; then
+	    for ((label_index = 1; label_index <= 15; ++label_index)); do
+		smooth_zoom_events+=$(cat <<EOF
+    {"target": "${canvas_target}", "action": "wheel",
+     "arguments": {"x": 0.5, "y": 0.5, "pixel_x": 0, "pixel_y": 0,
+                   "angle_x": 0, "angle_y": 1, "modifiers": 0}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 100}},
+EOF
+)
+	    done
+	    # A first richer System-GL VBO presentation can legitimately hit the
+	    # 100 ms hard deadline after completing its one-time upload.  Make that
+	    # bounded attempt observable, then leave the button held while the
+	    # event loop services the controller's requested retained-data replay.
+	    # The validated checkpoint still requires an actually submitted richer
+	    # frame; this pause tests retry liveness rather than accepting metadata.
+	    smooth_zoom_events+=$(cat <<EOF
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-active-first-attempt.png"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 250}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-active-refined.png"}},
+    {"target": "${canvas_target}", "action": "mouse_release",
+     "arguments": {"x": 0.52, "y": 0.5, "button": 1, "buttons": 0,
+                   "modifiers": 0}},
+EOF
+)
+	fi
+	smooth_zoom_events+=$(cat <<EOF
+    {"target": ".", "action": "wait", "arguments": {"ms": 850}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-close-stable.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-close-stable.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-close-stable.png"}},
+EOF
+)
+	for ((label_index = 1;
+		label_index <= smooth_zoom_steps; ++label_index)); do
+	    smooth_zoom_events+=$(cat <<EOF
+    {"target": "${canvas_target}", "action": "wheel",
+     "arguments": {"x": 0.5, "y": 0.5, "pixel_x": 0, "pixel_y": 0,
+                   "angle_x": 0, "angle_y": -120, "modifiers": 0}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 16}},
+EOF
+)
+	    if ((label_index % 4 == 0)); then
+		smooth_zoom_events+=$(cat <<EOF
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-out-${label_index}.png"}},
+EOF
+)
+	    fi
+	done
+	smooth_zoom_events+=$(cat <<EOF
+    {"target": ".", "action": "wait", "arguments": {"ms": 850}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-out-stable.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-out-stable.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-out-stable.png"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "autoview"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 850}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-return.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-return.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-return.png"}},
+EOF
+)
+    fi
+    if [[ -n "$hierarchy_root" && -n "$hierarchy_child" &&
+	    -n "$hierarchy_path" ]]; then
+	# Drive every prefix of the declared probe path.  Keeping the event
+	# generator independent of a fixture's hierarchy depth prevents a
+	# larger stress database from silently probing the wrong row.
+	local -a hierarchy_labels=()
+	IFS='/' read -r -a hierarchy_labels <<< "$hierarchy_path"
+	local prefix_labels=""
+	local label
+	for ((label_index = 0;
+		label_index < ${#hierarchy_labels[@]}; ++label_index)); do
+	    label="${hierarchy_labels[$label_index]}"
+	    [[ -n "$hierarchy_selection_labels" ]] &&
+		hierarchy_selection_labels+=", "
+	    hierarchy_selection_labels+="\"${label}\""
+	    [[ -n "$prefix_labels" ]] && prefix_labels+=", "
+	    prefix_labels+="\"${label}\""
+	    if ((label_index + 1 < ${#hierarchy_labels[@]})); then
+		hierarchy_expand_events+="    {\"target\": \"./n:Hierarchy/i:hierarchy-tree\", \"action\": \"set_expanded\",
+     \"arguments\": {\"labels\": [${prefix_labels}], \"expanded\": true}},
+"
+	    fi
+	done
+	# A canvas checkpoint performs a real render.  On a slow backend that
+	# render may supply new capacity feedback and schedule a legitimate LoD
+	# correction.  Settle any such work before beginning the hierarchy
+	# interval so the selection assertions measure work caused by selection,
+	# rather than work caused by the preceding diagnostic checkpoint.
+	hierarchy_events=$(cat <<EOF
+,
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+${hierarchy_expand_events}
+    {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/tree-expanded.png"}},
+    {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "set_current",
+     "arguments": {"labels": [${hierarchy_selection_labels}]}},
+    {"target": ".", "action": "wait_progressive_view_ready",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 50}},
+    {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/tree-selected.png"}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/selection-visible.png"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "erase ${hierarchy_path}"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/subpath-erased.png"}},
+    {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/tree-erased.png"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "draw -m${draw_mode} ${hierarchy_path}"}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/subpath-redraw-return.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/subpath-redraw-stable.png"}},
+    {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/tree-redrawn.png"}},
+    {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "clear_selection",
+     "arguments": {}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/tree-cleared.png"}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/final-stable.png"}}
+EOF
+)
+    fi
+
+    if [[ "$case_name" == "unique_mesh_50k_stress" ||
+	    "$case_name" == "unique_mesh_150k_stress" ]]; then
+	# User readiness and terminal background convergence are different
+	# contracts.  Exercise a real held drag while cold preparation is still
+	# active, then return to the reference view and wait once for a terminal
+	# visible characterization.  Resident compaction is independently bounded
+	# background work and may continue while subsequent camera changes exercise
+	# its cancellation and demand-replacement contract.  Waiting for all cache
+	# work here hid cold input stalls and turned a useful scale test into several
+	# minutes of memory-housekeeping latency.
+	view_events=$(cat <<EOF
+    {"target": "${canvas_target}", "action": "mouse_press",
+     "arguments": {"x": 0.34, "y": 0.45, "button": 1, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.43, "y": 0.49, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.52, "y": 0.55, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/cold-rotate-held.png"}},
+    {"target": "${canvas_target}", "action": "mouse_release",
+     "arguments": {"x": 0.52, "y": 0.55, "button": 1, "buttons": 0,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/cold-rotate-motion.png"}},
+    {"target": ".", "action": "qged_command_batch",
+     "arguments": {"commands": ["ae 90 0", "autoview"]}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 1000}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/realization-1s.png"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 2000}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/realization-3s.png"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 3000}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/realization-6s.png"}},
+    {"target": ".", "action": "wait_progressive_scope_ready",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/scope-ready.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/ae90-stable.png"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 200}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/ae90-stable-held.png"}},
+
+    {"target": "${canvas_target}", "action": "wheel",
+     "arguments": {"x": 0.5, "y": 0.5, "pixel_x": 0, "pixel_y": 0,
+                   "angle_x": 0, "angle_y": 360, "modifiers": 0}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/zoom-in-motion.png"}},
+    {"target": "${canvas_target}", "action": "wheel",
+     "arguments": {"x": 0.5, "y": 0.5, "pixel_x": 0, "pixel_y": 0,
+                   "angle_x": 0, "angle_y": -720, "modifiers": 0}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/zoom-out-motion.png"}},
+    {"target": "${canvas_target}", "action": "wheel",
+     "arguments": {"x": 0.5, "y": 0.5, "pixel_x": 0, "pixel_y": 0,
+                   "angle_x": 0, "angle_y": 360, "modifiers": 0}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/zoom-return-stable.png"}},
+
+    {"target": "${canvas_target}", "action": "mouse_press",
+     "arguments": {"x": 0.34, "y": 0.45, "button": 1, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.40, "y": 0.47, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.46, "y": 0.51, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.52, "y": 0.55, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.58, "y": 0.51, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/rotate-held-end.png"}},
+    {"target": "${canvas_target}", "action": "mouse_release",
+     "arguments": {"x": 0.58, "y": 0.51, "button": 1, "buttons": 0,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/rotate-motion.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/rotate-stable.png"}}
+EOF
+)
+    else
+	view_events=$(cat <<EOF
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${initial_settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/ae90-stable.png"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 200}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/ae90-stable-held.png"}},
+
+${history_events}
+    {"target": "${canvas_target}", "action": "wheel",
+     "arguments": {"x": 0.5, "y": 0.5, "pixel_x": 0, "pixel_y": 0,
+                   "angle_x": 0, "angle_y": 360, "modifiers": 0}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/zoom-in-motion.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/zoom-in-stable.png"}},
+
+    {"target": "${canvas_target}", "action": "wheel",
+     "arguments": {"x": 0.5, "y": 0.5, "pixel_x": 0, "pixel_y": 0,
+                   "angle_x": 0, "angle_y": -720, "modifiers": 0}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/zoom-out-motion.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/zoom-out-stable.png"}},
+
+    {"target": "${canvas_target}", "action": "wheel",
+     "arguments": {"x": 0.5, "y": 0.5, "pixel_x": 0, "pixel_y": 0,
+                   "angle_x": 0, "angle_y": 360, "modifiers": 0}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/zoom-return-stable.png"}},
+
+${working_set_events}
+${smooth_zoom_events}
+    {"target": "${canvas_target}", "action": "mouse_press",
+     "arguments": {"x": 0.34, "y": 0.45, "button": 1, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.40, "y": 0.47, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.46, "y": 0.51, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.52, "y": 0.55, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.58, "y": 0.51, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/rotate-held-end.png"}},
+    {"target": "${canvas_target}", "action": "mouse_release",
+     "arguments": {"x": 0.58, "y": 0.51, "button": 1, "buttons": 0,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/rotate-motion.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/rotate-stable.png"}}
+EOF
+)
+    fi
+
+    cat > "$output" <<EOF
+{
+  "schema": "brlcad.qtcad.events",
+  "version": 1,
+  "events": [
+    {"target": ".", "action": "resize",
+     "arguments": {"width": 1100, "height": 800}},
+    {"target": ".", "action": "wait_canvas_ready",
+     "arguments": {"timeout_ms": ${canvas_ready_timeout_ms}}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "ae 90 0"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "draw -m${draw_mode} ${object}"}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/draw-return.png"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/draw-050ms.png"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 200}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/ae90-0200ms.png"}},
+${initial_observation_events}
+${first_coverage_events}
+${view_events}
+${lighting_events}
+${background_completion_events}
+${hierarchy_events}
+  ]
+}
+EOF
+
+    if [[ "$case_name" == "lucy" ||
+	"$case_name" == "unique_mesh_50k_stress" ||
+	"$case_name" == "unique_mesh_150k_stress" ]]; then
+	# Large-source persistence and high-cardinality resident compaction may
+	# outlive a terminal visible frame.  Intermediate barriers model real user
+	# interactions and therefore wait for the framebuffer contract.  Lucy's
+	# explicit cache-idle event above remains the strict persistence row;
+	# high-cardinality background completion is qualified separately from this
+	# interaction matrix.
+	sed -i 's/"wait_progressive_idle"/"wait_progressive_view_ready"/g' "$output"
+    fi
+}
+
+validate_report()
+{
+    local report="$1"
+    local image_dir="$2"
+    local object="$3"
+    local hierarchy_path="$4"
+    local validation="$5"
+    local cache_state="${6:-cold}"
+    local case_name="${7:-}"
+    local mode="${8:-shaded}"
+    local lucy_contract_failed=0
+
+    : >"$validation"
+    # Diagnose Lucy quality even when the independent base or control-trace
+    # gate also fails.  A control failure must not hide a bad settled image.
+    if [[ "$case_name" == "lucy" ]]; then
+	if ! jq -e --arg mode "$mode" \
+	    -f "$script_dir/lod_lucy_contract.jq" "$report" \
+	    >>"$validation" 2>&1; then
+	    lucy_contract_failed=1
+	    printf 'Lucy coverage/presentation contract failed (conditions above)\n' \
+		>>"$validation"
+	fi
+    fi
+
+    if ! jq -e '
+	.schema == "brlcad.qged.gui-report" and
+	.version == 2 and
+	.success == true and
+	(.samples | length) > 0 and
+	(any(.samples[];
+	    ((.draw_frontier_count // 0) > 0) or
+	    ((.draw_occurrence_count // 0) > 0))) and
+	(all(.samples[]; (.failed_sources // 0) == 0)) and
+	(all(.samples[] | select(.controller_available == true);
+	    . as $sample |
+	    (["compact_entries", "compact_lod_entries",
+	      "compact_fallback_entries", "compact_lod_entries_with_payload",
+	      "compact_fallback_entries_with_payload", "cad_payloads_without_entry",
+	      "superseded_fallback_presentations",
+	      "active_structural_fallback_presentations"] | all(.[];
+		. as $field |
+		($sample | has($field)) and
+		(if $sample.deep_lod_diagnostics == true then
+		    ($sample[$field] | type) == "number" and $sample[$field] >= 0
+		 else
+		    $sample.deep_lod_diagnostics == false and $sample[$field] == null
+		 end))) and
+	    (if .deep_lod_diagnostics == true then
+		.cad_payloads_without_entry == 0
+	     else true end))) and
+	# The production refinement map is the executable bridge to the finite
+	# TLA+ work ledger.  Missing fields are a harness failure, not a zero-value
+	# fallback, and every sampled controller state must satisfy its local
+	# owner/readiness invariants.
+	(all(.samples[] | select(.controller_available == true);
+	    has("lod_control_obligation_mask") and
+	    has("lod_control_owner") and
+	    has("lod_control_violation_mask") and
+	    has("lod_convergence_constraint_evidence_mask") and
+	    (.lod_control_violation_mask == 0) and
+	    (((.lod_convergence_performance_limited // false) | not) or
+	     ((.lod_convergence_constraint_evidence_mask // 0) != 0)))) and
+	# Estimated progress is presentation-only, but it still makes a strict
+	# user-facing promise: only terminal convergence may display 100 percent.
+	# Unknown work must remain explicitly indeterminate instead of retaining a
+	# stale estimate from an earlier terminal frame.
+	(all(.samples[] | select(.controller_available == true);
+	    has("lod_progress_estimate_available") and
+	    has("lod_estimated_fraction") and
+	    has("lod_estimated_remaining_ms") and
+	    (.lod_estimated_fraction >= 0) and
+	    (.lod_estimated_fraction <= 1) and
+	    (if .lod_convergence_terminal == true then
+		(.lod_progress_estimate_available == true) and
+		(.lod_estimated_fraction == 1) and
+		(.lod_estimated_remaining_ms == 0)
+	     elif .lod_progress_estimate_available == true then
+		(.lod_estimated_fraction < 1) and
+		(.lod_estimated_remaining_ms > 0)
+	     else
+		(.lod_estimated_fraction == 0) and
+		(.lod_estimated_remaining_ms == 0)
+	     end))) and
+	# "View ready" is the faceplate terminal promise.  Validate the actual
+	# retained label text, not merely the controller readiness bit: a usable
+	# framebuffer may coexist with background work and an incomplete bar.
+	(all(.samples[];
+	    (((.lod_progress_label_text // "") |
+	      startswith("View ready")) | not) or
+	    ((.lod_convergence_has_state // false) == true and
+	     (.lod_convergence_terminal // false) == true and
+	     (.lod_convergence_view_ready // false) == true and
+	     (.lod_convergence_background_pending // false) == false and
+	     (.lod_convergence_fraction // 0) >= 1))) and
+	# Results may become owner-thread state immediately before the render
+	# traversal synchronizes their retained presentation.  That transient is
+	# not a displayed fallback frame; the stable/final sample is the
+	# authoritative lingering-box invariant.
+	(if .samples[-1].deep_lod_diagnostics == true then
+	    .samples[-1].superseded_fallback_presentations == 0
+	 else true end)
+	and
+	# The generic progressive flag also covers deferred resident-memory
+	# compaction.  A terminal visual frame may therefore be view-ready while
+	# memory housekeeping remains queued; reject only unfinished visual work.
+	((.samples[-1].progressive_pending == false) or
+	 ((.samples[-1].lod_convergence_view_ready // false) == true and
+	  (.samples[-1].lod_convergence_background_pending // false) == true)) and
+	(.samples[-1].lod_results_pending == false) and
+	(.samples[-1].lod_submissions_pending == false) and
+	(.samples[-1].lod_refinement_frame_pending == false) and
+	# GPU accounting is published only at a complete-frame commit.  A drawn
+	# CAD scene must expose a nonempty coherent snapshot, and a clean terminal
+	# frame cannot retain an atlas-admission proxy or pressure latch.
+	((.samples[-1].lod_gpu_resource_sample_serial // 0) > 0) and
+	((.samples[-1].lod_gpu_tracked_buffer_bytes // 0) > 0) and
+	((.samples[-1].lod_gpu_atlas_live_bytes // 0) <=
+	 (.samples[-1].lod_gpu_atlas_allocated_bytes // 0)) and
+	# A scene whose useful visible working set exceeds the configured GPU
+	# allowance may terminate at a coherent memory-limited cut.  Requiring the
+	# renderer admission-pressure observation or its aggregate point records to
+	# disappear made the 50k/150k qualification fixtures fail precisely when
+	# the coordinator honored that contract.  The exact atlas builder admits
+	# minimum prefixes in visual-importance order; only the least-important
+	# eligible suffix is represented by those points.  Pressure is acceptable
+	# only with an explicit terminal proof; ordinary scenes and every
+	# non-ready/pending state still require both the latch and proxy count clear.
+	((.samples[-1].lod_gpu_memory_pressure == false) or
+	 ((.samples[-1].lod_convergence_memory_limited // false) == true and
+	  (.samples[-1].lod_convergence_view_ready // false) == true and
+	  (.samples[-1].lod_convergence_fraction // 0) >= 1 and
+	  ((.samples[-1].progressive_pending == false) or
+	   ((.samples[-1].lod_convergence_background_pending // false) == true)))) and
+	(((.samples[-1].lod_gpu_pressure_proxies // 0) == 0) or
+	 ((.samples[-1].lod_gpu_memory_pressure // false) == true and
+	  (.samples[-1].lod_convergence_memory_limited // false) == true and
+	  (.samples[-1].lod_convergence_view_ready // false) == true and
+	  (.samples[-1].lod_convergence_fraction // 0) >= 1 and
+	  ((.samples[-1].progressive_pending == false) or
+	   ((.samples[-1].lod_convergence_background_pending // false) == true)))) and
+	((.samples[-1].lod_service_pending_tasks // 0) == 0) and
+	((.samples[-1].lod_service_active_requests // 0) == 0) and
+	((.samples[-1].lod_service_queued_results // 0) == 0) and
+	((.samples[-1].lod_service_queued_cache_writes // 0) == 0) and
+	# Terminal structural proxies are valid only when the controller has an
+	# explicit memory or renderer-performance constraint proof.  Hubble and
+	# the large fixtures may retain a small least-important proxy suffix after
+	# a costly pose, while unconstrained scenes (especially Generic Twin) must
+	# retire every startup proxy.
+	((((.samples[-1].active_lod_aabb_payloads // 0) +
+	   (.samples[-1].active_lod_obb_payloads // 0) +
+	   (.samples[-1].active_lod_sphere_payloads // 0)) == 0) or
+	 ((.samples[-1].lod_convergence_view_ready // false) == true and
+	  (.samples[-1].lod_convergence_fraction // 0) >= 1 and
+	  ((.samples[-1].progressive_pending == false) or
+	   ((.samples[-1].lod_convergence_background_pending // false) == true)) and
+	  (((.samples[-1].lod_convergence_memory_limited // false) == true) or
+	   ((.samples[-1].lod_convergence_performance_limited // false) == true)) and
+	  ((.samples[-1].lod_convergence_constraint_evidence_mask // 0) != 0))) and
+	# Compact entries outside the current view intentionally need no payload:
+	# requiring one for every leaf defeats view-aware LoD memory management.
+	# Existing payloads must instead form a one-to-one, entry-backed subset.
+	(if .samples[-1].deep_lod_diagnostics == true
+	 then
+	    ((.samples[-1].compact_lod_entries_with_payload // 0) <=
+	     (.samples[-1].compact_lod_entries // 0)) and
+	    ((.samples[-1].compact_lod_entries_with_payload // 0) ==
+	     (.samples[-1].active_lod_cad_payloads // 0))
+	 else true
+	 end)
+	' "$report" >>"$validation" 2>&1; then
+	printf 'base terminal rendering contract failed\n' >>"$validation"
+	return 1
+    fi
+
+    # Refine sampled production state against the finite control contract.
+    # This checker is deliberately external to the controller: observation
+    # can fail a qualification run, but can never schedule or retire work.
+    if ! jq -e -f "$script_dir/lod_control_trace.jq" "$report" \
+	    >>"$validation" 2>&1; then
+	printf 'progressive control trace contract failed\n' >>"$validation"
+	return 1
+    fi
+
+    if [[ "$case_name" == "generic_twin" ]]; then
+	if ! jq -e --arg object "$object" \
+		--argjson deadline "$generic_twin_terminal_deadline_ms" '
+	    (first(.samples[] |
+		select((.command? // "") | startswith("draw ")) |
+		select((.command? // "") | endswith(" " + $object)))) as $draw |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/initial-ready.png")))) as $ready |
+	    ($draw != null) and ($ready != null) and
+	    (($ready.elapsed_ms - $draw.elapsed_ms) <= $deadline) and
+	    (($ready.lod_convergence_terminal // false) == true) and
+	    (($ready.lod_convergence_view_ready // false) == true) and
+	    ($ready.lod_convergence_background_pending == false) and
+	    (($ready.lod_convergence_fraction // 0) >= 1) and
+	    ($ready.progressive_pending == false) and
+	    (($ready.visible_structural_fallback_boxes // 1) == 0)
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'Generic Twin did not reach terminal mesh presentation within %s ms\n' \
+		"$generic_twin_terminal_deadline_ms" >>"$validation"
+	    return 1
+	fi
+	if ! jq -e --argjson error_factor "$LOD_SCREEN_ERROR_HYSTERESIS_FACTOR" \
+	    --argjson error_roundoff "$LOD_SCREEN_ERROR_ROUNDOFF_PIXELS" '
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/history-reference-stable.png")))) as $initial |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/history-return-stable.png")))) as $returned |
+	    ($initial != null) and ($returned != null) and
+	    (($returned.lod_view_quality_history_recalls // 0) >= 1) and
+	    # The policy target is an aspiration; a discrete retained PoP cut is
+	    # permitted to remain within its documented hysteresis band.  The
+	    # projected-error certificate is the user-visible fidelity contract and
+	    # also catches a return that recalls a materially coarser cut.
+	    (($returned.lod_max_cad_projected_error_pixels //
+	      9223372036854775807) <=
+	     (($initial.lod_max_cad_projected_error_pixels // 0) *
+	      $error_factor + $error_roundoff)) and
+	    (($returned.lod_convergence_view_ready // false) == true) and
+	    (($returned.lod_convergence_presented_structural_boxes // 0) == 0)
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'Generic Twin exact reference view did not recall proven terminal quality\n' \
+		>>"$validation"
+	    return 1
+	fi
+    fi
+
+    if [[ "$mode" == "shaded" &&
+	    ("$case_name" == "generic_twin" || "$case_name" == "lucy") ]]; then
+	local mged_lighting_image="$image_dir/lighting-mged.png"
+	local studio_lighting_image="$image_dir/lighting-studio.png"
+	local lighting_dimensions lighting_width lighting_height
+	local lighting_crop_width=0 lighting_crop_height=0
+	local lighting_changed_pixels=0
+	lighting_dimensions=$(identify -format '%wx%h' "$studio_lighting_image" \
+	    2>/dev/null || true)
+	lighting_width="${lighting_dimensions%x*}"
+	lighting_height="${lighting_dimensions#*x}"
+	if [[ -f "$mged_lighting_image" && -f "$studio_lighting_image" &&
+		"$lighting_width" =~ ^[0-9]+$ &&
+		"$lighting_height" =~ ^[0-9]+$ &&
+		"$lighting_width" -gt 60 && "$lighting_height" -gt 174 ]]; then
+	    lighting_crop_width=$((lighting_width - 60))
+	    lighting_crop_height=$((lighting_height - 174))
+	    lighting_changed_pixels=$(compare -metric AE -fuzz 2% \
+		-crop "${lighting_crop_width}x${lighting_crop_height}+0+24" \
+		"$mged_lighting_image" "$studio_lighting_image" null: \
+		2>&1 || true)
+	fi
+	if [[ ! "$lighting_changed_pixels" =~ ^[0-9]+$ ||
+		"$lighting_changed_pixels" -lt 500 ]]; then
+	    printf 'MGED/studio lighting profiles did not visibly differ: changed_pixels=%s\n' \
+		"$lighting_changed_pixels" >>"$validation"
+	    return 1
+	fi
+	if ! jq -e --arg mged "$mged_lighting_image" \
+		--arg studio "$studio_lighting_image" '
+	    (first(.samples[] |
+		select((.checkpoint? // "") == $mged))) as $mged_sample |
+	    (first(.samples[] |
+		select((.checkpoint? // "") == $studio))) as $studio_sample |
+	    ($mged_sample.lighting_profile == "mged") and
+	    (($mged_sample.lighting_camera_light_count // -1) == 1) and
+	    ((($mged_sample.lighting_ambient_intensity // 0) - 0.30) |
+		abs < 0.0001) and
+	    ($studio_sample.lighting_profile == "studio") and
+	    (($studio_sample.lighting_camera_light_count // -1) == 3) and
+	    ((($studio_sample.lighting_ambient_intensity // 0) - 0.18) |
+		abs < 0.0001)
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'lighting checkpoints did not report the selected shared rig\n' \
+		>>"$validation"
+	    return 1
+	fi
+    fi
+
+    # The independent coverage/quality result was recorded before the other
+    # gates; retain its failure while continuing the remaining Lucy checks
+    # only when those prerequisites passed.
+    if [[ "$case_name" == "lucy" ]]; then
+	if [[ "$lucy_contract_failed" -ne 0 ]]; then
+	    return 1
+	fi
+	if [[ "$cache_state" == "cold" ]] && ! jq -e \
+	    --argjson deadline "$lucy_cold_payload_deadline_ms" '
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/first-coverage-ready.png")))) as $first_coverage |
+	    ($first_coverage != null) and
+	    (($first_coverage.elapsed_ms // 9223372036854775807) <= $deadline) and
+	    (($first_coverage.active_lod_cad_payloads // 0) >= 1) and
+	    (($first_coverage.visible_structural_fallback_boxes // 0) == 0)
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'cold Lucy did not publish globally representative coverage by %s ms\n' \
+		"$lucy_cold_payload_deadline_ms" >>"$validation"
+	    return 1
+	fi
+	# Reopening a warm hierarchy must publish a bounded but recognizable first
+	# prefix.  The former absolute-minimum policy made Lucy appear as three
+	# box-like slabs; the opposite extreme delayed all content while reading the
+	# complete view target.  Permit ordinary refinement after this checkpoint,
+	# but keep the first mesh within a bounded number of authored cuts and well
+	# above the unusable 44/68-triangle population.
+	if [[ "$cache_state" == "warm" ]] && ! jq -e '
+	    ([.samples[] |
+	      select((.checkpoint? // "") |
+		endswith("/ae90-0200ms.png") or
+		endswith("/ae90-1500ms.png")) |
+	      select((.active_lod_cad_payloads // 0) > 0) |
+	      select((.active_progressive_cad_faces // 0) >= 2000) |
+	      select((.active_progressive_cad_cut_min // -1) >= 8)] |
+	      first) as $first |
+	    ($first != null) and
+	    (($first.visible_structural_fallback_boxes // 0) == 0) and
+	    (($first.active_progressive_cad_cut_min // -1) >=
+	     (($first.requested_progressive_cad_cut_min // 12) - 12))
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'warm Lucy first mesh was not a bounded recognizable prefix\n' \
+		>>"$validation"
+	    return 1
+	fi
+	if [[ "$mode" == "shaded" ]] && ! jq -e '
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/normals-flat.png")))) as $flat |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/normals-authored-reference.png")))) as $authored |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/normals-smooth.png")))) as $smooth |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/normals-authored-return.png")))) as $returned |
+	    all([$authored, $flat, $smooth, $returned][];
+		. != null and
+		(.lod_convergence_terminal // false) == true and
+		(.lod_convergence_view_ready // false) == true and
+		(.visible_structural_fallback_boxes // 0) == 0 and
+		(.cad_occurrence_terminal_failures // 0) == 0 and
+		(.presented_cad_faces // 0) > 0) and
+	    ($authored.view_normal_style == "authored") and
+	    ($flat.view_normal_style == "flat") and
+	    ($smooth.view_normal_style == "smooth") and
+	    ((($smooth.view_normal_crease_angle // 0) - 35) | abs < 0.0001) and
+	    ($returned.view_normal_style == "authored") and
+	    all([$flat, $smooth, $returned][];
+		.active_progressive_cad_occurrence_hash ==
+		$authored.active_progressive_cad_occurrence_hash) and
+	    all([$smooth, $returned][];
+		.active_progressive_cad_cut_min ==
+		$authored.active_progressive_cad_cut_min and
+		.active_progressive_cad_cut_max ==
+		$authored.active_progressive_cad_cut_max and
+		.presented_cad_faces == $authored.presented_cad_faces)
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'Lucy spatial-page normal policy transition was not coherent\n' \
+		>>"$validation"
+	    return 1
+	fi
+	if [[ "$mode" == "shaded" ]]; then
+	    local authored_normal_image="$image_dir/normals-authored-reference.png"
+	    local smooth_normal_image="$image_dir/normals-smooth.png"
+	    local returned_normal_image="$image_dir/normals-authored-return.png"
+	    local normal_dimensions normal_width normal_height
+	    local normal_crop_width=0 normal_crop_height=0
+	    local smooth_normal_pixels=0 returned_normal_pixels=0
+	    normal_dimensions=$(identify -format '%wx%h' \
+		"$authored_normal_image" 2>/dev/null || true)
+	    normal_width="${normal_dimensions%x*}"
+	    normal_height="${normal_dimensions#*x}"
+	    if [[ "$normal_width" =~ ^[0-9]+$ &&
+		    "$normal_height" =~ ^[0-9]+$ &&
+		    "$normal_width" -gt 60 && "$normal_height" -gt 174 ]]; then
+		normal_crop_width=$((normal_width - 60))
+		normal_crop_height=$((normal_height - 174))
+		smooth_normal_pixels=$(compare -metric AE -fuzz 0.5% \
+		    -crop "${normal_crop_width}x${normal_crop_height}+0+24" \
+		    "$authored_normal_image" "$smooth_normal_image" null: \
+		    2>&1 || true)
+		returned_normal_pixels=$(compare -metric AE -fuzz 1% \
+		    -crop "${normal_crop_width}x${normal_crop_height}+0+24" \
+		    "$authored_normal_image" "$returned_normal_image" null: \
+		    2>&1 || true)
+	    fi
+	    # The renderer may synthesize flat normals in a transient GPU buffer,
+	    # so its submitted-work normal counter is not an immutable-payload
+	    # census.  Low-level cache tests inspect the arrays directly; this GUI
+	    # row verifies the complementary user contract: smooth policy changes
+	    # the surface and returning to authored restores the same pixels.
+	    if [[ ! "$smooth_normal_pixels" =~ ^[0-9]+$ ||
+		    "$smooth_normal_pixels" -lt 500 ||
+		    ! "$returned_normal_pixels" =~ ^[0-9]+$ ||
+		    "$returned_normal_pixels" -gt 100 ]]; then
+		printf 'Lucy normal-policy pixels were not reversible: smooth=%s return=%s\n' \
+		    "$smooth_normal_pixels" "$returned_normal_pixels" \
+		    >>"$validation"
+		return 1
+	    fi
+	fi
+    fi
+
+    # Hubble combines a few large silhouette-defining assemblies (solar
+    # panels, telescope body, doors) with thousands of much smaller parts.
+    # It is therefore the real-model qualification case for the scene-wide
+    # visual-importance allocator: every quiet reference view must identify a
+    # nonempty prominent set and satisfy its quality floor.  A renderer with
+    # enough calibrated capacity must also keep every visible projected error
+    # within the allocator's 25 percent hysteresis; a correctly reported
+    # performance-limited software cut may spend less on small parts but not
+    # leave the prominent population unrecognizably coarse.
+    # Motion frames may temporarily violate the quiet floor to meet the input
+    # deadline and are checked separately by the interaction contract.
+    if [[ "$case_name" == "hubble" ]]; then
+	if ! jq -e '
+	    [ .samples[] |
+	      select((.checkpoint? // "") |
+		endswith("/ae90-stable.png") or
+		endswith("/zoom-in-stable.png") or
+		endswith("/zoom-out-stable.png") or
+		endswith("/zoom-return-stable.png") or
+		endswith("/rotate-stable.png") or
+		endswith("/final-stable.png")) ] as $stable |
+	    ($stable | length) >= 6 and
+	    all($stable[];
+		(.lod_convergence_view_ready // false) == true and
+		(.lod_prominent_cad_payloads // 0) > 0 and
+		(.lod_prominent_cad_quality_floor_violations // 0) == 0 and
+		(.lod_max_cad_visual_footprint_pixels // 0) > 0 and
+		(if (.lod_convergence_performance_limited // false) then
+		    true
+		 else
+		    (.lod_cad_quality_floor_violations // 0) == 0 and
+		    (.lod_max_cad_normalized_error // 9223372036854775807) <=
+			1.251
+		 end))
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'Hubble visual-importance allocator left a prominent quiet-view quality deficit\n' \
+		>>"$validation"
+	    return 1
+	fi
+    fi
+
+    if ! sh "$script_dir/lod_hud_contract.sh" jq identify convert "$report" \
+        >>"$validation" 2>&1; then
+        return 1
+    fi
+
+    # A retained database-source node is counted before it owns drawable
+    # geometry, so report counters alone cannot distinguish a useful first
+    # frame from the empty gradient canvas.  Check an actual early
+    # framebuffer: the background is horizontally uniform, while boxes and
+    # geometry differ from the left-edge color on enough pixels to be useful.
+    # A 3+ GiB/150k-object cold database must first open and index its isolated
+    # read-only realization handle, then discover every hierarchy occurrence
+    # before its whole-target extent can be exact.  For that qualification
+    # tier the six-second realization checkpoint (normally about eight
+    # seconds after draw return) is the explicit exact-overview deadline; the
+    # 1.5-second checkpoint remains a UI/HUD responsiveness sample.  Warm and
+    # smaller cases retain the stricter 1.5-second geometry gate.
+    # Exclude the border, HUD strip, and right-side convergence indicator.
+    local first_useful="$image_dir/ae90-1500ms.png"
+    local first_useful_limit_ms=5000
+    if [[ "$case_name" == "generic_twin" ]]; then
+	first_useful="$image_dir/initial-ready.png"
+	first_useful_limit_ms="$generic_twin_terminal_deadline_ms"
+    fi
+    if [[ "$cache_state" == "cold" ]]; then
+	if [[ "$case_name" == "unique_mesh_150k_stress" ]]; then
+	    first_useful="$image_dir/realization-6s.png"
+	    first_useful_limit_ms=12000
+	elif [[ "$case_name" == "unique_mesh_50k_stress" ]]; then
+	    # The reference autoview is intentionally deferred until the exact
+	    # whole-target scope is known; fitting a 10k/50k partial prefix would
+	    # make the camera visibly jump as discovery expands the bounds.  The
+	    # one/three-second images remain responsiveness and partial-coverage
+	    # samples.  Judge representative whole-scene coverage at the explicit
+	    # six-second scope checkpoint, just as for the 150k cold tier.
+	    first_useful="$image_dir/realization-6s.png"
+	    first_useful_limit_ms=12000
+	elif [[ "$case_name" == "multi_lucy_xpush" && "$mode" == "wire" ]]; then
+	    # Eight independently baked 28M-face copies are an intentionally
+	    # pathological cold source.  The bounds-first contract still publishes
+	    # partial leaf boxes at 1.5 seconds, but at that instant OSMesa can have
+	    # only a handful of one-pixel silhouettes which the background fuzz
+	    # correctly rejects as non-useful.  Judge the first complete exact
+	    # scope at the stable checkpoint; the structural-box count and terminal
+	    # payload assertions below continue to reject blank/stalled drawing.
+	    first_useful="$image_dir/ae90-stable.png"
+	    first_useful_limit_ms=60000
+	fi
+    fi
+    local first_useful_elapsed first_useful_structural_boxes
+    first_useful_elapsed=$(jq -r --arg checkpoint "$first_useful" '
+	first(.samples[] |
+	    select((.checkpoint? // "") == $checkpoint) |
+	    (.elapsed_ms // 9223372036854775807))
+    ' "$report" 2>/dev/null)
+    first_useful_structural_boxes=$(jq -r --arg checkpoint "$first_useful" '
+	first(.samples[] |
+	    select((.checkpoint? // "") == $checkpoint) |
+	    (.visible_structural_fallback_boxes // 0)) // 0
+    ' "$report" 2>/dev/null)
+    # The large-fixture "realization-6s" checkpoint is six seconds after the
+    # explicit reference-view reset, not six seconds after process start.  GUI
+    # startup, the required 1.5-second responsiveness samples, and the cold
+    # held-drag exercise precede that reset.  Anchor its deadline to the first
+    # realization checkpoint so an increasingly expensive diagnostic frame or
+    # cold input sample cannot be misreported as source-realization latency.
+    if [[ "$cache_state" == "cold" &&
+	("$case_name" == "unique_mesh_50k_stress" ||
+	 "$case_name" == "unique_mesh_150k_stress") ]]; then
+	local realization_1s_elapsed
+	realization_1s_elapsed=$(jq -r --arg checkpoint \
+	    "$image_dir/realization-1s.png" '
+	    first(.samples[] |
+		select((.checkpoint? // "") == $checkpoint) |
+		(.elapsed_ms // 9223372036854775807))
+	    ' "$report" 2>/dev/null)
+	if [[ "$realization_1s_elapsed" =~ ^[0-9]+$ &&
+		"$first_useful_elapsed" =~ ^[0-9]+$ ]]; then
+	    first_useful_elapsed=$((first_useful_elapsed -
+		realization_1s_elapsed + 1000))
+	fi
+    fi
+    if [[ "$cache_state" == "warm" &&
+	"$case_name" == "multi_lucy_xpush" && "$mode" == "wire" ]]; then
+	# The warm cache eliminates PoP construction, but the 5.7 GiB database
+	# still needs its eight exact bounds scanned before reference autoview is
+	# released.  Keep the fixed 1.5-second samples as responsiveness evidence
+	# and validate useful geometry at the first quiescent frame.
+	first_useful="$image_dir/ae90-stable.png"
+	first_useful_limit_ms=30000
+	first_useful_elapsed=$(jq -r --arg checkpoint "$first_useful" '
+	    first(.samples[] |
+		select((.checkpoint? // "") == $checkpoint) |
+		(.elapsed_ms // 9223372036854775807))
+	    ' "$report" 2>/dev/null)
+	first_useful_structural_boxes=$(jq -r --arg checkpoint "$first_useful" '
+	    first(.samples[] |
+		select((.checkpoint? // "") == $checkpoint) |
+		(.visible_structural_fallback_boxes // 0)) // 0
+	    ' "$report" 2>/dev/null)
+    fi
+    local dimensions width height crop_width crop_height crop_y
+    local background changed_pixels
+    local minimum_changed_pixels=1000
+    # A structural scope/leaf box communicates the model extent with line
+    # pixels, not filled area.  When diagnostics prove such a box is actually
+    # present, use a perimeter-scale threshold; retaining the 1,000-pixel
+    # threshold would reject a correct early overview merely because it is a
+    # deliberately cheap wireframe proxy.  The HUD and convergence strip are
+    # outside this crop, so they cannot satisfy either threshold.
+    if [[ "$mode" == "wire" ||
+	    ("$first_useful_structural_boxes" =~ ^[0-9]+$ &&
+	     "$first_useful_structural_boxes" -gt 0) ]]; then
+	minimum_changed_pixels=400
+    fi
+    # Thousands of widely spaced instances are intentionally subpixel in the
+    # initial all-model view.  Requiring 1,000 distinct pixels there rewards a
+    # larger proxy, not a faster useful answer; a visible 100-pixel footprint
+    # plus the later payload/count assertions is the meaningful threshold.
+    if [[ "$object" == "many_lucy_stress" ]]; then
+	minimum_changed_pixels=100
+    fi
+    dimensions=$(identify -format '%wx%h' "$first_useful" 2>/dev/null || true)
+    width="${dimensions%x*}"
+    height="${dimensions#*x}"
+    crop_width=0
+    crop_height=0
+    crop_y=24
+    if [[ "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ &&
+	    "$width" -gt 60 && "$height" -gt 174 ]]; then
+	crop_width=$((width - 60))
+	crop_height=$((height - 174))
+    fi
+    background=$(mktemp "$artifact_dir/.qged-background.XXXXXX.png")
+    changed_pixels=0
+    if [[ "$crop_width" -gt 0 && "$crop_height" -gt 0 ]] &&
+	convert "$first_useful" \
+	    -crop "1x${crop_height}+0+${crop_y}" +repage \
+	    -scale "${crop_width}x${crop_height}!" "$background" \
+	    2>/dev/null; then
+	changed_pixels=$(compare -metric AE -fuzz 3% \
+	    -crop "${crop_width}x${crop_height}+0+${crop_y}" \
+	    "$first_useful" "$background" null: 2>&1 || true)
+    fi
+    if [[ ! "$first_useful_elapsed" =~ ^[0-9]+$ ||
+	    "$first_useful_elapsed" -gt "$first_useful_limit_ms" ||
+	    ! "$changed_pixels" =~ ^[0-9]+$ ||
+	    "$changed_pixels" -lt "$minimum_changed_pixels" ]]; then
+	printf 'no useful model pixels by first-frame checkpoint: elapsed=%s changed_pixels=%s\n' \
+	    "$first_useful_elapsed" "$changed_pixels" >>"$validation"
+	rm -f "$background"
+	return 1
+    fi
+
+    # A prefix-ordered traversal can satisfy the raw pixel count while showing
+    # only the first row of a large two-dimensional assembly.  Keep that
+    # responsiveness checkpoint distinct from the authoritative scope
+    # checkpoint, then compare the latter with the same reference view after
+    # convergence.  Scope-ready means spatially representative whole-scene
+    # coverage, not merely "some geometry exists."
+    if [[ "$case_name" == "unique_mesh_50k_stress" ||
+	    "$case_name" == "unique_mesh_150k_stress" ]]; then
+	local scope_image="$image_dir/scope-ready.png"
+	local stable_image="$image_dir/ae90-stable.png"
+	local scope_background stable_background early_extent stable_extent
+	local early_extent_width early_extent_height
+	local stable_extent_width stable_extent_height
+	scope_background=$(mktemp \
+	    "$artifact_dir/.qged-scope-background.XXXXXX.png")
+	stable_background=$(mktemp \
+	    "$artifact_dir/.qged-stable-background.XXXXXX.png")
+	early_extent=""
+	stable_extent=""
+	if convert "$scope_image" \
+		-crop "1x${crop_height}+0+${crop_y}" +repage \
+		-scale "${crop_width}x${crop_height}!" "$scope_background" \
+		2>/dev/null &&
+	    convert "$stable_image" \
+		-crop "1x${crop_height}+0+${crop_y}" +repage \
+		-scale "${crop_width}x${crop_height}!" "$stable_background" \
+		2>/dev/null; then
+	    early_extent=$(convert "$scope_image" \
+		-crop "${crop_width}x${crop_height}+0+${crop_y}" +repage \
+		"$scope_background" -compose difference -composite -threshold 3% \
+		-trim -format '%@' info: 2>/dev/null || true)
+	    stable_extent=$(convert "$stable_image" \
+		-crop "${crop_width}x${crop_height}+0+${crop_y}" +repage \
+		"$stable_background" -compose difference -composite \
+		-threshold 3% -trim -format '%@' info: 2>/dev/null || true)
+	fi
+	rm -f "$scope_background" "$stable_background"
+	early_extent_width="${early_extent%%x*}"
+	early_extent_height="${early_extent#*x}"
+	early_extent_height="${early_extent_height%%+*}"
+	stable_extent_width="${stable_extent%%x*}"
+	stable_extent_height="${stable_extent#*x}"
+	stable_extent_height="${stable_extent_height%%+*}"
+	if [[ ! "$early_extent_width" =~ ^[0-9]+$ ||
+		! "$early_extent_height" =~ ^[0-9]+$ ||
+		! "$stable_extent_width" =~ ^[0-9]+$ ||
+		! "$stable_extent_height" =~ ^[0-9]+$ ||
+		"$stable_extent_width" -le 0 ||
+		"$stable_extent_height" -le 0 ||
+		"$((early_extent_width * 4))" -lt "$((stable_extent_width * 3))" ||
+		"$((early_extent_height * 4))" -lt "$((stable_extent_height * 3))" ||
+		"$((early_extent_width * 4))" -gt "$((stable_extent_width * 5))" ||
+		"$((early_extent_height * 4))" -gt "$((stable_extent_height * 5))" ]]; then
+	    printf 'first-useful view has invalid whole-scene spatial coverage: early=%s stable=%s\n' \
+		"$early_extent" "$stable_extent" >>"$validation"
+	    rm -f "$background"
+	    return 1
+	fi
+    fi
+    rm -f "$background"
+
+    # Progressive autoview has exactly one camera owner.  The draw may expose
+    # the pre-fit camera briefly while exact leaf coverage is assembled, but
+    # it must not publish a provisional fit, change orientation independently,
+    # or return to the pre-fit camera after the exact fit has landed.  Those
+    # transitions are perceived as an autoview jump/flicker even if the final
+    # image is correct.
+    # The event script issues an explicit ae 90 0 before draw.  On a cold
+    # source that command may not be painted until after draw-return, so begin
+    # the ownership interval at the first post-command checkpoint.  Starting
+    # at draw-return falsely attributes the delayed user-authored orientation
+    # to progressive autoview itself.
+    local autoview_window_start="$image_dir/ae90-0200ms.png"
+    if [[ "$case_name" == "unique_mesh_50k_stress" ||
+	    "$case_name" == "unique_mesh_150k_stress" ]]; then
+	# These fixtures deliberately rotate during cold realization, then issue
+	# one atomic ae/autoview reference command.  Start after that user-authored
+	# camera transition so it is not misclassified as a progressive-autoview
+	# write.  Ordinary cases continue to prove the full draw-return window.
+	autoview_window_start="$image_dir/realization-1s.png"
+    fi
+    if ! jq -e --arg window_start "$autoview_window_start" '
+	def orientation:
+	    [.camera_orientation_axis_x, .camera_orientation_axis_y,
+	     .camera_orientation_axis_z, .camera_orientation_angle];
+	def framing:
+	    [.camera_position_x, .camera_position_y, .camera_position_z,
+	     .camera_orthographic_height];
+	(first(.samples[] |
+	    select((.checkpoint? // "") == $window_start)).event_index) as $start |
+	(first(.samples[] |
+	    select((.checkpoint? // "") |
+		endswith("/ae90-stable.png")))) as $final |
+	[.samples[] |
+	    select(.event_index >= $start and
+		.event_index <= $final.event_index)] as $window |
+	([$window[] | orientation] | unique | length) == 1 and
+	([$window[] | framing] | unique | length) <= 2 and
+	(first($window[] |
+	    select(framing == ($final | framing))).event_index) as $fit |
+	all($window[] | select(.event_index >= $fit);
+	    framing == ($final | framing))
+	' "$report" >>"$validation" 2>&1; then
+	printf 'progressive autoview exposed provisional or mixed camera states\n' \
+	    >>"$validation"
+	return 1
+    fi
+
+    # A converged, fixed camera is an invariant, not a best effort.  Hold the
+    # exact same view for 200 ms and require both the retained cut and the
+    # model-area framebuffer to remain unchanged.  This directly rejects the
+    # former mesh -> box -> mesh admission loop and repeated deferred-autoview
+    # rewrites even when both happen to end on a plausible final screenshot.
+    if ! jq -e --arg case_name "$case_name" '
+	(first(.samples[] |
+	    select((.checkpoint? // "") |
+		endswith("/ae90-stable.png")))) as $first |
+	(first(.samples[] |
+	    select((.checkpoint? // "") |
+		endswith("/ae90-stable-held.png")))) as $held |
+	(if ($case_name == "lucy" or
+	     $case_name == "unique_mesh_50k_stress" or
+	     $case_name == "unique_mesh_150k_stress") then
+	    ($first.lod_convergence_view_ready // false) and
+	    ($held.lod_convergence_view_ready // false)
+	 else
+	    ($first.progressive_pending == false) and
+	    ($held.progressive_pending == false)
+	 end) and
+	($first.lod_refinement_frame_pending == false) and
+	($held.lod_refinement_frame_pending == false) and
+	($first.camera_view_projection == $held.camera_view_projection) and
+	($first.camera_position_x == $held.camera_position_x) and
+	($first.camera_position_y == $held.camera_position_y) and
+	($first.camera_position_z == $held.camera_position_z) and
+	($first.camera_orientation_axis_x ==
+	    $held.camera_orientation_axis_x) and
+	($first.camera_orientation_axis_y ==
+	    $held.camera_orientation_axis_y) and
+	($first.camera_orientation_axis_z ==
+	    $held.camera_orientation_axis_z) and
+	($first.camera_orientation_angle ==
+	    $held.camera_orientation_angle) and
+	($first.camera_orthographic_height ==
+	    $held.camera_orthographic_height) and
+	(($first.active_lod_mesh_payloads // -1) ==
+	    ($held.active_lod_mesh_payloads // -2)) and
+	(($first.visible_structural_fallback_boxes // -1) ==
+	    ($held.visible_structural_fallback_boxes // -2)) and
+	(($first.active_progressive_cad_occurrence_hash // "") ==
+	    ($held.active_progressive_cad_occurrence_hash // "?")) and
+	(($first.active_progressive_cad_faces // -1) ==
+	    ($held.active_progressive_cad_faces // -2)) and
+	(($first.requested_progressive_cad_cut_min // -99) ==
+	    ($held.requested_progressive_cad_cut_min // -98)) and
+	(($first.requested_progressive_cad_cut_max // -99) ==
+	    ($held.requested_progressive_cad_cut_max // -98))
+	' "$report" >>"$validation" 2>&1; then
+	printf 'fixed converged view changed retained/camera state during hold\n' \
+	    >>"$validation"
+	return 1
+    fi
+    local stable_hold_pixels
+    # The first software framebuffer may still carry its startup device-pixel
+    # extent while the settled canvas has adopted the window's final logical
+    # size.  Derive this crop from the two images being compared; reusing the
+    # early-frame dimensions accidentally included the later HUD (whose FPS
+    # text is expected to change) and reported that as model flicker.
+    local stable_hold_dimensions stable_hold_width stable_hold_height
+    local stable_hold_crop_width=0
+    local stable_hold_crop_height=0
+    stable_hold_dimensions=$(identify -format '%wx%h' \
+	"$image_dir/ae90-stable.png" 2>/dev/null || true)
+    stable_hold_width="${stable_hold_dimensions%x*}"
+    stable_hold_height="${stable_hold_dimensions#*x}"
+    if [[ "$stable_hold_width" =~ ^[0-9]+$ &&
+	    "$stable_hold_height" =~ ^[0-9]+$ &&
+	    "$stable_hold_width" -gt 60 && "$stable_hold_height" -gt 174 ]]; then
+	stable_hold_crop_width=$((stable_hold_width - 60))
+	stable_hold_crop_height=$((stable_hold_height - 174))
+    fi
+    stable_hold_pixels=$(compare -metric AE -fuzz 1% \
+	-crop "${stable_hold_crop_width}x${stable_hold_crop_height}+0+${crop_y}" \
+	"$image_dir/ae90-stable.png" \
+	"$image_dir/ae90-stable-held.png" null: 2>&1 || true)
+    if [[ "$stable_hold_crop_width" -le 0 ||
+	    "$stable_hold_crop_height" -le 0 ||
+	    ! "$stable_hold_pixels" =~ ^[0-9]+$ ||
+	    "$stable_hold_pixels" -gt 4 ]]; then
+	printf 'fixed converged framebuffer flickered during hold: pixels=%s\n' \
+	    "$stable_hold_pixels" >>"$validation"
+	return 1
+    fi
+
+    # Camera pose and projected scale have different LoD contracts.  Wheel
+    # zoom must retarget existing PoP prefixes, while a responsive System GL
+    # rotation must retain the cut it already draws rather than installing an
+    # unconditional global motion ceiling.  This catches the former behavior
+    # where a 5 ms Generic Twin frame was dropped from about 100k faces to the
+    # 50k seed merely because the mouse button went down.
+    if [[ "$case_name" == "generic_twin" ]]; then
+	# A scalar minimax threshold may straddle a large group of equal discrete
+	# PoP transitions.  Performance-limited is not a valid explanation for
+	# prominent quality debt while most of the calibrated scene allowance is
+	# unused: the marginal allocator must spend that stranded headroom.
+	if ! jq -e '
+	    [ .samples[] |
+	      select((.checkpoint? // "") |
+		endswith("/ae90-stable.png") or
+		endswith("/zoom-in-stable.png") or
+		endswith("/zoom-out-stable.png") or
+		endswith("/zoom-return-stable.png") or
+		endswith("/rotate-stable.png") or
+		endswith("/final-stable.png")) ] as $stable |
+	    ($stable | length) >= 6 and
+	    all($stable[];
+		((.lod_prominent_cad_quality_floor_violations // 0) == 0) or
+		 ((.active_lod_scene_render_cost // 0) >=
+		  ((.lod_scene_render_cost_budget // 0) * 0.8)))
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'Generic Twin left prominent quality debt with unused scene budget\n' \
+		>>"$validation"
+	    return 1
+	fi
+	if ! jq -e --arg mode "$mode" -f "$script_dir/lod_pose_contract.jq" \
+	    "$report" >>"$validation" 2>&1; then
+	    printf 'zoom/pose LoD policy did not preserve a responsive retained cut\n' \
+		>>"$validation"
+	    return 1
+	fi
+    fi
+
+    # Generic Twin is our production-main visual ground truth for shaded CAD
+    # submission.  A transform or channel-routing failure can leave only the
+    # thin structural CSG wireframe while all retained-payload counters still
+    # claim success.  Require actual filled-surface area in the stable
+    # framebuffer.  Compare against the same-row gradient sampled at the left
+    # edge, and exclude the border, convergence HUD, and progress bar.
+    if [[ ("$case_name" == "generic_twin" ||
+	    "$case_name" == "lucy") && "$mode" == "shaded" ]]; then
+    local stable_surface="$image_dir/ae90-stable.png"
+    if [[ "$case_name" == "lucy" ]]; then
+	stable_surface="$image_dir/background-cache-complete.png"
+    fi
+	local surface_dimensions surface_width surface_height
+	local surface_crop_width surface_crop_height
+	local surface_background surface_mask surface_pixels
+	surface_dimensions=$(identify -format '%wx%h' "$stable_surface" \
+	    2>/dev/null || true)
+	surface_width="${surface_dimensions%x*}"
+	surface_height="${surface_dimensions#*x}"
+	surface_crop_width=0
+	surface_crop_height=0
+	if [[ "$surface_width" =~ ^[0-9]+$ &&
+		"$surface_height" =~ ^[0-9]+$ &&
+		"$surface_width" -gt 60 && "$surface_height" -gt 174 ]]; then
+	    surface_crop_width=$((surface_width - 60))
+	    surface_crop_height=$((surface_height - 174))
+	fi
+	surface_background=$(mktemp \
+	    "$artifact_dir/.qged-surface-background.XXXXXX.png")
+	surface_mask=$(mktemp "$artifact_dir/.qged-surface-mask.XXXXXX.png")
+	surface_pixels=0
+	if [[ "$surface_crop_width" -gt 0 &&
+		"$surface_crop_height" -gt 0 ]] &&
+	    convert "$stable_surface" \
+		-crop "1x${surface_crop_height}+0+24" +repage \
+		-scale "${surface_crop_width}x${surface_crop_height}!" \
+		"$surface_background" 2>/dev/null &&
+	    convert "$stable_surface" \
+		-crop "${surface_crop_width}x${surface_crop_height}+0+24" \
+		+repage "$surface_background" -compose difference \
+		-composite -threshold 3% "$surface_mask" 2>/dev/null; then
+	    surface_pixels=$(convert "$surface_mask" \
+		-format '%[fx:w*h*mean]' info: 2>/dev/null || true)
+	    surface_pixels="${surface_pixels%.*}"
+	fi
+	rm -f "$surface_background" "$surface_mask"
+	# Scale the filled-area oracle with the usable canvas.  Fixed pixel counts
+	# became dependent on tool-panel width even when the model framebuffer was
+	# correct.  Rotation-invariant autoview framing keeps the complete target
+	# visible at every pose and leaves Generic Twin's thin side profile just
+	# above four percent of this crop; CSG-only wires remain far below it.
+	local minimum_surface_pixels=$((surface_crop_width * surface_crop_height / 25))
+	if [[ "$case_name" == "lucy" ]]; then
+	    minimum_surface_pixels=5000
+	fi
+	if [[ ! "$surface_pixels" =~ ^[0-9]+$ ||
+		"$surface_pixels" -lt "$minimum_surface_pixels" ]]; then
+	    printf 'stable shaded framebuffer lacks filled CAD surfaces: pixels=%s\n' \
+		"$surface_pixels" >>"$validation"
+	    return 1
+	fi
+    fi
+
+    if [[ -n "$hierarchy_path" ]]; then
+	if ! jq -e --arg object "$object" --arg path "$hierarchy_path" '
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/tree-expanded.png")))) as $preSelection |
+	    (first(.samples[] |
+		select(.action == "set_current") | .event_index)) as $selected |
+	    (first(.samples[] |
+		select(.command? == ("erase " + $path)) |
+		.event_index)) as $erased |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/selection-visible.png")))) as $selectedShot |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/subpath-redraw-stable.png")))) as $redrawnShot |
+	    (any(.samples[];
+		.selection_paths? != null and
+		(.selection_paths | index($path)) != null)) and
+	    # Selection must not restart camera-visible LoD work.  Resident-prefix
+	    # compaction is deliberately allowed to continue in the background, but
+	    # every standing pump must have a concrete controller, provider, or
+	    # service witness.  A bare progressive_pending bit used to survive the
+	    # OSMesa selection frame and misreport endless background work.
+	    (all(.samples[];
+		if (.event_index > $selected and .event_index < $erased)
+		then (.lod_submissions_pending == false and
+		      .lod_results_pending == false and
+		      .lod_refinement_frame_pending == false and
+		      (.render_capacity_sample_requested == false) and
+		      ((.lod_service_pending_tasks // 0) == 0) and
+		      ((.lod_service_active_requests // 0) == 0) and
+		      ((.lod_service_queued_results // 0) == 0) and
+		      ((.progressive_pending == false) or
+		       ((.lod_control_obligation_mask // 0) != 0) or
+		       ((.lod_convergence_source_preparation_providers // 0) > 0) or
+		       ((.lod_service_queued_cache_writes // 0) > 0)))
+		else true end)) and
+	    # Selection is a presentation-only transaction.  Once its exact style
+	    # frame commits, it must return to the pre-selection convergence state
+	    # without changing the view policy or retained geometry population.
+	    (($selectedShot.lod_convergence_phase // -1) ==
+	     ($preSelection.lod_convergence_phase // -2)) and
+	    (($selectedShot.lod_policy_revision // -1) ==
+	     ($preSelection.lod_policy_revision // -2)) and
+	    (($selectedShot.active_lod_scene_faces // -1) ==
+	     ($preSelection.active_lod_scene_faces // -2)) and
+	    (($selectedShot.visible_structural_fallback_boxes // -1) ==
+	     ($preSelection.visible_structural_fallback_boxes // -2)) and
+	    (any(.samples[];
+		.command? == ("erase " + $path) and
+		((.draw_frontier_count // 0) > 0) and
+		(.draw_frontier_paths | index($object)) != null)) and
+	    (any(.samples[];
+		(.command? | type) == "string" and
+		(.command | endswith(" " + $path)) and
+		(.command | startswith("draw ")) and
+		((.draw_frontier_count // 0) > 0) and
+		(.draw_frontier_paths | index($object)) != null)) and
+	    (all(.samples[];
+		if (.action == "set_expanded" or
+		    .action == "set_current" or
+		    .action == "clear_selection" or
+		    ((.command? | type) == "string" and
+		     ((.command == ("erase " + $path)) or
+		      ((.command | startswith("draw ")) and
+		       (.command | endswith(" " + $path))))))
+		then ((.event_duration_us // 9223372036854775807) <= 250000)
+		else true end)) and
+	    ((.samples[-1].tree_notify_path_us // 9223372036854775807) <=
+	     100000) and
+	    ((.samples[-1].tree_notify_full_items // 0) <= 16) and
+	    ((.samples[-1].selection_count // -1) == 0) and
+	    (($selectedShot.compact_selected_entries // 0) > 0) and
+	    (($selectedShot.cad_selected_instances // 0) > 0) and
+	    (($redrawnShot.compact_selected_entries // 0) > 0) and
+	    (($redrawnShot.cad_selected_instances // 0) > 0) and
+	    ((.samples[-1].compact_selected_entries // -1) == 0) and
+	    ((.samples[-1].cad_selected_instances // -1) == 0)
+	    ' "$report" >>"$validation" 2>&1; then
+	    return 1
+	fi
+
+	# Counters can agree while a stale aggregate, lost selection style, or
+	# missed redraw leaves the framebuffer unchanged.  Require the real tree
+	# and canvas pixels to show all four user-facing transitions.  A low
+	# threshold is deliberate: Hubble contains valid selectable components
+	# only a few pixels wide at the matrix's initial view.
+	local tree_selection_pixels erase_pixels redraw_pixels clear_pixels
+	# The semantic assertions above prove which path changed.  After a 3% fuzz
+	# filter, one changed pixel is sufficient evidence that the real canvas also
+	# reflected that change: a valid selected leaf may be subpixel or almost
+	# completely occluded.  Larger fixed counts made the result depend on pose,
+	# antialiasing, and device-pixel ratio rather than scene correctness.
+	local minimum_erase_pixels=1
+	local minimum_redraw_pixels=1
+	local minimum_clear_pixels=1
+	# The selected 16-leaf region in the explicit large fixtures contains
+	# overlapping hull skins and may be completely depth-occluded in the
+	# all-model reference view.  Hubble's direct panel regions have the same
+	# property in its assembled all.g reference view: a duplicate or foreground
+	# assembly can cover every erased pixel.  Internal frontier, selection, and
+	# compact-entry assertions above prove the exact erase/redraw transition,
+	# while the tree selection and redraw images still prove user-visible GUI
+	# responses.  Requiring an erase canvas delta would reward an enlarged proxy
+	# or a broken depth test rather than correct restoration of an occluded
+	# subpath.
+	if [[ "$case_name" == "unique_mesh_50k_stress" ||
+		"$case_name" == "unique_mesh_150k_stress" ]]; then
+	    minimum_erase_pixels=0
+	    minimum_redraw_pixels=0
+	elif [[ "$case_name" == "hubble" ]]; then
+	    minimum_erase_pixels=0
+	    minimum_redraw_pixels=0
+	fi
+	# In the distinct-mesh fixtures the selected first region is a stack of
+	# overlapping hull skins.  It can be completely depth-occluded at the
+	# all-model view, so a deselection may correctly change zero canvas
+	# pixels.  The source/presentation set assertions above are the robust
+	# contract; Generic Twin, Lucy, and the other hierarchy cases continue to
+	# require an observable selected-style transition.  Hubble requires its
+	# independent tree-selection and redraw transitions above; a covered panel
+	# cannot produce an in-scene deselection delta either.
+	local require_clear_pixels=1
+	if [[ "$case_name" == "unique_mesh_stress" ||
+		"$case_name" == "unique_mesh_50k_stress" ||
+		"$case_name" == "unique_mesh_150k_stress" ||
+		"$case_name" == "hubble" ]]; then
+	    require_clear_pixels=0
+	fi
+	tree_selection_pixels=$(compare -metric AE -fuzz 3% \
+	    "$image_dir/tree-expanded.png" "$image_dir/tree-selected.png" \
+	    null: 2>&1 || true)
+	erase_pixels=$(compare -metric AE -fuzz 3% \
+	    "$image_dir/selection-visible.png" "$image_dir/subpath-erased.png" \
+	    null: 2>&1 || true)
+	redraw_pixels=$(compare -metric AE -fuzz 3% \
+	    "$image_dir/subpath-erased.png" \
+	    "$image_dir/subpath-redraw-stable.png" null: 2>&1 || true)
+	clear_pixels=$(compare -metric AE -fuzz 3% \
+	    "$image_dir/subpath-redraw-stable.png" \
+	    "$image_dir/final-stable.png" null: 2>&1 || true)
+	if [[ ! "$tree_selection_pixels" =~ ^[0-9]+$ ||
+		"$tree_selection_pixels" -lt 100 ||
+		! "$erase_pixels" =~ ^[0-9]+$ ||
+		"$erase_pixels" -lt "$minimum_erase_pixels" ||
+		! "$redraw_pixels" =~ ^[0-9]+$ ||
+		"$redraw_pixels" -lt "$minimum_redraw_pixels" ||
+		! "$clear_pixels" =~ ^[0-9]+$ ||
+		("$require_clear_pixels" -eq 1 &&
+		 "$clear_pixels" -lt "$minimum_clear_pixels") ]]; then
+	    printf 'missing hierarchy visual transition: tree=%s erase=%s redraw=%s clear=%s\n' \
+		"$tree_selection_pixels" "$erase_pixels" "$redraw_pixels" \
+		"$clear_pixels" >>"$validation"
+	    return 1
+	fi
+    fi
+
+    # A large software-rendered mesh must remain responsive while the mouse is
+    # held.  Retaining the current cut is the preferred outcome when it already
+    # meets the controller's published deadline; otherwise verify that the
+    # render-only ceiling actually sheds submitted triangles.
+    #
+    # The render-only ceiling deliberately leaves producer-authored active
+    # cuts intact so a pose-only interaction can recover without rebuilding
+    # or reloading geometry.  Testing active_progressive_cad_faces here
+    # required that useful retained state be destructively rewritten and
+    # rejected the faster O(1) ceiling path even when it submitted a much
+    # smaller prefix.  Small/non-progressive scenes are intentionally outside
+    # this stress assertion.
+    if ! jq --argjson staticQualityLimit \
+	"$static_quality_render_limit_ms" \
+	--argjson interruptTolerance \
+	"$presentation_interrupt_deadline_tolerance_ms" -e '
+	if .backend != "osmesa" then true
+	else
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-return.png"))) // {}) as $beforeMotion |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/rotate-held-end.png")))) as $motion |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/rotate-stable.png")))) as $stable |
+	    if (($stable.presented_cad_faces // 0) < 100000 or
+		($stable.active_progressive_cad_payloads // 0) == 0)
+	    then true
+	    else
+		# Pressure may be expressed either by a larger per-object pixel
+		# error or by the scene face budget.  The latter is preferred for
+		# pose-only motion because it can retain responsive objects while
+		# coarsening only the expensive cut.  Test the rendering contract,
+		# not one internal pressure signal.
+		(($motion.presented_cad_faces // 0) > 0) and
+		((($motion.last_render_ms // 9223372036854775807) <=
+		  ($motion.presentation_deadline_current_ms // 0)) or
+		 (((($motion.presented_cad_faces // 0) * 100 <=
+		    ($stable.presented_cad_faces // 0) * 95) and
+		   (($motion.lod_interactive_progressive_ceiling // -1) >= 0)) or
+		  # Rotation changes visibility.  A held view can therefore submit
+		  # more total faces than the settled reference while still applying
+		  # a real renderer-only cut.  The ceiling below the retained active
+		  # maximum is the direct witness for that non-destructive coarsening.
+		  ((($motion.lod_interactive_progressive_ceiling // -1) >= 0) and
+		   (($motion.lod_interactive_progressive_ceiling // -1) <
+		    ($motion.active_progressive_cad_cut_max // -1))))) and
+		# A quiet recovery may deliberately spend longer than the ordinary
+		# stable cadence on one exact, event-driven quality frame and then retain
+		# those pixels without redraw.  That is stable convergence, not
+		# unfinished interaction, provided it is explicitly performance-limited,
+		# stays below the separate static-quality bound, and restores at
+		# least as rich a prefix as the held-motion frame.  Requiring the static
+		# frame to meet the 100 ms convergence target contradicted the retained-
+		# framebuffer contract and rejected a 14 ms held-motion frame merely
+		# because its later static quality image took 174 ms.
+		((($stable.lod_interactive_progressive_ceiling // -2) == -1) or
+		 ((($stable.presented_cad_work_exact // false) == true) and
+		  (($stable.lod_interactive_progressive_ceiling // -1) >=
+		   ($motion.lod_interactive_progressive_ceiling // -1)) and
+		  (($stable.lod_convergence_performance_limited // false) == true) and
+		  (($stable.last_render_ms // 9223372036854775807) <=
+		   $staticQualityLimit))) and
+		# An interrupted motion frame deliberately leaves last_render_ms as
+		# the preceding complete retained frame.  In that case use the abort
+		# witness from this gesture rather than misclassifying stale static
+		# timing as an unbounded input stall.
+		((($motion.last_render_ms // 9223372036854775807) <= 250) or
+		 ((($motion.presentation_interrupted_frames // 0) >
+		   ($beforeMotion.presentation_interrupted_frames // 0)) and
+		  (($motion.presentation_last_interrupted_ms //
+		      9223372036854775807) <=
+		   (($motion.presentation_deadline_current_ms // 0) +
+		    $interruptTolerance))))
+	    end
+	end
+	' "$report" >>"$validation" 2>&1; then
+	printf 'software interaction was neither deadline-safe nor measurably coarsened\n' \
+	    >>"$validation"
+	return 1
+    fi
+
+    # Shared-array instancing is useful only if view-local occurrences remain
+    # a real working set.  The close multi-Lucy sequence starts with a subset,
+    # coarsens it under a held drag, then selects two deterministic directions
+    # which exchange and retire occurrences.  Require actual occurrence-key
+    # turnover, not merely a changed camera or lower global face count.
+    if [[ "$object" == "multi_lucy" ]]; then
+	if ! jq -e '
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/zoom-return-stable.png")))) as $overview |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/close-focus-stable.png")))) as $focus |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/close-turnover-held.png")))) as $held |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/close-turnover-stable.png")))) as $dragStable |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/close-direction-0-stable.png")))) as $direction0 |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/close-direction-90-stable.png")))) as $direction90 |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/close-turnover-return.png")))) as $returned |
+	    (($overview.active_lod_cad_payloads // 0) >= 5) and
+	    (($focus.active_lod_cad_payloads // 0) > 0) and
+	    (($focus.active_lod_cad_payloads // 0) <
+		($overview.active_lod_cad_payloads // 0)) and
+	    (($direction0.active_lod_cad_payloads // 0) > 0) and
+	    (($direction0.active_lod_cad_payloads // 0) <
+		($overview.active_lod_cad_payloads // 0)) and
+	    (($direction90.active_lod_cad_payloads // 0) > 0) and
+	    (($focus.active_progressive_cad_occurrence_hash // "") !=
+		($direction0.active_progressive_cad_occurrence_hash // "")) and
+	    (($direction0.active_progressive_cad_occurrence_hash // "") !=
+		($direction90.active_progressive_cad_occurrence_hash // "")) and
+	    (($direction90.active_progressive_cad_occurrence_hash // "") ==
+		($focus.active_progressive_cad_occurrence_hash // "")) and
+	    (($returned.active_progressive_cad_occurrence_hash // "") ==
+		($overview.active_progressive_cad_occurrence_hash // "")) and
+	    (($held.last_render_ms // 9223372036854775807) <= 250) and
+	    (((($held.lod_interactive_progressive_ceiling // -1) >= 0) and
+	       (($held.active_lod_aabb_payloads // 0) == 0)) or
+	      ((($held.lod_interactive_progressive_ceiling // -2) == -1) and
+	       (($held.active_lod_aabb_payloads // 0) == 0))) and
+	    ($dragStable.lod_interactive == false) and
+	    ($direction0.lod_interactive == false) and
+	    ($direction90.lod_interactive == false) and
+	    (all([$focus, $dragStable, $direction0, $direction90, $returned][];
+		((.active_lod_aabb_payloads // 0) == 0) and
+		((.active_lod_cad_payloads // 0) > 0)))
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'close-view occurrence working set did not turn over coherently\n' \
+		>>"$validation"
+	    return 1
+	fi
+    fi
+
+    # The occurrence-scale stress scene must be governed as one workload.
+    # Regressions here used to present as a slow left-to-right replay of
+    # thousands of independent PoP prefixes, followed by an unbounded motion
+    # frame.  Require a useful warm/cold mesh result, independent stable and
+    # interaction calibration, and convergence toward the finite aggregate
+    # motion budget.  The factor of two permits a bounded compact-entry wave
+    # to still be in flight at the held-button checkpoint.
+    if [[ "$object" == "many_lucy_stress" ]]; then
+	if ! jq -e --arg cache_state "$cache_state" '
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/ae90-stable.png")))) as $initial |
+	    (first(.samples[] | select(.action == "mouse_press"))) as $press |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/rotate-held-end.png")))) as $held |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/rotate-motion.png")))) as $motion |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/rotate-stable.png")))) as $stable |
+	    (($cache_state != "warm") or
+		(($initial.elapsed_ms // 9223372036854775807) <= 6000)) and
+	    (($initial.active_lod_cad_payloads // 0) > 0) and
+	    (($motion.lod_scene_face_budget // 0) > 0) and
+	    (($motion.lod_scene_face_budget // 0) <
+		9223372036854775807) and
+	    (($motion.lod_interactive_calibrated_faces_per_second // 0) > 0) and
+	    (($motion.lod_stable_calibrated_faces_per_second // 0) > 0) and
+	    (($motion.active_lod_scene_faces // 0) <=
+		(($motion.lod_scene_face_budget // 0) * 2)) and
+	    (($motion.active_lod_scene_faces // 0) <=
+		($press.active_lod_scene_faces // 0)) and
+	    (($held.active_lod_scene_faces // 0) <=
+		($press.active_lod_scene_faces // 0)) and
+	    (($held.last_render_ms // 9223372036854775807) <= 250) and
+	    (($held.lod_interactive_progressive_ceiling // -1) >= 0) and
+	    (($stable.lod_interactive_progressive_ceiling // -2) == -1)
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'occurrence-scale scene did not converge to its calibrated aggregate motion budget\n' \
+		>>"$validation"
+	    return 1
+	fi
+    fi
+
+    # Distinct-asset scale must not be mistaken for repeated-instance scale.
+    # The default fixture has 5,000 independently stored BoTs.  The explicit
+    # 50k fixture must visit its complete compact population, but terminal
+    # residency remains view- and scene-budget-aware: demanding 50k resident
+    # payloads would directly contradict the production LoD contract.  Every
+    # admitted System GL asset must graduate from its box.  Motion may retain
+    # the existing cut when it is already responsive, or select a cheaper PoP
+    # or aggregate-point cut under load; both backends must recover without
+    # pending work.
+    if [[ "$object" == "unique_mesh_stress" ]]; then
+	# Stable pixel-exact convergence is a terminal quality checkpoint, not
+	# the first-useful-frame deadline.  Keep a hard 30 s regression guard:
+	# thousands of small assets must not level-walk through avoidable PoP
+	# publications merely because the earlier startup checkpoints passed.
+	local initial_stable_limit_ms=30000
+	local minimum_resident_assets=1000
+	local expected_visited_assets=0
+	local interaction_render_limit_ms=250
+	# Fixed-function software GL retains a bounded, camera-local physical
+	# proxy stream.  Logical proxy occurrences remain unbounded semantic
+	# coverage, so assert the two counts independently at distinct-asset scale.
+	local software_proxy_aggregation_minimum=4096
+	local software_proxy_draw_point_limit=32768
+	if [[ "$case_name" == "unique_mesh_50k_stress" ||
+		"$case_name" == "unique_mesh_150k_stress" ]]; then
+	    # The process/event timeout bounds eventual convergence.  Do not
+	    # relabel a usable, interactable cold scene as a startup failure
+	    # merely because optional background cache population takes longer
+	    # than an arbitrary terminal deadline.
+	    initial_stable_limit_ms=9223372036854775807
+	    minimum_resident_assets=100
+	    if [[ "$case_name" == "unique_mesh_150k_stress" ]]; then
+		expected_visited_assets=150000
+	    else
+		expected_visited_assets=50000
+	    fi
+	    # The checkpoint includes a framebuffer readback.  Preserve a small
+	    # tolerance around the 250 ms interaction objective so 0.5 ms of
+	    # capture jitter does not turn a valid bounded cut into a failure.
+	    interaction_render_limit_ms=275
+	fi
+	if ! jq -e --argjson initial_stable_limit_ms \
+		"$initial_stable_limit_ms" \
+		--argjson minimum_resident_assets "$minimum_resident_assets" \
+		--argjson expected_visited_assets "$expected_visited_assets" \
+		--argjson interaction_render_limit_ms \
+		"$interaction_render_limit_ms" \
+		--argjson presentation_interrupt_deadline_tolerance_ms \
+		"$presentation_interrupt_deadline_tolerance_ms" \
+		--argjson static_quality_render_limit_ms \
+		"$static_quality_render_limit_ms" \
+		--argjson software_proxy_aggregation_minimum \
+		"$software_proxy_aggregation_minimum" \
+		--argjson software_proxy_draw_point_limit \
+		"$software_proxy_draw_point_limit" '
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/ae90-stable.png")))) as $initial |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/rotate-held-end.png")))) as $held |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/zoom-return-stable.png")))) as $beforeHeld |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/rotate-motion.png")))) as $motion |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/rotate-stable.png")))) as $stable |
+	    ((first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/cold-rotate-held.png"))) // {})) as $coldHeld |
+	    ((first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/cold-rotate-motion.png"))) // {})) as $coldMotion |
+	    (($expected_visited_assets == 0) or
+		(($coldHeld.elapsed_ms // 9223372036854775807) <= 10000)) and
+	    # An explicit ceiling is an overload response, not an interaction
+	    # prerequisite.  During cold realization the currently available
+	    # prefixes may already render inside the interaction bound; retaining
+	    # those prefixes with ceiling == -1 is the desired no-rebuild path.
+	    (($expected_visited_assets == 0) or
+		(($coldHeld.last_render_ms // 9223372036854775807) <=
+		    $interaction_render_limit_ms)) and
+	    (($expected_visited_assets == 0) or
+		(($coldMotion.last_render_ms // 9223372036854775807) <= 250)) and
+	    (($expected_visited_assets == 0) or
+		(($coldHeld.lod_service_working_set_limit_bytes // 0) > 0)) and
+	    (($initial.elapsed_ms // 9223372036854775807) <=
+		$initial_stable_limit_ms) and
+	    (($initial.lod_service_resident_assets // 0) >=
+		$minimum_resident_assets) and
+	    (($expected_visited_assets == 0) or
+		(($initial.lod_convergence_available_leaves // 0) >=
+		    $expected_visited_assets)) and
+	    # A sparse retained-allocation pass must not replace the completed
+	    # all-entry visibility census.  A populated qualification frame with a
+	    # zero denominator is a false empty-view proof, even if its retained
+	    # payloads happen to keep the framebuffer useful.
+	    (($expected_visited_assets == 0) or
+		(($initial.lod_convergence_visible_targets // 0) > 0)) and
+	    # The scene render-cost budget is a calibrated refinement allowance, not
+	    # permission to discard a visible leaf minimum coherent prefix.
+	    # Thousands of minimum prefixes may modestly exceed that soft budget.
+	    # Accept the coverage floor only when every expected leaf is already
+	    # represented by either a mesh payload or the renderer-owned pixel-exact
+	    # aggregate-point channel, no structural box remains, and the measured
+	    # frame is still inside the interaction bound.  Requiring a resident
+	    # mesh for a subpixel leaf defeats the very large-scene batching route
+	    # this fixture is intended to qualify.
+	    (($expected_visited_assets == 0) or
+		(($initial.active_lod_scene_render_cost //
+		    9223372036854775807) <=
+		    ($initial.lod_scene_render_cost_budget // -1)) or
+		(((($initial.active_lod_cad_payloads // 0) +
+		   ($initial.active_cad_subpixel_proxy_points // 0)) >=
+		    $expected_visited_assets) and
+		 (($initial.visible_structural_fallback_boxes // 0) == 0) and
+		 (($initial.last_render_ms // 9223372036854775807) <=
+		    $static_quality_render_limit_ms))) and
+	    # The coverage count is per retained occurrence.  OSMesa must not
+	    # submit that same high-cardinality stream one point at a time once it
+	    # crosses the renderer aggregation threshold.
+	    (if .backend == "osmesa" and
+		($initial.active_cad_subpixel_proxy_points // 0) >
+		    $software_proxy_aggregation_minimum then
+		(($initial.active_cad_subpixel_proxy_draw_points // 0) > 0) and
+		(($initial.active_cad_subpixel_proxy_draw_points // 0) <
+		    ($initial.active_cad_subpixel_proxy_points // 0)) and
+		(($initial.active_cad_subpixel_proxy_draw_points // 0) <=
+		    $software_proxy_draw_point_limit)
+	     else true end) and
+	    (if .backend == "system_gl" then
+		(if $expected_visited_assets > 0 then
+		    (($initial.active_lod_cad_payloads // 0) > 0) and
+		    (($initial.active_lod_cad_payloads // 0) <=
+			($initial.lod_service_resident_assets // -1))
+		 else
+		    (($initial.active_lod_cad_payloads // 0) ==
+			($initial.lod_service_resident_assets // -1))
+		 end)
+	     else
+		(($initial.active_lod_cad_payloads // 0) > 0)
+	     end) and
+	    (($initial.active_lod_aabb_payloads // 0) == 0) and
+	    (($initial.visible_structural_fallback_boxes // 0) == 0) and
+	    (($held.active_lod_cad_payloads // 0) > 0) and
+	    (($held.active_lod_aabb_payloads // 0) == 0) and
+	    ((($held.last_render_ms // 9223372036854775807) <=
+		$interaction_render_limit_ms) or
+	     ((($held.presentation_interrupted_frames // 0) >
+	       ($beforeHeld.presentation_interrupted_frames // 0)) and
+	      (($held.presentation_last_interrupted_ms //
+		  9223372036854775807) <=
+	       (($held.presentation_deadline_current_ms // 0) +
+		$presentation_interrupt_deadline_tolerance_ms)))) and
+	    # An interrupted motion frame does not replace last_render_ms; that
+	    # field continues to describe the preceding completed static frame.
+	    # Accept interruption only when no later frame completed and the
+	    # interruption itself met the active presentation deadline.
+	    ((($motion.last_render_ms // 9223372036854775807) <= 250) or
+	     ((($motion.render_completion_serial // -1) ==
+	       ($held.render_completion_serial // -2)) and
+	      (($motion.presentation_interrupted_frames // 0) >
+	       ($held.presentation_interrupted_frames // 0)) and
+	      (($motion.presentation_last_interrupted_ms //
+		  9223372036854775807) <=
+	       (($motion.presentation_deadline_current_ms // 0) +
+		$presentation_interrupt_deadline_tolerance_ms)))) and
+	    (if .backend == "system_gl" then
+		(if $expected_visited_assets > 0 then
+		    (($motion.active_lod_cad_payloads // 0) >=
+			($held.active_lod_cad_payloads // -1))
+		 else
+		    (($motion.active_lod_cad_payloads // 0) ==
+			($held.active_lod_cad_payloads // -1))
+		 end)
+	     else true end) and
+	    (if .backend == "system_gl" then
+		(if $expected_visited_assets > 0 then
+		    (($stable.active_lod_cad_payloads // 0) > 0) and
+		    (($stable.active_lod_cad_payloads // 0) <=
+			($stable.lod_service_resident_assets // -1))
+		 else
+		    (($stable.active_lod_cad_payloads // 0) ==
+			($stable.lod_service_resident_assets // -1))
+		 end)
+	     else
+		(($stable.active_lod_cad_payloads // 0) >=
+		    ($initial.active_lod_cad_payloads // 0))
+	     end) and
+	    (($stable.active_lod_aabb_payloads // 0) == 0) and
+		    (($stable.visible_structural_fallback_boxes // 0) == 0) and
+		    (($expected_visited_assets == 0) or
+			(($stable.lod_convergence_visible_targets // 0) > 0)) and
+		    # Prominent quality debt is terminal only with an explicit measured
+		    # capacity witness.  A Boolean "performance limited" label alone
+		    # formerly let a timing-dependent handoff strand the bounded search
+		    # and declare a visibly coarse scene ready.  The completed static
+		    # frame must also stay inside the hard interaction deadline and use
+		    # essentially all of its certified allowance.
+		    ((($stable.lod_prominent_cad_quality_floor_violations // 0) == 0) or
+		     (($stable.lod_convergence_performance_limited // false) == true and
+		      (($stable.lod_convergence_constraint_evidence_mask // 0) != 0) and
+		      (($stable.last_render_ms // 9223372036854775807) <=
+			$static_quality_render_limit_ms) and
+		      (($stable.active_lod_scene_render_cost // 0) >=
+			(($stable.lod_scene_render_cost_budget // 0) * 0.8)))) and
+		    ((.samples[-1].visible_structural_fallback_boxes // 0) == 0) and
+	    (($stable.lod_interactive_progressive_ceiling // -2) == -1) and
+	    ($stable.lod_submissions_pending == false) and
+	    (($stable.progressive_pending == false) or
+	     (($stable.lod_convergence_view_ready // false) == true and
+	      ($stable.lod_convergence_background_pending // false) == true))
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'distinct-mesh scene did not preserve coverage and recover around bounded motion\n' \
+		>>"$validation"
+	    return 1
+	fi
+
+	# The default distinct-mesh fixture includes a dedicated smooth-zoom
+	# target.  Controller quiescence over an empty frustum is valid production
+	# behavior, but it is not a valid test of view-local refinement.  Require
+	# the resolved target to remain represented at both zoom endpoints.
+	if [[ "$case_name" == "unique_mesh_stress" ]] && ! jq -e '
+	    (last(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-start-stable.png")))) as $start |
+	    (last(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-close-stable.png")))) as $close |
+	    (all([$start, $close][];
+		((.presented_cad_faces // 0) > 0) and
+		((.presented_cad_occurrences // 0) > 0) and
+		((.lod_convergence_visible_targets // 0) > 0)))
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'distinct-mesh smooth zoom lost its resolved target\n' \
+		>>"$validation"
+	    return 1
+	fi
+    fi
+
+    # A single large PoP asset exercises the other side of the residency
+    # contract: zooming in must extend the retained prefix, while a quiet
+    # zoom-out must compact it without rebuilding or discarding the useful
+    # coarse prefix.  Keep wheel dispatch bounded throughout so background
+    # loading never turns into lost-feeling input.
+    if [[ "$case_name" == "lucy" ]]; then
+	if ! jq -e -L "$script_dir" --arg mode "$mode" \
+	    --argjson error_factor "$LOD_SCREEN_ERROR_HYSTERESIS_FACTOR" \
+	    --argjson error_roundoff "$LOD_SCREEN_ERROR_ROUNDOFF_PIXELS" \
+	    --argjson static_quality_limit \
+	    "$static_quality_render_limit_ms" '
+	    include "lod_atlas_reuse";
+	    def submitted:
+		if $mode == "wire" then (.presented_cad_lines // 0)
+		else (.presented_cad_faces // 0) end;
+	    def spatially_advanced($sample; $baseline):
+		(([($sample.active_progressive_cad_cut_max // -1),
+		   (if ($sample.lod_interactive_progressive_ceiling // -1) >= 0
+		    then $sample.lod_interactive_progressive_ceiling
+		    else ($sample.active_progressive_cad_cut_max // -1) end)] |
+		  min) > ($baseline.active_progressive_cad_cut_max // -1)) or
+		((($sample.requested_progressive_cad_cut_max // -1) >
+		  ($baseline.requested_progressive_cad_cut_max // -1)) and
+		 (($sample.lod_service_resident_bytes // 0) >
+		  ($baseline.lod_service_resident_bytes // 0)));
+	    def spatially_realized($sample; $baseline):
+		(($sample | submitted) > ($baseline | submitted)) or
+		(($sample.lod_service_resident_bytes // 0) >
+		 ($baseline.lod_service_resident_bytes // 0));
+	    def resident_plan_is_current($sample):
+		($sample.lod_convergence_compaction_plan_current == true) and
+		(($sample.lod_convergence_compaction_candidates // -1) == 0);
+	    def resident_release_is_witnessed($sample; $before):
+		(($sample.lod_service_compactions // 0) >
+		 ($before.lod_service_compactions // 0)) or
+		# A provider may publish a smaller immutable working set while
+		# satisfying the new view, without scheduling the independent quiet
+		# compaction worker.  The service advances its admission revision on
+		# that exact resident-byte release.  Requiring the compaction counter
+		# alone misclassifies successful in-band reclamation as a leak.
+		(($sample.lod_service_resident_admission_revision // 0) >
+		 ($before.lod_service_resident_admission_revision // 0));
+	    def residency_is_settled($sample; $peak; $before):
+		if (($sample.lod_service_stable_resident_bytes // 0) <
+		    ($peak.lod_service_stable_resident_bytes // 0)) then
+		    resident_release_is_witnessed($sample; $before)
+		else
+		    resident_plan_is_current($sample) and
+		    (($sample.lod_service_stable_resident_bytes // 0) <=
+		     ($sample.lod_service_resident_limit_bytes // -1))
+		end;
+	    (last(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-start-stable.png")))) as $start |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-in-8.png")))) as $early |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-in-12.png")))) as $during |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-active-first-attempt.png")))) as $attempt |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-active-refined.png")))) as $active |
+	    (last(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-close-stable.png")))) as $close |
+	    (last(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-out-stable.png")))) as $out |
+	    (last(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-return.png")))) as $returned |
+	    # PoP bit populations can have a roughly fourfold discontinuity.  On
+	    # software GL the next discrete cut may exceed even the explicit 10 Hz
+	    # zoom-quality deadline.  In that case loading the requested suffix,
+	    # retaining the current exact cut, and declining the known-bad jump is
+	    # the only responsive outcome; it must not be mistaken for stalled LoD.
+	    (((($active.active_progressive_cad_cut_max // -1) >=
+		 ($start.active_progressive_cad_cut_max // -1)) and
+	      # The richer immutable prefix may already be resident while its first
+	      # coherent presentation exceeds the hard deadline.  A counted abort is
+	      # the required proof in that case; retaining the last exact completed
+	      # cut is the responsive result, not failed refinement.  Do not compare
+	      # raw submitted primitives across these views: the close view clips
+	      # Lucy heavily, and view-local cluster culling can submit fewer
+	      # primitives from a richer global PoP prefix.
+	      (($active.presentation_interrupted_frames // 0) >
+		 ($start.presentation_interrupted_frames // 0)) and
+	      (($active.requested_progressive_cad_cut_max // -1) >
+	       ($active.active_progressive_cad_cut_max // -1)) and
+	      (($active.lod_interactive_progressive_ceiling // -1) >= 0) and
+	      (($active.last_render_ms // 9223372036854775807) <=
+	       ($active.presentation_deadline_current_ms // 0)))) as
+		$discreteBounded |
+	    (($close.requested_progressive_cad_cut_max // -1) >
+		($start.requested_progressive_cad_cut_max // -1)) and
+	    (if .backend == "system_gl" then
+		# Both checkpoints are inside the bracketed scale stream.  Refinement
+		# may become drawable by the twelfth event and then be backed down by
+		# the O(1) renderer ceiling while later low-amplitude events continue.
+		# Either completed in-gesture presentation is therefore valid evidence;
+		# requiring the later sample to remain richer would reject the intended
+		# FPS response after a real richer frame was already shown.
+		($during.lod_gesture_active == true) and
+		($during.lod_interactive == true) and
+		($during.lod_scale_changing_interaction == true) and
+		($attempt.lod_gesture_active == true) and
+		($attempt.lod_interactive == true) and
+		($attempt.lod_scale_changing_interaction == true) and
+		($active.lod_gesture_active == true) and
+		($active.lod_interactive == true) and
+		($active.lod_scale_changing_interaction == true) and
+		spatially_advanced($active; $start) and
+		(((spatially_advanced($early; $start) and
+		   spatially_realized($early; $start))) or
+		 ((spatially_advanced($during; $start) and
+		   spatially_realized($during; $start))) or
+		 ((spatially_advanced($attempt; $start) and
+		   spatially_realized($attempt; $start))) or
+		 ((spatially_advanced($active; $start) and
+		   spatially_realized($active; $start)))) and
+		(($active.active_lod_aabb_payloads // 0) == 0) and
+		# Spatial PoP assets retain one immutable renderer part per resident
+		# page.  Newly visible pages need one first upload; already visible pages
+		# reuse their lineage and extend only by a suffix.  Small, unpaged assets
+		# retain the original single ordinary-VBO contract.  Distinguish these
+		# paths explicitly instead of misclassifying a page first-upload as a
+		# replacement of the aggregate mesh.
+		(if (($active.lod_gpu_atlas_parts // 0) > 1) then
+		    (($active.lod_gpu_atlas_full_upload_bytes // 0) >=
+			($start.lod_gpu_atlas_full_upload_bytes // 0)) and
+		    (($active.lod_gpu_atlas_suffix_upload_bytes // 0) >=
+			($start.lod_gpu_atlas_suffix_upload_bytes // 0)) and
+		    (($active.lod_gpu_ordinary_full_upload_bytes // 0) >=
+			($start.lod_gpu_ordinary_full_upload_bytes // 0)) and
+		    (($active.lod_gpu_ordinary_suffix_upload_bytes // 0) >=
+			($start.lod_gpu_ordinary_suffix_upload_bytes // 0)) and
+		    lod_atlas_append_or_reuse($start; $active) and
+		    (($active.last_render_ms // 9223372036854775807) <=
+			($active.presentation_deadline_current_ms // 0))
+		 else
+		    # An immutable aggregate generation must append only its CPU suffix.
+		    # Capacity growth migrates the old prefix device-locally.  A quiet
+		    # compaction may publish a new dense lineage, whose one complete
+		    # replacement upload must remain within the frame deadline.
+		    (if (($during.lod_gpu_ordinary_full_upload_bytes // 0) ==
+			    ($start.lod_gpu_ordinary_full_upload_bytes // -1))
+		     then true
+		     else
+			(($during.lod_gpu_ordinary_lineage_replacements // 0) >
+			 ($start.lod_gpu_ordinary_lineage_replacements // 0)) and
+			(($during.last_render_ms // 9223372036854775807) <=
+			 ($during.presentation_deadline_current_ms // 0))
+		     end) and
+		    (if (($active.lod_gpu_ordinary_full_upload_bytes // 0) ==
+			    ($start.lod_gpu_ordinary_full_upload_bytes // -1))
+		     then true
+		     else
+			(($active.lod_gpu_ordinary_lineage_replacements // 0) >
+			 ($start.lod_gpu_ordinary_lineage_replacements // 0)) and
+			(($active.last_render_ms // 9223372036854775807) <=
+			 ($active.presentation_deadline_current_ms // 0))
+		     end) and
+		    (($during.lod_gpu_ordinary_suffix_upload_bytes // 0) >=
+			($start.lod_gpu_ordinary_suffix_upload_bytes // 0)) and
+		    (($active.lod_gpu_ordinary_suffix_upload_bytes // 0) >=
+			($during.lod_gpu_ordinary_suffix_upload_bytes // 0)) and
+		    # A prefetched immutable generation can reserve enough device space
+		    # for later cuts.  Require suffix upload, lineage reuse, and a device
+		    # copy only when the active ordinary part actually grows.
+		    (if (($active.lod_gpu_ordinary_part_buffer_bytes // 0) >
+			    ($start.lod_gpu_ordinary_part_buffer_bytes // 0))
+		     then
+			(($active.lod_gpu_ordinary_suffix_upload_bytes // 0) >
+			 ($start.lod_gpu_ordinary_suffix_upload_bytes // 0)) and
+			(($active.lod_gpu_ordinary_lineage_reuses // 0) >
+			 ($start.lod_gpu_ordinary_lineage_reuses // 0)) and
+			(($active.lod_gpu_ordinary_copy_bytes // 0) >
+			 ($start.lod_gpu_ordinary_copy_bytes // 0))
+		     else true end)
+		 end)
+	     else
+		# Software rendering may use a coarser cut while wheel events are
+		# arriving, but zoom residency is not a render-budget decision.  The
+		# missing suffix must load under the independent memory governor, and
+		# continuous scale input must expose at least one richer cut rather
+		# than magnifying the same block image until button-up.
+		($active.lod_gesture_active == true) and
+		($active.lod_interactive == true) and
+		($active.lod_scale_changing_interaction == true) and
+		(($active.lod_service_resident_bytes // 0) >
+		    ($start.lod_service_resident_bytes // 0)) and
+		(($active.lod_service_cache_loads // 0) >
+		    ($start.lod_service_cache_loads // 0)) and
+		# The active cut itself must be richer than the pre-zoom stable cut.
+		# It may have reached that cut before the last checkpoint; requiring
+		# another increase during the final low-amplitude events would turn
+		# successful early refinement into a false failure.
+		((($active.active_progressive_cad_cut_max // -1) >
+		   ($start.active_progressive_cad_cut_max // -1)) or
+		 $discreteBounded) and
+		# A measured over-budget probe may back off from the arbitrary in-12
+		# checkpoint through the O(1) render ceiling.  The durable contract is
+		# that continuous input has exposed a cut richer than the pre-zoom
+		# stable image, not that every sampled probe is monotonically richer.
+		# The occurrence may remain richer than the render-only ceiling.  Its
+		# actual submitted level is their minimum and must still improve on the
+		# pre-zoom image.
+		((([($early.active_progressive_cad_cut_max // -1),
+		     (if ($early.lod_interactive_progressive_ceiling // -1) >= 0
+		      then $early.lod_interactive_progressive_ceiling
+		      else ($early.active_progressive_cad_cut_max // -1) end)] |
+		    min) > ($start.active_progressive_cad_cut_max // -1)) or
+		  (([($during.active_progressive_cad_cut_max // -1),
+		     (if ($during.lod_interactive_progressive_ceiling // -1) >= 0
+		      then $during.lod_interactive_progressive_ceiling
+		      else ($during.active_progressive_cad_cut_max // -1) end)] |
+		    min) > ($start.active_progressive_cad_cut_max // -1)) or
+		  (([($active.active_progressive_cad_cut_max // -1),
+		     (if ($active.lod_interactive_progressive_ceiling // -1) >= 0
+		      then $active.lod_interactive_progressive_ceiling
+		      else ($active.active_progressive_cad_cut_max // -1) end)] |
+		    min) > ($start.active_progressive_cad_cut_max // -1) and
+		   # View-local spatial clusters can keep the submitted line count
+		   # unchanged while the global active cut and resident prefix grow.
+		   # The resident-byte increase above proves real suffix loading; do not
+		   # require an incidental visible-line increase as well.
+		   (($active.lod_service_resident_bytes // 0) >
+		    ($start.lod_service_resident_bytes // 0))) or
+		  $discreteBounded) and
+		(($active.active_lod_aabb_payloads // 0) == 0)
+	     end) and
+	    # Every renderer tier must publish the exact submitted population.  If
+	    # the reusable in-gesture cut already met the less demanding stable
+	    # deadline, quiet handoff may reduce it only to the current pixel
+	    # demand—not merely because interactive and stable calibration stores
+	    # were historically isolated.
+	    (($active | submitted) > 0) and
+	    (if (($active.last_render_ms // 9223372036854775807) <=
+		    (1000.0 / ($close.lod_stable_target_fps // 10.0)))
+	     then
+		(($close.active_progressive_cad_cut_max // -1) >=
+		 ([($active.active_progressive_cad_cut_max // -1),
+		   (if ($active.lod_interactive_progressive_ceiling // -1) >= 0
+		    then $active.lod_interactive_progressive_ceiling
+		    else ($active.active_progressive_cad_cut_max // -1) end),
+		   ($close.requested_progressive_cad_cut_max // -1)] | min))
+	     else true end) and
+	    # Zoom-out is itself a terminal view, not merely a memory-maintenance
+	    # checkpoint.  Its current cut and page census must meet the declared
+	    # pixel target unless a measured aggregate capacity limit is explicitly
+	    # reported.  This catches stale close-view results which were formerly
+	    # rebased with only a new ordinal/epoch and then falsely marked current.
+	    (if ($out.lod_convergence_performance_limited // false) then
+		# A discrete PoP transition may straddle the conservative
+		# cost-model boundary while a completed frame proves the selected
+		# prefix meets the actual stable deadline.  Treat that as valid
+		# capacity evidence, but never as permission to leave prominent
+		# quality-floor debt.
+		((($out.active_lod_scene_render_cost // 0) <=
+		  ($out.lod_scene_render_cost_budget // 0)) or
+		 # A quiet zoom-out is an event-driven terminal image, just like an
+		 # exact-view return below.  It may use the static-quality allowance
+		 # when doing so protects visible fidelity; the hard allowance still
+		 # bounds the next user event, and the protected floor must be met.
+		 ((($out.last_render_ms // 9223372036854775807) <=
+		   $static_quality_limit) and
+		  (($out.lod_prominent_cad_quality_floor_violations // 0) == 0)))
+	     else
+		(($out.active_progressive_cad_cut_max // -1) >=
+		 ($out.requested_progressive_cad_cut_max // -1)) and
+		(($out.lod_max_cad_projected_error_pixels //
+		    9223372036854775807) <=
+		 # The cut selector uses the same bounded hysteresis band while
+		 # retaining an existing discrete prefix.  Requiring the nominal
+		 # target here rejects a current, pixel-appropriate cut merely
+		 # because its next finer discrete population would overshoot.
+		 (($out.lod_target_pixel_error // 1) * $error_factor +
+		  $error_roundoff))
+	     end) and
+	    # A global cut is not a memory ordering for a spatial mesh.  Zooming out
+	    # can expose many more pages at a lower cut and legitimately require more
+	    # bytes than a clipped close view.  Require the bounded demand scan to be
+	    # current and to certify that it has no reclaimable candidates.  The
+	    # explicit resident limit remains the hard bound.  This distinguishes a
+	    # genuinely required wider working set from a skipped or stalled trim
+	    # without forcing useful pages out merely to make a byte counter fall.
+	    residency_is_settled($out; $close; $active) and
+	    residency_is_settled($returned; $close; $active) and
+	    (($returned.lod_service_compactions // 0) >=
+		($out.lod_service_compactions // 0)) and
+	    # Returning to the same view restores its proven visual result, not an
+	    # incidental global resident-prefix population.  A warm single-mesh
+	    # view can retain a richer global PoP prefix while spatial clusters
+	    # submit only a small visible subset; quiet compaction may later retain
+	    # a smaller prefix whose view-local submission is actually richer.  Raw
+	    # active face counts therefore order neither image quality nor work.
+	    # Accept the returned population when it is exact for the requested
+	    # terminal contract, or when the current exact view carries a typed
+	    # capacity-limit proof.  Do not compare the old starting population to
+	    # the new scene budget: completed-frame calibration and static-deadline
+	    # trials may legitimately change that budget, and raw work does not
+	    # order visual fidelity after view-local clustering/compaction.
+	    (($returned | submitted) > 0) and
+	    (((($returned.active_progressive_cad_cut_max // -1) >=
+	       ($returned.requested_progressive_cad_cut_max // -1)) and
+	      (($returned.lod_max_cad_projected_error_pixels //
+		  9223372036854775807) <=
+	       # A retained discrete cut is valid through the same hysteresis band
+	       # used by mesh_lod_apply_cut_hysteresis().  Keep a tiny independent
+	       # allowance for float camera matrices versus double PoP metadata.
+	       (($returned.lod_target_pixel_error // 0.25) *
+		$error_factor + $error_roundoff))) or
+	     (((($returned.active_lod_scene_render_cost // 0) <=
+		 ($returned.lod_scene_render_cost_budget // 0)) or
+		# A returned exact view may restore its previously proven
+		# event-driven static-quality framebuffer.  It need not discard that
+		# fidelity merely to satisfy the redraw cadence for an image which is
+		# no longer changing; the separate hard static deadline remains the
+		# responsiveness bound.
+		(($returned.last_render_ms // 9223372036854775807) <=
+		 $static_quality_limit)) and
+	       (($returned.lod_prominent_cad_quality_floor_violations // 0) == 0) and
+	       ($returned.lod_convergence_performance_limited == true))) and
+	    # The exact camera/viewport return must consume a completed-frame proof
+	    # from the bounded history.  This counter makes restoration observable;
+	    # matching final pixels alone could otherwise hide a full cold
+	    # recalibration which happened to converge before the checkpoint.
+	    (($returned.lod_view_quality_history_recalls // 0) >
+		($start.lod_view_quality_history_recalls // 0)) and
+	    # These three quiet checkpoints are known to fit the protected
+	    # prominent floor inside the explicit static-quality allowance.  A
+	    # lingering violation is a coarse-image regression, even if the
+	    # ordinary redraw cadence has already declared the view usable.
+	    (all([$close, $out, $returned][];
+		((.lod_prominent_cad_quality_floor_violations // 0) == 0))) and
+	    # Visible-view terminality and optional cache persistence are separate
+	    # ledgers.  A cold Lucy worker may keep the global progressive pump alive
+	    # after the exact current frame has no producer, submission, publication,
+	    # or refinement obligation.  Requiring progressive_pending=false here
+	    # would make background persistence part of the foreground contract.
+	    (all([$start, $close, $out, $returned][];
+		(.lod_convergence_view_ready == true) and
+		(.lod_convergence_refinement_frame_pending == false) and
+		(.lod_convergence_publication_frame_pending == false) and
+		(.lod_convergence_source_preparation_pending == false) and
+		(.lod_submissions_pending == false) and
+		((.active_lod_aabb_payloads // 0) == 0))) and
+	    (all(.samples[]; if .action == "wheel"
+		then ((.event_duration_us // 9223372036854775807) <= 250000)
+		else true end))
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'smooth large-mesh zoom did not load, compact, and return responsively\n' \
+		>>"$validation"
+	    return 1
+	fi
+
+	# The close view deliberately clips Lucy against the upper viewport edge.
+	# The wheel sequence returns toward the overview but is not an inverse
+	# camera transform (discrete wheel scaling is intentionally hysteretic), so
+	# that intermediate image may still legitimately meet the top edge.  The
+	# following autoview command establishes the unambiguous returned extent;
+	# its top scanline must be pure background.  A horizontal non-background
+	# span there is the characteristic stale QOpenGLWidget scanline left by
+	# treating the gradient quad as a framebuffer clear.
+	local edge_image edge_dimensions edge_width edge_background edge_pixels
+	for edge_image in smooth-zoom-return.png; do
+	    edge_dimensions=$(identify -format '%wx%h' \
+		"$image_dir/$edge_image" 2>/dev/null || true)
+	    edge_width="${edge_dimensions%x*}"
+	    edge_background=$(mktemp "$artifact_dir/.qged-edge.XXXXXX.png")
+	    edge_pixels=9223372036854775807
+	    if [[ "$edge_width" =~ ^[0-9]+$ && "$edge_width" -gt 0 ]] &&
+		convert "$image_dir/$edge_image" -crop '1x1+0+0' +repage \
+		    -scale "${edge_width}x1!" "$edge_background" 2>/dev/null; then
+		edge_pixels=$(compare -metric AE -fuzz 3% \
+		    -crop "${edge_width}x1+0+0" "$image_dir/$edge_image" \
+		    "$edge_background" null: 2>&1 || true)
+	    fi
+	    rm -f "$edge_background"
+	    if [[ ! "$edge_pixels" =~ ^[0-9]+$ ||
+		    "$edge_pixels" -gt 4 ]]; then
+		printf 'stale top-edge pixels after smooth zoom: image=%s pixels=%s\n' \
+		    "$edge_image" "$edge_pixels" >>"$validation"
+		return 1
+	    fi
+	done
+    fi
+
+    # Generic Twin contains 709 BoT and four ELL occurrences.  Its
+    # view-managed wire mode is intentionally backed by those same
+    # source-mesh/PoP contracts, not by
+    # the legacy plotted-vlist cache.  A former first-warm race converged with
+    # zero requests after an authoritative worker overwrote a briefly correct
+    # manifest publication; generic "nonempty framebuffer" checks could not
+    # distinguish the remaining CSG wires from success.  Do not, however,
+    # require every subpixel occurrence to own a triangle payload: the normal
+    # view-aware terminal representation for those leaves is the aggregate
+    # point path.  A safe scene may also admit the terminal mesh directly, so
+    # progressive-face presence is not itself a required endpoint.  The base
+    # contract above has already rejected active AABB/OBB/sphere payloads and
+    # unmatched payloads.
+    if [[ "$case_name" == "generic_twin" && "$mode" == "shaded" ]]; then
+	if ! jq -e '
+	    (.samples[-1].active_lod_cad_payloads // 0) > 0 and
+	    ((.samples[-1].active_full_detail_cad_payloads // 0) * 2 >=
+	     (.samples[-1].active_lod_cad_payloads // 0)) and
+	    (.samples[-1].visible_structural_fallback_boxes // 0) == 0
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'Generic Twin safe scene did not use direct terminal mesh admission\n' \
+		>>"$validation"
+	    return 1
+	fi
+    fi
+
+    if [[ "$case_name" == "generic_twin" && "$mode" == "wire" ]]; then
+	if ! jq -e --argjson expected "$generic_twin_managed_occurrence_count" '
+	    (if .samples[-1].deep_lod_diagnostics == true then
+		.samples[-1].compact_lod_entries == $expected and
+		.samples[-1].compact_lod_entries_with_payload ==
+		    .samples[-1].active_lod_cad_payloads
+	     else true end) and
+	    (((.samples[-1].active_lod_cad_payloads // 0) +
+	      (.samples[-1].active_cad_subpixel_proxy_points // 0)) ==
+	     $expected) and
+	    (.samples[-1].visible_structural_fallback_boxes // 0) == 0 and
+	    (.samples[-1].active_lod_scene_faces // 0) > 0
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'Generic Twin wire draw lost coverage of its %d managed occurrences\n' \
+		"$generic_twin_managed_occurrence_count" >>"$validation"
+	    return 1
+	fi
+    fi
+
+    if find "$image_dir" -type f -size 0 -print -quit | grep -q .; then
+	printf 'zero-length checkpoint image\n' >>"$validation"
+	return 1
+    fi
+    return 0
+}
+
+run_current()
+{
+    local case_name="$1"
+    local db="$2"
+    local object="$3"
+    local backend="$4"
+    local mode="$5"
+    local swap="$6"
+    local cache_state="$7"
+    local cache_dir="$8"
+    local settle_ms="$9"
+    local hierarchy_root="${10}"
+    local hierarchy_child="${11}"
+    local hierarchy_path="${12}"
+    local smooth_zoom_center="${13}"
+    local effective_timeout="$run_timeout"
+    local swap_tag="${swap//-/_}"
+    local run_name="${case_name}-${backend}-${mode}-swap${swap_tag}-${cache_state}"
+    local out="$artifact_dir/cases/$run_name"
+    local events="$artifact_dir/events/$run_name.json"
+    mkdir -p "$out/images"
+    write_event_script "$events" "$out/images" "$mode" "$object" \
+	"$settle_ms" "$hierarchy_root" "$hierarchy_child" "$hierarchy_path" \
+	"$case_name" "$cache_state" "$smooth_zoom_center"
+
+    local env_args=("BU_DIR_CACHE=$cache_dir")
+    # Deep per-occurrence diagnostic arrays are valuable for focused small
+    # model debugging, but collecting them at every scripted checkpoint turns
+    # the 50k/150k observer into repeated O(scene-size) work on the GUI thread.
+    # Scale qualification uses the constant-size aggregate counters and perf
+    # samples asserted below; keep the instrumentation from becoming the
+    # workload being measured.
+    if [[ "$case_name" == "unique_mesh_50k_stress" ||
+	    "$case_name" == "unique_mesh_150k_stress" ]]; then
+	env_args+=("QGED_TEST_DEEP_LOD_REPORT=0")
+    fi
+    if [[ "$capture_apng" -eq 1 ]]; then
+	mkdir -p "$out/frames"
+	env_args+=("QGED_TEST_FRAME_DIR=$out/frames")
+    fi
+    if [[ "$swap" != "default" ]]; then
+	env_args+=("QGED_SWAP_INTERVAL=$swap")
+    fi
+    local qged_args=()
+    [[ "$backend" == "osmesa" ]] && qged_args+=("-s")
+    qged_args+=("--test-script" "$events" "--test-report" "$out/report.json" "$db")
+
+    local command=(env "${env_args[@]}" "$qged" "${qged_args[@]}")
+    if [[ "$case_name" == "$perf_case" &&
+	    ("$perf_phase" == "both" || "$cache_state" == "$perf_phase") &&
+	    "$swap" == "default" ]]; then
+	env_args+=("QGED_TEST_DEEP_LOD_REPORT=0")
+	command=(env "${env_args[@]}" "$qged" "${qged_args[@]}")
+	# perf's system default may be several kHz.  That rate measurably changes
+	# renderer timing and therefore the adaptive LoD policy on large scenes;
+	# use an explicit, still statistically useful rate so the observer does
+	# not manufacture a different capacity regime.  Callers investigating a
+	# short hot path may opt into a higher value explicitly.
+	command=(perf record -F "$perf_frequency" -g -o "$out/perf.data" --
+	    "${command[@]}")
+    fi
+    if [[ "$case_name" == "$apitrace_case" && "$backend" == "system" &&
+	    "$cache_state" == "cold" && "$mode" == "shaded" &&
+	    "$swap" == "default" ]]; then
+	command=(apitrace trace --api=gl -o "$out/qged.trace" "${command[@]}")
+    fi
+
+    printf 'RUN %s\n' "$run_name"
+    local started=$SECONDS
+    local status
+    if [[ "$run_timeout_explicit" -eq 0 ]]; then
+	if [[ "$case_name" == "unique_mesh_150k_stress" &&
+	    "$effective_timeout" -lt "$scale_150k_process_timeout" ]]; then
+	    effective_timeout="$scale_150k_process_timeout"
+	elif [[ "$case_name" == "unique_mesh_50k_stress" &&
+	    "$effective_timeout" -lt "$scale_50k_process_timeout" ]]; then
+	    effective_timeout="$scale_50k_process_timeout"
+	fi
+    fi
+    timeout --signal=TERM --kill-after="${process_kill_grace}s" \
+	"$effective_timeout" "${command[@]}" \
+	>"$out/stdout.log" 2>"$out/stderr.log" &
+    active_test_pid=$!
+    if wait "$active_test_pid"; then
+	status=0
+	active_test_pid=""
+
+	if [[ "$capture_apng" -eq 1 ]]; then
+	    if ! "$apng_encoder" "$out/frames/frames.tsv" \
+		    "$out/presented.apng" --remove-inputs \
+		    >"$out/apng.stdout.log" 2>"$out/apng.stderr.log"; then
+		printf 'FAIL,%s,%s,apng-encode\n' "$run_name" \
+		    "$((SECONDS - started))" >> "$artifact_dir/results.csv"
+		return 1
+	    fi
+	fi
+	if validate_report "$out/report.json" "$out/images" "$object" \
+		"$hierarchy_path" "$out/validation.log" "$cache_state" \
+		"$case_name" "$mode"; then
+	    printf 'PASS,%s,%s,\n' "$run_name" "$((SECONDS - started))" \
+		>> "$artifact_dir/results.csv"
+	    return 0
+	fi
+	printf 'FAIL,%s,%s,report-validation\n' "$run_name" \
+	    "$((SECONDS - started))" >> "$artifact_dir/results.csv"
+	return 1
+    else
+	status=$?
+	active_test_pid=""
+    fi
+    printf 'FAIL,%s,%s,status=%s\n' "$run_name" "$((SECONDS - started))" \
+	"$status" >> "$artifact_dir/results.csv"
+    return 1
+}
+
+capture_baseline()
+{
+    local case_name="$1"
+    local db="$2"
+    local object="$3"
+    local mode="$4"
+    local out="$artifact_dir/baseline/${case_name}-${mode}"
+    local draw_mode=1
+    [[ "$mode" == "wire" ]] && draw_mode=0
+    mkdir -p "$out"
+
+    if [[ ! -x "$baseline_qged" ]]; then
+	echo "SKIP: baseline qged not found at $baseline_qged" > "$out/status.txt"
+	return 0
+    fi
+    # This expanded-copy scene is generated specifically to stress the new
+    # occurrence/PCA path.  Production main accepts all commands for it but
+    # returns no drawable geometry in either mode, so it cannot serve as a
+    # visual ground truth.  The shared multi_lucy and all other cases remain
+    # mandatory production baselines.
+    if [[ "$case_name" == "multi_lucy_xpush" ]]; then
+	echo "SKIP: production qged has no drawable multi_lucy_xpush result" \
+	    > "$out/status.txt"
+	return 0
+    fi
+    if [[ -z "${DISPLAY:-}" ]] || ! command -v xdotool >/dev/null ||
+	    ! command -v import >/dev/null ||
+	    ! command -v convert >/dev/null ||
+	    ! command -v compare >/dev/null; then
+	echo "SKIP: baseline capture needs DISPLAY, xdotool, import, convert, and compare" \
+	    > "$out/status.txt"
+	return 0
+    fi
+
+    # A screensaver overlay can leave the qged framebuffer capturable while
+    # silently intercepting every XTEST click/key.  Deactivate it before each
+    # baseline launch so an idle desktop cannot manufacture empty evidence.
+    if command -v xfce4-screensaver-command >/dev/null 2>&1; then
+	xfce4-screensaver-command --deactivate >/dev/null 2>&1 || true
+    fi
+
+    "$baseline_qged" "$db" >"$out/stdout.log" 2>"$out/stderr.log" &
+    local pid=$!
+    local window=""
+    for _ in $(seq 1 100); do
+	window="$(xdotool search --onlyvisible --pid "$pid" 2>/dev/null |
+	    tail -n 1)"
+	[[ -n "$window" ]] && break
+	sleep 0.1
+    done
+    if [[ -z "$window" ]]; then
+	echo "FAIL: no baseline window" > "$out/status.txt"
+	kill "$pid" 2>/dev/null || true
+	wait "$pid" 2>/dev/null || true
+	return 1
+    fi
+
+    eval "$(xdotool getwindowgeometry --shell "$window")"
+    xdotool windowraise "$window"
+    xdotool windowactivate --sync "$window"
+    # Let the database-backed completer and tree finish their initial setup.
+    # Sending commands while that work is still pumping events can lose the
+    # tail of a synthetic key sequence on large production models.
+    sleep 2
+    import -window "$window" "$out/initial.png"
+    # Click well inside the bottom console instead of estimating the prompt
+    # line in physical pixels.  XTEST coordinates follow the X window's
+    # logical size, while ImageMagick captures Qt's device-pixel framebuffer;
+    # the old fixed 320-pixel offset therefore clicked the canvas at 2x DPI.
+    local console_y=$((HEIGHT - 100))
+    xdotool mousemove --window "$window" "$((WIDTH / 2))" "$console_y" click 1
+    xdotool key ctrl+End
+    # The historical console recomputes geometry completion after each key.
+    # A 1 ms stream outruns that work on Lucy/Stanford and leaves a truncated
+    # command in the prompt.  Pace entry and let the final completion settle
+    # before Return.
+    xdotool type --delay 20 "draw -m${draw_mode} ${object}"
+    sleep 1
+    # Dismiss the exact-object completion popup so Return executes the
+    # command instead of merely accepting the already-complete token.
+    xdotool key Escape
+    xdotool key Return
+    # A second Return is harmless once a fresh prompt exists, but guarantees
+    # execution if a late completer popup consumed the first one.
+    sleep 1
+    xdotool key Return
+    case "$profile" in
+	smoke) sleep 5 ;;
+	full) sleep 10 ;;
+	stress) sleep 20 ;;
+    esac
+    xdotool type --delay 20 "ae 90 0"
+    sleep 1
+    xdotool key Escape
+    xdotool key Return
+    xdotool type --delay 20 "autoview"
+    sleep 1
+    xdotool key Escape
+    xdotool key Return
+    sleep 5
+    import -window "$window" "$out/ae90-stable.png"
+    # Use qged's command path for the production visual baseline.  Large
+    # meshes can keep the historical canvas busy long enough for synthetic
+    # wheel events to be discarded even though console commands remain
+    # ordered and reliable.  Actual wheel/drag behavior is exercised by the
+    # current-stack Qt event script above.
+    xdotool mousemove --window "$window" "$((WIDTH / 2))" "$console_y" click 1
+    xdotool key ctrl+End
+    xdotool type --delay 20 "zoom 2"
+    sleep 1
+    xdotool key Escape
+    xdotool key Return
+    sleep 5
+    import -window "$window" "$out/zoom-in-stable.png"
+
+    # Window capture succeeding does not prove the commands reached qged.
+    # Compare a conservative central viewport crop: drawing must change the
+    # initially empty canvas, and zooming must then change the drawn canvas.
+    # This caught a former false-positive path that archived three identical
+    # empty screenshots and labelled the baseline PASS.
+    local crop_x=$((WIDTH / 4))
+    local crop_y=$((HEIGHT / 5))
+    local crop_width=$((WIDTH / 2))
+    local crop_height=$((HEIGHT / 2))
+    local crop_geometry="${crop_width}x${crop_height}+${crop_x}+${crop_y}"
+    convert "$out/initial.png" -crop "$crop_geometry" +repage \
+	"$out/initial-view.png"
+    convert "$out/ae90-stable.png" -crop "$crop_geometry" +repage \
+	"$out/ae90-stable-view.png"
+    convert "$out/zoom-in-stable.png" -crop "$crop_geometry" +repage \
+	"$out/zoom-in-stable-view.png"
+    if compare -metric AE "$out/initial-view.png" \
+	    "$out/ae90-stable-view.png" null: >/dev/null 2>&1; then
+	echo "FAIL: baseline draw did not change the viewport" > "$out/status.txt"
+	kill "$pid" 2>/dev/null || true
+	wait "$pid" 2>/dev/null || true
+	return 1
+    fi
+    if compare -metric AE "$out/ae90-stable-view.png" \
+	    "$out/zoom-in-stable-view.png" null: >/dev/null 2>&1; then
+	echo "FAIL: baseline zoom did not change the viewport" > "$out/status.txt"
+	kill "$pid" 2>/dev/null || true
+	wait "$pid" 2>/dev/null || true
+	return 1
+    fi
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    echo "PASS" > "$out/status.txt"
+}
+
+# A progressive autoview has one path-scoped camera result.  Cache warmth and
+# renderer speed may change when that result becomes available, but must not
+# change the result itself.  The first run for a case/mode/swap tuple records
+# the reference; every cold/warm and System/OSMesa peer must match it within a
+# small float-serialization tolerance.
+validate_autoview_camera_contract()
+{
+    local case_name="$1"
+    local backend="$2"
+    local mode="$3"
+    local swap="$4"
+    local phase="$5"
+    local run="${case_name}-${backend}-${mode}-swap${swap//-/_}-${phase}"
+    local report="$artifact_dir/cases/$run/report.json"
+    local camera_dir="$artifact_dir/camera-contracts"
+    local reference="$camera_dir/${case_name}-${mode}-swap${swap//-/_}.json"
+    local snapshot="$camera_dir/$run.json"
+    mkdir -p "$camera_dir"
+
+    if [[ ! -r "$report" ]] || ! jq -e '
+	[.samples[] | select(.checkpoint != null and
+	    (.checkpoint | endswith("/ae90-stable.png")))] | length > 0
+	' "$report" >/dev/null; then
+	printf 'FAIL,%s-camera-contract,0,%s\n' "$run" \
+	    "missing stable autoview telemetry" >> "$artifact_dir/results.csv"
+	return 1
+    fi
+
+    jq -c '
+	[.samples[] | select(.checkpoint != null and
+	    (.checkpoint | endswith("/ae90-stable.png")))] | last | {
+	position: [.camera_position_x, .camera_position_y, .camera_position_z],
+	orientation: [.camera_orientation_angle, .camera_orientation_axis_x,
+	    .camera_orientation_axis_y, .camera_orientation_axis_z],
+	orthographic_height: .camera_orthographic_height,
+	focal_distance: .camera_focal_distance,
+	near_distance: .camera_near_distance,
+	far_distance: .camera_far_distance
+	}
+    ' "$report" > "$snapshot"
+
+    if [[ ! -e "$reference" ]]; then
+	cp "$snapshot" "$reference"
+    fi
+    if ! jq -e -n --slurpfile actual "$snapshot" \
+	    --slurpfile expected "$reference" '
+	def close($a; $b):
+	    ($a != null and $b != null and
+	     (($a - $b) | abs) <=
+	     ([0.0001, ((($a | abs) + ($b | abs)) * 0.000001)] | max));
+	def array_close($a; $b):
+	    ($a | length) == ($b | length) and
+	    all(range(0; $a | length); close($a[.]; $b[.]));
+	($actual[0]) as $a | ($expected[0]) as $e |
+	array_close($a.position; $e.position) and
+	array_close($a.orientation; $e.orientation) and
+	close($a.orthographic_height; $e.orthographic_height) and
+	close($a.focal_distance; $e.focal_distance) and
+	close($a.near_distance; $e.near_distance) and
+	close($a.far_distance; $e.far_distance)
+	' >/dev/null; then
+	printf 'FAIL,%s-camera-contract,0,%s\n' "$run" \
+	    "final camera differs by cache state or renderer" \
+	    >> "$artifact_dir/results.csv"
+	return 1
+    fi
+
+    printf 'PASS,%s-camera-contract,0,\n' "$run" \
+	>> "$artifact_dir/results.csv"
+    return 0
+}
+
+printf 'status,run,seconds,detail\n' > "$artifact_dir/results.csv"
+if ! ldd "$qged" > "$artifact_dir/qged-ldd.txt" 2>&1; then
+    echo "ERROR: qged runtime dependency preflight failed; the build may still be linking" >&2
+    sed -n '1,40p' "$artifact_dir/qged-ldd.txt" >&2
+    exit 2
+fi
+if grep -Eq 'not found|file too short|invalid ELF' \
+	"$artifact_dir/qged-ldd.txt"; then
+    echo "ERROR: qged runtime dependency preflight found an incomplete build" >&2
+    grep -E 'not found|file too short|invalid ELF' \
+	"$artifact_dir/qged-ldd.txt" >&2
+    exit 2
+fi
+
+runtime_library_path()
+{
+    local soname="$1"
+    awk -v soname="$soname" \
+	'index($1, soname) == 1 && $2 == "=>" { print $3; exit }' \
+	"$artifact_dir/qged-ldd.txt"
+}
+
+record_runtime_library()
+{
+    local key="$1"
+    local soname="$2"
+    local path
+    path="$(runtime_library_path "$soname")"
+    if [[ -z "$path" || ! -r "$path" ]]; then
+	printf '%s_path=unresolved\n' "$key"
+	return
+    fi
+    printf '%s_path=%s\n' "$key" "$(realpath "$path")"
+    printf '%s_sha256=' "$key"
+    sha256sum "$path" | cut -d' ' -f1
+}
+
+expected_runtime_dir="$(realpath "$build_dir/lib")"
+runtime_provenance="PASS"
+runtime_provenance_detail=""
+for soname in libBObol.so libObol.so libosmesa.so; do
+    library_path="$(runtime_library_path "$soname")"
+    if [[ -z "$library_path" || ! -r "$library_path" ]]; then
+	runtime_provenance="FAIL"
+	runtime_provenance_detail+="${soname}=unresolved "
+	continue
+    fi
+    library_path="$(realpath "$library_path")"
+    if [[ "$library_path" != "$expected_runtime_dir/"* ]]; then
+	runtime_provenance="FAIL"
+	runtime_provenance_detail+="${soname}=${library_path} "
+    fi
+done
+
+{
+    printf 'source_root=%s\nbuild_dir=%s\nmain_build_dir=%s\n' \
+	"$source_root" "$build_dir" "$main_build_dir"
+    printf 'profile=%s\ncases=%s\nbackends=%s\nmodes=%s\nswap_intervals=%s\n' \
+	"$profile" "$case_list" "$backend_list" "$mode_list" "$swap_list"
+    printf 'perf_case=%s\nperf_phase=%s\nperf_frequency=%s\n' \
+	"$perf_case" "$perf_phase" "$perf_frequency"
+    printf 'display=%s\nsession_type=%s\n' "${DISPLAY:-}" "${XDG_SESSION_TYPE:-}"
+    printf 'qged_sha256='
+    sha256sum "$qged" | cut -d' ' -f1
+    if [[ -x "$baseline_qged" ]]; then
+	printf 'baseline_qged_sha256='
+	sha256sum "$baseline_qged" | cut -d' ' -f1
+    fi
+    record_runtime_library libbobol libBObol.so
+    record_runtime_library libobol libObol.so
+    record_runtime_library libosmesa libosmesa.so
+    printf 'runtime_provenance=%s\n' "$runtime_provenance"
+    if [[ -n "$runtime_provenance_detail" ]]; then
+	printf 'runtime_provenance_detail=%s\n' "$runtime_provenance_detail"
+    fi
+    if [[ -L "$source_root/obol" ]]; then
+	printf 'obol_source_root=%s\n' \
+	    "$(realpath "$source_root/obol")"
+    fi
+    if [[ -e "$source_root/obol/external/osmesa" ]]; then
+	printf 'osmesa_source_root=%s\n' \
+	    "$(realpath "$source_root/obol/external/osmesa")"
+    fi
+} > "$artifact_dir/run-info.txt"
+
+if [[ "$runtime_provenance" != "PASS" ]]; then
+    echo "ERROR: qged resolved a required drawing library outside $expected_runtime_dir" >&2
+    echo "       $runtime_provenance_detail" >&2
+    printf 'FAIL,runtime-provenance,0,%s\n' \
+	"required drawing library is unresolved or outside build/lib" \
+	>> "$artifact_dir/results.csv"
+    exit 2
+fi
+
+failures=0
+IFS=',' read -r -a cases <<< "$case_list"
+IFS=',' read -r -a backends <<< "$backend_list"
+IFS=',' read -r -a modes <<< "$mode_list"
+IFS=',' read -r -a swaps <<< "$swap_list"
+
+for case_name in "${cases[@]}"; do
+    spec="$(case_spec "$case_name")" || {
+	echo "ERROR: unknown case '$case_name'" >&2
+	failures=$((failures + 1))
+	continue
+    }
+    IFS='|' read -r db object hierarchy_root hierarchy_child hierarchy_path \
+	smooth_zoom_target <<< "$spec"
+    if [[ ! -r "$db" ]]; then
+	echo "ERROR: missing database for $case_name: $db" >&2
+	failures=$((failures + 1))
+	continue
+    fi
+    smooth_zoom_center=""
+    if [[ -n "$smooth_zoom_target" ]]; then
+	smooth_zoom_center="$(database_path_center \
+	    "$db" "$smooth_zoom_target")" || {
+	    failures=$((failures + 1))
+	    continue
+	}
+    fi
+    write_inventory "$case_name" "$db" "$object" "$hierarchy_root" \
+	"$hierarchy_child" "$hierarchy_path"
+
+    if [[ "$run_baseline" -eq 1 ]]; then
+	for mode in "${modes[@]}"; do
+	    capture_baseline "$case_name" "$db" "$object" "$mode" ||
+		failures=$((failures + 1))
+	done
+    fi
+    if [[ "$baseline_only" -eq 1 ]]; then
+	continue
+    fi
+
+    case "$profile" in
+	# A genuinely cold Lucy cache classifies and persists 28M source faces
+	# before walking its view-appropriate cuts.  Useful boxes/mesh pixels have
+	# their own early framebuffer gates; this deadline is only for terminal
+	# quiescence, including bounded calibration cooldown and compaction.
+	smoke) settle_ms=30000 ;;
+	full) settle_ms=30000 ;;
+	stress) settle_ms=60000 ;;
+    esac
+    if [[ "$case_name" == "unique_mesh_50k_stress" ]]; then
+	settle_ms=180000
+    elif [[ "$case_name" == "unique_mesh_150k_stress" ]]; then
+	settle_ms=300000
+	# Lucy has one 28M-face logical leaf.  Scope readiness includes the
+	# bounded source/cache preparation which cannot be partitioned across
+	# occurrences, so give its terminal gate the documented one-minute bound.
+    elif [[ "$case_name" == "lucy" ]]; then
+	settle_ms=60000
+	# Expanded Lucy cold generation is one canonical 28M-face build, but a
+	# loaded desktop can legitimately exceed the ordinary 30-second smoke
+	# quiescence deadline.  It must never approach the former eight-build
+	# behavior, so retain a strict one-minute bound.
+    elif [[ "$case_name" == "multi_lucy_xpush" ]]; then
+	settle_ms=60000
+    fi
+    if [[ -n "$settle_override_ms" ]]; then
+	settle_ms="$settle_override_ms"
+    fi
+    for backend in "${backends[@]}"; do
+	if [[ "$backend" != "system" && "$backend" != "osmesa" ]]; then
+	    echo "ERROR: unknown backend '$backend'" >&2
+	    failures=$((failures + 1))
+	    continue
+	fi
+	for mode in "${modes[@]}"; do
+	    if [[ "$mode" != "shaded" && "$mode" != "wire" ]]; then
+		echo "ERROR: unknown mode '$mode'" >&2
+		failures=$((failures + 1))
+		continue
+	    fi
+	    for swap in "${swaps[@]}"; do
+		if [[ "$swap" != "default" && "$swap" != "0" &&
+			"$swap" != "1" && "$swap" != "-1" ]]; then
+		    echo "ERROR: invalid swap interval '$swap'" >&2
+		    failures=$((failures + 1))
+		    continue
+		fi
+		pair="$artifact_dir/caches/${case_name}-${backend}-${mode}-swap${swap//-/_}"
+		mkdir -p "$pair"
+		if [[ -n "$warm_cache" ]]; then
+		    cache="$warm_cache"
+		    if ! cache_is_ready "$cache" "$db"; then
+			echo "ERROR: --warm-cache has no validated completion marker for $db" >&2
+			echo "Run the cold/warm pair once; a successful cold run writes a certificate under $CACHE_READY_MARKER_DIRECTORY." >&2
+			failures=$((failures + 1))
+			continue
+		    fi
+		    if run_current "$case_name" "$db" "$object" "$backend" \
+			    "$mode" "$swap" "warm" "$cache" "$settle_ms" \
+			    "$hierarchy_root" "$hierarchy_child" "$hierarchy_path" \
+			    "$smooth_zoom_center"; then
+			validate_autoview_camera_contract "$case_name" "$backend" \
+			    "$mode" "$swap" "warm" || failures=$((failures + 1))
+			cache_mark_ready "$cache" "$db" || {
+			    echo "ERROR: could not update validated cache certificate: $cache" >&2
+			    failures=$((failures + 1))
+			}
+		    else
+			failures=$((failures + 1))
+		    fi
+		    find "$cache" -type f -printf '%s %T@ %p\n' 2>/dev/null |
+			sort -n > "$pair/cache-files.txt"
+		    continue
+		fi
+		cache="$pair/cache"
+		# BU_DIR_CACHE itself must exist or libbu correctly disables cache
+		# writes.  This is still a completely cold cache: the new directory
+		# contains neither format metadata nor cached payloads.
+		mkdir "$cache"
+		cold_succeeded=0
+		if run_current "$case_name" "$db" "$object" "$backend" \
+			"$mode" "$swap" "cold" "$cache" "$settle_ms" \
+			"$hierarchy_root" "$hierarchy_child" "$hierarchy_path" \
+			"$smooth_zoom_center"; then
+		    validate_autoview_camera_contract "$case_name" "$backend" \
+			"$mode" "$swap" "cold" && cold_succeeded=1 ||
+			failures=$((failures + 1))
+		else
+		    failures=$((failures + 1))
+		fi
+		if [[ "$cold_succeeded" -eq 0 ]]; then
+		    echo "SKIP: warm run requires a validated cold completion" >&2
+		    continue
+		fi
+	if ! cache_mark_ready "$cache" "$db"; then
+		    echo "ERROR: could not mark validated cache ready: $cache" >&2
+		    failures=$((failures + 1))
+	    continue
+	fi
+	if [[ "$cold_only" -eq 1 ]]; then
+	    find "$cache" -type f -printf '%s %T@ %p\n' 2>/dev/null |
+		sort -n > "$pair/cache-files.txt"
+	    continue
+	fi
+	if run_current "$case_name" "$db" "$object" "$backend" \
+			"$mode" "$swap" "warm" "$cache" "$settle_ms" \
+			"$hierarchy_root" "$hierarchy_child" "$hierarchy_path" \
+			"$smooth_zoom_center"; then
+		    validate_autoview_camera_contract "$case_name" "$backend" \
+			"$mode" "$swap" "warm" || failures=$((failures + 1))
+		else
+		    failures=$((failures + 1))
+		fi
+		find "$cache" -type f -printf '%s %T@ %p\n' 2>/dev/null |
+		    sort -n > "$pair/cache-files.txt"
+	    done
+	done
+    done
+
+    after_size="$(stat -c %s "$db")"
+    before_size="$(sed -n 's/^size=//p' "$artifact_dir/inventory/$case_name.txt" |
+	head -n 1)"
+    if [[ "$after_size" != "$before_size" ]]; then
+	echo "ERROR: input database size changed during $case_name" >&2
+	failures=$((failures + 1))
+    fi
+done
+
+{
+    printf '# qged GUI matrix summary\n\n'
+    printf -- '- Artifact directory: `%s`\n' "$artifact_dir"
+    printf -- '- Failures: %s\n\n' "$failures"
+    printf '| Status | Run | Seconds | Detail |\n'
+    printf '|---|---|---:|---|\n'
+    tail -n +2 "$artifact_dir/results.csv" |
+	while IFS=',' read -r status run seconds detail; do
+	    printf '| %s | %s | %s | %s |\n' "$status" "$run" "$seconds" "$detail"
+	done
+} > "$artifact_dir/SUMMARY.md"
+
+echo "Artifacts: $artifact_dir"
+echo "Failures: $failures"
+[[ "$failures" -eq 0 ]]

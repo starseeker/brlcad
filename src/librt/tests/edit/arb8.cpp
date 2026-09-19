@@ -59,6 +59,7 @@
 #include "bu/str.h"
 #include "raytrace.h"
 #include "rt/db4.h"
+#include "edit_test_view.h"
 #include "rt/rt_ecmds.h"
 #include "rt/primitives/arb8.h"
 
@@ -281,6 +282,65 @@ test_arb_point_knob(struct rt_edit *s, struct rt_arb_internal *arb,
 }
 
 
+static void
+check_arb_edit_topology(struct rt_db_internal *ip, struct rt_arb_internal *arb,
+	const struct bn_tol *tol)
+{
+    static const point_t shapes[5][8] = {
+	{{0, 0, 0}, {0, 10, 0}, {0, 10, 10}, {0, 0, 0},
+	 {10, 10, 0}, {10, 10, 0}, {10, 10, 0}, {10, 10, 0}},
+	{{0, 0, 0}, {0, 10, 0}, {0, 10, 10}, {0, 0, 10},
+	 {10, 5, 5}, {10, 5, 5}, {10, 5, 5}, {10, 5, 5}},
+	{{0, 0, 0}, {0, 10, 0}, {0, 10, 10}, {0, 0, 5},
+	 {10, 5, 0}, {10, 5, 0}, {10, 5, 10}, {10, 5, 10}},
+	{{0, 0, 0}, {0, 10, 0}, {0, 10, 10}, {0, 0, 5},
+	 {10, 0, 0}, {10, 10, 0}, {10, 10, 5}, {10, 0, 0}},
+	{{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0},
+	 {0, 0, 10}, {10, 0, 10}, {10, 10, 10}, {0, 10, 10}}
+    };
+    static const int edge_counts[5] = {6, 8, 9, 11, 12};
+    static const int face_counts[5] = {4, 5, 5, 6, 6};
+    static const int movable_edge_counts[5] = {0, 8, 8, 11, 12};
+
+    for (int ti = 0; ti < 5; ti++) {
+	memcpy(arb->pt, shapes[ti], sizeof(shapes[ti]));
+	struct rt_arb_edit_topology topology;
+	if (rt_arb_edit_topology_get(&topology, ip, tol) != BRLCAD_OK ||
+	    topology.arb_type != ti + 4 ||
+	    topology.vertex_count != ti + 4 ||
+	    topology.edge_count != edge_counts[ti] ||
+	    topology.face_count != face_counts[ti])
+	    bu_exit(1, "ERROR: ARB%d edit topology dimensions are invalid\n",
+		ti + 4);
+	int movable_edges = 0;
+	for (int ei = 0; ei < topology.edge_count; ei++) {
+	    const struct rt_arb_edit_edge *edge = &topology.edges[ei];
+	    if (edge->vertices[0] < 0 ||
+		edge->vertices[0] >= topology.vertex_count ||
+		edge->vertices[1] < 0 ||
+		edge->vertices[1] >= topology.vertex_count ||
+		edge->vertices[0] == edge->vertices[1])
+		bu_exit(1, "ERROR: ARB%d edit topology has invalid edge\n",
+		    ti + 4);
+	    if (edge->edit_index >= 0)
+		movable_edges++;
+	}
+	if (movable_edges != movable_edge_counts[ti])
+	    bu_exit(1, "ERROR: ARB%d edit topology has %d movable edges, expected %d\n",
+		ti + 4, movable_edges, movable_edge_counts[ti]);
+	for (int fi = 0; fi < topology.face_count; fi++) {
+	    const struct rt_arb_edit_face *face = &topology.faces[fi];
+	    if (face->vertex_count < 3 ||
+		face->vertex_count > RT_ARB_EDIT_MAX_FACE_VERTICES ||
+		face->edit_index < 0 || !face->rotatable)
+		bu_exit(1, "ERROR: ARB%d edit topology has invalid face\n",
+		    ti + 4);
+	}
+    }
+    bu_log("ARB4-ARB8 edit topology SUCCESS\n");
+}
+
+
 int
 main(int argc, char *argv[])
 {
@@ -301,20 +361,10 @@ main(int argc, char *argv[])
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size  = 73.3197;
-    v->gv_isize = 1.0 / v->gv_size;
-    v->gv_scale = 0.5 * v->gv_size;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width  = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init(&v);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
 
     struct rt_arb_internal *arb =
@@ -324,6 +374,24 @@ main(int argc, char *argv[])
     if (rt_edit_map_clbk_set(s->m, ECMD_MENU_SET, BU_CLBK_DURING,
 		capture_menu, &captured_menu) != BRLCAD_OK)
 	bu_exit(1, "ERROR: Unable to register ARB menu capture callback\n");
+
+    check_arb_edit_topology(&s->es_int, arb, &tol);
+    arb8_reset(s, arb, a);
+
+    struct rt_edit_param_bounds vertexBounds = {};
+    struct rt_edit_param_bounds edgeBounds = {};
+    struct rt_edit_param_bounds faceBounds = {};
+    if (rt_edit_param_bounds_get(s, ECMD_ARB_SELECT_VERTEX, 0,
+	    &vertexBounds) != BRLCAD_OK || !vertexBounds.has_maximum ||
+	!NEAR_EQUAL(vertexBounds.maximum, 7.0, SMALL_FASTF) ||
+	rt_edit_param_bounds_get(s, EARB, 0, &edgeBounds) != BRLCAD_OK ||
+	!edgeBounds.has_maximum ||
+	!NEAR_EQUAL(edgeBounds.maximum, 11.0, SMALL_FASTF) ||
+	rt_edit_param_bounds_get(s, ECMD_ARB_MOVE_FACE, 0,
+	    &faceBounds) != BRLCAD_OK || !faceBounds.has_maximum ||
+	!NEAR_EQUAL(faceBounds.maximum, 5.0, SMALL_FASTF))
+	bu_exit(1, "ERROR: ARB current-topology parameter bounds are invalid\n");
+    bu_log("ARB current-topology parameter bounds SUCCESS\n");
 
     vect_t mousevec;
 
@@ -415,8 +483,8 @@ main(int argc, char *argv[])
     VMOVE(s->curr_e_axes_pos, arb->pt[0]);
     {
 	int xpos = 1300, ypos = 800;
-	mousevec[X] = xpos * INV_BV;
-	mousevec[Y] = ypos * INV_BV;
+	mousevec[X] = xpos * RT_INV_VIEW;
+	mousevec[Y] = ypos * RT_INV_VIEW;
 	mousevec[Z] = 0;
     }
     bu_vls_trunc(s->log_str, 0);

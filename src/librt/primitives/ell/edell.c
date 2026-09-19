@@ -147,7 +147,7 @@ static const struct rt_edit_param_desc ell_abc_params[] = {
 
 static const struct rt_edit_cmd_desc ell_cmds[] = {
     {
-	ECMD_ELL_SCALE_A,     /* cmd_id       */
+	ECMD_ELL_SCALE_A, RT_EDIT_CMD_NAME(ECMD_ELL_SCALE_A),     /* cmd_id       */
 	"Set A",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -157,7 +157,7 @@ static const struct rt_edit_cmd_desc ell_cmds[] = {
 	"ell"                 /* req_types */
     },
     {
-	ECMD_ELL_SCALE_B,     /* cmd_id       */
+	ECMD_ELL_SCALE_B, RT_EDIT_CMD_NAME(ECMD_ELL_SCALE_B),     /* cmd_id       */
 	"Set B",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -167,7 +167,7 @@ static const struct rt_edit_cmd_desc ell_cmds[] = {
 	"ell"                 /* req_types */
     },
     {
-	ECMD_ELL_SCALE_C,     /* cmd_id       */
+	ECMD_ELL_SCALE_C, RT_EDIT_CMD_NAME(ECMD_ELL_SCALE_C),     /* cmd_id       */
 	"Set C",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -177,7 +177,7 @@ static const struct rt_edit_cmd_desc ell_cmds[] = {
 	"ell"                 /* req_types */
     },
     {
-	ECMD_ELL_SCALE_ABC,   /* cmd_id       */
+	ECMD_ELL_SCALE_ABC, RT_EDIT_CMD_NAME(ECMD_ELL_SCALE_ABC),   /* cmd_id       */
 	"Set A,B,C",          /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -187,6 +187,23 @@ static const struct rt_edit_cmd_desc ell_cmds[] = {
 	"ell,sph"             /* req_types */
     }
 };
+
+static const enum rt_edit_param_semantic ell_distance_semantics[] = {
+    RT_EDIT_SEMANTIC_DISTANCE
+};
+
+static const struct rt_edit_interaction_desc ell_interactions[] = {
+    { RT_EDIT_SELECTION_PRIMITIVE, RT_EDIT_COORDINATE_SCALAR,
+      RT_EDIT_MANIPULATOR_AXIS, ell_distance_semantics, 1 },
+    { RT_EDIT_SELECTION_PRIMITIVE, RT_EDIT_COORDINATE_SCALAR,
+      RT_EDIT_MANIPULATOR_AXIS, ell_distance_semantics, 1 },
+    { RT_EDIT_SELECTION_PRIMITIVE, RT_EDIT_COORDINATE_SCALAR,
+      RT_EDIT_MANIPULATOR_AXIS, ell_distance_semantics, 1 },
+    { RT_EDIT_SELECTION_PRIMITIVE, RT_EDIT_COORDINATE_SCALAR,
+      RT_EDIT_MANIPULATOR_RADIUS, ell_distance_semantics, 1 }
+};
+_Static_assert(sizeof(ell_interactions) / sizeof(ell_interactions[0]) ==
+    sizeof(ell_cmds) / sizeof(ell_cmds[0]), "ell command interactions");
 
 static const struct rt_edit_opt_desc ell_opts[] = {
     {
@@ -203,7 +220,11 @@ static const struct rt_edit_prim_desc ell_prim_desc = {
     4,                    /* ncmd         */
     ell_cmds              /* cmds         */,
     1,                    /* nopt         */
-    ell_opts              /* opts         */
+    ell_opts,             /* opts         */
+    RT_EDIT_CONTROL_GENERATED,
+    NULL,
+    ell_interactions,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
@@ -213,32 +234,37 @@ rt_edit_ell_edit_desc(void)
 }
 
 C_DECL int
-rt_edit_ell_get_params(struct rt_edit *s, int cmd_id, fastf_t *vals)
+rt_edit_ell_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
 {
     struct rt_ell_internal *ell;
 
-    if (!s || !vals)
-	return -1;
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
 
     ell = (struct rt_ell_internal *)s->es_int.idb_ptr;
     RT_ELL_CK_MAGIC(ell);
 
-    switch (cmd_id) {
+	switch (cmd_id) {
 	case ECMD_ELL_SCALE_A:
-	    vals[0] = MAGNITUDE(ell->a) * s->base2local;
-	    return 1;
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(ell->a) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_ELL_SCALE_B:
-	    vals[0] = MAGNITUDE(ell->b) * s->base2local;
-	    return 1;
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(ell->b) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_ELL_SCALE_C:
-	    vals[0] = MAGNITUDE(ell->c) * s->base2local;
-	    return 1;
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(ell->c) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_ELL_SCALE_ABC:
 	    /* Return the current A magnitude as the uniform scale value. */
-	    vals[0] = MAGNITUDE(ell->a) * s->base2local;
-	    return 1;
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(ell->a) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	default:
-	    return 0;
+	    return RT_EDIT_VALUE_UNAVAILABLE;
     }
 }
 

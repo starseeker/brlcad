@@ -49,7 +49,7 @@
 #include "bu/parallel.h"
 #include "vmath.h"
 #include "raytrace.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 #include "optical.h"
 #include "bn/rand.h"
 
@@ -64,7 +64,7 @@
  * main()).
  * ----------------------------------------------------------------------- */
 
-struct fb	*fbp = FB_NULL;		/* framebuffer handle */
+imgstream_fb_t	*fbp = NULL;		/* framebuffer handle */
 struct icv_image *bif = NULL;		/* ICV image buffer */
 struct application APP;			/* global application structure */
 FILE		*outfp = NULL;		/* optional output file */

@@ -60,7 +60,6 @@ main(int argc, char *argv[])
 
     ged_init(&view_ged);
     ged_init(&qvrot_ged);
-    view_ged.new_cmd_forms = 1;
 
     if (ged_exec_view(&view_ged, 2, view_get) != BRLCAD_OK ||
 	ged_exec_viewdir(&qvrot_ged, 1, viewdir_get) != BRLCAD_OK ||

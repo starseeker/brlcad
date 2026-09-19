@@ -30,14 +30,15 @@
 #include <string>
 
 #include <bu.h>
-#define DM_WITH_RT
-#include <dm.h>
+#include <BObol/BDatabaseSource.h>
+#include <ged/view.h>
+#include <ged/scene.h>
 #include <ged.h>
 #include <rt/geom.h>
 #include <rt/primitives/annot.h>
 #include <wdb.h>
 
-#include "../../dbi.h"
+#include "view_test_util.h"
 #include "../../ged_private.h"
 
 #define ADIFF_THRESHOLD 0.99
@@ -51,7 +52,6 @@ static constexpr const char *PRIMITIVE_TEXT_HEIGHT = "40";
 static constexpr fastf_t PRIMITIVE_DIMENSION_OFFSET_SCALE = 1.5;
 static constexpr fastf_t PRIMITIVE_ANGULAR_OFFSET_SCALE = 3.0;
 
-extern "C" void ged_changed_callback(struct db_i *, struct directory *, int, void *);
 extern "C" void dm_refresh(struct ged *);
 extern "C" int img_cmp(int, struct ged *, const char *, bool, bool, int, fastf_t,
 	const char *, const char *);
@@ -59,69 +59,55 @@ extern "C" int unpack_apng(const char *, const char *, const char *, const char 
 
 
 static void
-verify_legacy_annotation_coloring(struct ged *gedp)
+verify_annotation_coloring(struct ged *gedp)
 {
-    const unsigned char default_annotation_color[3] = {255, 255, 255};
+    const char *name = "color-test-annotation";
+    const char *group = "color-test-group";
     const char *create_argv[] = {
-	"annotate", "text", "--no-draw", "--at", "0 0 0",
-	"legacy-color-annotation", "test", NULL
+	"annotate", "text", "--no-draw", "--at", "0 0 0", name, "test", NULL
     };
     if (ged_exec_annotate(gedp, 7, create_argv) != BRLCAD_OK)
-	bu_exit(EXIT_FAILURE, "Unable to create legacy color test annotation: %s\n",
+	bu_exit(EXIT_FAILURE, "Unable to create color test annotation: %s\n",
 	    bu_vls_cstr(gedp->ged_result_str));
 
-    struct directory *annotation_dp = db_lookup(gedp->dbip,
-	"legacy-color-annotation", LOOKUP_QUIET);
-    struct directory *component_dp = db_lookup(gedp->dbip,
-	"component", LOOKUP_QUIET);
-    if (annotation_dp == RT_DIR_NULL || component_dp == RT_DIR_NULL)
-	bu_exit(EXIT_FAILURE, "Unable to find legacy color test objects\n");
+    SbColor actual;
+    const SbColor white(1.0f, 1.0f, 1.0f);
+    if (!bobol_database_source_path_material_color(gedp->dbip, name, actual) ||
+	!actual.equals(white, SMALL_FASTF))
+	bu_exit(EXIT_FAILURE, "Annotation inherited the region color table\n");
 
-    struct ged_bv_data bdata = {};
-    db_full_path_init(&bdata.s_fullpath);
-    db_add_node_to_full_path(&bdata.s_fullpath, annotation_dp);
+    const char *group_argv[] = {"g", group, name, NULL};
+    const char *color_argv[] = {"attr", "set", group, "color", "200/50/25", NULL};
+    if (ged_exec(gedp, 3, group_argv) != BRLCAD_OK ||
+	ged_exec(gedp, 5, color_argv) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "Unable to create inherited annotation color fixture\n");
+    const SbColor inherited(200.0f / 255.0f, 50.0f / 255.0f, 25.0f / 255.0f);
+    if (!bobol_database_source_path_material_color(gedp->dbip,
+	"color-test-group/color-test-annotation", actual) ||
+	!actual.equals(inherited, SMALL_FASTF))
+	bu_exit(EXIT_FAILURE, "Annotation lost its inherited color\n");
 
-    struct bv_scene_obj scene_obj = {};
-    scene_obj.s_u_data = &bdata;
-    scene_obj.s_old.s_dflag = 1;
-    scene_obj.s_old.s_regionid = 0;
-    color_soltab(gedp->dbip, &scene_obj);
-
-    if (scene_obj.s_old.s_cflag ||
-	std::memcmp(scene_obj.s_color, default_annotation_color,
-	    sizeof(default_annotation_color)))
-	bu_exit(EXIT_FAILURE,
-	    "Legacy annotation inherited the region color table\n");
-
-    const unsigned char inherited_color[3] = {200, 50, 25};
-    scene_obj.s_old.s_dflag = 0;
-    std::memcpy(scene_obj.s_old.s_basecolor, inherited_color,
-	sizeof(inherited_color));
-    color_soltab(gedp->dbip, &scene_obj);
-    if (scene_obj.s_old.s_cflag ||
-	std::memcmp(scene_obj.s_color, inherited_color,
-	    sizeof(inherited_color)))
-	bu_exit(EXIT_FAILURE, "Legacy annotation lost its inherited color\n");
-
-    db_free_full_path(&bdata.s_fullpath);
-    db_full_path_init(&bdata.s_fullpath);
-    db_add_node_to_full_path(&bdata.s_fullpath, component_dp);
-    color_soltab(gedp->dbip, &scene_obj);
+    struct wmember members;
+    BU_LIST_INIT(&members.l);
+    if (!mk_addmember("component", &members.l, NULL, WMOP_UNION) ||
+	mk_comb(wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT), "color-test-region",
+	    &members.l, 1, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, 0) != 0)
+	bu_exit(EXIT_FAILURE, "Unable to create color-table test region\n");
 
     const struct mater *material = db_mater_head(gedp->dbip);
-    while (material != MATER_NULL &&
-	(scene_obj.s_old.s_regionid < material->mt_low ||
-	 scene_obj.s_old.s_regionid > material->mt_high))
+    while (material != MATER_NULL && (material->mt_low > 0 || material->mt_high < 0))
 	material = material->mt_forw;
-    if (material == MATER_NULL || scene_obj.s_color[0] != material->mt_r ||
-	scene_obj.s_color[1] != material->mt_g ||
-	scene_obj.s_color[2] != material->mt_b)
-	bu_exit(EXIT_FAILURE, "Legacy region color-table behavior changed\n");
+    if (material == MATER_NULL)
+	bu_exit(EXIT_FAILURE, "Missing region color-table fixture\n");
+    const SbColor region_color(material->mt_r / 255.0f,
+	material->mt_g / 255.0f, material->mt_b / 255.0f);
+    if (!bobol_database_source_path_material_color(gedp->dbip, "color-test-region", actual) ||
+	!actual.equals(region_color, SMALL_FASTF))
+	bu_exit(EXIT_FAILURE, "Region color-table behavior changed\n");
 
-    db_free_full_path(&bdata.s_fullpath);
-    if (db_delete(gedp->dbip, annotation_dp) ||
-	db_dirdelete(gedp->dbip, annotation_dp))
-	bu_exit(EXIT_FAILURE, "Unable to remove legacy color test annotation\n");
+    const char *kill_argv[] = {"kill", group, name, "color-test-region", NULL};
+    if (ged_exec(gedp, 4, kill_argv) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "Unable to remove annotation color fixture\n");
 }
 
 
@@ -255,15 +241,47 @@ verify_help_output(struct ged *gedp)
 }
 
 
+static std::string
+drawing_intents(struct ged *gedp)
+{
+    struct bu_vls paths = BU_VLS_INIT_ZERO;
+    (void)ged_scene_paths_append(gedp, ged_view_active_ctx(gedp),
+	GED_SCENE_DRAW_DEFAULT, GED_SCENE_PATHS_DRAW_INTENTS, &paths);
+    const std::string result(bu_vls_cstr(&paths));
+    bu_vls_free(&paths);
+    return result;
+}
+
+
 static void
 verify_geometry_update(struct ged *gedp)
 {
+    const char *zap_argv[] = {"zap", NULL};
+    if (ged_exec_zap(gedp, 1, zap_argv) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "Unable to isolate annotation update scene\n");
+    const std::string hidden_intents = drawing_intents(gedp);
     const char *source_name = "annotate-update-source";
     const char *dimension_name = "annotate-update-dim";
     point_t center = VINIT_ZERO;
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
     if (mk_sph(wdbp, source_name, center, 10.0))
 	bu_exit(EXIT_FAILURE, "Unable to create autodim update source\n");
+
+    /* Input discovery must work from draw intent without a render pass. */
+    const char *draw_source_argv[] = {"draw", source_name, NULL};
+    const char *inferred_argv[] = {"annotate", "autodim", "--no-draw",
+	"--axes", "x", "--precision", "1", "annotate-inferred-dim", NULL};
+    if (ged_exec_draw(gedp, 2, draw_source_argv) != BRLCAD_OK ||
+	ged_exec_annotate(gedp, 8, inferred_argv) != BRLCAD_OK ||
+	!NEAR_EQUAL(annotation_value(gedp, "annotate-inferred-dim.x"), 20.0 * gedp->dbip->dbi_base2local, 0.11))
+	bu_exit(EXIT_FAILURE, "Autodim could not discover its input drawing intent: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+    const char *erase_source_argv[] = {"erase", source_name, NULL};
+    const char *kill_inferred_argv[] = {"kill", "annotate-inferred-dim",
+	"annotate-inferred-dim.x", NULL};
+    if (ged_exec_erase(gedp, 2, erase_source_argv) != BRLCAD_OK ||
+	ged_exec(gedp, 3, kill_inferred_argv) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "Unable to clear inferred annotation fixture\n");
 
     const char *create_argv[] = {
 	"annotate", "autodim", "--no-draw", "--axes", "x,y", "--precision", "1",
@@ -325,6 +343,28 @@ verify_geometry_update(struct ged *gedp)
     if (!NEAR_EQUAL(updated_value, initial_value * 2.0, 0.11))
 	bu_exit(EXIT_FAILURE, "Autodim value did not track resized geometry\n");
 
+    if (drawing_intents(gedp) != hidden_intents)
+	bu_exit(EXIT_FAILURE, "Updating hidden annotations changed the drawing intents\n");
+
+    const char *parent_argv[] = {"g", "annotate-update-parent", dimension_name,
+	"annotate-update-leader", NULL};
+    const char *draw_parent_argv[] = {"draw", "-C", "9/80/150",
+	"annotate-update-parent", NULL};
+    if (ged_exec(gedp, 4, parent_argv) != BRLCAD_OK ||
+	ged_exec_draw(gedp, 4, draw_parent_argv) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "Unable to draw nested annotation update fixture\n");
+    const std::string nested_intents = drawing_intents(gedp);
+    if (ged_exec_annotate(gedp, 4, view_update_argv) != BRLCAD_OK ||
+	ged_exec_annotate(gedp, 3, update_leader_argv) != BRLCAD_OK ||
+	drawing_intents(gedp) != nested_intents)
+	bu_exit(EXIT_FAILURE, "Updating nested annotations changed their drawing roots\n");
+    dm_refresh(gedp);
+    const char *erase_parent_argv[] = {"erase", "annotate-update-parent", NULL};
+    if (ged_exec_erase(gedp, 2, erase_parent_argv) != BRLCAD_OK ||
+	ged_exec_annotate(gedp, 3, update_argv) != BRLCAD_OK ||
+	drawing_intents(gedp) != hidden_intents)
+	bu_exit(EXIT_FAILURE, "Updating erased annotations made them visible\n");
+
     struct directory *missing_member = db_lookup(gedp->dbip, "annotate-update-dim.y",
 	LOOKUP_QUIET);
     if (missing_member == RT_DIR_NULL || db_delete(gedp->dbip, missing_member) ||
@@ -381,22 +421,25 @@ main(int argc, const char **argv)
     int generate = 0;
     int keep_images = 0;
     int continue_on_failure = 0;
+    int commands_only = 0;
     int ret = BRLCAD_OK;
-    struct bu_opt_desc options[4];
+    struct bu_opt_desc options[5];
     BU_OPT(options[0], "G", "generate", "", NULL, &generate,
 	"Generate PNG frames without comparing controls");
     BU_OPT(options[1], "k", "keep", "", NULL, &keep_images,
 	"Keep generated PNG frames");
     BU_OPT(options[2], "c", "continue", "", NULL, &continue_on_failure,
 	"Continue after an image mismatch");
-    BU_OPT_NULL(options[3]);
+    BU_OPT(options[3], "n", "commands-only", "", NULL, &commands_only,
+	"Run command assertions without image comparison");
+    BU_OPT_NULL(options[4]);
 
     bu_setprogname(argv[0]);
     argc--; argv++;
     int remaining = bu_opt_parse(NULL, argc, argv, options);
     if (remaining != 2)
 	bu_exit(EXIT_FAILURE,
-	    "Usage: ged_test_annotate [-G] [-k] [-c] control-directory m35.g\n");
+	    "Usage: ged_test_annotate [-G] [-k] [-c] [-n] control-directory m35.g\n");
     const char *control_dir = argv[0];
     const char *m35_path = argv[1];
     if (!bu_file_directory(control_dir) || !bu_file_exists(m35_path, NULL))
@@ -421,42 +464,19 @@ main(int argc, const char **argv)
 	"cache", NULL);
     bu_mkdir(runtime_cache);
     bu_setenv("BU_DIR_CACHE", runtime_cache, 1);
-    bu_setenv("DM_SWRAST", "1", 1);
-    if (!generate && unpack_apng(control_dir, "annotate.apng", cache_dir,
+    if (!generate && !commands_only && unpack_apng(control_dir, "annotate.apng", cache_dir,
 	"annotate"))
 	bu_exit(EXIT_FAILURE, "Unable to unpack annotation controls\n");
 
     struct ged *gedp = ged_open("db", working_db, 1);
     if (!gedp)
 	bu_exit(EXIT_FAILURE, "Unable to open annotation test database\n");
-    verify_legacy_annotation_coloring(gedp);
-    gedp->dbi_state = new DbiState(gedp);
-    gedp->new_cmd_forms = 1;
-    db_add_changed_clbk(gedp->dbip, &ged_changed_callback, gedp);
-
     verify_help_output(gedp);
+    if (draw_test_obol_view_init(gedp, ged_view_active_ctx(gedp),
+	ANNOTATE_IMAGE_SIZE, ANNOTATE_IMAGE_SIZE) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "Unable to initialize annotation drawing endpoint\n");
+    verify_annotation_coloring(gedp);
 
-    const char *dm_argv[] = {"dm", "attach", "swrast", "SW", NULL};
-    if (ged_exec_dm(gedp, 4, dm_argv) != BRLCAD_OK)
-	bu_exit(EXIT_FAILURE, "Unable to attach swrast display manager\n");
-    struct bview *view = gedp->ged_gvp;
-    struct dm *display = static_cast<struct dm *>(view->dmp);
-    view->gv_width = ANNOTATE_IMAGE_SIZE;
-    view->gv_height = ANNOTATE_IMAGE_SIZE;
-    dm_set_width(display, ANNOTATE_IMAGE_SIZE);
-    dm_set_height(display, ANNOTATE_IMAGE_SIZE);
-    dm_configure_win(display, 0);
-    dm_set_zbuffer(display, 1);
-    fastf_t bounds[6] = {-1, 1, -1, 1, -100, 100};
-    dm_set_win_bounds(display, bounds);
-    view->gv_width = dm_get_width(display);
-    view->gv_height = dm_get_height(display);
-    dm_set_vp(display, &view->gv_scale);
-    view->gv_base2local = gedp->dbip->dbi_base2local;
-    view->gv_local2base = gedp->dbip->dbi_local2base;
-
-    const char *dm_set_argv[] = {"dm", "set", "fast_wireframe", "0", NULL};
-    (void)ged_exec_dm(gedp, 4, dm_set_argv);
     const char *draw_argv[] = {"draw", "component", NULL};
     const char *autoview_argv[] = {"autoview", NULL};
     const char *ae_argv[] = {"ae", "45", "35", NULL};
@@ -476,9 +496,9 @@ main(int argc, const char **argv)
 	    bu_vls_cstr(gedp->ged_result_str));
     (void)ged_exec_autoview(gedp, 1, autoview_argv);
     (void)ged_exec_ae(gedp, 3, ae_argv);
-    if (generate)
+    if (generate && !commands_only)
 	capture_image(gedp, 1);
-    else
+    else if (!commands_only)
 	ret += img_cmp(1, gedp, cache_dir, false, !keep_images, continue_on_failure,
 	    ADIFF_THRESHOLD, "annotate_clear", "annotate");
 
@@ -495,9 +515,9 @@ main(int argc, const char **argv)
 	    bu_vls_cstr(gedp->ged_result_str));
     (void)ged_exec_autoview(gedp, 1, autoview_argv);
     (void)ged_exec_ae(gedp, 3, ae_argv);
-    if (generate)
+    if (generate && !commands_only)
 	capture_image(gedp, 2);
-    else
+    else if (!commands_only)
 	ret += img_cmp(2, gedp, cache_dir, false, !keep_images, continue_on_failure,
 	    ADIFF_THRESHOLD, "annotate_clear", "annotate");
 
@@ -510,9 +530,9 @@ main(int argc, const char **argv)
 	bu_exit(EXIT_FAILURE, "Unable to update autodim for the current view: %s\n",
 	    bu_vls_cstr(gedp->ged_result_str));
     (void)ged_exec_autoview(gedp, 1, autoview_argv);
-    if (generate)
+    if (generate && !commands_only)
 	capture_image(gedp, 3);
-    else
+    else if (!commands_only)
 	ret += img_cmp(3, gedp, cache_dir, false, !keep_images, continue_on_failure,
 	    ADIFF_THRESHOLD, "annotate_clear", "annotate");
 
@@ -558,10 +578,10 @@ main(int argc, const char **argv)
 	    bu_vls_cstr(gedp->ged_result_str));
     (void)ged_exec_autoview(gedp, 1, autoview_argv);
     point_t target_view, screen_label_view, screen_label;
-    MAT4X3PNT(target_view, gedp->ged_gvp->gv_model2view, leader_target);
+    MAT4X3PNT(target_view, DRAW_TEST_BV_CONST(ged_view_active_ctx(gedp))->model2view, leader_target);
     VSET(screen_label_view, target_view[X] + 0.45, target_view[Y] + 0.35,
 	target_view[Z]);
-    MAT4X3PNT(screen_label, gedp->ged_gvp->gv_view2model, screen_label_view);
+    MAT4X3PNT(screen_label, DRAW_TEST_BV_CONST(ged_view_active_ctx(gedp))->view2model, screen_label_view);
     const std::string screen_label_arg = point_arg(screen_label,
 	gedp->dbip->dbi_base2local);
     const char *screen_leader_argv[] = {
@@ -576,9 +596,9 @@ main(int argc, const char **argv)
 	    bu_vls_cstr(gedp->ged_result_str));
     if (!annotation_is_screen_space(gedp, "component-screen-note"))
 	bu_exit(EXIT_FAILURE, "screen-space leader was stored in model space\n");
-    if (generate)
+    if (generate && !commands_only)
 	capture_image(gedp, 4);
-    else
+    else if (!commands_only)
 	ret += img_cmp(4, gedp, cache_dir, false, !keep_images, continue_on_failure,
 	    ADIFF_THRESHOLD, "annotate_clear", "annotate");
 
@@ -593,9 +613,9 @@ main(int argc, const char **argv)
 	    bu_vls_cstr(gedp->ged_result_str));
     if (!annotation_is_screen_space(gedp, "component-screen-note"))
 	bu_exit(EXIT_FAILURE, "screen-space update changed annotation coordinates\n");
-    if (generate)
+    if (generate && !commands_only)
 	capture_image(gedp, 5);
-    else
+    else if (!commands_only)
 	ret += img_cmp(5, gedp, cache_dir, false, !keep_images, continue_on_failure,
 	    ADIFF_THRESHOLD, "annotate_clear", "annotate");
 
@@ -638,9 +658,9 @@ main(int argc, const char **argv)
 	    bu_vls_cstr(gedp->ged_result_str));
     (void)ged_exec_autoview(gedp, 1, autoview_argv);
     (void)ged_exec_ae(gedp, 3, direct_ae_argv);
-    if (generate)
+    if (generate && !commands_only)
 	capture_image(gedp, 6);
-    else
+    else if (!commands_only)
 	ret += img_cmp(6, gedp, cache_dir, false, !keep_images, continue_on_failure,
 	    ADIFF_THRESHOLD, "annotate_clear", "annotate");
 
@@ -697,17 +717,15 @@ main(int argc, const char **argv)
     (void)ged_exec_autoview(gedp, 1, autoview_argv);
     const char *primitive_ae_argv[] = {"ae", "0", "90", NULL};
     (void)ged_exec_ae(gedp, 3, primitive_ae_argv);
-    if (generate)
+    if (generate && !commands_only)
 	capture_image(gedp, 7);
-    else
+    else if (!commands_only)
 	ret += img_cmp(7, gedp, cache_dir, false, !keep_images, continue_on_failure,
 	    ADIFF_THRESHOLD, "annotate_clear", "annotate");
 
     verify_geometry_update(gedp);
+    bu_log("PASS annotate command, color, and update assertions\n");
 
-    db_rm_changed_clbk(gedp->dbip, &ged_changed_callback, gedp);
-    delete static_cast<DbiState *>(gedp->dbi_state);
-    gedp->dbi_state = NULL;
     ged_close(gedp);
     bu_file_delete(working_db);
     return ret ? EXIT_FAILURE : EXIT_SUCCESS;

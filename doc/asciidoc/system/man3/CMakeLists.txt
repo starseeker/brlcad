@@ -6,7 +6,6 @@ set(
   libbrep.adoc
   libbu.adoc
   libbv.adoc
-  libdm.adoc
   libfft.adoc
   libgcv.adoc
   libged.adoc

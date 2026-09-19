@@ -42,6 +42,7 @@
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
 #include "rt/rt_ecmds.h"
 
 
@@ -140,22 +141,17 @@ bu_exit(1, "ERROR: Unable to create database instance\n");
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size = 73.3197;
-    v->gv_isize = 1.0 / v->gv_size;
-    v->gv_scale = 0.5 * v->gv_size;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init(&v);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
     struct rt_rpc_internal *edit_rpc = (struct rt_rpc_internal *)s->es_int.idb_ptr;
+
+    if (!rt_edit_test_scalar_value(s, ECMD_RPC_B, 5.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_RPC_H, 10.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_RPC_R, 3.0))
+	bu_exit(1, "ERROR: RPC descriptor current-value readback failed\n");
 
     vect_t mousevec;
 
@@ -298,8 +294,8 @@ bu_exit(1, "ERROR: RT_PARAMS_EDIT_ROT(k) failed\n");
 
     {
 int xpos = 1372, ypos = 1383;
-mousevec[X] = xpos * INV_BV;
-mousevec[Y] = ypos * INV_BV;
+mousevec[X] = xpos * RT_INV_VIEW;
+mousevec[Y] = ypos * RT_INV_VIEW;
 mousevec[Z] = 0;
     }
 
@@ -322,8 +318,8 @@ bu_exit(1, "ERROR: ECMD_RPC_B(xy) failed\n");
 
     {
 int xpos = 1482, ypos = 762;
-mousevec[X] = xpos * INV_BV;
-mousevec[Y] = ypos * INV_BV;
+mousevec[X] = xpos * RT_INV_VIEW;
+mousevec[Y] = ypos * RT_INV_VIEW;
 mousevec[Z] = 0;
     }
 

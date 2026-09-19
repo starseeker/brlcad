@@ -77,7 +77,10 @@ init_tclcad(Tcl_Interp *interp, int init_gui)
 static bool
 check_gui_packages(Tcl_Interp *interp)
 {
+    /* Initialization errors must fail the test rather than wait for a modal
+     * dialog on an unattended display. */
     const char *script =
+	"proc tk_messageBox {args} {error $args};"
 	"proc tops {args} {return {}};"
 	"proc who {} {return {}};"
 	"proc graph {args} {return {}};"
@@ -112,7 +115,6 @@ check_initialized(Tcl_Interp *interp, const char *value, bool init_gui)
 {
     if (!has_command(interp, "bu_dir") ||
 	!has_command(interp, "bn_noise_perlin") ||
-	!has_command(interp, "dm_open") ||
 	!has_command(interp, "go_open") ||
 	!has_command(interp, "ch_open")) {
 	std::fprintf(stderr, "libtclcad did not register all expected commands\n");
@@ -158,80 +160,59 @@ check_initialized(Tcl_Interp *interp, const char *value, bool init_gui)
 
 
 static bool
-open_shared_database(Tcl_Interp *first, Tcl_Interp *second)
+open_database(Tcl_Interp *interp)
 {
     char database[MAXPATHLEN] = {0};
     bu_dir(database, MAXPATHLEN, BU_DIR_DATA, "db", "m35.g", NULL);
-    if (!bu_file_exists(database, NULL)) {
-	std::fprintf(stderr, "Unable to find test database: %s\n", database);
-	return false;
-    }
-
-    if (!Tcl_SetVar(first, "multi_interp_database", database, TCL_GLOBAL_ONLY) ||
-	!Tcl_SetVar(second, "multi_interp_database", database, TCL_GLOBAL_ONLY) ||
-	!eval_ok(first, "go_open shared_ged db $multi_interp_database") ||
-	!eval_ok(second, "go_open shared_ged db $multi_interp_database") ||
-	!eval_ok(first, "llength [go_open]") ||
-	!result_is(first, "1") ||
-	!eval_ok(second, "llength [go_open]") ||
-	!result_is(second, "1")) {
-	std::fprintf(stderr, "GED object registry crossed interpreter boundaries\n");
-	return false;
-    }
-
-    return true;
+    return bu_file_exists(database, NULL) &&
+	Tcl_SetVar(interp, "multi_interp_database", database, TCL_GLOBAL_ONLY) &&
+	eval_ok(interp, "go_open shared_ged db $multi_interp_database; llength [go_open]") &&
+	result_is(interp, "1");
 }
 
 
 static bool
-check_framebuffer_registry_growth(Tcl_Interp *interp)
+check_view_registry_growth(Tcl_Interp *interp)
 {
     const char *script =
 	"for {set i 0} {$i < 10} {incr i} {"
-	" fb_open lifecycle_fb_$i /dev/mem -s 4"
+	" shared_ged new_view lifecycle_view_$i nu"
 	"};"
-	"if {[llength [fb_open]] != 10} {"
-	" error {framebuffer registry has the wrong initial size}"
+	"if {[llength [shared_ged list_views]] != 10} {"
+	" error {view registry has the wrong initial size}"
 	"};"
-	"rename lifecycle_fb_4 {};"
-	"if {[llength [fb_open]] != 9} {"
-	" error {framebuffer registry has the wrong size after deletion}"
+	"shared_ged delete_view lifecycle_view_4;"
+	"if {[llength [shared_ged list_views]] != 9} {"
+	" error {view registry has the wrong size after deletion}"
 	"};"
-	"expr {[lifecycle_fb_0 getwidth] == 4 &&"
-	" [lifecycle_fb_9 getheight] == 4}";
-
-    return eval_ok(interp, script) &&
-	result_is(interp, "1");
+	"shared_ged size lifecycle_view_0 10;"
+	"shared_ged size lifecycle_view_9 40;"
+	"expr {[shared_ged size lifecycle_view_0] == 10 &&"
+	" [shared_ged size lifecycle_view_9] == 40}";
+    return open_database(interp) && eval_ok(interp, script) && result_is(interp, "1");
 }
 
 
 static bool
 open_shared_runtime_objects(Tcl_Interp *first, Tcl_Interp *second, bool init_gui)
 {
-    const char *open_framebuffer = "fb_open shared_fb /dev/mem -s 16";
-    const char *open_display_manager = "dm_open shared_dm X";
-
-    if (!eval_ok(first, open_framebuffer) ||
-	!eval_ok(second, open_framebuffer) ||
-	!eval_ok(first, "llength [fb_open]") ||
-	!result_is(first, "1") ||
-	!eval_ok(second, "llength [fb_open]") ||
-	!result_is(second, "1")) {
-	std::fprintf(stderr, "framebuffer registry crossed interpreter boundaries\n");
+    const char *open_view = init_gui ? "shared_ged new_view shared_view tkobol" :
+	"shared_ged new_view shared_view nu";
+    if (!open_database(first) || !open_database(second) ||
+	!eval_ok(first, open_view) || !eval_ok(second, open_view) ||
+	!eval_ok(first, "shared_ged size shared_view 11") ||
+	!eval_ok(second, "shared_ged size shared_view 44") ||
+	!eval_ok(first, "expr {[shared_ged size shared_view] == 11}") || !result_is(first, "1") ||
+	!eval_ok(second, "expr {[shared_ged size shared_view] == 44}") || !result_is(second, "1")) {
+	std::fprintf(stderr, "GED or view state crossed interpreter boundaries\n");
 	return false;
     }
-
     if (init_gui &&
-	(!eval_ok(first, open_display_manager) ||
-	 !eval_ok(second, open_display_manager) ||
-	 !eval_ok(first, "llength [dm_open]") ||
-	 !result_is(first, "1") ||
-	 !eval_ok(second, "llength [dm_open]") ||
-	 !result_is(second, "1"))) {
-	std::fprintf(stderr, "display manager registry crossed interpreter boundaries\n");
+	(!eval_ok(first, "shared_ged bg shared_view 11 22 33") ||
+	 !eval_ok(second, "shared_ged bg shared_view 44 55 66") ||
+	 !eval_ok(first, "shared_ged bg shared_view") || !result_is(first, "11 22 33") ||
+	 !eval_ok(second, "shared_ged bg shared_view") || !result_is(second, "44 55 66")))
 	return false;
-    }
-
     return true;
 }
 
@@ -281,7 +262,6 @@ main(int argc, const char **argv)
 	!init_tclcad(second, init_gui) ||
 	!check_initialized(first, "first", init_gui) ||
 	!check_initialized(second, "second", init_gui) ||
-	!open_shared_database(first, second) ||
 	!open_shared_runtime_objects(first, second, init_gui)) {
 	Tcl_DeleteInterp(first);
 	Tcl_DeleteInterp(second);
@@ -296,9 +276,8 @@ main(int argc, const char **argv)
 	!result_is(second, "1") ||
 	!eval_ok(second, "llength [shared_ged tops]") ||
 	result_is(second, "0") ||
-	!eval_ok(second, "shared_fb getwidth") ||
-	!result_is(second, "16") ||
-	(init_gui && !eval_ok(second, "shared_dm get_aspect"))) {
+	!eval_ok(second, "expr {[shared_ged size shared_view] == 44}") ||
+	!result_is(second, "1")) {
 	Tcl_DeleteInterp(second);
 	return 1;
     }
@@ -307,7 +286,7 @@ main(int argc, const char **argv)
     Tcl_Interp *replacement = Tcl_CreateInterp();
     if (!replacement || !init_tclcad(replacement, init_gui) ||
 	!check_initialized(replacement, "replacement", init_gui) ||
-	!check_framebuffer_registry_growth(replacement)) {
+	!check_view_registry_growth(replacement)) {
 	if (replacement)
 	    Tcl_DeleteInterp(replacement);
 	return 1;

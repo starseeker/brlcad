@@ -30,7 +30,7 @@
  *   - ECMD_ARBN_PLANE_ROTATE rotates the normal
  *   - ECMD_ARBN_PLANE_ADD appends a new plane
  *   - ECMD_ARBN_PLANE_DEL removes a plane
- *   - rt_edit_arbn_get_params returns correct values
+ *   - rt_edit_arbn_get_values returns correct values
  *   - Descriptor is accessible and has the right number of commands
  */
 
@@ -45,6 +45,7 @@
 #include "bu/malloc.h"
 #include "bu/vls.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
 #include "rt/geom.h"
 
 /* Mirror the private ECMD numbers from edarbn.c */
@@ -120,20 +121,10 @@ main(int argc, char *argv[])
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size = 10.0;
-    v->gv_isize = 0.1;
-    v->gv_scale = 5.0;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width  = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init_size(&v, 10.0);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
     s->local2base = 1.0;
     s->base2local = 1.0;
@@ -251,7 +242,7 @@ main(int argc, char *argv[])
     bu_log("TEST 7 PASS: neqn now %zu (was %zu)\n", aip->neqn, before_del);
 
     /* ================================================================
-     * Test 8: rt_edit_arbn_get_params returns plane index
+     * Test 8: rt_edit_arbn_get_values returns plane index
      * ================================================================*/
     /* Re-select plane 0 so we have something to query */
     (*EDOBJ[dp->d_minor_type].ft_set_edit_mode)(s, ECMD_ARBN_PLANE_SELECT);
@@ -259,11 +250,14 @@ main(int argc, char *argv[])
     s->e_para[0] = 0.0;
     rt_edit_process(s);
 
-    fastf_t vals[4] = {0};
-    int nv = (*EDOBJ[dp->d_minor_type].ft_edit_get_params)(s, ECMD_ARBN_PLANE_SELECT, vals);
-    if (nv != 1 || (int)vals[0] != 0)
-	bu_exit(1, "ERROR: get_params(SELECT): nv=%d vals[0]=%g\n", nv, vals[0]);
-    bu_log("TEST 8 PASS: get_params(SELECT) returns plane_index=%g\n", vals[0]);
+    struct rt_edit_cmd_values vals;
+    int status = rt_edit_cmd_values_get(s, ECMD_ARBN_PLANE_SELECT, &vals);
+    if (status != RT_EDIT_VALUE_OK || vals.value_count != 1 ||
+	(int)vals.values[0] != 0)
+	bu_exit(1, "ERROR: get_values(SELECT): status=%d value=%g\n",
+	    status, vals.values[0]);
+    bu_log("TEST 8 PASS: get_values(SELECT) returns plane_index=%g\n",
+	vals.values[0]);
 
     bu_log("All ARBN edit tests PASSED\n");
 

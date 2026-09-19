@@ -42,7 +42,7 @@
 #include "bu/log.h"
 #include "bu/str.h"
 #include "bn.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 #define NONE -1
@@ -175,7 +175,7 @@ main (int argc, char **argv)
      */
     if (nm_bytes == -1) {
 	if ((how == BELIEVE_NAME)
-	    && fb_common_name_size(&width, &height, argument))
+	    && imgstream_image_name_size(&width, &height, argument))
 	    goto done;
 
 	nm_bytes = (int)stat_buf.st_size;
@@ -194,7 +194,7 @@ main (int argc, char **argv)
 
     nm_pixels = nm_bytes / bytes_per_pixel;
 
-    if (!fb_common_image_size(&width, &height, nm_pixels))
+    if (!imgstream_image_size(&width, &height, (size_t)nm_pixels))
 	bu_exit (0, NULL);
 
 done:

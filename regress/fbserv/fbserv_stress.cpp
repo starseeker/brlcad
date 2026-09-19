@@ -21,11 +21,11 @@
  *
  * Stress test for the fbserv token-isolation mechanism.
  *
- * Simulates the rtwizard / fbserv connection scenario: multiple
- * concurrent workers each launch their own fbserv instance on a
- * unique port with a unique token, connect to it using the raw PKG
- * protocol (replicating what libdm/if_remote.c::rem_open does), send
- * MSG_FBAUTH + MSG_FBOPEN and verify a successful MSG_RETURN.
+ * Simulates the rtwizard / fbserv connection scenario: multiple concurrent
+ * workers each launch an isolated fbserv instance, connect through
+ * libimgstream's authenticated remote-framebuffer client, and verify pixel
+ * round trips.  Both TCP and local IPC transports use the same public client
+ * contract exercised by applications.
  *
  * The test is designed to flush out races such as:
  *   - Client connecting before fbserv is ready to accept (ECONNREFUSED)
@@ -37,7 +37,7 @@
  * a robust rtwizard front-end.
  *
  * Usage:
- *   fbserv_stress [--workers N] [--base-port P]
+ *   fbserv_stress [--workers N] [--base-port P] [--ipc]
  *
  * Exits 0 on full success, 1 if any worker fails.
  */
@@ -49,7 +49,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
-#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -65,31 +64,14 @@
 #  include <unistd.h>
 #endif
 
-#include "bnetwork.h"
-
 #include "bu/app.h"
 #include "bu/log.h"
 #include "bu/process.h"
 #include "bu/snooze.h"
 #include "bu/str.h"
 #include "bu/datetime.h"
+#include "imgstream/fb_compat.h"
 #include "pkg.h"
-
-/* Message-type constants for the fbserv PKG protocol.
- * These mirror the definitions in include/dm.h so we can avoid pulling in
- * the entire libdm / libicv dependency chain for a simple protocol test. */
-#ifndef MSG_FBOPEN
-#  define MSG_FBOPEN  1
-#endif
-#ifndef MSG_FBAUTH
-#  define MSG_FBAUTH  34
-#endif
-#ifndef MSG_RETURN
-#  define MSG_RETURN  21
-#endif
-#ifndef NET_LONG_LEN
-#  define NET_LONG_LEN 4  /* bytes per network-order long */
-#endif
 
 /* --------------------------------------------------------------------------
  * Tunables
@@ -107,6 +89,9 @@ static const int RETRY_MAX_MS = 500;
 
 /** Length (in hex chars) of the authentication token. */
 static const int TOKEN_LEN = 64;
+
+/** Framebuffer dimensions used by every isolated worker. */
+static const size_t FRAMEBUFFER_SIZE = 512;
 
 /* --------------------------------------------------------------------------
  * Global state
@@ -191,31 +176,6 @@ port_in_use(int port)
 }
 
 /* --------------------------------------------------------------------------
- * PKG switch (no-op callbacks — we use pkg_waitfor to get responses)
- * -------------------------------------------------------------------------- */
-
-static void noop_handler(struct pkg_conn * /*conn*/, char *buf)
-{
-    free(buf);
-}
-
-#ifndef MSG_ERROR
-#  define MSG_ERROR 23
-#endif
-#ifndef MSG_CLOSE
-#  define MSG_CLOSE 22
-#endif
-
-static struct pkg_switch s_pkgswitch[] = {
-    { MSG_RETURN, noop_handler, "Return",       NULL },
-    { MSG_FBOPEN, noop_handler, "FBOpen",       NULL },
-    { MSG_FBAUTH, noop_handler, "FBAuth",       NULL },
-    { MSG_ERROR,  noop_handler, "Error",        NULL },
-    { MSG_CLOSE,  noop_handler, "Close",        NULL },
-    { 0,          NULL,         (char *)0,      NULL }
-};
-
-/* --------------------------------------------------------------------------
  * Worker
  * -------------------------------------------------------------------------- */
 
@@ -238,21 +198,29 @@ stop_worker(struct bu_process **fbserv_proc)
 }
 
 static void
-run_worker(int wid, int base_port, const char *fbserv_path, WorkerResult &result)
+run_worker(int wid, int base_port, bool use_ipc, const char *fbserv_path,
+	WorkerResult &result)
 {
     result.worker_id = wid;
 
-    /* ------------------------------------------------------------------
-     * 1. Pick a unique port.  The atomic counter ensures concurrent workers
-     *    get distinct port numbers.  Skip ports that are already in use.
-     * ------------------------------------------------------------------ */
-    int port = base_port + g_port_counter.fetch_add(1);
-
-    /* Scan forward until we find a free port (max 200 attempts). */
-    for (int tries = 0; tries < 200 && port_in_use(port); tries++, port = base_port + g_port_counter.fetch_add(1))
-        ;
-
-    worker_log(wid, "using port %d", port);
+    char endpoint[MAXPATHLEN] = {0};
+    char remote_spec[MAXPATHLEN + 8] = {0};
+    char port_str[16] = {0};
+    if (use_ipc) {
+	if (pkg_ipc_addr(endpoint, sizeof(endpoint), "fbserv-stress") != 0) {
+	    result.message = "failed to allocate an IPC endpoint";
+	    return;
+	}
+	snprintf(remote_spec, sizeof(remote_spec), "ipc:%s", endpoint);
+	worker_log(wid, "using IPC endpoint %s", endpoint);
+    } else {
+	int port = base_port + g_port_counter.fetch_add(1);
+	for (int tries = 0; tries < 200 && port_in_use(port); tries++)
+	    port = base_port + g_port_counter.fetch_add(1);
+	snprintf(port_str, sizeof(port_str), "%d", port);
+	snprintf(remote_spec, sizeof(remote_spec), "tcp:localhost:%d", port);
+	worker_log(wid, "using port %d", port);
+    }
 
     /* ------------------------------------------------------------------
      * 2. Generate a unique session token for this worker.
@@ -266,23 +234,15 @@ run_worker(int wid, int base_port, const char *fbserv_path, WorkerResult &result
      *    We pass -A (strict auth) so that a connection without the token
      *    is rejected — this verifies isolation between workers.
      *
-     *    fbserv -A -w 512 -n 512 -F /dev/mem -p <port>
+     *    fbserv -A -w 512 -n 512 -F /dev/mem (-p port | -I address)
      *
      *    NOTE: /dev/mem is the in-memory framebuffer (null device);
      *    the -F form launches a single-frame-buffer server which stays
      *    alive until killed, which is what rtwizard uses.
      * ------------------------------------------------------------------ */
-    char port_str[16];
-    snprintf(port_str, sizeof(port_str), "%d", port);
-
-    const char *argv_fbserv[] = {
-        fbserv_path,
-        "-A",
-        "-w", "512",
-        "-n", "512",
-        "-F", "/dev/mem",
-        "-p", port_str,
-        NULL
+    const char *argv_fbserv[12] = {
+	fbserv_path, "-A", "-w", "512", "-n", "512", "-F", "/dev/mem",
+	use_ipc ? "-I" : "-p", use_ipc ? endpoint : port_str, NULL, NULL
     };
 
     /* Pre-supply the token via the environment variable.  Environment state
@@ -316,104 +276,52 @@ run_worker(int wid, int base_port, const char *fbserv_path, WorkerResult &result
     }
     worker_log(wid, "fbserv launched (pid %d)", fbserv_pid);
 
-    /* ------------------------------------------------------------------
-     * 4. Retry-connect loop.
-     *    fbserv needs a moment to bind its socket; we retry with
-     *    exponential backoff up to MAX_CONNECT_WAIT_SEC.
-     * ------------------------------------------------------------------ */
-    struct pkg_conn *pc = PKC_ERROR;
+    /* fbserv needs a moment to bind its endpoint.  Retry the same public
+     * libimgstream open that applications use, with bounded backoff. */
+    struct imgstream_fb_remote_options remote_options =
+	IMGSTREAM_FB_REMOTE_OPTIONS_INIT;
+    remote_options.auth_token = token;
+    imgstream_fb_t *remote = NULL;
     int interval_ms = RETRY_INTERVAL_MS;
     int64_t deadline = bu_gettime() + BU_SEC2USEC(g_connect_timeout_sec);
     int attempt = 0;
 
-    while (pc == PKC_ERROR && bu_gettime() < deadline) {
-        attempt++;
-        pc = pkg_open("localhost", port_str, 0, 0, 0, s_pkgswitch, NULL);
-        if (pc == PKC_ERROR) {
-            worker_log(wid, "connect attempt %d failed, retrying in %dms...",
-                       attempt, interval_ms);
+    while (!remote && bu_gettime() < deadline) {
+	attempt++;
+	remote = imgstream_fb_open_remote(remote_spec, FRAMEBUFFER_SIZE,
+	    FRAMEBUFFER_SIZE, &remote_options);
+	if (!remote) {
+	    worker_log(wid, "connect attempt %d failed, retrying in %dms...",
+		attempt, interval_ms);
             bu_snooze((int64_t)interval_ms * (int64_t)1000);
             interval_ms = (interval_ms * 2 < RETRY_MAX_MS) ? interval_ms * 2 : RETRY_MAX_MS;
         }
     }
 
-    if (pc == PKC_ERROR) {
-        result.message = "timed out connecting to fbserv";
-        worker_log(wid, "ERROR: %s (tried %d times)", result.message.c_str(), attempt);
-        stop_worker(&fbserv_proc);
-        return;
+    if (!remote) {
+	result.message = "timed out connecting to fbserv";
+	worker_log(wid, "ERROR: %s (tried %d times)", result.message.c_str(), attempt);
+	stop_worker(&fbserv_proc);
+	return;
     }
     worker_log(wid, "connected after %d attempt(s)", attempt);
 
-    /* ------------------------------------------------------------------
-     * 5. Send MSG_FBAUTH with the token.
-     * ------------------------------------------------------------------ */
-    size_t tlen = strlen(token);
-    if (pkg_send(MSG_FBAUTH, token, tlen, pc) != (int)tlen) {
-        result.message = "failed to send MSG_FBAUTH";
-        worker_log(wid, "ERROR: %s", result.message.c_str());
-        pkg_close(pc);
-        stop_worker(&fbserv_proc);
-        return;
+    const unsigned char pixels[12] = {
+	(unsigned char)wid, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
+    };
+    unsigned char readback[sizeof(pixels)] = {0};
+    if (imgstream_fb_writerect(remote, 0, 0, 2, 2, pixels) != 4 ||
+	imgstream_fb_readrect(remote, 0, 0, 2, 2, readback) != 4 ||
+	memcmp(pixels, readback, sizeof(pixels)) != 0) {
+	result.message = "authenticated framebuffer pixel round trip failed";
+	worker_log(wid, "ERROR: %s", result.message.c_str());
+	imgstream_fb_close(remote);
+	stop_worker(&fbserv_proc);
+	return;
     }
+    worker_log(wid, "authenticated pixel round trip completed");
 
-    /* ------------------------------------------------------------------
-     * 6. Send MSG_FBOPEN (width + height + device).
-     *    Mirrors what if_remote.c::rem_open() sends.
-     * ------------------------------------------------------------------ */
-    char open_buf[128] = {0};
-    *(uint32_t *)&open_buf[0 * NET_LONG_LEN] = htonl(512);
-    *(uint32_t *)&open_buf[1 * NET_LONG_LEN] = htonl(512);
-    /* device name: empty string (use server's default) */
-    size_t open_len = 0 + 2 * NET_LONG_LEN;
-
-    if ((size_t)pkg_send(MSG_FBOPEN, open_buf, open_len, pc) != open_len) {
-        result.message = "failed to send MSG_FBOPEN";
-        worker_log(wid, "ERROR: %s", result.message.c_str());
-        pkg_close(pc);
-        stop_worker(&fbserv_proc);
-        return;
-    }
-
-    /* ------------------------------------------------------------------
-     * 7. Wait for MSG_RETURN.
-     *    Expected payload: return_code, max_w, max_h, width, height
-     *    (5 × NET_LONG_LEN = 20 bytes).
-     * ------------------------------------------------------------------ */
-    char ret_buf[5 * NET_LONG_LEN + 4];
-    memset(ret_buf, 0, sizeof(ret_buf));
-
-    int got = pkg_waitfor(MSG_RETURN, ret_buf, sizeof(ret_buf), pc);
-    if (got < (int)(5 * NET_LONG_LEN)) {
-        std::ostringstream ss;
-        ss << "MSG_RETURN payload too small (got " << got
-           << ", need " << (5 * NET_LONG_LEN) << ")";
-        result.message = ss.str();
-        worker_log(wid, "ERROR: %s", result.message.c_str());
-        pkg_close(pc);
-        stop_worker(&fbserv_proc);
-        return;
-    }
-
-    uint32_t rc = ntohl(*(uint32_t *)&ret_buf[0]);
-    if (rc != 0) {
-        std::ostringstream ss;
-        ss << "fbserv returned error code " << rc;
-        result.message = ss.str();
-        worker_log(wid, "ERROR: %s", result.message.c_str());
-        pkg_close(pc);
-        stop_worker(&fbserv_proc);
-        return;
-    }
-
-    uint32_t srv_w = ntohl(*(uint32_t *)&ret_buf[3 * NET_LONG_LEN]);
-    uint32_t srv_h = ntohl(*(uint32_t *)&ret_buf[4 * NET_LONG_LEN]);
-    worker_log(wid, "fbserv opened OK: %ux%u", srv_w, srv_h);
-
-    /* ------------------------------------------------------------------
-     * 8. Clean up.
-     * ------------------------------------------------------------------ */
-    pkg_close(pc);
+    imgstream_fb_close(remote);
     stop_worker(&fbserv_proc);
 
     result.passed = true;
@@ -428,11 +336,12 @@ run_worker(int wid, int base_port, const char *fbserv_path, WorkerResult &result
 static void
 print_usage(const char *prog)
 {
-    fprintf(stderr,
-        "Usage: %s [options]\n"
-        "  --workers N      number of parallel workers (default: 8)\n"
-        "  --base-port P    first port to try (default: 5600)\n"
-        "  --timeout T      seconds to wait for fbserv to become ready (default: 15)\n"
+	fprintf(stderr,
+	    "Usage: %s [options]\n"
+	    "  --workers N      number of parallel workers (default: 8)\n"
+	    "  --base-port P    first TCP port to try (PID-derived by default)\n"
+	    "  --ipc            use isolated local IPC endpoints instead of TCP\n"
+	    "  --timeout T      seconds to wait for fbserv to become ready (default: 15)\n"
         "  --help           show this help\n",
         prog);
 }
@@ -449,14 +358,17 @@ main(int argc, const char *argv[])
      * and away from the typical ephemeral-port range). */
     int pid_offset = (bu_pid() % 1000) * 10;
     int base_port  = 10000 + pid_offset;
+    bool use_ipc = false;
 
     for (int i = 1; i < argc; i++) {
         if (BU_STR_EQUAL(argv[i], "--workers") && i + 1 < argc) {
             num_workers = atoi(argv[++i]);
         } else if (BU_STR_EQUAL(argv[i], "--base-port") && i + 1 < argc) {
             base_port = atoi(argv[++i]);
-        } else if (BU_STR_EQUAL(argv[i], "--timeout") && i + 1 < argc) {
-            g_connect_timeout_sec = atoi(argv[++i]);
+	} else if (BU_STR_EQUAL(argv[i], "--timeout") && i + 1 < argc) {
+	    g_connect_timeout_sec = atoi(argv[++i]);
+	} else if (BU_STR_EQUAL(argv[i], "--ipc")) {
+	    use_ipc = true;
         } else if (BU_STR_EQUAL(argv[i], "--help") || BU_STR_EQUAL(argv[i], "-h")) {
             print_usage(argv[0]);
             return 0;
@@ -474,8 +386,8 @@ main(int argc, const char *argv[])
 
     g_port_counter.store(0);
 
-    fprintf(stderr, "fbserv_stress: launching %d parallel workers (base-port %d)\n",
-            num_workers, base_port);
+    fprintf(stderr, "fbserv_stress: launching %d parallel workers (%s)\n",
+	    num_workers, use_ipc ? "local IPC" : "loopback TCP");
 
     std::vector<WorkerResult> results(num_workers);
     std::vector<std::thread> threads;
@@ -487,7 +399,8 @@ main(int argc, const char *argv[])
     bu_dir(fbserv_path, MAXPATHLEN, BU_DIR_BIN, "fbserv", BU_DIR_EXT, NULL);
 
     for (int w = 0; w < num_workers; w++)
-        threads.emplace_back(run_worker, w, base_port, fbserv_path, std::ref(results[w]));
+	threads.emplace_back(run_worker, w, base_port, use_ipc, fbserv_path,
+	    std::ref(results[w]));
 
     for (auto &t : threads)
         t.join();

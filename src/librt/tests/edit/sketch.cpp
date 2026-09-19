@@ -44,6 +44,7 @@
 #include "bu/malloc.h"
 #include "nmg.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
 #include "rt/geom.h"
 #include "rt/primitives/sketch.h"
 #include "rt/rt_ecmds.h"
@@ -114,20 +115,10 @@ main(int argc, char *argv[])
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size = 100.0;
-    v->gv_isize = 1.0 / v->gv_size;
-    v->gv_scale = 50.0;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width  = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init_size(&v, 100.0);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
     s->local2base = 1.0;
 
@@ -144,6 +135,36 @@ main(int argc, char *argv[])
 	bu_exit(1, "ERROR: initial state wrong (expected -1,-1)\n");
     bu_log("SKETCH initial state SUCCESS: curr_vert=%d curr_seg=%d\n",
 	   se->curr_vert, se->curr_seg);
+
+    struct rt_edit_param_bounds vertexBounds = {};
+    struct rt_edit_param_bounds segmentBounds = {};
+    if (rt_edit_param_bounds_get(s, ECMD_SKETCH_PICK_VERTEX, 0,
+	    &vertexBounds) != BRLCAD_OK || !vertexBounds.has_maximum ||
+	!NEAR_EQUAL(vertexBounds.maximum, 3.0, SMALL_FASTF) ||
+	rt_edit_param_bounds_get(s, ECMD_SKETCH_PICK_SEGMENT, 0,
+	    &segmentBounds) != BRLCAD_OK || !segmentBounds.has_maximum ||
+	!NEAR_EQUAL(segmentBounds.maximum, 0.0, SMALL_FASTF))
+	bu_exit(1, "ERROR: sketch current-topology parameter bounds are invalid\n");
+    bu_log("SKETCH current-topology parameter bounds SUCCESS\n");
+
+    struct bg_tess_tol ttol = {};
+    ttol.abs = 0.01;
+    ttol.rel = 0.01;
+    struct rt_sketch_edit_geometry geometry = {};
+    if (rt_sketch_edit_geometry_get(&geometry, &s->es_int, &ttol) !=
+	BRLCAD_OK || geometry.vertex_count != 4 ||
+	geometry.segment_count != 1 || geometry.line_count < 2 ||
+	geometry.segment_types[0] != RT_SKETCH_EDIT_SEGMENT_LINE)
+	bu_exit(1, "ERROR: sketch retained edit geometry query failed\n");
+    for (size_t i = 0; i < geometry.line_count; i++) {
+	if (geometry.line_segments[i] != 0)
+	    bu_exit(1, "ERROR: sketch line command lost segment identity\n");
+    }
+    point_t expected_vertex = {10.0, 10.0, 0.0};
+    if (!VNEAR_EQUAL(geometry.vertices[2], expected_vertex, SMALL_FASTF))
+	bu_exit(1, "ERROR: sketch edit vertex mapping is incorrect\n");
+    rt_sketch_edit_geometry_free(&geometry);
+    bu_log("SKETCH retained edit geometry SUCCESS\n");
 
     /* ================================================================
      * ECMD_SKETCH_PICK_VERTEX  (select vertex 2)
@@ -213,6 +234,14 @@ main(int argc, char *argv[])
     bu_log("ECMD_SKETCH_MOVE_SEGMENT SUCCESS: verts[0]=(%g,%g) verts[1]=(%g,%g)\n",
 	   skt->verts[0][0], skt->verts[0][1],
 	   skt->verts[1][0], skt->verts[1][1]);
+    struct rt_edit_cmd_values segment_values;
+    if (rt_edit_cmd_values_get(s, ECMD_SKETCH_MOVE_SEGMENT,
+	    &segment_values) != RT_EDIT_VALUE_OK ||
+	segment_values.value_count != 2 ||
+	!segment_values.value_valid[0] || !segment_values.value_valid[1] ||
+	!NEAR_EQUAL(segment_values.values[0], 5.0, VUNITIZE_TOL) ||
+	!NEAR_EQUAL(segment_values.values[1], 5.0, VUNITIZE_TOL))
+	bu_exit(1, "ERROR: ECMD_SKETCH_MOVE_SEGMENT readback failed\n");
 
     /* Restore verts */
     V2SET(skt->verts[0],  0,  0);
@@ -442,6 +471,30 @@ main(int argc, char *argv[])
 	       "v0=(%g,%g) v2=(%g,%g)\n",
 	       skt2->verts[0][0], skt2->verts[0][1],
 	       skt2->verts[2][0], skt2->verts[2][1]);
+
+	V2SET(skt2->verts[0], 0, 0);
+	EDOBJ[dp->d_minor_type].ft_set_edit_mode(s,
+	    ECMD_SKETCH_MOVE_VERTEX_LIST);
+	s->e_inpara = 4;
+	s->e_para[0] = 5.0;
+	s->e_para[1] = 5.0;
+	s->e_para[2] = 0.0;
+	s->e_para[3] = 999.0;
+	if (rt_edit_process_result(s) == BRLCAD_OK ||
+	    !V2NEAR_ZERO(skt2->verts[0], VUNITIZE_TOL))
+	    bu_exit(1, "ERROR: invalid vertex list partially changed sketch\n");
+
+	EDOBJ[dp->d_minor_type].ft_set_edit_mode(s,
+	    ECMD_SKETCH_MOVE_VERTEX_LIST);
+	s->e_inpara = 4;
+	s->e_para[0] = 1.0;
+	s->e_para[1] = 0.0;
+	s->e_para[2] = 0.0;
+	s->e_para[3] = 0.0;
+	if (rt_edit_process_result(s) != BRLCAD_OK ||
+	    !NEAR_EQUAL(skt2->verts[0][0], 1.0, VUNITIZE_TOL))
+	    bu_exit(1, "ERROR: duplicate vertex list moved a vertex twice\n");
+	bu_log("ECMD_SKETCH_MOVE_VERTEX_LIST atomic/deduplicated SUCCESS\n");
     }
 
     /* ================================================================
@@ -672,7 +725,7 @@ main(int argc, char *argv[])
 	       skt5->verts[0][0], skt5->u_vec,
 	       skt5->verts[0][1], skt5->v_vec);
 	mat_t m2ov;
-	bn_mat_mul(m2ov, v->gv_model2view, s->model_changes);
+	bn_mat_mul(m2ov, v.gv_model2view, s->model_changes);
 	point_t v0_view;
 	MAT4X3PNT(v0_view, m2ov, v0_3d);
 
@@ -926,6 +979,54 @@ main(int argc, char *argv[])
 		    "ERROR: ECMD_SKETCH_APPEND_NURB should reject out-of-range vert\n");
 	    bu_log("ECMD_SKETCH_APPEND_NURB (bad vert index) correctly rejected\n");
 	}
+    }
+
+    /* ================================================================
+     * ECMD_SKETCH_SET_PLANE: generated property update/readback and
+     * reject-without-partial-mutation semantics.
+     * ================================================================*/
+    {
+	struct rt_sketch_internal *plane_skt =
+	    (struct rt_sketch_internal *)s->es_int.idb_ptr;
+	EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_SKETCH_SET_PLANE);
+	s->e_inpara = 9;
+	VSET(&s->e_para[0], 1.0, 2.0, 3.0);
+	VSET(&s->e_para[3], 0.0, 1.0, 0.0);
+	VSET(&s->e_para[6], 0.0, 0.0, 1.0);
+	bu_vls_trunc(s->log_str, 0);
+	if (rt_edit_process_result(s) != BRLCAD_OK)
+	    bu_exit(1, "ERROR: ECMD_SKETCH_SET_PLANE rejected valid axes: %s\n",
+		bu_vls_cstr(s->log_str));
+
+	struct rt_edit_cmd_values plane_values;
+	if (rt_edit_cmd_values_get(s, ECMD_SKETCH_SET_PLANE,
+		&plane_values) != RT_EDIT_VALUE_OK ||
+	    plane_values.value_count != 9 ||
+	    !NEAR_EQUAL(plane_values.values[0], 1.0, VUNITIZE_TOL) ||
+	    !NEAR_EQUAL(plane_values.values[1], 2.0, VUNITIZE_TOL) ||
+	    !NEAR_EQUAL(plane_values.values[2], 3.0, VUNITIZE_TOL) ||
+	    !NEAR_EQUAL(plane_values.values[4], 1.0, VUNITIZE_TOL) ||
+	    !NEAR_EQUAL(plane_values.values[8], 1.0, VUNITIZE_TOL))
+	    bu_exit(1, "ERROR: ECMD_SKETCH_SET_PLANE readback failed\n");
+
+	point_t valid_origin;
+	vect_t valid_u;
+	vect_t valid_v;
+	VMOVE(valid_origin, plane_skt->V);
+	VMOVE(valid_u, plane_skt->u_vec);
+	VMOVE(valid_v, plane_skt->v_vec);
+	EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_SKETCH_SET_PLANE);
+	s->e_inpara = 9;
+	VSET(&s->e_para[0], 9.0, 9.0, 9.0);
+	VSET(&s->e_para[3], 1.0, 0.0, 0.0);
+	VSET(&s->e_para[6], 2.0, 0.0, 0.0);
+	bu_vls_trunc(s->log_str, 0);
+	if (rt_edit_process_result(s) == BRLCAD_OK ||
+	    !VNEAR_EQUAL(plane_skt->V, valid_origin, VUNITIZE_TOL) ||
+	    !VNEAR_EQUAL(plane_skt->u_vec, valid_u, VUNITIZE_TOL) ||
+	    !VNEAR_EQUAL(plane_skt->v_vec, valid_v, VUNITIZE_TOL))
+	    bu_exit(1, "ERROR: invalid sketch plane partially changed geometry\n");
+	bu_log("ECMD_SKETCH_SET_PLANE generated readback/atomic rejection SUCCESS\n");
     }
 
     rt_edit_destroy(s);

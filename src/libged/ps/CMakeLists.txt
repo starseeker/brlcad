@@ -1,7 +1,7 @@
 set(PLUGIN_LIBS libged libbu)
 
 ged_plugin_library(ged-ps
-  ps.c
+  ps.cpp
   LIBS ${PLUGIN_LIBS}
 )
 

@@ -958,7 +958,6 @@
 ** ../../mann/en/rcodes.php[Rocdes]
 ** ../../mann/en/red.php[Red]
 ** ../../mann/en/refresh.php[Refresh]
-** ../../mann/en/regdebug.php[Regdebug]
 ** ../../mann/en/regdef.php[Regdef]
 ** ../../mann/en/regions.php[Regions]
 ** ../../mann/en/reid.php[Reid]

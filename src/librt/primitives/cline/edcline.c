@@ -102,22 +102,62 @@ static const struct rt_edit_param_desc cline_mv_h_params[] = {
 };
 
 static const struct rt_edit_cmd_desc cline_cmds[] = {
-    { ECMD_CLINE_SCALE_H, "Set H",               "geometry", 1, cline_h_params,    1, 10, NULL },
-    { ECMD_CLINE_SCALE_R, "Set R",               "geometry", 1, cline_r_params,    1, 20, NULL },
-    { ECMD_CLINE_SCALE_T, "Set plate thickness", "geometry", 1, cline_t_params,    1, 30, NULL },
-    { ECMD_CLINE_MOVE_H,  "Move End H",          "move",     1, cline_mv_h_params, 1, 40, NULL },
+    { ECMD_CLINE_SCALE_H, RT_EDIT_CMD_NAME(ECMD_CLINE_SCALE_H), "Set H",               "geometry", 1, cline_h_params,    1, 10, NULL },
+    { ECMD_CLINE_SCALE_R, RT_EDIT_CMD_NAME(ECMD_CLINE_SCALE_R), "Set R",               "geometry", 1, cline_r_params,    1, 20, NULL },
+    { ECMD_CLINE_SCALE_T, RT_EDIT_CMD_NAME(ECMD_CLINE_SCALE_T), "Set plate thickness", "geometry", 1, cline_t_params,    1, 30, NULL },
+    { ECMD_CLINE_MOVE_H, RT_EDIT_CMD_NAME(ECMD_CLINE_MOVE_H),  "Move End H",          "move",     1, cline_mv_h_params, 1, 40, NULL },
 };
 
 static const struct rt_edit_prim_desc cline_prim_desc = {
     "cline", "CLINE", 4, cline_cmds,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_GENERATED,
+    NULL,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
 rt_edit_cline_edit_desc(void)
 {
     return &cline_prim_desc;
+}
+
+C_DECL int
+rt_edit_cline_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
+{
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    struct rt_cline_internal *cline =
+	(struct rt_cline_internal *)s->es_int.idb_ptr;
+    RT_CLINE_CK_MAGIC(cline);
+
+    switch (cmd_id) {
+	case ECMD_CLINE_SCALE_H:
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(cline->h) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_CLINE_SCALE_R:
+	    rt_edit_cmd_values_set_value(result, 0,
+		cline->radius * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_CLINE_SCALE_T:
+	    rt_edit_cmd_values_set_value(result, 0,
+		cline->thickness * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_CLINE_MOVE_H: {
+	    point_t endpoint;
+	    VADD2(endpoint, cline->v, cline->h);
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    endpoint[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	}
+	default:
+	    return RT_EDIT_VALUE_UNAVAILABLE;
+    }
 }
 
 

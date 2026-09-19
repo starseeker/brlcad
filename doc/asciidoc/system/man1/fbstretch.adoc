@@ -105,7 +105,7 @@ $ fbstretch -w 320 -n 200 -W 1280 -N 1024
 [[see_also]]
 == SEE ALSO
 
-*gif-fb*(1), *pixscale*(1), *libdm*(3), *pix*(5)
+*gif-fb*(1), *pixscale*(1), *pix*(5)
 
 
 [[diagnostics]]

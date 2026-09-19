@@ -24,7 +24,7 @@ if(BRLCAD_ENABLE_TCL)
     brlcad_addexec(archer "${archer_srcs}" "${archer_libs}" GUI)
     target_compile_definitions(archer PRIVATE HAVE_TK)
     add_dependencies(archer rtwizard)
-    add_target_deps(archer Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld dm_plugins)
+    add_target_deps(archer Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld)
 
     # Archer needs a lot of files to be copied into place to work - just have it
     # depend on ALL the managed files, rather than trying to list specifics
@@ -72,17 +72,15 @@ set(archer_wizard_FILES
 )
 
 if(BRLCAD_ENABLE_TCL)
-  brlcad_adddata(archer_utility_FILES plugins/archer/Utility)
-  brlcad_adddata(archer_wizard_FILES plugins/archer/Wizards)
-  brlcad_adddata(plugins/Commands/README plugins/archer/Command)
+  # The loader scans the top level for registration scripts.  Preserve each
+  # implementation's subdirectory so it cannot be sourced a second time.
+  foreach(plugin_file IN LISTS archer_utility_FILES archer_wizard_FILES)
+    get_filename_component(plugin_dir "${plugin_file}" DIRECTORY)
+    string(REGEX REPLACE "^plugins/" "plugins/archer/" plugin_dir "${plugin_dir}")
+    brlcad_adddata("${plugin_file}" "${plugin_dir}")
+  endforeach()
+  brlcad_adddata(plugins/Commands/README plugins/archer/Commands)
   brlcad_adddata(plugins/Core/README plugins/archer/Core)
-  brlcad_adddata(plugins/Utility/attrGroupsDisplayUtilityP/AttrGroupsDisplayUtilityP.tcl plugins/archer/Utility/attrGroupsDisplayUtilityP)
-  brlcad_adddata(plugins/Utility/botUtilityP/BotUtilityP.tcl plugins/archer/Utility/botUtilityP)
-  brlcad_adddata(plugins/Utility/lodUtilityP/LODUtilityP.tcl plugins/archer/Utility/lodUtilityP)
-  brlcad_adddata(plugins/Wizards/humanwizard/HumanWizard.tcl plugins/archer/Wizards/humanwizard)
-  brlcad_adddata(plugins/Wizards/tankwizard/TankWizard.tcl plugins/archer/Wizards/tankwizard)
-  brlcad_adddata(plugins/Wizards/tankwizard/images/tank.png plugins/archer/Wizards/tankwizardIA/images)
-  brlcad_adddata(plugins/Wizards/tirewizard/TireWizard.tcl plugins/archer/Wizards/tirewizard)
 endif(BRLCAD_ENABLE_TCL)
 
 set(

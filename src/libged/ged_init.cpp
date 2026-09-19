@@ -42,6 +42,7 @@
 #include "bu/app.h"
 #include "bu/dylib.h"
 #include "bu/file.h"
+#include "bu/opt.h"
 #include "bu/str.h"
 #include "bu/vls.h"
 #include "ged.h"
@@ -105,6 +106,7 @@ ged_list_command_names(struct bu_vls *out_csv)
 	struct bu_vls *v = (struct bu_vls *)ud;
 	if (!name) return 0;
 	if (bu_strncmp(name, "_mged_", 6) == 0) return 0; /* skip synthetic aliases */
+	if (strchr(name, '.')) return 0; /* qualified plugin subcommand */
 	if (bu_vls_strlen(v) > 0) bu_vls_printf(v, ",");
 	bu_vls_printf(v, "%s", name);
 	return 0;
@@ -123,6 +125,7 @@ ged_list_command_array(const char * const **cl, size_t *cnt)
 	(void)impl;
 	if (!name) return 0;
 	if (bu_strncmp(name, "_mged_", 6) == 0) return 0;
+	if (strchr(name, '.')) return 0;
 	std::vector<std::string> *v = (std::vector<std::string> *)ud;
 	v->push_back(std::string(name));
 	return 0;
@@ -238,6 +241,30 @@ ged_cmd_exists(const char *cmd)
 }
 
 extern "C" int
+ged_cmd_schema_exists(const char *cmd)
+{
+    if (!cmd)
+	return 0;
+
+    ged_ensure_initialized();
+    return (_ged_cmd_schema(cmd) != NULL) ? 1 : 0;
+}
+
+extern "C" char *
+ged_cmd_schema_json(const char *cmd)
+{
+    if (!cmd)
+	return NULL;
+
+    ged_ensure_initialized();
+    const struct bu_opt_cmd_desc *schema = _ged_cmd_schema(cmd);
+    if (!schema)
+	return NULL;
+
+    return bu_opt_describe_json(schema);
+}
+
+extern "C" int
 ged_cmd_same(const char *cmd1, const char *cmd2)
 {
     ged_ensure_initialized();
@@ -263,6 +290,7 @@ ged_cmd_lookup(const char **ncmd, const char *cmd)
 	    const char **closest;
 	} *ctx = (decltype(ctx))ud;
 	if (!name) return 0;
+	if (strchr(name, '.')) return 0;
 	size_t edist = bu_editdist(ctx->target, name);
 	if (edist < *(ctx->min_dist)) {
 	    *(ctx->min_dist) = edist;

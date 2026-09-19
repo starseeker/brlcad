@@ -1,0 +1,3 @@
+# Deliberate backend-specific GED plugin ABI, sorted lexically.
+
+ged_plugin_obol_endpoint_get

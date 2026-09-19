@@ -29,7 +29,7 @@
  *   - ECMD_DATUM_SET_PNT sets the position
  *   - ECMD_DATUM_SET_DIR sets the direction
  *   - ECMD_DATUM_SET_W sets the scale factor
- *   - rt_edit_datum_get_params returns correct values
+ *   - rt_edit_datum_get_values returns correct values
  */
 
 #include "common.h"
@@ -43,6 +43,7 @@
 #include "bu/malloc.h"
 #include "bu/vls.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
 #include "rt/geom.h"
 
 /* ECMD numbers from eddatum2.c */
@@ -103,14 +104,10 @@ main(int argc, char *argv[])
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dir);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    v->gv_size = 10.0; v->gv_isize = 0.1; v->gv_scale = 5.0;
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width = 512; v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init_identity_size(&v, 10.0);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
     s->local2base = 1.0;
     s->base2local = 1.0;
@@ -212,20 +209,21 @@ main(int argc, char *argv[])
     bu_log("TEST 6 PASS: w = %g\n", dp->w);
 
     /* ================================================================
-     * Test 7: rt_edit_datum_get_params returns correct pnt
+     * Test 7: rt_edit_datum_get_values returns correct pnt
      * ================================================================*/
     reset_s(s, dp);
     VSET(dp->pnt, 5, 6, 7);
 
-    fastf_t vals[4] = {0};
-    int nv = (*EDOBJ[dir->d_minor_type].ft_edit_get_params)(s, ECMD_DATUM_SET_PNT, vals);
-    if (nv != 3 || !NEAR_EQUAL(vals[0], 5.0, SMALL_FASTF) ||
-	!NEAR_EQUAL(vals[1], 6.0, SMALL_FASTF) ||
-	!NEAR_EQUAL(vals[2], 7.0, SMALL_FASTF))
-	bu_exit(1, "ERROR: get_params(SET_PNT): nv=%d vals=(%g,%g,%g)\n",
-		nv, vals[0], vals[1], vals[2]);
-    bu_log("TEST 7 PASS: get_params(SET_PNT) = (%g,%g,%g)\n",
-	   vals[0], vals[1], vals[2]);
+    struct rt_edit_cmd_values vals;
+    int status = rt_edit_cmd_values_get(s, ECMD_DATUM_SET_PNT, &vals);
+    if (status != RT_EDIT_VALUE_OK || vals.value_count != 3 ||
+	!NEAR_EQUAL(vals.values[0], 5.0, SMALL_FASTF) ||
+	!NEAR_EQUAL(vals.values[1], 6.0, SMALL_FASTF) ||
+	!NEAR_EQUAL(vals.values[2], 7.0, SMALL_FASTF))
+	bu_exit(1, "ERROR: get_values(SET_PNT): status=%d values=(%g,%g,%g)\n",
+		status, vals.values[0], vals.values[1], vals.values[2]);
+    bu_log("TEST 7 PASS: get_values(SET_PNT) = (%g,%g,%g)\n",
+	   vals.values[0], vals.values[1], vals.values[2]);
 
     bu_log("All DATUM edit tests PASSED\n");
 

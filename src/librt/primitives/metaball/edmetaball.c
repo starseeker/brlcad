@@ -356,7 +356,7 @@ static const struct rt_edit_param_desc metaball_blobbiness_params[] = {
 static const struct rt_edit_cmd_desc metaball_cmds[] = {
     /* --- global metaball parameters --------------------------------- */
     {
-	ECMD_METABALL_SET_THRESHOLD, /* cmd_id  */
+	ECMD_METABALL_SET_THRESHOLD, RT_EDIT_CMD_NAME(ECMD_METABALL_SET_THRESHOLD), /* cmd_id  */
 	"Set Threshold",      /* label        */
 	"metaball",           /* category     */
 	1,                    /* nparam       */
@@ -366,7 +366,7 @@ static const struct rt_edit_cmd_desc metaball_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_METABALL_SET_METHOD,    /* cmd_id  */
+	ECMD_METABALL_SET_METHOD, RT_EDIT_CMD_NAME(ECMD_METABALL_SET_METHOD),    /* cmd_id  */
 	"Set Render Method",  /* label        */
 	"metaball",           /* category     */
 	1,                    /* nparam       */
@@ -377,7 +377,7 @@ static const struct rt_edit_cmd_desc metaball_cmds[] = {
     },
     /* --- point selection / navigation -------------------------------- */
     {
-	ECMD_METABALL_PT_PICK,       /* cmd_id  */
+	ECMD_METABALL_PT_PICK, RT_EDIT_CMD_NAME(ECMD_METABALL_PT_PICK),       /* cmd_id  */
 	"Select Point",       /* label        */
 	"select",             /* category     */
 	1,                    /* nparam       */
@@ -387,7 +387,7 @@ static const struct rt_edit_cmd_desc metaball_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_METABALL_PT_NEXT,       /* cmd_id  */
+	ECMD_METABALL_PT_NEXT, RT_EDIT_CMD_NAME(ECMD_METABALL_PT_NEXT),       /* cmd_id  */
 	"Next Point",         /* label        */
 	"select",             /* category     */
 	0,                    /* nparam       */
@@ -397,7 +397,7 @@ static const struct rt_edit_cmd_desc metaball_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_METABALL_PT_PREV,       /* cmd_id  */
+	ECMD_METABALL_PT_PREV, RT_EDIT_CMD_NAME(ECMD_METABALL_PT_PREV),       /* cmd_id  */
 	"Previous Point",     /* label        */
 	"select",             /* category     */
 	0,                    /* nparam       */
@@ -408,7 +408,7 @@ static const struct rt_edit_cmd_desc metaball_cmds[] = {
     },
     /* --- point geometry manipulation --------------------------------- */
     {
-	ECMD_METABALL_PT_MOV,        /* cmd_id  */
+	ECMD_METABALL_PT_MOV, RT_EDIT_CMD_NAME(ECMD_METABALL_PT_MOV),        /* cmd_id  */
 	"Move Point",         /* label        */
 	"point",              /* category     */
 	1,                    /* nparam       */
@@ -418,7 +418,7 @@ static const struct rt_edit_cmd_desc metaball_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_METABALL_PT_ADD,        /* cmd_id  */
+	ECMD_METABALL_PT_ADD, RT_EDIT_CMD_NAME(ECMD_METABALL_PT_ADD),        /* cmd_id  */
 	"Add Point",          /* label        */
 	"point",              /* category     */
 	1,                    /* nparam       */
@@ -428,7 +428,7 @@ static const struct rt_edit_cmd_desc metaball_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_METABALL_PT_DEL,        /* cmd_id  */
+	ECMD_METABALL_PT_DEL, RT_EDIT_CMD_NAME(ECMD_METABALL_PT_DEL),        /* cmd_id  */
 	"Delete Point",       /* label        */
 	"point",              /* category     */
 	0,                    /* nparam       */
@@ -439,7 +439,7 @@ static const struct rt_edit_cmd_desc metaball_cmds[] = {
     },
     /* --- per-point scalar parameters --------------------------------- */
     {
-	ECMD_METABALL_PT_FLDSTR,     /* cmd_id  */
+	ECMD_METABALL_PT_FLDSTR, RT_EDIT_CMD_NAME(ECMD_METABALL_PT_FLDSTR),     /* cmd_id  */
 	"Scale Point Field Strength", /* label  */
 	"point",              /* category     */
 	1,                    /* nparam       */
@@ -449,7 +449,7 @@ static const struct rt_edit_cmd_desc metaball_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_METABALL_PT_SCALE_BLOBBINESS, /* cmd_id */
+	ECMD_METABALL_PT_SCALE_BLOBBINESS, RT_EDIT_CMD_NAME(ECMD_METABALL_PT_SCALE_BLOBBINESS), /* cmd_id */
 	"Scale Point Blobbiness", /* label    */
 	"point",              /* category     */
 	1,                    /* nparam       */
@@ -459,7 +459,7 @@ static const struct rt_edit_cmd_desc metaball_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_METABALL_PT_SET_BLOBBINESS, /* cmd_id */
+	ECMD_METABALL_PT_SET_BLOBBINESS, RT_EDIT_CMD_NAME(ECMD_METABALL_PT_SET_BLOBBINESS), /* cmd_id */
 	"Set Point Blobbiness", /* label      */
 	"point",              /* category     */
 	1,                    /* nparam       */
@@ -476,7 +476,11 @@ static const struct rt_edit_prim_desc metaball_prim_desc = {
     11,                   /* ncmd         */
     metaball_cmds         /* cmds         */,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_CUSTOM,
+    NULL,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
@@ -486,9 +490,9 @@ rt_edit_metaball_edit_desc(void)
 }
 
 
-/* get_params: return current value(s) for the given cmd_id */
-C_DECL int
-rt_edit_metaball_get_params(struct rt_edit *s, int cmd_id, fastf_t *vals)
+/* Return current numeric values for the typed callback below. */
+static int
+metaball_current_numbers(struct rt_edit *s, int cmd_id, fastf_t *vals)
 {
     struct rt_metaball_internal *ball;
     struct rt_metaball_edit *m;
@@ -528,6 +532,23 @@ rt_edit_metaball_get_params(struct rt_edit *s, int cmd_id, fastf_t *vals)
 	default:
 	    return 0;
     }
+}
+
+C_DECL int
+rt_edit_metaball_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
+{
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    fastf_t values[RT_EDIT_MAXPARA] = {0.0};
+    const int count = metaball_current_numbers(s, cmd_id, values);
+    if (count < 0)
+	return RT_EDIT_VALUE_ERROR;
+    if (!count)
+	return RT_EDIT_VALUE_UNAVAILABLE;
+    for (int i = 0; i < count; i++)
+	rt_edit_cmd_values_set_value(result, i, values[i]);
+    return RT_EDIT_VALUE_OK;
 }
 
 #define V3BASE2LOCAL(_pt) (_pt)[X]*base2local, (_pt)[Y]*base2local, (_pt)[Z]*base2local

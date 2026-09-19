@@ -34,7 +34,7 @@
 #include "bu/log.h"
 #include "bu/opt.h"
 #include "vmath.h"
-#include "bv/plot3.h"
+#include "bg/plot3.h"
 
 
 static const char usage[] = "Usage: plot3color r g b\n";

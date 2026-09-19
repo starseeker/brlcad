@@ -568,6 +568,32 @@ RT_EXPORT extern int db_walk_tree(struct db_i *dbip,
 				  void *client_data);
 
 /**
+ * Like db_walk_tree(), but leaf_func is called before librt imports the
+ * primitive with the accumulated instance transform.  The callback receives
+ * the current tree state, full path, and directory entry, allowing callers
+ * that maintain their own scene graph or geometry cache to import local
+ * primitive geometry once and apply tsp->ts_mat separately per instance.
+ */
+RT_EXPORT extern int db_walk_tree_leaf_instances(struct db_i *dbip,
+						 int argc,
+						 const char **argv,
+						 int ncpu,
+						 const struct db_tree_state *init_state,
+						 int (*reg_start_func) (struct db_tree_state * /*tsp*/,
+									const struct db_full_path * /*pathp*/,
+									const struct rt_comb_internal * /* combp */,
+									void *client_data),
+						 union tree *(*reg_end_func) (struct db_tree_state * /*tsp*/,
+									      const struct db_full_path * /*pathp*/,
+									      union tree * /*curtree*/,
+									      void *client_data),
+						 union tree *(*leaf_func) (struct db_tree_state * /*tsp*/,
+									   const struct db_full_path * /*pathp*/,
+									   struct directory * /*dp*/,
+									   void *client_data),
+						 void *client_data);
+
+/**
  * Fills a bu_vls with a representation of the given tree appropriate
  * for processing by Tcl scripts.
  *
