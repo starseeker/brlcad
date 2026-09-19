@@ -19,9 +19,8 @@
  */
 /** @file CADViewSettings.h
  *
- * Widget for controlling and reflecting the current state of view
- * settings (faceplate elements).  Covers all fields in bview_settings
- * and bv_params_state that have widget-level controls.
+ * Widget for controlling and reflecting the current faceplate and view
+ * parameter state.
  *
  */
 
@@ -29,7 +28,10 @@
 #include <QGroupBox>
 #include <QCheckBox>
 #include <QComboBox>
-#include "bv/defines.h"
+#include <QDoubleSpinBox>
+#include "qtcad/QgTypes.h"
+
+class QgPluginContext;
 
 class CADViewSettings : public QWidget
 {
@@ -38,6 +40,8 @@ class CADViewSettings : public QWidget
     public:
 	CADViewSettings(QWidget *p = 0);
 	~CADViewSettings();
+
+	void setContext(QgPluginContext *ctx) { m_ctx = ctx; }
 
 	/* Top-level faceplate toggles */
 	QCheckBox *acsg_ckbx;
@@ -49,7 +53,14 @@ class CADViewSettings : public QWidget
 	QCheckBox *scale_ckbx;
 	QCheckBox *viewaxes_ckbx;
 
-	/* Framebuffer mode: index 0=off, 1=overlay, 2=underlay */
+	/* World-space section plane.  This is deliberately not part of camera
+	 * clipping: it remains disabled until the user explicitly enables it. */
+	QGroupBox *cutting_grp;
+	QCheckBox *cutting_enabled_ckbx;
+	QDoubleSpinBox *cutting_origin[3];
+	QDoubleSpinBox *cutting_normal[3];
+
+	/* Framebuffer mode: index 0=off, 1=overlay, 2=underlay, 3=interlay */
 	QComboBox *fb_mode_combo;
 
 	/* View parameters group */
@@ -63,7 +74,7 @@ class CADViewSettings : public QWidget
 	QCheckBox *params_fps_ckbx;
 
     signals:
-	void settings_changed(unsigned long long);
+	void settings_changed(QgViewUpdateFlags);
 
     public slots:
 	void checkbox_refresh(unsigned long long);
@@ -71,6 +82,10 @@ class CADViewSettings : public QWidget
 	void view_refresh(unsigned long long);
 	void view_update_int(int);
 	void view_update();
+	void cutting_update();
+
+    private:
+	QgPluginContext *m_ctx = nullptr;
 };
 
 // Local Variables:

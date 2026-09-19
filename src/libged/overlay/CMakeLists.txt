@@ -1,7 +1,8 @@
-set(PLUGIN_LIBS libged libbu)
+set(PLUGIN_LIBS libged libimgstream libicv libbu)
 
 ged_plugin_library(ged-overlay
-  overlay.c
+  PLUGIN_ONLY
+  overlay.cpp
   LIBS ${PLUGIN_LIBS}
 )
 

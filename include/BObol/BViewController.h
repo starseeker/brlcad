@@ -1,0 +1,1474 @@
+/*             B V I E W C O N T R O L L E R . H
+ * BRL-CAD
+ *
+ * Copyright (c) 2026 United States Government as represented by
+ * the U.S. Army Research Laboratory.
+ */
+/** @file BObol/BViewController.h */
+
+#ifndef BOBOL_BVIEWCONTROLLER_H
+#define BOBOL_BVIEWCONTROLLER_H
+
+#include "BObol/BDefines.h"
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BPickDetail.h"
+#include "BObol/BPresentationPreparation.h"
+
+#include <Inventor/SbBasic.h>
+#include <Inventor/SbColor.h>
+#include <Inventor/SbMatrix.h>
+#include <Inventor/SbRotation.h>
+#include <Inventor/SbString.h>
+#include <Inventor/SbVec2f.h>
+#include <Inventor/SbVec3f.h>
+#include <Inventor/SbViewportRegion.h>
+#include <Inventor/SoDB.h>
+#include <memory>
+#include <stddef.h>
+#include <stdint.h>
+#include <vector>
+
+#include "vmath.h"
+
+class BObolLodService;
+class BObolSceneController;
+class BObolViewAttachment;
+class BObolViewLodState;
+class BObolHeadlessWindowHost;
+class BObolWindowHost;
+class BObolFeatureStore;
+class BObolPolygonStore;
+class BObolSelectionStore;
+class SoBRLExportAction;
+class SoBRLMeasureAction;
+class SoBRLSnapAction;
+class SoBRLViewLodGroup;
+class SoCamera;
+class SoGroup;
+class SoNode;
+class SoOffscreenRenderer;
+class SoRenderManager;
+class SoViewport;
+struct bg_line_layer_builder;
+struct bobol_display_endpoint;
+struct BObolPreparedRenderRequest;
+struct db_i;
+struct bv_view_info;
+struct bv_lod_policy;
+
+class BObolViewController;
+
+BOBOL_EXPORT SbMatrix bobol_sbmatrix_from_brl_mat(const mat_t mat);
+BOBOL_EXPORT SbRotation bobol_camera_orientation_from_brl_rotation(
+    const mat_t rotation);
+
+struct BOBOL_EXPORT BObolProgressiveOptions {
+    BObolProgressiveOptions(void);
+
+    size_t maxLodResults;
+    uint64_t maxLodApplyMicroseconds;
+    size_t maxProviders;
+    /** Maximum streamed database occurrences merged by one provider pump.
+     * Zero removes the item limit, but maxProviderMicroseconds still applies
+     * between merge batches. */
+    size_t maxProviderItems;
+    /** Cooperative host-thread provider budget.  A single merge batch is
+     * atomic, so this is checked between bounded batches.  Zero disables the
+     * time limit. */
+    uint64_t maxProviderMicroseconds;
+    /** Admit the raster-stable (at most quarter-pixel error) PoP cut without
+     * interactive frame-time/quiet-time ceilings.  The mode remains active
+     * across controller-owned render pumps until an explicit options call
+     * disables it.  Offline captures and deterministic tests still present
+     * every selected cut before advancing, but need not emulate human pauses
+     * or depend on host rendering speed. */
+    SbBool forceTerminalLodRefinement;
+};
+
+struct BOBOL_EXPORT BObolProgressiveStatus {
+    BObolProgressiveStatus(void);
+    void clear(void);
+
+    size_t providerCount;
+    size_t providerAdvanced;
+    size_t lodResultsProcessed;
+    size_t lodResultsApplied;
+    size_t submitted;
+    size_t alreadyCached;
+    size_t expanded;
+    size_t existing;
+    size_t remaining;
+    size_t proxyPublished;
+    size_t metadataApplied;
+    size_t pendingTasks;
+    size_t inFlight;
+    size_t queuedResults;
+    size_t queuedCacheWrites;
+    /** Exact aggregate rank reported by source-preparation providers.  A zero
+     * total means the provider has not established a finite denominator; it
+     * does not imply that its work is complete. */
+    uint64_t sourcePreparationCompletedUnits;
+    uint64_t sourcePreparationTotalUnits;
+    /** The provider published source geometry, bounds, or occurrence
+     * metadata which changes the representations available to LoD planning.
+     * Camera-only and style-only presentation changes leave this clear. */
+    int sourceAvailabilityChanged;
+    int changed;
+    /** The progressive transaction is unfinished.  This is diagnostic return
+     * state, not a runnable host level; schedule from getHostWorkSnapshot(). */
+    int hasMore;
+};
+
+enum BObolLodConvergencePhase {
+    BOBOL_LOD_CONVERGENCE_IDLE = 0,
+    BOBOL_LOD_CONVERGENCE_DISCOVERING,
+    BOBOL_LOD_CONVERGENCE_INTERACTIVE,
+    BOBOL_LOD_CONVERGENCE_REFINING,
+    BOBOL_LOD_CONVERGENCE_CALIBRATING,
+    BOBOL_LOD_CONVERGENCE_BACKGROUND,
+    BOBOL_LOD_CONVERGENCE_ERROR,
+    /* Keep established diagnostic values stable when adding HUD phases. */
+    BOBOL_LOD_CONVERGENCE_PREPARING
+};
+
+/** Whether a completed presentation is valid evidence for retained LoD
+ * capacity control.  Keep this distinct from CAD execution: a frame can draw
+ * CAD while being requested solely for a selection or faceplate change. */
+enum class BObolLodCapacityRelevance : uint8_t {
+    EXCLUDED = 0,
+    RELEVANT
+};
+
+/** Whether a completed presentation may advance an already-owned LoD
+ * planning transaction.  This is deliberately independent of capacity: an
+ * initial structural classifier has no measurable mesh population, while a
+ * selection repaint may traverse that same population without owning any
+ * geometry work. */
+enum class BObolLodPlanningRelevance : uint8_t {
+    EXCLUDED = 0,
+    RELEVANT
+};
+
+/** Whether the CAD presentation traversal actually executed in a frame. */
+enum class BObolCadPresentationExecution : uint8_t {
+    NOT_EXECUTED = 0,
+    EXECUTED
+};
+
+/** Whether every CAD assembly in a host traversal produced an exact report
+ * for the current scene and view.  An incomplete traversal may still supply a
+ * useful progressive image, but it cannot retire presentation obligations. */
+enum class BObolCadPresentationCompleteness : uint8_t {
+    INCOMPLETE = 0,
+    EXACT
+};
+
+/** Classification facts which must remain attached to one presentation
+ * timing sample.  Distinct enum types make swapped or omitted host facts a
+ * compile-time error. */
+struct BOBOL_EXPORT BObolPresentationTimingContext {
+    BObolPresentationTimingContext(
+	BObolLodCapacityRelevance capacityRelevance,
+	BObolLodPlanningRelevance planningRelevance,
+	BObolCadPresentationExecution cadExecution,
+	BObolCadPreparationProgress preparation,
+	BObolCadPresentationCompleteness completeness) :
+	lodCapacityRelevance(capacityRelevance),
+	lodPlanningRelevance(planningRelevance),
+	cadPresentationExecution(cadExecution),
+	cadPreparation(preparation),
+	cadPresentationCompleteness(completeness)
+    {
+    }
+
+    BObolLodCapacityRelevance lodCapacityRelevance;
+    BObolLodPlanningRelevance lodPlanningRelevance;
+    BObolCadPresentationExecution cadPresentationExecution;
+    BObolCadPreparationProgress cadPreparation;
+    BObolCadPresentationCompleteness cadPresentationCompleteness;
+};
+
+/** Derived result for the current visible presentation.  This is independent
+ * of the user-facing phase: background cache persistence may continue after a
+ * ready or constrained presentation. */
+enum BObolLodPresentationOutcome {
+    BOBOL_LOD_PRESENTATION_ACTIVE = 0,
+    BOBOL_LOD_PRESENTATION_READY,
+    BOBOL_LOD_PRESENTATION_CONSTRAINED,
+    BOBOL_LOD_PRESENTATION_ERROR
+};
+
+/** Finite work-ledger projection used by convergence diagnostics and the
+ * progressive-control refinement checker.  Several independent obligations
+ * may be present, but exactly one owner-thread class is selected to make the
+ * next bounded transition. */
+enum BObolLodControlObligation {
+    BOBOL_LOD_CONTROL_OBLIGATION_NONE = 0,
+    BOBOL_LOD_CONTROL_OBLIGATION_INTERACTION = 1u << 0,
+    BOBOL_LOD_CONTROL_OBLIGATION_INVENTORY = 1u << 1,
+    BOBOL_LOD_CONTROL_OBLIGATION_AVAILABILITY = 1u << 2,
+    BOBOL_LOD_CONTROL_OBLIGATION_PUBLICATION = 1u << 3,
+    BOBOL_LOD_CONTROL_OBLIGATION_PLANNING = 1u << 4,
+    BOBOL_LOD_CONTROL_OBLIGATION_PRESENTATION = 1u << 5,
+    BOBOL_LOD_CONTROL_OBLIGATION_HANDOFF = 1u << 6,
+    BOBOL_LOD_CONTROL_OBLIGATION_COMPACTION = 1u << 7,
+    BOBOL_LOD_CONTROL_OBLIGATION_CACHE_WRITE = 1u << 8
+};
+
+enum BObolLodControlOwner {
+    BOBOL_LOD_CONTROL_OWNER_NONE = 0,
+    BOBOL_LOD_CONTROL_OWNER_INTERACTION,
+    BOBOL_LOD_CONTROL_OWNER_INVENTORY,
+    BOBOL_LOD_CONTROL_OWNER_AVAILABILITY,
+    BOBOL_LOD_CONTROL_OWNER_PUBLICATION,
+    BOBOL_LOD_CONTROL_OWNER_PLANNING,
+    BOBOL_LOD_CONTROL_OWNER_PRESENTATION,
+    BOBOL_LOD_CONTROL_OWNER_HANDOFF,
+    BOBOL_LOD_CONTROL_OWNER_COMPACTION,
+    BOBOL_LOD_CONTROL_OWNER_CACHE_WRITE
+};
+
+enum BObolLodControlViolation {
+    BOBOL_LOD_CONTROL_VIOLATION_NONE = 0,
+    BOBOL_LOD_CONTROL_VIOLATION_OWNERLESS_WORK = 1u << 0,
+    BOBOL_LOD_CONTROL_VIOLATION_TERMINAL_WITH_WORK = 1u << 1,
+    BOBOL_LOD_CONTROL_VIOLATION_INVALID_READINESS = 1u << 2,
+    BOBOL_LOD_CONTROL_VIOLATION_INVALID_OWNER = 1u << 3,
+    BOBOL_LOD_CONTROL_VIOLATION_UNWITNESSED_PRESENTATION = 1u << 4,
+    BOBOL_LOD_CONTROL_VIOLATION_UNWITNESSED_CONSTRAINT = 1u << 5,
+    BOBOL_LOD_CONTROL_VIOLATION_UNWITNESSED_PLANNING = 1u << 6,
+    BOBOL_LOD_CONTROL_VIOLATION_NONTERMINAL_WITHOUT_PROGRESS = 1u << 7
+};
+
+/** Concrete finite-progress sources for the current presentation owner.
+ *
+ * A shared host pump is evidence only when the controller's presentation
+ * reducer is one of its standing reasons.  Reporting the sources separately
+ * keeps an unrelated provider wakeup from concealing a stalled presentation
+ * transaction in runtime refinement traces. */
+enum BObolLodPresentationWitness {
+    BOBOL_LOD_PRESENTATION_WITNESS_NONE = 0,
+    BOBOL_LOD_PRESENTATION_WITNESS_RENDER = 1u << 0,
+    BOBOL_LOD_PRESENTATION_WITNESS_CONTROLLER_PUMP = 1u << 1,
+    BOBOL_LOD_PRESENTATION_WITNESS_TIMER = 1u << 2,
+    BOBOL_LOD_PRESENTATION_WITNESS_INDEPENDENT_PRODUCER = 1u << 3,
+    BOBOL_LOD_PRESENTATION_WITNESS_CLAIMED_FRAME = 1u << 4
+};
+
+/** Typed evidence supporting a resource-constrained terminal presentation.
+ *
+ * More than one bit may apply.  In particular, a measured stable-frame
+ * budget can coexist with a rejected static-quality trial.  This mask makes
+ * a constrained outcome auditable without exposing the controller's private
+ * capacity state machine. */
+enum BObolLodConstraintEvidence {
+    BOBOL_LOD_CONSTRAINT_NONE = 0,
+    BOBOL_LOD_CONSTRAINT_STABLE_BUDGET = 1u << 0,
+    BOBOL_LOD_CONSTRAINT_PROGRESSIVE_CEILING = 1u << 1,
+    BOBOL_LOD_CONSTRAINT_SUBPIXEL_AGGREGATION = 1u << 2,
+    BOBOL_LOD_CONSTRAINT_STATIC_DEADLINE = 1u << 3,
+    BOBOL_LOD_CONSTRAINT_MEMORY = 1u << 4,
+    BOBOL_LOD_CONSTRAINT_TERMINAL_PROXY = 1u << 5
+};
+
+/** Current phase of the bounded renderer-capacity search. */
+enum BObolLodCapacitySearchPhase {
+    BOBOL_LOD_CAPACITY_SEARCH_INACTIVE = 0,
+    BOBOL_LOD_CAPACITY_SEARCH_ALLOCATING,
+    BOBOL_LOD_CAPACITY_SEARCH_PRESENTING,
+    BOBOL_LOD_CAPACITY_SEARCH_MEASURING,
+    BOBOL_LOD_CAPACITY_SEARCH_TERMINAL
+};
+
+/** Deadline currently being certified by the renderer-capacity search. */
+enum BObolLodCapacitySearchGoal {
+    BOBOL_LOD_CAPACITY_SEARCH_STEADY = 0,
+    BOBOL_LOD_CAPACITY_SEARCH_STATIC
+};
+
+/** User-facing progress for one view epoch.
+ *
+ * The fraction is a cost-weighted estimate of progress toward the current
+ * view's terminal, frame-rate-aware presentation.  Structural discovery,
+ * initial useful representation, and detailed mesh resolution are distinct
+ * work classes: one completed subpixel proxy must not hide a comparatively
+ * expensive outstanding mesh.  A value of one never promises that every
+ * source triangle is resident.  Cache writes are reported separately because
+ * they may continue after the visible view is ready. */
+struct BOBOL_EXPORT BObolLodConvergenceStatus {
+    BObolLodConvergenceStatus(void);
+    void clear(void);
+
+    int phase;
+    int outcome;
+    /** Concrete control facts corresponding one-for-one with the refinement
+     * contract.  This diagnostic identifies an unfinished alias when several
+     * implementation facts share one abstract obligation. */
+    uint32_t controlFactMask;
+    uint32_t controlObligationMask;
+    int controlOwner;
+    uint32_t controlViolationMask;
+    uint32_t controlPresentationWitnessMask;
+    /** Nonempty for a constrained outcome; bits are defined above. */
+    uint32_t constraintEvidenceMask;
+    size_t viewQualityHistoryEntryCount;
+    size_t viewQualityHistoryRememberCount;
+    size_t viewQualityHistoryRecallCount;
+    uint64_t inventoryRevision;
+    uint64_t availabilityRevision;
+    uint64_t visibilityRevision;
+    uint64_t viewRevision;
+    uint64_t policyRevision;
+    uint64_t capacityRevision;
+    /** View-local retained CAD population revisions which complete the
+     * allocation transaction identity beyond the six admission domains. */
+    uint64_t cadRevision;
+    uint64_t residentDemandRevision;
+    /** A worker can publish reclaimed capacity before its owner-thread wake
+     * runs.  Keep the producer epoch and the controller's observation cursor
+     * in the same status snapshot used to derive pending work. */
+    uint64_t serviceResidentAdmissionRevision;
+    uint64_t observedResidentAdmissionRevision;
+    /** Bounded capacity-search diagnostics.  Progress units are an exact
+     * finite rank for the active search, not renderer-time estimates. */
+    int capacitySearchPhase;
+    int capacitySearchGoal;
+    unsigned int capacitySearchSamplesRemaining;
+    unsigned int capacitySearchMeasuredCandidates;
+    unsigned int capacitySearchTotalMeasuredCandidates;
+    unsigned int capacitySearchCandidateLimit;
+    unsigned int capacitySearchMaximumCandidates;
+    unsigned int capacitySearchSampleLimit;
+    unsigned int capacitySearchInvalidFrameAttempts;
+    unsigned int capacitySearchInvalidFrameAttemptLimit;
+    uint64_t capacitySearchCompletedUnits;
+    uint64_t capacitySearchTotalUnits;
+    /** Allocation plan certified by the current eight-domain revision tuple.
+     * Zero while an older committed presentation is retained during
+     * replacement planning. */
+    uint64_t currentAllocationPlanSerial;
+    uint64_t presentationTransactionSerial;
+    uint64_t presentationRequiredRenderSerial;
+    uint64_t presentedFrameSerial;
+    uint64_t activeGeneration;
+    size_t submissionSourceIndex;
+    size_t submissionEntryOffset;
+    size_t expectedLeafCount;
+    size_t availableLeafCount;
+    size_t visibleTargetCount;
+    size_t activePayloadCount;
+    size_t satisfiedPayloadCount;
+    size_t presentedSubpixelOccurrenceCount;
+    size_t presentedStructuralBoxCount;
+    /** Visible occurrence-scoped OBBs installed only after an exact
+     * renderer-capacity witness rejected their minimum mesh population. */
+    size_t terminalProxyOccurrenceCount;
+    size_t terminalOccurrenceFailureCount;
+    size_t pendingTasks;
+    size_t inFlight;
+    size_t queuedResults;
+    size_t queuedCacheWrites;
+    /** Aggregate exact-target retained-renderer preparation rank.  A stable
+     * nonzero signature identifies one immutable work denominator. */
+    uint64_t rendererPreparationTargetSignature;
+    uint64_t rendererPreparationTotalUnits;
+    uint64_t rendererPreparationCompletedUnits;
+    uint64_t rendererPreparationRemainingUnits;
+    uint64_t rendererPreparationReservedBytes;
+    size_t rendererPreparationTargetCount;
+    size_t rendererPreparationPreparingTargetCount;
+    size_t rendererPreparationConstrainedTargetCount;
+    size_t rendererPreparationFailedTargetCount;
+    size_t rendererPreparationInvalidTargetCount;
+    /** Exact CAD primitives submitted by the most recently completed frame.
+     * Unlike activeFaces, this includes direct full-detail and wire channels.
+     * The value is meaningful only when presentedPrimitiveCountValid is true. */
+    SbBool presentedPrimitiveCountValid;
+    size_t presentedPrimitiveCount;
+    size_t activeFaces;
+    size_t activeRenderCost;
+    size_t renderCostBudget;
+    size_t selectedPresentationCost;
+    size_t certifiedPresentationBudget;
+    size_t pixelDemandPresentationCost;
+    size_t requestedPresentationBudget;
+    size_t maximumMarginalPresentationBudget;
+    size_t maximumProtectedPresentationBudget;
+    /** Exact non-revision inputs of the current retained allocation.  These
+     * fields make plan determinism auditable without treating a bounded
+     * capacity-search candidate as a new semantic scene revision. */
+    size_t allocationExternalPresentationCost;
+    uint64_t allocationResidentAdmissionRevision;
+    float allocationPointProxyPixelThreshold;
+    SbBool allocationProtectedFloorAllowed;
+    size_t pointProxyCandidateCount;
+    size_t reachablePointProxyCandidateCount;
+    size_t selectedPointProxyCount;
+    size_t prominentCandidateCount;
+    size_t prominentQualityFloorViolationCount;
+    double maximumNormalizedVisualError;
+    double visualImportanceDebt;
+    /** Last committed renderer allocation, including a safe fallback from an
+     * older revision tuple while current planning is incomplete. */
+    uint64_t committedAllocationPlanSerial;
+    size_t residentMeshBytes;
+    size_t stableResidentMeshBytes;
+    size_t reservedResidentMeshGrowthBytes;
+    size_t residentMeshLimitBytes;
+    size_t memoryLimitedPayloadCount;
+    size_t activeWorkingSetBytes;
+    size_t peakWorkingSetBytes;
+    uint64_t residentCompactionCount;
+    uint64_t residentCompactionPlanRevision;
+    size_t residentCompactionCandidateCount;
+    SbBool residentCompactionPlanCurrent;
+    size_t gpuTrackedBufferBytes;
+    size_t gpuOrdinaryPartBufferBytes;
+    size_t gpuProgressiveCutBufferBytes;
+    size_t gpuProgressiveActiveCutBytes;
+    size_t gpuBatchBufferBytes;
+    size_t gpuTriangleAtlasAllocatedBytes;
+    size_t gpuTriangleAtlasLiveBytes;
+    size_t gpuTriangleAtlasConfiguredCapacityBytes;
+    size_t gpuTriangleAtlasPartCount;
+    size_t gpuTriangleAtlasPageCount;
+    uint64_t gpuOrdinaryPartFullUploadBytes;
+    uint64_t gpuOrdinaryPartSuffixUploadBytes;
+    uint64_t gpuOrdinaryPartGpuCopyBytes;
+    uint64_t gpuOrdinaryPartLineageReuseCount;
+    uint64_t gpuOrdinaryPartLineageReplacementCount;
+    uint64_t gpuTriangleAtlasFullUploadBytes;
+    uint64_t gpuTriangleAtlasSuffixUploadBytes;
+    uint64_t gpuTriangleAtlasLineageReuseCount;
+    size_t gpuPressureProxyCount;
+    uint64_t gpuProgressiveEvictionCount;
+    uint64_t gpuTriangleAtlasReclamationCount;
+    uint64_t gpuResourceSampleSerial;
+    /** Presentation-only estimate derived from observed rates of the finite
+     * work ranks above.  This never participates in scheduling or terminal
+     * readiness.  When progressEstimateAvailable is false, clients should
+     * present an indeterminate activity indicator and the exact per-stage
+     * ranks instead of interpreting estimatedFraction as determinate
+     * progress. */
+    SbBool progressEstimateAvailable;
+    float estimatedFraction;
+    uint64_t estimatedRemainingMilliseconds;
+    float fraction;
+    /* terminal means the visible presentation has no remaining foreground
+     * obligation.  viewReady includes a truthful constrained terminal view,
+     * but never an error.  Consult outcome to distinguish exact readiness
+     * from a resource-constrained result. */
+    SbBool terminal;
+    SbBool terminalError;
+    SbBool viewReady;
+    /* FALSE when the view has no LoD-managed scene or pending LoD work.  An
+     * empty status is not a zero-percent convergence operation and should not
+     * produce a progress HUD. */
+    SbBool hasLodState;
+    SbBool backgroundPending;
+    SbBool performanceLimited;
+    SbBool memoryLimited;
+    SbBool gpuMemoryPressure;
+    /* Individual convergence obligations.  These are intentionally exposed
+     * in the aggregate status so hosts and regression reports can distinguish
+     * a pending PoP presentation frame from nonvisual scene reallocation. */
+    SbBool refinementFramePending;
+    SbBool budgetCalibrationPending;
+    SbBool stablePresentationHandoffPending;
+    SbBool pointProxyCalibrationPending;
+    SbBool pointProxyAdmissionFramePending;
+    SbBool stablePointProxyCalibrationPending;
+    SbBool pointProxyTriangleRecoveryPending;
+    SbBool residentGrowthReallocationPending;
+    SbBool publicationFramePending;
+    /** One exact style/overlay frame is pending without LoD allocation,
+     * calibration, publication, or background work.  Hosts use this to avoid
+     * presenting a detail-progress HUD for selection and manipulator repaints. */
+    SbBool semanticPresentationFramePending;
+    /* Foreground cold-start work which is still publishing the immutable
+     * population against which terminal view allocation will be proved. */
+    SbBool sourcePreparationPending;
+    size_t sourcePreparationProviderCount;
+    /** Exact finite source-representation rank for providers which have
+     * established a denominator.  It describes completed work items, not an
+     * elapsed-time estimate. */
+    uint64_t sourcePreparationCompletedUnits;
+    uint64_t sourcePreparationTotalUnits;
+    unsigned int failedSourceCount;
+};
+
+typedef int (*BObolProgressiveAdvanceCallback)(
+    BObolViewController *controller,
+    void *userData,
+    const BObolProgressiveOptions *options,
+    BObolProgressiveStatus *status);
+typedef void (*BObolProgressiveUserDataFreeCallback)(void *userData);
+
+/* A positive callback result records provider progress.  Set status->changed
+ * only when that progress published a visible scene update, and additionally
+ * set sourceAvailabilityChanged when the update changes source data available
+ * to LoD planning.  status->hasMore independently requests a subsequent pump
+ * for pending work. */
+
+typedef void (*BObolFrameRequestCallback)(void *userData,
+    const char *reason);
+
+/** Level-triggered work advertised by a view controller to its presentation
+ * host.  Pumping and rendering are independent: background/provider progress
+ * may need bounded owner-thread service without traversing an unchanged
+ * scene, while a render request may be satisfied from already published
+ * retained data. */
+enum BObolHostWorkFlag {
+    BOBOL_HOST_WORK_NONE = 0,
+    BOBOL_HOST_WORK_PUMP = 1u << 0,
+    BOBOL_HOST_WORK_RENDER = 1u << 1,
+    BOBOL_HOST_WORK_CAPACITY_SAMPLE = 1u << 2,
+    /** The host consumed a render level and is currently traversing it. */
+    BOBOL_HOST_WORK_FRAME_CLAIMED = 1u << 3,
+    /** The claimed traversal retains a renderer-capacity obligation until
+     * its completed-frame timing is committed. */
+    BOBOL_HOST_WORK_CAPACITY_SAMPLE_CLAIMED = 1u << 4
+};
+
+/** Immutable observation of the controller/host work boundary.  Revision is
+ * advanced by every level transition; renderRevision identifies the pending
+ * render transaction.  A host claims that transaction with
+ * consumeRenderRequest() before traversal, so work published during traversal
+ * becomes a distinct pending transaction. */
+struct BOBOL_EXPORT BObolHostWorkSnapshot {
+    BObolHostWorkSnapshot(void);
+
+    uint64_t revision;
+    uint64_t renderRevision;
+    uint32_t flags;
+
+    SbBool pumpPending(void) const;
+    SbBool renderPending(void) const;
+    SbBool capacitySampleRequested(void) const;
+    SbBool frameClaimed(void) const;
+    SbBool capacitySampleClaimed(void) const;
+};
+
+/** Finite event alphabet for the opt-in production control-transition
+ * journal.  The nine owner events are numerically aligned with
+ * BObolLodControlOwner; EXTERNAL_INPUT is the only event allowed to introduce
+ * arbitrary user work.  PRODUCER_PROGRESS records an independently advancing
+ * worker or a claimed renderer traversal; it refines to either a producer
+ * action or a control-state stutter, not an owner-thread reducer action.
+ * UNNAMED is emitted by the journal's audit boundary when observable state
+ * changed outside every registered or independently witnessed transition. */
+enum BObolLodControlTransitionEvent {
+    BOBOL_LOD_CONTROL_TRANSITION_UNNAMED = 0,
+    BOBOL_LOD_CONTROL_TRANSITION_INITIAL,
+    BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT,
+    BOBOL_LOD_CONTROL_TRANSITION_INTERACTION,
+    BOBOL_LOD_CONTROL_TRANSITION_INVENTORY,
+    BOBOL_LOD_CONTROL_TRANSITION_AVAILABILITY,
+    BOBOL_LOD_CONTROL_TRANSITION_PUBLICATION,
+    BOBOL_LOD_CONTROL_TRANSITION_PLANNING,
+    BOBOL_LOD_CONTROL_TRANSITION_PRESENTATION,
+    BOBOL_LOD_CONTROL_TRANSITION_HANDOFF,
+    BOBOL_LOD_CONTROL_TRANSITION_COMPACTION,
+    BOBOL_LOD_CONTROL_TRANSITION_CACHE_WRITE,
+    BOBOL_LOD_CONTROL_TRANSITION_IDLE_SERVICE,
+    BOBOL_LOD_CONTROL_TRANSITION_PRODUCER_PROGRESS
+};
+
+BOBOL_EXPORT const char *bobol_lod_control_transition_event_name(
+    BObolLodControlTransitionEvent event);
+
+/** One immutable endpoint in a control-transition refinement witness. */
+struct BOBOL_EXPORT BObolLodControlTraceState {
+    BObolLodControlTraceState(void);
+
+    BObolLodConvergenceStatus convergence;
+    BObolHostWorkSnapshot hostWork;
+    /** Reason attached to the currently pending render, if any.  This is
+     * diagnostic provenance only; scheduling is defined by hostWork. */
+    SbString renderReason;
+    /** Exact CAD-frame completion clock used by presentation barriers.  This
+     * is distinct from convergence.presentedFrameSerial, which counts host
+     * presentations whether or not they satisfy the CAD control contract. */
+    uint64_t renderCompletionSerial;
+    uint64_t viewRevision;
+    uint64_t policyRevision;
+    SbBool interactionActive;
+};
+
+/** One named production transition.  Both endpoints are retained so an
+ * offline checker can prove continuity instead of trusting adjacent samples
+ * that may have come from different observation times. */
+struct BOBOL_EXPORT BObolLodControlTransitionRecord {
+    BObolLodControlTransitionRecord(void);
+
+    uint64_t serial;
+    BObolLodControlTransitionEvent event;
+    BObolLodControlTraceState before;
+    BObolLodControlTraceState after;
+};
+
+static constexpr size_t BOBOL_LOD_CONTROL_TRACE_DEFAULT_RECORD_LIMIT = 4096;
+
+/* Runs on the controller/host owner thread immediately before a scene is
+ * rendered.  Producers may use it to apply thread-safe image-stream updates
+ * to retained Coin presentation nodes without letting worker threads touch
+ * Coin or an OpenGL context. */
+typedef void (*BObolPresentationSyncCallback)(void *userData);
+
+struct BOBOL_EXPORT BObolProgressiveProviderRecord {
+    BObolProgressiveProviderRecord(void);
+
+    uint64_t token;
+    BObolProgressiveAdvanceCallback callback;
+    void *userData;
+    BObolProgressiveUserDataFreeCallback userDataFree;
+    uint64_t sourcePreparationCompletedUnits;
+    uint64_t sourcePreparationTotalUnits;
+};
+
+/**
+ * Narrow application-facing controller for an Obol-backed BRL-CAD view.
+ *
+ * The controller records view services that GUI and command layers need while
+ * leaving scene hierarchy, camera fields, visibility, and renderable geometry
+ * in Obol.  It is the migration target for code that currently carries a
+ * legacy view/display-manager pair.
+ */
+class BOBOL_EXPORT BObolViewController
+{
+public:
+    enum SoftwareWireMode {
+	SOFTWARE_WIRE_AUTO = 0,
+	SOFTWARE_WIRE_QUALITY = 1,
+	SOFTWARE_WIRE_FAST = 2
+    };
+
+    /** Named, renderer-independent camera-lighting policies.  Values match
+     * enum bv_lighting_profile so GED can synchronize without translation
+     * tables or client-specific defaults. */
+    enum LightingProfile {
+	LIGHTING_STUDIO = 0,
+	LIGHTING_MGED = 1
+    };
+
+    /** Construct an idle controller with an empty SoBRLSceneGroup, a default
+     * orthographic camera, and one consistent 1x1 viewport.  The camera is
+     * owned by the private viewport graph rather than modeled scene content. */
+    BObolViewController(void);
+    explicit BObolViewController(SoNode *root, SoCamera *camera = NULL);
+    ~BObolViewController(void);
+
+    /* Replace the modeled scene root.  A host may preserve active LoD only
+     * when installing a view-local presentation root around unchanged shared
+     * model data. */
+    void setSceneRoot(SoNode *root, SbBool preserveLodState = FALSE);
+    SoNode *getSceneRoot(void) const;
+    /* Install a render composition root.  Callers replacing the modeled scene
+     * use the default destructive behavior; a host may preserve an active LoD
+     * generation when it only wraps the same scene with presentation layers. */
+    void setRenderSceneRoot(SoNode *root, SbBool preserveLodState = FALSE);
+    SoNode *getRenderSceneRoot(void) const;
+    SoNode *getRenderRoot(void) const;
+    /** Stable retained framebuffer layers.  Underlay and overlay surround
+     * the CAD render batch.  Interlay is inserted by the hosted GED render
+     * composition between model geometry and view-local screen features. */
+    SoGroup *getFramebufferUnderlayRoot(void) const;
+    SoGroup *getFramebufferInterlayRoot(void) const;
+    SoGroup *getFramebufferOverlayRoot(void) const;
+    void setViewAttachment(BObolViewAttachment *attachment);
+    BObolViewAttachment *getViewAttachment(void) const;
+    BObolViewLodState *getViewLodState(void) const;
+    void clearViewLodState(void);
+
+    /** Replace the controller, viewport and renderer camera as one published
+     * owner-thread transition.  Passing NULL removes the camera. */
+    void setCamera(SoCamera *camera);
+    SoCamera *getCamera(void) const;
+
+    void setViewportRegion(const SbViewportRegion &region);
+    const SbViewportRegion &getViewportRegion(void) const;
+    void setViewportSize(unsigned int width, unsigned int height);
+    /** Publish both retained background colors, the fog color derived from
+     * the top color and one presentation frame. Non-finite input is ignored. */
+    void setBackgroundColors(const SbColor &bottom, const SbColor &top);
+    const SbColor &getBackgroundBottomColor(void) const;
+    const SbColor &getBackgroundTopColor(void) const;
+    /** Publish depth testing and depth writes with one renderer-capacity
+     * invalidation. */
+    void setDepthTestEnabled(SbBool enabled);
+    SbBool isDepthTestEnabled(void) const;
+    void setLightingEnabled(SbBool enabled);
+    SbBool isLightingEnabled(void) const;
+    void setLightingProfile(LightingProfile profile);
+    LightingProfile getLightingProfile(void) const;
+    /** Publish the complete camera-rig and database-light input as one
+     * owner-thread transition. */
+    void setLightingState(LightingProfile profile,
+	const SbVec3f &headlightOffset, SbBool headlightCameraTracked,
+	SbBool headlightEnabled,
+	const std::vector<BObolSceneLightRealization> &sceneLights,
+	SbBool sceneLightsEnabled);
+    float getLightingAmbientIntensity(void) const;
+    void setNormalStyle(BObolViewLodState::NormalStyle style,
+	float creaseAngleDegrees = 60.0f);
+    BObolViewLodState::NormalStyle getNormalStyle(void) const;
+    float getNormalCreaseAngle(void) const;
+    /** Enable/disable the camera-driven light rig (layered under the master
+     * setLightingEnabled()).  The historical name remains the concise public
+     * command vocabulary for this independent lighting source. */
+    void setHeadlightEnabled(SbBool enabled);
+    SbBool isHeadlightEnabled(void) const;
+    /** When TRUE the headlight direction tracks the camera each frame (old
+     * main-branch style); when FALSE the direction stays scene-fixed. */
+    void setHeadlightCameraTracked(SbBool tracked);
+    SbBool isHeadlightCameraTracked(void) const;
+    /** Eye-space headlight offset direction (normalized).  Not straight-on, to
+     * avoid washed-out shading. */
+    void setHeadlightOffset(const SbVec3f &eyeDir);
+    SbVec3f getHeadlightOffset(void) const;
+    /** Current world-space headlight travel direction (as last aimed). */
+    SbVec3f getHeadlightDirection(void) const;
+    /** Snapshot enabled camera-rig lights in world space for retained
+     * non-Obol renderers such as the librt preview. */
+    void getCameraLights(
+	std::vector<BObolSceneLightRealization> &lights) const;
+    /** Publish in-scene light intent, retained light nodes and one frame
+     * request as a single owner-thread transition. */
+    void setSceneLightsEnabled(SbBool enabled);
+    SbBool isSceneLightsEnabled(void) const;
+    /** Supply the in-scene lights (world-space) for this view.  The GED layer
+     * derives these from the database's "light"-shader regions and pushes them
+     * here (independent of the geometry realize/LoD cache). */
+    void setSceneLights(const std::vector<BObolSceneLightRealization> &lights);
+    /** Atomically supply in-scene lights and their enablement intent. */
+    void setSceneLights(const std::vector<BObolSceneLightRealization> &lights,
+	SbBool enabled);
+    /** Root group holding realized in-scene lights (NULL if none), so other
+     * render paths (e.g. the software raytrace preview) can honor them. */
+    SoNode *getSceneLightsRoot(void) const;
+    /** Rebuild the in-scene light group from every database source's realized
+     * light snapshots.  Safe to call after any realization path (the endpoint
+     * realize, the render-time realize action, etc.). */
+    void rebuildSceneLights(void);
+    /** Publish a finite, unit-clamped key-light color as a presentation-only
+     * change. */
+    void setHeadlightColor(const SbColor &color);
+    SbColor getHeadlightColor(void) const;
+    /** Publish a finite, unit-clamped key-light intensity as a
+     * presentation-only change. */
+    void setHeadlightIntensity(float intensity);
+    float getHeadlightIntensity(void) const;
+    /** Publish controller, onscreen and cached offscreen transparency with one
+     * renderer-capacity invalidation. */
+    void setTransparencyEnabled(SbBool enabled);
+    SbBool isTransparencyEnabled(void) const;
+    /** Enable Obol's single-pass line and point smoothing.  This deliberately
+     * does not enable expensive accumulation-buffer multipass rendering. The
+     * controller and both render actions publish with one capacity
+     * invalidation. */
+    void setAntialiasingEnabled(SbBool enabled);
+    SbBool isAntialiasingEnabled(void) const;
+    /** Set camera-relative zclip bounds and publish both retained clip planes
+     * with the resulting renderer-capacity request. */
+    SbBool setClipBounds(double minimum, double maximum);
+    void getClipBounds(double &minimum, double &maximum) const;
+    /** Camera-relative zclip uses two planes.  An optional user section plane
+     * is world-space and remains independent of camera navigation. */
+    static const size_t CLIP_PLANE_CAPACITY = 3;
+    /** Publish section-plane intent, the retained clip node, its visible
+     * affordance and one frame request as a single owner-thread transition. */
+    void setCuttingPlaneEnabled(SbBool enabled);
+    SbBool isCuttingPlaneEnabled(void) const;
+    SbBool setCuttingPlane(const SbPlane &plane);
+    SbPlane getCuttingPlane(void) const;
+    size_t getActiveClipPlanes(SbPlane planes[CLIP_PLANE_CAPACITY]) const;
+    /** Publish fog mode, background-derived color and camera-relative
+     * visibility with one renderer-capacity invalidation. */
+    void setDepthCueEnabled(SbBool enabled);
+    SbBool isDepthCueEnabled(void) const;
+    void renderBackground(void) const;
+    /** Publish controller, LoD-wrapper and compact-batch software-wire policy
+     * with one renderer-capacity invalidation. Invalid values select AUTO. */
+    void setSoftwareWireMode(SoftwareWireMode mode);
+    SoftwareWireMode getSoftwareWireMode(void) const;
+    /** Project one libbv view input into the viewport size, camera, tracked
+     * lights, clipping planes, section aid, LoD signature, and frame request
+     * as one owner-thread publication.  Ordinary navigation preserves camera
+     * identity; changing projection type replaces it.  Preparation failure
+     * leaves the predecessor visible, while observer failures are propagated
+     * after every committed notification is attempted.  An identical input
+     * reports changedOut=FALSE without allocating or notifying. */
+    SbBool syncCameraFromViewContext(const void *viewCtx,
+				     SbBool createCamera = TRUE,
+				     SbBool *changedOut = NULL);
+    SbBool getViewInfo(struct bv_view_info *info) const;
+
+    SbBool realizePending(void);
+
+    /* Derived display mode: when the view's LoD policy has neither mesh nor CSG
+     * LoD enabled, drawing behaves like the classic force-realize (whole tree
+     * before first frame) path; when LoD is enabled the render paths stay on the
+     * progressive coarse-first pipeline.  Consulted by renderPending() and the
+     * headless host so the single `view lod` setting controls both without a
+     * separate progressive-display toggle. */
+    SbBool isForceRealizeDisplay(void) const;
+
+    unsigned int getLastVisitedSourceCount(void) const;
+    unsigned int getLastRealizedSourceCount(void) const;
+    unsigned int getLastFailedSourceCount(void) const;
+    const SbString &getLastDiagnostics(void) const;
+
+    /** Request an LoD-owned frame whose completed CAD traversal may advance
+     * planning and supply capacity/deadline evidence. */
+    void requestLodCapacityRender(const char *reason = NULL);
+    /** Request a presentation-only frame.  Selection, highlighting, HUD, and
+     * other style changes must become visible, but they neither advance LoD
+     * planning nor provide evidence that the retained geometry cut is
+     * unsustainable.  If an LoD-owned request is already pending, the combined
+     * frame retains that stronger classification. */
+    void requestPresentationRender(const char *reason = NULL);
+    /** Request a presentation-only frame after an external mutation to
+     * retained CAD appearance state.  The successor frame must traverse the
+     * current CAD assemblies exactly before LoD readiness may be reported,
+     * but its one-time style-update cost is not capacity evidence. */
+    void requestExactCadPresentationRender(const char *reason = NULL);
+    void setFrameRequestCallback(BObolFrameRequestCallback callback,
+	void *userData);
+    void clearFrameRequestCallback(void *userData);
+    void setPresentationSyncCallback(BObolPresentationSyncCallback callback,
+	void *userData);
+    void clearPresentationSyncCallback(void *userData);
+    void synchronizePresentation(void);
+    /** Obtain the complete level-triggered host work contract in one atomic
+     * observation.  Hosts should keep their bounded service loop scheduled
+     * while either PUMP or RENDER remains asserted. */
+    BObolHostWorkSnapshot getHostWorkSnapshot(void) const;
+    void clearRenderRequest(void);
+    /** Claim the current frame transaction.  The optional outputs classify
+     * its timing independently for capacity estimation and LoD planning. */
+    SbBool consumeRenderRequest(SbString *reason = NULL,
+	SbBool *lodCapacityRelevant = NULL,
+	SbBool *lodPlanningRelevant = NULL);
+    uint64_t renderRequestSerialGet(void) const;
+    /** Render one pending frame. On success, featureRevision identifies the
+     * feature-store content traversed by that frame, before completion feedback
+     * can publish another overlay. Hosts retain this witness with its pixels. */
+    SbBool renderPending(SbBool clearWindow = TRUE,
+			 SbBool clearZBuffer = TRUE,
+			 SbString *reason = NULL,
+			 uint64_t *featureRevision = NULL);
+    uint64_t beginRenderTiming(void) const;
+    void completeRenderTiming(uint64_t startedNanoseconds,
+	const BObolPresentationTimingContext &context);
+    /** Commit one attempted presentation traversal.  Incomplete traversals
+     * retain the previous framebuffer.  A traversal which reaches exact
+     * completion between deadline checks is a valid presentation sample; its
+     * supplied duration lets the ordinary capacity reducer classify it.
+     * Delivery time after traversal is not part of that sample. */
+    SbBool finishPresentationRenderTiming(uint64_t startedNanoseconds,
+	uint64_t elapsedNanoseconds,
+	SbBool traversalInterrupted,
+	const BObolPresentationTimingContext &context);
+    /** Bound a graphical traversal before it can monopolize the endpoint
+     * thread.  Zero disables the corresponding deadline.  Interrupted
+     * or incomplete frames are not presentation samples; hosts preserve the
+     * last completed image.  Exact frames which finish between two deadline
+     * checks are published and classified from their measured duration.
+     * Changing a deadline invalidates quality-policy evidence and requests
+     * a frame under the new allowance; identical values preserve that work. */
+    void setPresentationFrameDeadlines(uint64_t interactiveNanoseconds,
+	uint64_t stableNanoseconds);
+    uint64_t getInteractivePresentationFrameDeadline(void) const;
+    uint64_t getStablePresentationFrameDeadline(void) const;
+    uint64_t getCurrentPresentationFrameDeadline(void) const;
+    /** TRUE only when the current retained population has nonzero
+     * LoD-managed work which deadline recovery can make cheaper.  Hosts that
+     * traverse the render root directly must use this together with the
+     * capacity-relevance bit returned by consumeRenderRequest(). */
+    SbBool isLodPresentationCapacityRelevant(void) const;
+    void notePresentationRenderInterrupted(uint64_t elapsedNanoseconds,
+	const BObolPresentationTimingContext &context);
+    uint64_t getInterruptedPresentationFrameCount(void) const;
+    uint64_t getLastInterruptedPresentationTimeNanoseconds(void) const;
+    uint64_t getLastRenderTimeNanoseconds(void) const;
+    uint64_t getSmoothedRenderTimeNanoseconds(void) const;
+    /** Host-side phase timings for the most recently completed render. */
+    uint64_t getLastBackgroundRenderTimeNanoseconds(void) const;
+    uint64_t getLastSceneRenderTimeNanoseconds(void) const;
+    /** Host-thread time spent preparing the most recent progressive frame.
+     * These diagnostics deliberately exclude the GL traversal reported by
+     * getLastRenderTimeNanoseconds(), making event-loop stalls attributable
+     * without a sampling profiler. */
+    uint64_t getLastProgressiveAdvanceTimeNanoseconds(void) const;
+    uint64_t getLastLodResultProcessingTimeNanoseconds(void) const;
+    uint64_t getLastProgressiveProviderTimeNanoseconds(void) const;
+    uint64_t getLastLodSubmissionTimeNanoseconds(void) const;
+    uint64_t getLastPresentationSyncTimeNanoseconds(void) const;
+    /** Record one completed host/offscreen presentation.  This cadence is
+     * intentionally separate from render work duration. */
+    void noteFramePresented(void);
+    /** Monotonic count of completed host/offscreen presentations.  Hosts and
+     * test drivers may use it to distinguish published scene/camera state
+     * from a frame which has actually reached the presentation surface. */
+    uint64_t getPresentedFrameSerial(void) const;
+    /** Monotonic controller-side render-request mutation token.  This is
+     * diagnostic/liveness state: it lets a host distinguish an unchanged
+     * pending level from a newer request published while a prior frame was
+     * being consumed. */
+    uint64_t getRenderRequestSerial(void) const;
+    /** Monotonic count of complete CAD presentation barriers.  Unlike
+     * getPresentedFrameSerial(), this advances only for traversals accepted
+     * by the LoD state machine (not retained images from interrupted frames). */
+    uint64_t getRenderCompletionSerial(void) const;
+    /** Completion serial required by the current camera-settle gate, or zero
+     * when no camera frame is outstanding. */
+    uint64_t getLodSettleAfterRenderSerial(void) const;
+    /** Completion serial required before the next progressive cut may be
+     * admitted, or zero when no refinement presentation is outstanding. */
+    uint64_t getLodRefinementResumeAfterRenderSerial(void) const;
+    /** Short-horizon presentation cadence used by diagnostic telemetry.  LoD
+     * capacity uses measured CPU/GPU work instead: an event-driven host gap
+     * is not a renderer cost. */
+    uint64_t getSmoothedPresentationIntervalNanoseconds(void) const;
+    uint64_t getSmoothedInteractivePresentationIntervalNanoseconds(void) const;
+    /** Human-facing presentation cadence.  This uses an elapsed-time EMA so
+     * its response is independent of frame rate and short scheduling bursts
+     * do not make the FPS faceplate flicker. */
+    uint64_t getDisplayedPresentationIntervalNanoseconds(void) const;
+    /** Capture with the controller-bound provider, or with a transient
+     * explicit override whose lifetime needs to extend only through this call. */
+    int renderToImage(unsigned char **image,
+		      int flip = 0,
+		      int alpha = 0,
+		      const SbColor *background = NULL,
+		      SoDB::ContextManager *contextManager = NULL,
+		      BObolProgressiveStatus *progressiveStatus = NULL);
+    /** True only when presentation state has explicitly requested a frame.
+     * Progressive work is reported independently by
+     * hasProgressiveWorkPending() and must not make this query true: a host
+     * may need to service a provider without repainting an unchanged scene. */
+    SbBool isRenderRequested(void) const;
+    SbString getRenderReason(void) const;
+    uint64_t registerProgressiveProvider(
+	BObolProgressiveAdvanceCallback callback,
+	void *userData,
+	BObolProgressiveUserDataFreeCallback userDataFree = NULL);
+    void unregisterProgressiveProvider(uint64_t token);
+    void clearProgressiveProviders(void);
+    void *findProgressiveProviderData(
+	BObolProgressiveAdvanceCallback callback) const;
+    uint64_t findProgressiveProviderToken(
+	BObolProgressiveAdvanceCallback callback) const;
+    SbBool hasProgressiveProviders(void) const;
+    void setDefaultProgressiveOptions(
+	const BObolProgressiveOptions *options);
+    const BObolProgressiveOptions &getDefaultProgressiveOptions(void) const;
+    int advanceProgressiveWork(
+	const BObolProgressiveOptions *options = NULL,
+	BObolProgressiveStatus *status = NULL);
+    /** Publish a semantic edge after an application mutates the compact
+     * inventory or visibility journal of an attached database source.  The
+     * controller coalesces repeated notifications until its bounded planner
+     * consumes the newest source revision. */
+    void notifyProgressiveSourceInputsChanged(void);
+    void markProgressiveWorkPending(void);
+    void clearProgressiveWorkPending(void);
+    SbBool hasProgressiveWorkPending(void) const;
+
+    void setLodService(BObolLodService *service);
+    BObolLodService *getLodService(void) const;
+    BObolLodService *ensureManagedLodService(size_t workerCount);
+    void stopManagedLodService(void);
+    size_t getManagedLodWorkerCount(void) const;
+    /** Begin and claim a result generation on the configured service.
+     * External producers must submit through this generation if this
+     * controller is to consume their results; unscoped FIFO draining is
+     * intentionally unsupported because it lets one view steal another's
+     * work. */
+    uint64_t beginLodGeneration(void);
+    /** Set automatic submission intent. Reapplying the current setting
+     * preserves pending work and completed quality certificates. */
+    void setLodAutoSubmit(SbBool enabled);
+    SbBool isLodAutoSubmitEnabled(void) const;
+    void setLodForcedCut(int cut);
+    void clearLodForcedCut(void);
+    SbBool hasLodForcedCut(void) const;
+    int getLodForcedCut(void) const;
+    void setExactFullDetailBudget(uint64_t maxFaceCount,
+				  uint64_t maxPointCount);
+    uint64_t getMaxExactFullDetailFaceCount(void) const;
+    uint64_t getMaxExactFullDetailPointCount(void) const;
+    int consumeExportSourceFullDetail(SoBRLExportAction &exportAction,
+				      uint64_t generation = 0,
+				      int *submittedRequestCount = NULL);
+    int consumeMeasureSourceFullDetail(SoBRLMeasureAction &measureAction,
+				       uint64_t generation = 0,
+				       int *submittedRequestCount = NULL);
+    int consumeSnapSourceFullDetail(SoBRLSnapAction &snapAction,
+				    uint64_t generation = 0,
+				    int *submittedRequestCount = NULL);
+    int prepareRtPickCaches(void);
+    int getRtPickCacheCount(void) const;
+    BObolRtPickCache *getRtPickCache(int index) const;
+    uint32_t getRtPickCacheSourceRevision(int index) const;
+    int pickSourceMeshExactRay(BObolSourceMeshPickResult &pick,
+			       const SbVec3f &rayOrigin,
+			       const SbVec3f &rayDirection,
+			       uint64_t generation = 0,
+			       int *submittedRequestCount = NULL);
+    int pickRtExactRay(std::vector<BObolRtPickResult> &results,
+		       const SbVec3f &rayOrigin,
+		       const SbVec3f &rayDirection,
+		       SbBool pickAll = FALSE);
+    void clearRtPickCaches(void);
+    void setMeshResidencyBudget(size_t maxResidentMeshBytes,
+				SbBool evictDisplayPayloads = TRUE);
+    void clearMeshResidencyBudget(void);
+    SbBool hasMeshResidencyBudget(void) const;
+    size_t getMaxResidentMeshBytes(void) const;
+    SbBool isMeshResidencyDisplayEvictionEnabled(void) const;
+    size_t evictMeshPayloadsToBudget(size_t maxBytes,
+				     SbBool evictDisplayPayloads = TRUE);
+    size_t getLastMeshBudgetInitialResidentBytes(void) const;
+    size_t getLastMeshBudgetFinalResidentBytes(void) const;
+    size_t getLastMeshBudgetFreedResidentBytes(void) const;
+    size_t getLastMeshBudgetFreedFullDetailBytes(void) const;
+    size_t getLastMeshBudgetFreedDisplayBytes(void) const;
+    unsigned int getLastMeshBudgetVisitedMeshCount(void) const;
+    unsigned int getLastMeshBudgetEvictedFullDetailMeshCount(void) const;
+    unsigned int getLastMeshBudgetEvictedDisplayMeshCount(void) const;
+    SbBool hasPendingLodResults(void) const;
+    SbBool hasPendingLodSubmissions(void) const;
+    /** True only while a retained PoP cut, presentation-stage handoff, or
+     * unchanged calibration probe requires a completed frame. */
+    SbBool hasPendingLodRefinementFrame(void) const;
+    size_t processPendingLodResults(size_t maxResults = 0,
+	uint64_t maxMicroseconds = 0);
+    int submitLodRequestsIfNeeded(SbBool refreshMissing = TRUE,
+				  SbBool resetExisting = FALSE);
+    int submitLodRequests(BObolLodService *service = NULL,
+			  uint64_t generation = 0,
+			  SbBool refreshMissing = TRUE,
+			  SbBool resetExisting = FALSE);
+    int applyLodResults(BObolLodService *service = NULL,
+			size_t maxResults = 0,
+			size_t maxEstimatedBytes = 0,
+			uint64_t generation = 0);
+    uint64_t getLodViewRevision(void) const;
+    /** Publish a live view policy with its revision, retired generation and
+     * successor work. An unchanged sanitized policy is a no-op; disabling
+     * automatic detail preserves the retained geometry. */
+    void setViewLodPolicy(const struct bv_lod_policy *policy);
+    void setLodPolicyRevision(uint64_t revision);
+    uint64_t getLodPolicyRevision(void) const;
+    void beginLodInteraction(void);
+    void endLodInteraction(void);
+    SbBool isLodInteractionActive(void) const;
+    SbBool isLodGestureActive(void) const;
+    /** True when the newest camera revision changes projected scale (zoom,
+     * viewport, or projection) rather than only camera pose.  Existing PoP
+     * cuts may track scale changes immediately; pose-only interaction keeps
+     * its current cuts unless measured frame pressure requires coarsening. */
+    SbBool isLodScaleChangingInteraction(void) const;
+    /** Return the current per-object physical pixel-error demand after the
+     * view's user LoD scale has been applied. */
+    float getLodTargetPixelError(void) const;
+    int getLodInteractiveProgressiveCeiling(void) const;
+    /** Configure aggregate scene frame-rate goals.  Projected per-object
+     * error remains the quality demand; these targets calibrate a total
+     * render-cost budget from measured frames so shaded faces, wire segments,
+     * points, and repeated occurrences compete for one measured resource.
+     * A target slower than the default endpoint deadline also relaxes that
+     * deadline, subject to bounded interactive and stable latency ceilings.
+     * Targets below those ceilings' effective minimum FPS are clamped. */
+    void setLodFrameRateTargets(float interactiveFps, float stableFps);
+    float getLodInteractiveTargetFps(void) const;
+    float getLodStableTargetFps(void) const;
+    size_t getCurrentLodRenderCostBudget(void) const;
+    size_t getActiveLodFaceCount(void) const;
+    size_t getActiveLodRenderCost(void) const;
+    /** Return the calibration selected for the controller's current
+     * interaction state. */
+    double getCalibratedLodRenderCostPerSecond(void) const;
+    double getInteractiveCalibratedLodRenderCostPerSecond(void) const;
+    double getStableCalibratedLodRenderCostPerSecond(void) const;
+    unsigned int getLastLodVisitedMeshCount(void) const;
+    unsigned int getLastLodSubmittedTaskCount(void) const;
+    unsigned int getLastLodUpdatedCutCount(void) const;
+    unsigned int getLastLodSkippedMeshCount(void) const;
+    size_t getLastLodResultCount(void) const;
+    unsigned int getLastLodMatchedResultCount(void) const;
+    unsigned int getLastLodAppliedResultCount(void) const;
+    unsigned int getLastLodRejectedResultCount(void) const;
+    unsigned int getLastLodUnmatchedResultCount(void) const;
+    const SbString &getLastLodDiagnostics(void) const;
+    size_t getActiveLodMeshPayloadCount(void) const;
+    size_t getActiveLodProxyPayloadCount(int proxyKind) const;
+    size_t getActiveLodCadPayloadCount(void) const;
+    void getLodConvergenceStatus(
+	BObolLodConvergenceStatus &status) const;
+    /** Enable an owner-thread-only, bounded refinement witness.  This is
+     * diagnostic state and is never consulted by scheduling or policy. */
+    void setLodControlTransitionTracing(SbBool enabled,
+	size_t recordLimit = BOBOL_LOD_CONTROL_TRACE_DEFAULT_RECORD_LIMIT);
+    SbBool isLodControlTransitionTracing(void) const;
+    size_t drainLodControlTransitions(
+	std::vector<BObolLodControlTransitionRecord> &records);
+    uint64_t getDroppedLodControlTransitionCount(void) const;
+
+    BObolSceneController *getSceneController(void);
+    const BObolSceneController *getSceneController(void) const;
+    BObolFeatureStore &features(void);
+    const BObolFeatureStore &features(void) const;
+    BObolPolygonStore &polygons(void);
+    const BObolPolygonStore &polygons(void) const;
+    BObolSelectionStore &selection(void);
+    const BObolSelectionStore &selection(void) const;
+    SoViewport *getViewport(void);
+    const SoViewport *getViewport(void) const;
+    /** Bind the concrete rendering provider used by direct drawing and by
+     * renderToImage() when it has no explicit per-call override.  A NULL
+     * provider leaves scene/action services available but disables rendering;
+     * BRL-CAD never consults SoDB's process-global provider as a fallback.
+     * Provider state and renderer invalidation commit before one frame-request
+     * callback; allocation failure retains the preceding provider. */
+    void setRenderContextManager(SoDB::ContextManager *manager);
+    SoDB::ContextManager *getRenderContextManager(void) const;
+    SoRenderManager *getRenderManager(void);
+    const SoRenderManager *getRenderManager(void) const;
+
+    /** Prepare a complete line-layer overlay before publishing its root
+     * replacement or removal with one renderer-capacity frame. */
+    int replaceLineLayerOverlay(const char *overlayId,
+				const struct bg_line_layer_builder *builder,
+				uint32_t sourceId = 0,
+				SbBool selectable = TRUE,
+				SbBool depthTest = TRUE);
+    /** Prepare HUD-label fields and geometry before publishing an insertion,
+     * identity-preserving replacement or removal with one capacity frame. */
+    int replaceHUDLabelOverlay(const char *labelId,
+			       const char *text,
+			       const SbVec2f &position,
+			       const SbColor &color,
+			       float fontSize = 12.0f,
+			       uint32_t sourceId = 0);
+    int removeHUDLabelOverlay(const char *labelId);
+    /** Prepare edit-preview identity, intent, revisions and geometry before
+     * publishing them with root membership and one renderer-capacity frame. */
+    int replaceEditPreview(const char *previewId,
+			   const char *identity,
+			   const SbVec3f *points,
+			   const int32_t *commands,
+			   int count,
+			   uint32_t sourceRevision = 0,
+			   uint32_t inputsRevision = 0);
+    int replaceEditPreviewWithIntent(const char *previewId,
+				     const char *identity,
+				     const char *editIntentId,
+				     const char *editIntentRole,
+				     const SbVec3f *points,
+				     const int32_t *commands,
+				     int count,
+				     uint32_t sourceRevision = 0,
+				     uint32_t inputsRevision = 0);
+    /** Remove one edit preview and publish its frame obligation before graph
+     * observers run. */
+    int removeEditPreview(const char *previewId);
+
+    SoGroup *findGroup(const char *groupPath) const;
+    SoGroup *ensureGroup(const char *groupPath);
+    int setGroupDrawIntent(const char *groupPath,
+			   const char *intentPath,
+			   int drawMode,
+			   int fallbackDrawMode,
+			   SbBool overlayIntent,
+			   uint32_t revalidationRevision);
+    int setGroupDisplayState(const char *groupPath,
+			     SbBool visible,
+			     SbBool selected,
+			     SbBool highlighted,
+			     int lineStyle,
+			     int lineWidth,
+			     float transparency,
+			     SbBool colorOverride,
+			     const SbColor &color,
+			     SbBool materialColorValid,
+			     const SbColor &materialColor,
+			     uint32_t materialRevision);
+    int renameGroup(const char *groupPath, const char *newLeafName);
+    int appendChildToGroup(const char *groupPath, SoNode *child);
+    int removeChildFromGroup(const char *groupPath, SoNode *child);
+    int eraseGroupSubpath(const char *parentGroupPath,
+			  const char *subpath);
+    int removeGroup(const char *groupPath);
+    int clearGroup(const char *groupPath);
+    int getGroupChildCount(const char *groupPath) const;
+    int getGroupDescendantGroupCount(const char *groupPath) const;
+    int getGroupDatabaseSourceCount(const char *groupPath) const;
+
+    SoNode *findShape(const char *shapePath) const;
+    SoGroup *findShapeParent(const char *shapePath) const;
+    int moveShapeToGroup(const char *shapePath, const char *groupPath);
+    int removeShape(const char *shapePath);
+    int setShapeDrawState(const char *shapePath,
+			  int drawMode,
+			  SbBool databaseIntent,
+			  SbBool overlayIntent,
+			  SbBool hudIntent);
+    int setShapeDisplayState(const char *shapePath,
+			     SbBool visible,
+			     SbBool selected,
+			     SbBool highlighted,
+			     int lineStyle,
+			     int lineWidth,
+			     float transparency,
+			     SbBool colorOverride,
+			     const SbColor &color,
+			     SbBool materialColorValid,
+			     const SbColor &materialColor,
+			     uint32_t materialRevision);
+    int setShapeSourceState(const char *shapePath,
+			    const char *ownerSourcePath,
+			    uint32_t ownerSourceRevision,
+			    uint32_t ownerInputsRevision,
+			    uint32_t ownerViewRevision,
+			    uint32_t ownerRealizedRevision,
+			    uint32_t ownerRealizedSourceRevision,
+			    uint32_t ownerRealizedInputsRevision,
+			    uint32_t ownerRealizedViewRevision,
+			    int ownerRealizationStatus,
+			    const char *ownerRealizationDiagnostic,
+			    const char *ownerRealizationIdentity,
+			    SbBool ownerSourceStale,
+			    uint32_t ownerStaleReason);
+    int setShapePlacementState(const char *shapePath,
+			       SbBool drawMatrixValid,
+			       const SbMatrix &drawMatrix,
+			       SbBool drawCenterValid,
+			       const SbVec3f &drawCenter,
+			       SbBool drawSizeValid,
+			       float drawSize);
+
+    int replaceDatabaseSource(const char *sourcePath,
+			      struct db_i *dbip,
+			      int drawMode = SoBRLDatabaseSource::WIREFRAME,
+			      uint32_t sourceRevision = 0);
+    int replaceDatabaseSourceInstance(const char *sourceInstanceKey,
+				      const char *sourcePath,
+				      struct db_i *dbip,
+				      int drawMode = SoBRLDatabaseSource::WIREFRAME,
+				      uint32_t sourceRevision = 0);
+    int setDatabaseSourceState(const char *sourcePath,
+			       SbBool sourceRevisionValid,
+			       uint32_t sourceRevision,
+			       uint32_t inputsRevision,
+			       SbBool visible,
+			       SbBool selected,
+			       SbBool highlighted,
+			       int lineStyle,
+			       int lineWidth,
+			       float transparency,
+			       SbBool colorOverride,
+			       const SbColor &color,
+			       SbBool materialColorValid,
+			       const SbColor &materialColor,
+			       uint32_t materialRevision);
+    int setDatabaseSourceInstanceState(const char *sourceInstanceKey,
+				       SbBool sourceRevisionValid,
+				       uint32_t sourceRevision,
+				       uint32_t inputsRevision,
+				       SbBool visible,
+				       SbBool selected,
+				       SbBool highlighted,
+				       int lineStyle,
+				       int lineWidth,
+				       float transparency,
+				       SbBool colorOverride,
+				       const SbColor &color,
+				       SbBool materialColorValid,
+				       const SbColor &materialColor,
+				       uint32_t materialRevision);
+    int setDatabaseSourceDisplayPatch(const char *sourcePath,
+				      const BObolDatabaseSourceDisplayPatch &patch);
+    int setDatabaseSourceInstanceDisplayPatch(const char *sourceInstanceKey,
+	    const BObolDatabaseSourceDisplayPatch &patch);
+    int setDatabaseSourceDisplayName(const char *sourcePath,
+				     const char *displayName);
+    int setDatabaseSourceInstanceDisplayName(const char *sourceInstanceKey,
+	    const char *displayName);
+    int setDatabaseSourceBoundsState(const char *sourcePath,
+			     SbBool boundsValid,
+			     const SbVec3f &boundsMin,
+			     const SbVec3f &boundsMax,
+			     SbBool boundsExact = FALSE);
+    int setDatabaseSourceInstanceBoundsState(const char *sourceInstanceKey,
+	    SbBool boundsValid,
+	    const SbVec3f &boundsMin,
+	    const SbVec3f &boundsMax,
+	    SbBool boundsExact = FALSE);
+    int setDatabaseSourceMaterialPolicy(const char *sourcePath,
+					int materialPolicy);
+    int setDatabaseSourceInstanceMaterialPolicy(const char *sourceInstanceKey,
+	    int materialPolicy);
+    int markDatabaseSourceStale(const char *sourcePath,
+				uint32_t staleReason);
+    int markDatabaseSourceInstanceStale(const char *sourceInstanceKey,
+					uint32_t staleReason);
+    int moveDatabaseSourceToGroup(const char *sourcePath,
+				  const char *groupPath);
+    int moveDatabaseSourceInstanceToGroup(const char *sourceInstanceKey,
+					  const char *groupPath);
+    int removeDatabaseSource(const char *sourcePath);
+    int removeDatabaseSourceInstance(const char *sourceInstanceKey);
+    int clearDatabaseSources(void);
+    SoBRLDatabaseSource *getDatabaseSource(int index) const;
+    int getDatabaseSourceCount(void) const;
+    /** Return the authoritative sources under the active render scene.  This
+     * includes a shared GED render root when it differs from the controller's
+     * locally managed scene, without transferring source ownership.  Call only
+     * on the Coin/controller owner thread. */
+    std::vector<SoBRLDatabaseSource *> getRenderDatabaseSources(void) const;
+    SoBRLDatabaseSource *findDatabaseSourceInstance(
+	const char *sourceInstanceKey) const;
+    SbBool getDatabaseSourceSummary(int index,
+				    BObolDatabaseSourceSummary &summary) const;
+
+private:
+    friend struct bobol_display_endpoint;
+    friend class BObolLodControlTransitionScope;
+    friend class BObolRenderClaimCompletionScope;
+    friend class BObolFeatureStore;
+    friend class BObolHeadlessWindowHost;
+    friend class BObolWindowHost;
+
+    struct PreparedRenderContextPublication;
+    struct PreparedRendererAppearancePublication;
+    struct PreparedRendererInvalidation;
+    struct PreparedScalarAppearancePublication;
+    struct PreparedViewportPublication;
+
+    enum class RenderRequestIntent : uint8_t {
+	PRESENTATION,
+	LOD_PLANNING,
+	LOD_CAPACITY
+    };
+
+    /* Display endpoints own renderer selection.  These private hooks let an
+     * endpoint retain this controller's scene while preventing every host
+     * path (including direct toolkit repaints) from treating NONE or
+     * DIAGNOSTIC as a graphical renderer. */
+    void setEndpointGraphicalRenderingEnabled(SbBool enabled);
+    void initializeControllerState(SoNode *root, SoCamera *camera,
+	SbBool createDefaultRoot);
+    void releaseControllerStateNoexcept(void) noexcept;
+    void invalidateRendererPerformanceHistory(void);
+    void prepareRendererInvalidation(
+	PreparedRendererInvalidation &publication) const;
+    void prepareRendererInvalidation(
+	PreparedRendererInvalidation &publication, const char *reason) const;
+    void commitRendererInvalidation(
+	PreparedRendererInvalidation &publication, SbBool requestFrame) noexcept;
+    void notifyRendererInvalidation(
+	const PreparedRendererInvalidation &publication);
+    void prepareRenderContextManagerPublication(
+	SoDB::ContextManager *manager,
+	PreparedRenderContextPublication &publication) const;
+    void beginRenderContextManagerPublication(
+	PreparedRenderContextPublication &publication);
+    void rollbackRenderContextManagerPublication(
+	PreparedRenderContextPublication &publication) noexcept;
+    void finishRenderContextManagerPublication(
+	PreparedRenderContextPublication &publication, SbBool requestFrame,
+	SbBool notifyEndpoint);
+    void recordCompletedRenderTiming(uint64_t startedNanoseconds,
+	uint64_t elapsedNanoseconds,
+	const BObolPresentationTimingContext &context);
+    void requestRenderImpl(const char *reason, RenderRequestIntent intent);
+    BObolPreparedRenderRequest prepareRenderRequest(const char *reason,
+	RenderRequestIntent intent) const;
+    void commitRenderRequest(BObolPreparedRenderRequest &request) noexcept;
+    void notifyRenderRequest(const BObolPreparedRenderRequest &request);
+    void requestLodPresentationRender(const char *reason);
+    void retireLodCapacityRenderRequest(void);
+    void notifyFrameRequest(const char *reason);
+    void publishProgressiveWorkPending(void);
+    void publishProgressiveWorkPending(SbBool notifyEndpoint);
+    void retireClaimedRender(void);
+    void retireDisplayEndpointWork(void);
+    void resumeDisplayEndpointWork(void);
+    void synchronizeProgressiveWorkPending(void);
+    void setViewportSceneGraphWithLod(SoNode *root);
+    void cancelActiveLodGeneration(void);
+    SbBool lodViewPolicyEnabled(void) const;
+    SbBool automaticLodControlEnabled(void) const;
+    SbBool synchronizeAutomaticLodControl(void);
+    void retireAutomaticLodControl(void);
+    void resetDiscoveryPointProxyFloor(SbBool requestFrame);
+    void invalidateDatabaseSourceLodState(void);
+    BObolLodControlTraceState captureLodControlTraceState(void) const;
+    uint64_t beginLodControlTransition(
+	BObolLodControlTransitionEvent event, SbBool ownerEvent);
+    void endLodControlTransition(uint64_t token);
+    void discardLodControlTransition(void) noexcept;
+    void recordLodControlTransition(BObolLodControlTransitionEvent event,
+	const BObolLodControlTraceState &before,
+	const BObolLodControlTraceState &after, SbBool force = FALSE);
+    void syncRenderManager(void);
+    void prepareViewportRegionPublication(const SbViewportRegion &region,
+	const char *reason, PreparedViewportPublication &publication);
+    void prepareViewportSizePublication(unsigned int width,
+	unsigned int height, const char *reason,
+	PreparedViewportPublication &publication);
+    void finishViewportRegionPublication(
+	PreparedViewportPublication &publication);
+    void commitViewportRegionPublication(
+	PreparedViewportPublication &publication) noexcept;
+    void notifyViewportRegionPublication(
+	const PreparedViewportPublication &publication);
+    void publishCuttingPlaneState(const SbPlane &plane, SbBool enabled);
+    void publishLightingState(LightingProfile profile,
+	const SbVec3f &headlightOffset, SbBool headlightCameraTracked,
+	SbBool headlightEnabled,
+	const std::vector<BObolSceneLightRealization> &sceneLights,
+	SbBool sceneLightsEnabled, const char *reason);
+    void publishViewportRegion(const SbViewportRegion &region,
+	const char *reason);
+    void advanceLodViewRevision(void);
+    enum class LodPolicyTransition : uint8_t {
+	ORDINARY = 0,
+	PRESERVE_SCALE_DEMAND,
+	CONTINUE_STATIC_QUALITY
+    };
+    void advanceLodPolicyRevision(
+	LodPolicyTransition transition = LodPolicyTransition::ORDINARY);
+    SbBool publishPendingLodSourceRevision(void);
+    void syncLodViewSignature(SbBool advanceOnChange = TRUE);
+    void syncLodViewSignature(SbBool advanceOnChange, SbBool requestFrame);
+    void scheduleLodRefinementFrame(const char *reason);
+    void beginCadPresentationRepairPass(void);
+    void completePresentationBarrier(uint64_t elapsedNanoseconds,
+	SbBool exactFrame, size_t provenRenderCost = 0);
+    /** Present a structural point/box classifier change before mesh admission
+     * consumes it.  This transaction is mutually exclusive with stable mesh
+     * quality calibration and always publishes its required frame edge. */
+    void requestStructuralPointAdmissionFrame(const char *reason);
+    /** Start the sole submission successor selected by capacity evidence. */
+    void beginSceneWideCapacitySubmission(SbBool active = TRUE);
+    void restartLodCapacitySubmission(SbBool capacityCandidateChanged);
+    void scheduleResidentGrowthReallocationIfReady(void);
+    SbBool scheduleCapacityCandidateAllocationIfReady(void);
+    SbBool schedulePendingLodHandoffAllocationIfReady(void);
+    void advanceStableLodReducerIfReady(void);
+    SbBool completePointTriangleRecoveryIfReady(void);
+    void finishLodRetainedRecovery(void);
+    size_t enforceMeshResidencyBudget(void);
+    static void lodResultReadyCB(BObolLodService *service, void *userData);
+    /* Rewrite the headlight direction from the last camera orientation so it
+     * tracks the viewer (no-op unless the headlight is enabled and tracked). */
+    void applyTrackedHeadlight(SbBool force = FALSE);
+
+    struct Impl;
+    std::unique_ptr<Impl> d;
+};
+
+#endif /* BOBOL_BVIEWCONTROLLER_H */

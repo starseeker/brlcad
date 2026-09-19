@@ -1,7 +1,7 @@
 set(PLUGIN_LIBS libged libbu)
 
 ged_plugin_library(ged-grid
-  grid.c
+  grid.cpp
   LIBS ${PLUGIN_LIBS}
 )
 

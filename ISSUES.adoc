@@ -1421,7 +1421,6 @@ BUGS should be formatted to column 70 (M-q in emacs), no tabs.
   only as lower level settings when there are sensible defaults
   that are seldom changed.)
 
-  Modes->Display Lists
   Misc->Keystroke Forwarding
   Misc->Depth Cueing
   Misc->Z Buffer

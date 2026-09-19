@@ -1,7 +1,7 @@
 /*                        B V . H
  * BRL-CAD
  *
- * Copyright (c) 1993-2026 United States Government as represented by
+ * Copyright (c) 2026 United States Government as represented by
  * the U.S. Army Research Laboratory.
  *
  * This library is free software; you can redistribute it and/or
@@ -17,18 +17,9 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-
-// TODO - bv currently conflates scene and camera concepts - for example,
-// data axes and polygons are properly scene objects being viewed by the
-// camera, but at the moment they're directly part of the bv struct.
-//
-// The plan is to address this, so until this notice is removed the bv data
-// structure and related data structures should be considered in flux.
-
-/** @addtogroup libbv */
-/** @{ */
 /** @file bv.h
  *
+ * Common, scene-graph-free view mechanics.
  */
 
 #ifndef BV_H
@@ -36,22 +27,10 @@
 
 #include "common.h"
 
-#include "vmath.h"
-#include "bu/vls.h"
-#include "bn.h"
-
-#include "./bv/defines.h"
-#include "./bv/adc.h"
-#include "./bv/lod.h"
-#include "./bv/polygon.h"
-#include "./bv/snap.h"
-#include "./bv/util.h"
-#include "./bv/vlist.h"
-#include "./bv/view_sets.h"
+#include "bv/view.h"
 
 #endif /* BV_H */
 
-/** @} */
 /*
  * Local Variables:
  * mode: C

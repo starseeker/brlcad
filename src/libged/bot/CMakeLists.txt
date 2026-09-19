@@ -21,7 +21,7 @@ set(
   bot_face_fuse.c
   bot_face_sort.c
   bot_flip.c
-  bot_fuse.c
+  bot_fuse.cpp
   bot_merge.c
   bot_smooth.c
   bot_split.c
@@ -45,6 +45,7 @@ set(
   smooth.cpp
   subdivide.cpp
 )
+set_source_files_properties(bot_fuse.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 if(BRLCAD_ENABLE_OPENVDB)
   # Suppress warnings from OpenVDB/Boost headers and prevent the OpenVDB
@@ -88,7 +89,6 @@ cmakefiles(
   bot_flood_exterior.cpp
   bot_openvdb.cpp
   bot_openvdb.h
-  concurrentqueue.h
   dump/ged_bot_dump.h
   ged_bot.h
 )

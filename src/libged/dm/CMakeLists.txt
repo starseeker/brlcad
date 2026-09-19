@@ -1,12 +1,13 @@
-set(PLUGIN_LIBS libged libdm libbu)
+set(PLUGIN_LIBS libged libBObol libbu)
 
 set(DM_SRCS
-  dm.c
+  dm.cpp
   ert.cpp
-  screengrab.c
+  screengrab.cpp
 )
 
 ged_plugin_library(ged-dm
+  PLUGIN_ONLY
   ${DM_SRCS}
   LIBS ${PLUGIN_LIBS}
 )

@@ -232,14 +232,23 @@ reset_cache(const std::filesystem::path &cache_dir)
 }
 
 static bool
-cache_is_empty(const std::filesystem::path &cache_dir)
+facetize_workspaces_cleaned(const std::filesystem::path &cache_dir)
 {
+    /* GED also creates persistent drawing caches here.  Only facetize owns
+     * the workspaces whose retirement this recovery test must verify. */
+    const std::string workspace_prefix = "facetize_";
     std::error_code error;
-    bool empty = std::filesystem::is_empty(cache_dir, error);
+    std::filesystem::directory_iterator entry(cache_dir, error);
+    const std::filesystem::directory_iterator end;
+    for (; !error && entry != end; entry.increment(error)) {
+	if (entry->path().filename().string().compare(0, workspace_prefix.size(),
+		workspace_prefix) == 0)
+	    return false;
+    }
     if (error)
 	bu_log("[facetize_recovery] unable to inspect %s: %s\n",
 		cache_dir.string().c_str(), error.message().c_str());
-    return empty && !error;
+    return !error;
 }
 
 static int
@@ -283,7 +292,7 @@ run_recovery_case(const recovery_case &test_case,
 	passed = false;
     }
     if (test_case.expect_success) {
-	if (!cache_is_empty(cache_dir)) {
+	if (!facetize_workspaces_cleaned(cache_dir)) {
 	    bu_log("[facetize_recovery] %s: workspace was not cleaned\n",
 		    test_case.name);
 	    passed = false;
@@ -367,7 +376,7 @@ main(int argc, const char **argv)
     };
 
     int ret = 0;
-    if (!cache_is_empty(cache_dir)) {
+    if (!facetize_workspaces_cleaned(cache_dir)) {
 	bu_log("[facetize_recovery] serial control workspace was not cleaned\n");
 	ret = 1;
     }

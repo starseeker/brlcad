@@ -35,7 +35,7 @@
 #include "bu/opt.h"
 #include "bu/str.h"
 #include "bu/vls.h"
-#include "bv.h"
+#include "bg/plane.h"
 #include "bg/polygon.h"
 #include "rt/defines.h"
 #include "rt/directory.h"
@@ -47,6 +47,8 @@
 #include "rt/functab.h"
 #include "rt/geom.h"
 #include "rt/primitives/sketch.h"
+
+#include "./polygons_private.h"
 
 struct segment_node {
     struct bu_list l;
@@ -60,10 +62,114 @@ struct contour_node {
     struct bu_list head;
 };
 
-struct bv_scene_obj *
-db_sketch_to_scene_obj(const char *sname, struct db_i *dbip, struct directory *dp, struct bview *sv, int flags)
+static void
+rt_sketch_polygon_set_default_color(struct bu_color *color, double r, double g, double b)
 {
-    if (!sv)
+    if (!color)
+	return;
+
+    color->buc_rgb[RED] = r;
+    color->buc_rgb[GRN] = g;
+    color->buc_rgb[BLU] = b;
+    color->buc_rgb[ALP] = 0.0;
+}
+
+void
+rt_sketch_polygon_data_init(struct rt_sketch_polygon_data *poly)
+{
+    if (!poly)
+	return;
+
+    memset(poly, 0, sizeof(*poly));
+    poly->type = RT_SKETCH_POLYGON_GENERAL;
+    V2SET(poly->fill_dir, 1.0, 0.0);
+    poly->fill_delta = 1.0;
+    rt_sketch_polygon_set_default_color(&poly->fill_color, 1.0, 1.0, 1.0);
+    rt_sketch_polygon_set_default_color(&poly->edge_color, 1.0, 1.0, 1.0);
+    HSET(poly->vp, 0.0, 0.0, 1.0, 0.0);
+    poly->polygon = (struct bg_polygon)BG_POLYGON_INIT_ZERO;
+}
+
+void
+rt_sketch_polygon_data_free(struct rt_sketch_polygon_data *poly)
+{
+    if (!poly)
+	return;
+
+    bg_polygon_clear(&poly->polygon);
+    rt_sketch_polygon_data_init(poly);
+}
+
+int
+rt_sketch_polygon_data_copy(struct rt_sketch_polygon_data *dest,
+	const struct rt_sketch_polygon_data *src)
+{
+    struct rt_sketch_polygon_data copy;
+
+    if (!dest || !src)
+	return -1;
+
+    if (dest == src)
+	return 0;
+
+    copy = *src;
+    copy.polygon = (struct bg_polygon)BG_POLYGON_INIT_ZERO;
+    if (bg_polygon_copy(&copy.polygon, &src->polygon))
+	return -1;
+
+    bg_polygon_clear(&dest->polygon);
+    *dest = copy;
+    return 0;
+}
+
+static int
+rt_sketch_polygon_to_data(struct rt_sketch_polygon_data *data,
+	const struct rt_sketch_polygon *poly)
+{
+    if (!data || !poly)
+	return -1;
+
+    rt_sketch_polygon_data_init(data);
+    data->type = poly->type;
+    data->fill_flag = poly->fill_flag;
+    V2MOVE(data->fill_dir, poly->fill_dir);
+    data->fill_delta = poly->fill_delta;
+    BU_COLOR_CPY(&data->fill_color, &poly->fill_color);
+    VMOVE(data->origin_point, poly->origin_point);
+    HMOVE(data->vp, poly->vp);
+    data->vZ = poly->vZ;
+    data->have_edge_color = poly->have_edge_color;
+    BU_COLOR_CPY(&data->edge_color, &poly->edge_color);
+    return bg_polygon_copy(&data->polygon, &poly->polygon);
+}
+
+static void
+rt_sketch_polygon_from_data(struct rt_sketch_polygon *poly,
+	const struct rt_sketch_polygon_data *data)
+{
+    if (!poly || !data)
+	return;
+
+    memset(poly, 0, sizeof(*poly));
+    poly->type = data->type;
+    poly->fill_flag = data->fill_flag;
+    V2MOVE(poly->fill_dir, data->fill_dir);
+    poly->fill_delta = data->fill_delta;
+    BU_COLOR_CPY(&poly->fill_color, &data->fill_color);
+    poly->curr_contour_i = -1;
+    poly->curr_point_i = -1;
+    VMOVE(poly->origin_point, data->origin_point);
+    HMOVE(poly->vp, data->vp);
+    poly->vZ = data->vZ;
+    poly->polygon = data->polygon;
+    poly->have_edge_color = data->have_edge_color;
+    BU_COLOR_CPY(&poly->edge_color, &data->edge_color);
+}
+
+static struct rt_sketch_polygon *
+db_sketch_to_polygon_internal(const char *UNUSED(sname), struct db_i *dbip, struct directory *dp)
+{
+    if (!dbip || !dp)
 	return NULL;
 
     // Begin import
@@ -90,8 +196,17 @@ db_sketch_to_scene_obj(const char *sname, struct db_i *dbip, struct directory *d
     }
 
     // Have a sketch - create an empty polygon
-    struct bv_polygon *p;
-    BU_GET(p, struct bv_polygon);
+    struct rt_sketch_polygon *poly;
+    BU_GET(poly, struct rt_sketch_polygon);
+    memset(poly, 0, sizeof(*poly));
+    poly->type = RT_SKETCH_POLYGON_GENERAL;
+    V2SET(poly->fill_dir, 1.0, 0.0);
+    poly->fill_delta = 1.0;
+    rt_sketch_polygon_set_default_color(&poly->fill_color, 1.0, 1.0, 1.0);
+    rt_sketch_polygon_set_default_color(&poly->edge_color, 1.0, 1.0, 1.0);
+    poly->curr_contour_i = -1;
+    poly->curr_point_i = -1;
+    VMOVE(poly->origin_point, sketch_ip->V);
 
     /* Start translating the sketch info into a polygon */
     all_segment_nodes = (struct segment_node *)bu_calloc(sketch_ip->curve.count, sizeof(struct segment_node), "all_segment_nodes");
@@ -151,15 +266,15 @@ end:
 	}
     }
 
-    p->polygon.num_contours = ncontours;
-    p->polygon.hole = (int *)bu_calloc(ncontours, sizeof(int), "gp_hole");
-    p->polygon.contour = (struct bg_poly_contour *)bu_calloc(ncontours, sizeof(struct bg_poly_contour), "gp_contour");
+    poly->polygon.num_contours = ncontours;
+    poly->polygon.hole = (int *)bu_calloc(ncontours, sizeof(int), "gp_hole");
+    poly->polygon.contour = (struct bg_poly_contour *)bu_calloc(ncontours, sizeof(struct bg_poly_contour), "gp_contour");
 
     size_t j = 0;
     fastf_t dmax = 0.0;
     while (BU_LIST_NON_EMPTY(&HeadContourNodes)) {
 	size_t k = 0;
-	size_t npoints = 0;
+	size_t nsegments = 0;
 	struct line_seg *curr_lsg = NULL;
 
 	curr_cnode = BU_LIST_FIRST(contour_node, &HeadContourNodes);
@@ -167,11 +282,20 @@ end:
 
 	/* Count the number of segments in this contour */
 	for (BU_LIST_FOR(curr_snode, segment_node, &curr_cnode->head))
-	    ++npoints;
+	    ++nsegments;
 
-	p->polygon.contour[j].num_points = npoints;
-	p->polygon.contour[j].open = 0;
-	p->polygon.contour[j].point = (point_t *)bu_calloc(npoints, sizeof(point_t), "gpc_point");
+	struct segment_node *first_snode =
+	    BU_LIST_FIRST(segment_node, &curr_cnode->head);
+	struct segment_node *last_snode =
+	    BU_LIST_LAST(segment_node, &curr_cnode->head);
+	struct line_seg *first_lsg = (struct line_seg *)first_snode->segment;
+	struct line_seg *last_lsg = (struct line_seg *)last_snode->segment;
+	const int open = first_lsg->start != last_lsg->end;
+	const size_t npoints = nsegments + (open ? 1 : 0);
+
+	poly->polygon.contour[j].num_points = npoints;
+	poly->polygon.contour[j].open = open;
+	poly->polygon.contour[j].point = (point_t *)bu_calloc(npoints, sizeof(point_t), "gpc_point");
 
 	while (BU_LIST_NON_EMPTY(&curr_cnode->head)) {
 	    curr_snode = BU_LIST_FIRST(segment_node, &curr_cnode->head);
@@ -180,13 +304,22 @@ end:
 	    curr_lsg = (struct line_seg *)curr_snode->segment;
 
 	    /* Convert from UV space to model space */
-	    VJOIN2(p->polygon.contour[j].point[k], sketch_ip->V,
+	    VJOIN2(poly->polygon.contour[j].point[k], sketch_ip->V,
 		    sketch_ip->verts[curr_lsg->start][0], sketch_ip->u_vec,
 		    sketch_ip->verts[curr_lsg->start][1], sketch_ip->v_vec);
-	    fastf_t dtmp = DIST_PNT_PNT(sketch_ip->V, p->polygon.contour[j].point[k]);
+	    fastf_t dtmp = DIST_PNT_PNT(sketch_ip->V, poly->polygon.contour[j].point[k]);
 	    if (dtmp > dmax)
 		dmax = dtmp;
 	    ++k;
+	}
+	if (open) {
+	    VJOIN2(poly->polygon.contour[j].point[k], sketch_ip->V,
+		    sketch_ip->verts[last_lsg->end][0], sketch_ip->u_vec,
+		    sketch_ip->verts[last_lsg->end][1], sketch_ip->v_vec);
+	    fastf_t dtmp = DIST_PNT_PNT(sketch_ip->V,
+		    poly->polygon.contour[j].point[k]);
+	    if (dtmp > dmax)
+		dmax = dtmp;
 	}
 
 	/* free contour node */
@@ -198,24 +331,13 @@ end:
     /* Clean up */
     bu_free((void *)all_segment_nodes, "all_segment_nodes");
 
-    /* Create the scene object here so we can read a default color */
-    struct bv_scene_obj *s = bv_create_polygon_obj(sv, flags, p);
-    if (!s) {
-	bg_polygon_free(&p->polygon);
-	BU_PUT(p, struct bv_polygon);
-	return NULL;
-    }
-    bu_vls_init(&s->s_name);
-    bu_vls_printf(&s->s_name, "%s", sname);
-
     /* Unlike interactive sketch creation, the plane of an imported sketch comes from the
      * sketch parameters. */
     vect_t pn;
     VCROSS(pn, sketch_ip->u_vec, sketch_ip->v_vec);
-    bg_plane_pt_nrml(&p->vp, sketch_ip->V, pn);
+    bg_plane_pt_nrml(&poly->vp, sketch_ip->V, pn);
 
     // check attributes for visual properties
-    int have_view = 1;
     struct bu_attribute_value_set lavs;
     bu_avs_init_empty(&lavs);
     if (!db5_get_attributes(dbip, &lavs, dp)) {
@@ -225,136 +347,152 @@ end:
 	if (val) {
 	    struct bu_color bc;
 	    if (bu_opt_color(NULL, 1, (const char **)&val, (void *)&bc) == 1) {
-		bu_color_to_rgb_chars(&bc, s->s_color);
+		BU_COLOR_CPY(&poly->edge_color, &bc);
+		poly->have_edge_color = 1;
 	    }
 	}
 	val = bu_avs_get(&lavs, "POLYGON_FILL_COLOR");
 	if (val) {
-	    bu_opt_color(NULL, 1, (const char **)&val, (void *)&p->fill_color);
+	    bu_opt_color(NULL, 1, (const char **)&val, (void *)&poly->fill_color);
 	}
 	val = bu_avs_get(&lavs, "POLYGON_FILL");
 	if (val && BU_STR_EQUAL(val, "1")) {
-	    p->fill_flag = 1;
+	    poly->fill_flag = 1;
 	}
 	val = bu_avs_get(&lavs, "POLYGON_FILL_SLOPE_X");
 	if (val) {
-	    bu_opt_fastf_t(NULL, 1, (const char **)&val, (void *)&p->fill_dir[0]);
+	    bu_opt_fastf_t(NULL, 1, (const char **)&val, (void *)&poly->fill_dir[0]);
 	}
 	val = bu_avs_get(&lavs, "POLYGON_FILL_SLOPE_Y");
 	if (val) {
-	    bu_opt_fastf_t(NULL, 1, (const char **)&val, (void *)&p->fill_dir[1]);
+	    bu_opt_fastf_t(NULL, 1, (const char **)&val, (void *)&poly->fill_dir[1]);
 	}
 	val = bu_avs_get(&lavs, "POLYGON_FILL_DELTA");
 	if (val) {
-	    bu_opt_fastf_t(NULL, 1, (const char **)&val, (void *)&p->fill_delta);
+	    bu_opt_fastf_t(NULL, 1, (const char **)&val, (void *)&poly->fill_delta);
 	}
 	val = bu_avs_get(&lavs, "POLYGON_TYPE");
-	if (BU_STR_EQUAL(val, "CIRCLE")) {
-	    p->type = BV_POLYGON_CIRCLE;
+	if (val && BU_STR_EQUAL(val, "CIRCLE")) {
+	    poly->type = RT_SKETCH_POLYGON_CIRCLE;
 	}
-	if (BU_STR_EQUAL(val, "ELLIPSE")) {
-	    p->type = BV_POLYGON_ELLIPSE;
+	if (val && BU_STR_EQUAL(val, "ELLIPSE")) {
+	    poly->type = RT_SKETCH_POLYGON_ELLIPSE;
 	}
-	if (BU_STR_EQUAL(val, "RECTANGLE")) {
-	    p->type = BV_POLYGON_RECTANGLE;
+	if (val && BU_STR_EQUAL(val, "RECTANGLE")) {
+	    poly->type = RT_SKETCH_POLYGON_RECTANGLE;
 	}
-	if (BU_STR_EQUAL(val, "SQUARE")) {
-	    p->type = BV_POLYGON_SQUARE;
+	if (val && BU_STR_EQUAL(val, "SQUARE")) {
+	    poly->type = RT_SKETCH_POLYGON_SQUARE;
 	}
-	if (BU_STR_EQUAL(val, "GENERAL")) {
-	    p->type = BV_POLYGON_GENERAL;
+	if (val && BU_STR_EQUAL(val, "GENERAL")) {
+	    poly->type = RT_SKETCH_POLYGON_GENERAL;
 	}
-
-	// See if we have a stored view
-	if (have_view) {
-	    val = bu_avs_get(&lavs, "VIEWSCALE");
-	    if (val) {
-		bu_opt_fastf_t(NULL, 1, (const char **)&val, (void *)&sv->gv_scale);
-	    } else {
-		have_view = 0;
-	    }
-	}
-	if (have_view) {
-	    val = bu_avs_get(&lavs, "ROTATION");
-	    if (val) {
-		quat_t quat;
-		char *av[5] = {NULL};
-		char *lp = bu_strdup(val);
-		if (bu_argv_from_string(av, 4, lp) != 4) {
-		    have_view = 0;
-		} else {
-		    bu_opt_fastf_t(NULL, 1, (const char **)&av[0], (void *)&quat[0]);
-		    bu_opt_fastf_t(NULL, 1, (const char **)&av[1], (void *)&quat[1]);
-		    bu_opt_fastf_t(NULL, 1, (const char **)&av[2], (void *)&quat[2]);
-		    bu_opt_fastf_t(NULL, 1, (const char **)&av[3], (void *)&quat[3]);
-		    quat_quat2mat(sv->gv_rotation, quat);
-		}
-		bu_free(lp, "val cpy");
-	    } else {
-		have_view = 0;
-	    }
-	}
-	if (have_view) {
-	    val = bu_avs_get(&lavs, "CENTER");
-	    if (val) {
-		quat_t quat;
-		char *av[5] = {NULL};
-		char *lp = bu_strdup(val);
-		if (bu_argv_from_string(av, 4, lp) != 4) {
-		    have_view = 0;
-		} else {
-		    bu_opt_fastf_t(NULL, 1, (const char **)&av[0], (void *)&quat[0]);
-		    bu_opt_fastf_t(NULL, 1, (const char **)&av[1], (void *)&quat[1]);
-		    bu_opt_fastf_t(NULL, 1, (const char **)&av[2], (void *)&quat[2]);
-		    bu_opt_fastf_t(NULL, 1, (const char **)&av[3], (void *)&quat[3]);
-		    quat_quat2mat(sv->gv_center, quat);
-		}
-		bu_free(lp, "val cpy");
-	    } else {
-		have_view = 0;
+	val = bu_avs_get(&lavs, "POLYGON_CONTOUR_HOLES");
+	if (val) {
+	    const char *cp = val;
+	    for (size_t i = 0; i < poly->polygon.num_contours; i++) {
+		while (*cp && (isspace((unsigned char)*cp) || *cp == ','))
+		    cp++;
+		if (!*cp)
+		    break;
+		char *endp = NULL;
+		long hval = strtol(cp, &endp, 10);
+		if (endp == cp)
+		    break;
+		poly->polygon.hole[i] = hval ? 1 : 0;
+		cp = endp;
 	    }
 	}
     }
     bu_avs_free(&lavs);
 
-    /* TODO - if we didn't have a saved version, construct an appropriate plane from the
-     * sketch's 3D info so we can snap to it. */
-    if (!have_view) {
-    }
-
-    /* Have new polygon, now update view object vlist */
-    bv_polygon_vlist(s);
-
     rt_db_free_internal(&intern);
-    return s;
+    return poly;
 }
 
-struct directory *
-db_scene_obj_to_sketch(struct db_i *dbip, const char *sname, struct bv_scene_obj *s)
+struct rt_sketch_polygon *
+db_sketch_to_polygon(const char *sname, struct db_i *dbip, struct directory *dp)
 {
-    // Make sure we have a view polygon
-    if (!(s->s_type_flags & BV_VIEWONLY) || !(s->s_type_flags & BV_POLYGONS)) {
-	return NULL;
-    }
+    return db_sketch_to_polygon_internal(sname, dbip, dp);
+}
 
-    if (db_lookup(dbip, sname, LOOKUP_QUIET) != RT_DIR_NULL) {
+int
+db_sketch_to_polygon_data(struct rt_sketch_polygon_data *data,
+	const char *sname,
+	struct db_i *dbip,
+	struct directory *dp)
+{
+    if (!data)
+	return -1;
+
+    struct rt_sketch_polygon *poly = db_sketch_to_polygon_internal(sname,
+	    dbip, dp);
+    if (!poly)
+	return -1;
+
+    rt_sketch_polygon_data_free(data);
+    if (rt_sketch_polygon_to_data(data, poly)) {
+	rt_sketch_polygon_destroy(poly);
+	return -1;
+    }
+    rt_sketch_polygon_destroy(poly);
+    return 0;
+}
+
+const struct bg_polygon *
+rt_sketch_polygon_bg_polygon(const struct rt_sketch_polygon *poly)
+{
+    return poly ? &poly->polygon : NULL;
+}
+
+void
+rt_sketch_polygon_destroy(struct rt_sketch_polygon *poly)
+{
+    if (!poly)
+	return;
+    bg_polygon_clear(&poly->polygon);
+    BU_PUT(poly, struct rt_sketch_polygon);
+}
+
+static struct directory *
+db_polygon_data_to_sketch(struct db_i *dbip, const char *sname,
+	const struct rt_sketch_polygon *poly, const unsigned char edge_rgb[3],
+	int update)
+{
+    if (!dbip || !sname || !sname[0] || !poly)
+	return NULL;
+
+    struct directory *dp = db_lookup(dbip, sname, LOOKUP_QUIET);
+    if (!update && dp != RT_DIR_NULL) {
 	bu_log("Object %s already exists\n", sname);
 	return NULL;
     }
-
-    if (!s->s_v)
+    if (update && dp == RT_DIR_NULL) {
+	bu_log("Sketch %s does not exist\n", sname);
 	return NULL;
+    }
+    if (update && (dp->d_flags & RT_DIR_COMB || dp->d_minor_type != ID_SKETCH)) {
+	bu_log("Object %s is not a sketch\n", sname);
+	return NULL;
+    }
 
     size_t num_verts = 0;
+    size_t num_segments = 0;
     struct rt_db_internal internal;
     struct rt_sketch_internal *sketch_ip;
     struct line_seg *lsg;
+    plane_t vp;
+    HMOVE(vp, poly->vp);
 
-    struct bv_polygon *p = (struct bv_polygon *)s->s_i_data;
-    for (size_t j = 0; j < p->polygon.num_contours; ++j)
-	num_verts += p->polygon.contour[j].num_points;
+    for (size_t j = 0; j < poly->polygon.num_contours; ++j) {
+	const size_t npoints = poly->polygon.contour[j].num_points;
+	num_verts += npoints;
+	if (npoints > 1)
+	    num_segments += npoints -
+		(poly->polygon.contour[j].open ? 1 : 0);
+    }
 
-    if (num_verts < 3) {
+    if (num_verts < 3 || !num_segments) {
 	return NULL;
     }
 
@@ -368,29 +506,30 @@ db_scene_obj_to_sketch(struct db_i *dbip, const char *sname, struct bv_scene_obj
     sketch_ip->magic = RT_SKETCH_INTERNAL_MAGIC;
     sketch_ip->vert_count = num_verts;
     sketch_ip->verts = (point2d_t *)bu_calloc(sketch_ip->vert_count, sizeof(point2d_t), "sketch_ip->verts");
-    sketch_ip->curve.count = num_verts;
+    sketch_ip->curve.count = num_segments;
     sketch_ip->curve.reverse = (int *)bu_calloc(sketch_ip->curve.count, sizeof(int), "sketch_ip->curve.reverse");
     sketch_ip->curve.segment = (void **)bu_calloc(sketch_ip->curve.count, sizeof(void *), "sketch_ip->curve.segment");
 
 
     /* Plane origin is sketch origin */
-    bg_plane_pt_at(&sketch_ip->V, &p->vp, 0, 0);
+    bg_plane_pt_at(&sketch_ip->V, &vp, 0, 0);
     point_t u_end, v_end;
-    bg_plane_pt_at(&u_end, &p->vp, 1, 0);
-    bg_plane_pt_at(&v_end, &p->vp, 0, 1);
+    bg_plane_pt_at(&u_end, &vp, 1, 0);
+    bg_plane_pt_at(&v_end, &vp, 0, 1);
     VSUB2(sketch_ip->u_vec, u_end, sketch_ip->V);
     VSUB2(sketch_ip->v_vec, v_end, sketch_ip->V);
 
     int n = 0;
-    for (size_t j = 0; j < p->polygon.num_contours; ++j) {
+    int s = 0;
+    for (size_t j = 0; j < poly->polygon.num_contours; ++j) {
 	size_t cstart = n;
 	size_t k = 0;
-	for (k = 0; k < p->polygon.contour[j].num_points; ++k) {
-	    bg_plane_closest_pt(&sketch_ip->verts[n][0], &sketch_ip->verts[n][1], &p->vp, &p->polygon.contour[j].point[k]);
+	for (k = 0; k < poly->polygon.contour[j].num_points; ++k) {
+	    bg_plane_closest_pt(&sketch_ip->verts[n][0], &sketch_ip->verts[n][1], &vp, &poly->polygon.contour[j].point[k]);
 
 	    if (k) {
 		BU_ALLOC(lsg, struct line_seg);
-		sketch_ip->curve.segment[n-1] = (void *)lsg;
+		sketch_ip->curve.segment[s++] = (void *)lsg;
 		lsg->magic = CURVE_LSEG_MAGIC;
 		lsg->start = n-1;
 		lsg->end = n;
@@ -399,9 +538,9 @@ db_scene_obj_to_sketch(struct db_i *dbip, const char *sname, struct bv_scene_obj
 	    ++n;
 	}
 
-	if (k) {
+	if (k > 1 && !poly->polygon.contour[j].open) {
 	    BU_ALLOC(lsg, struct line_seg);
-	    sketch_ip->curve.segment[n-1] = (void *)lsg;
+	    sketch_ip->curve.segment[s++] = (void *)lsg;
 	    lsg->magic = CURVE_LSEG_MAGIC;
 	    lsg->start = n-1;
 	    lsg->end = cstart;
@@ -409,11 +548,20 @@ db_scene_obj_to_sketch(struct db_i *dbip, const char *sname, struct bv_scene_obj
     }
 
 
-    struct directory *dp = db_diradd(dbip, sname, RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID, (void *)&internal.idb_type);
-    if (dp == RT_DIR_NULL)
-	return NULL;
+    int created = 0;
+    if (dp == RT_DIR_NULL) {
+	dp = db_diradd(dbip, sname, RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID,
+		(void *)&internal.idb_type);
+	if (dp == RT_DIR_NULL) {
+	    rt_db_free_internal(&internal);
+	    return NULL;
+	}
+	created = 1;
+    }
 
     if (rt_db_put_internal(dp, dbip, &internal) < 0) {
+	if (created)
+	    db_dirdelete(dbip, dp);
 	return NULL;
     }
 
@@ -423,31 +571,39 @@ db_scene_obj_to_sketch(struct db_i *dbip, const char *sname, struct bv_scene_obj
     bu_avs_init_empty(&lavs);
     if (!db5_get_attributes(dbip, &lavs, dp)) {
 	struct bu_vls val = BU_VLS_INIT_ZERO;
-	bu_vls_sprintf(&val, "%d/%d/%d", s->s_color[0], s->s_color[1], s->s_color[2]);
+	unsigned char prgb[3] = {255, 255, 0};
+	if (edge_rgb) {
+	    prgb[0] = edge_rgb[0];
+	    prgb[1] = edge_rgb[1];
+	    prgb[2] = edge_rgb[2];
+	} else if (poly->have_edge_color) {
+	    bu_color_to_rgb_chars(&poly->edge_color, prgb);
+	}
+	bu_vls_sprintf(&val, "%d/%d/%d", prgb[0], prgb[1], prgb[2]);
 	bu_avs_add(&lavs, "POLYGON_EDGE_COLOR", bu_vls_cstr(&val));
 	unsigned char rgb[3];
-	bu_color_to_rgb_chars(&p->fill_color, rgb);
+	bu_color_to_rgb_chars(&poly->fill_color, rgb);
 	bu_vls_sprintf(&val, "%d/%d/%d", rgb[0], rgb[1], rgb[2]);
 	bu_avs_add(&lavs, "POLYGON_FILL_COLOR", bu_vls_cstr(&val));
-	bu_vls_sprintf(&val, "%d", p->fill_flag);
+	bu_vls_sprintf(&val, "%d", poly->fill_flag);
 	bu_avs_add(&lavs, "POLYGON_FILL", bu_vls_cstr(&val));
-	bu_vls_sprintf(&val, "%g", p->fill_dir[0]);
+	bu_vls_sprintf(&val, "%g", poly->fill_dir[0]);
 	bu_avs_add(&lavs, "POLYGON_FILL_SLOPE_X", bu_vls_cstr(&val));
-	bu_vls_sprintf(&val, "%g", p->fill_dir[1]);
+	bu_vls_sprintf(&val, "%g", poly->fill_dir[1]);
 	bu_avs_add(&lavs, "POLYGON_FILL_SLOPE_Y", bu_vls_cstr(&val));
-	bu_vls_sprintf(&val, "%g", p->fill_delta);
+	bu_vls_sprintf(&val, "%g", poly->fill_delta);
 	bu_avs_add(&lavs, "POLYGON_FILL_DELTA", bu_vls_cstr(&val));
-	switch (p->type) {
-	    case BV_POLYGON_CIRCLE:
+	switch (poly->type) {
+	    case RT_SKETCH_POLYGON_CIRCLE:
 		bu_vls_sprintf(&val, "CIRCLE");
 		break;
-	    case BV_POLYGON_ELLIPSE:
+	    case RT_SKETCH_POLYGON_ELLIPSE:
 		bu_vls_sprintf(&val, "ELLIPSE");
 		break;
-	    case BV_POLYGON_RECTANGLE:
+	    case RT_SKETCH_POLYGON_RECTANGLE:
 		bu_vls_sprintf(&val, "RECTANGLE");
 		break;
-	    case BV_POLYGON_SQUARE:
+	    case RT_SKETCH_POLYGON_SQUARE:
 		bu_vls_sprintf(&val, "SQUARE");
 		break;
 	    default:
@@ -455,22 +611,49 @@ db_scene_obj_to_sketch(struct db_i *dbip, const char *sname, struct bv_scene_obj
 		break;
 	}
 	bu_avs_add(&lavs, "POLYGON_TYPE", bu_vls_cstr(&val));
-	// Save view
-	bu_vls_sprintf(&val, "%.15e", s->s_v->gv_scale);
-	bu_avs_add(&lavs, "VIEWSCALE", bu_vls_cstr(&val));
-	quat_t rquat;
-	quat_mat2quat(rquat, s->s_v->gv_rotation);
-	bu_vls_sprintf(&val, "%.15e %.15e %.15e %.15e", V4ARGS(rquat));
-	bu_avs_add(&lavs, "ROTATION", bu_vls_cstr(&val));
-	quat_t cquat;
-	quat_mat2quat(cquat, s->s_v->gv_center);
-	bu_vls_sprintf(&val, "%.15e %.15e %.15e %.15e", V4ARGS(cquat));
-	bu_avs_add(&lavs, "CENTER", bu_vls_cstr(&val));
+	bu_vls_trunc(&val, 0);
+	for (size_t j = 0; j < poly->polygon.num_contours; j++) {
+	    bu_vls_printf(&val, "%s%d", j ? "," : "",
+		    (poly->polygon.hole && poly->polygon.hole[j]) ? 1 : 0);
+	}
+	bu_avs_add(&lavs, "POLYGON_CONTOUR_HOLES", bu_vls_cstr(&val));
     }
     db5_update_attributes(dp, &lavs, dbip);
     bu_avs_free(&lavs);
 
     return dp;
+}
+
+struct directory *
+db_sketch_polygon_to_sketch(struct db_i *dbip, const char *sname, const struct rt_sketch_polygon *poly, const unsigned char edge_rgb[3])
+{
+    return db_polygon_data_to_sketch(dbip, sname, poly, edge_rgb, 0);
+}
+
+struct directory *
+db_sketch_polygon_data_to_sketch(struct db_i *dbip,
+	const char *sname,
+	const struct rt_sketch_polygon_data *data)
+{
+    if (!data)
+	return NULL;
+
+    struct rt_sketch_polygon poly;
+    rt_sketch_polygon_from_data(&poly, data);
+    return db_polygon_data_to_sketch(dbip, sname, &poly, NULL, 0);
+}
+
+struct directory *
+db_sketch_polygon_data_update_sketch(struct db_i *dbip,
+	const char *sname,
+	const struct rt_sketch_polygon_data *data)
+{
+    if (!data)
+	return NULL;
+
+    struct rt_sketch_polygon poly;
+    rt_sketch_polygon_from_data(&poly, data);
+    return db_polygon_data_to_sketch(dbip, sname, &poly, NULL, 1);
 }
 
 /*

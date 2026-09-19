@@ -179,10 +179,11 @@ preferred.
   insufficient.  Overridden by *--gui* if both are given.
 
 *-d* _device_, *--fbserv-device* _device_::
-  Framebuffer device for *fbserv*(1) to use instead of the default
-  memory-only interface (e.g. -d /dev/wgl).  See *fbhelp*(1) for available
-  devices.  A framebuffer started by *rtwizard* is closed automatically
-  after image generation.
+  Imgstream target for headless *fbserv*(1) output instead of the default
+  memory stream (for example, `-d /dev/mem` or a file target). Visible GUI
+  preview uses rtwizard's endpoint-owned Obol view, not a standalone graphics
+  device. A framebuffer started by *rtwizard* is closed automatically after
+  image generation.
 
 *-p* _#_, *--fbserv-port* _#_::
   TCP port for the *fbserv*(1) framebuffer.  An existing framebuffer server
@@ -208,9 +209,9 @@ preferred.
 
 .Highlighted color-plus-edge image at a custom view
 ====
-[source,console]
+[source,bash]
 ----
-$ rtwizard -i m35.g -c component/power.train -g component -l component \
+rtwizard -i m35.g -c component/power.train -g component -l component \
          -a -35 -e 15 -z 1.6 -o m35.png
 ----
 Render the m35 sample model with its power train highlighted in full color
@@ -220,9 +221,9 @@ elevation 15 and zoomed in 1.6x, saving the result as a PNG image.
 
 .Bulk rendering on the command line
 ====
-[source,console]
+[source,bash]
 ----
-$ for g in *.g; do
+for g in *.g; do
     rtwizard --no-gui -t A -i "$g" -c all -s 1024 -o "${g%.g}.png"
 done
 ----
@@ -231,21 +232,21 @@ in every .g file in the current directory, naming each output after its
 database.  *--no-gui* ensures the script never blocks on the GUI.
 ====
 
-.Live preview on a framebuffer
+.GUI preview
 ====
-[source,console]
+[source,bash]
 ----
-$ rtwizard -d /dev/wgl -i m35.g -l component
+rtwizard --gui -i m35.g -l component
 ----
-Display a line drawing of the m35 truck in an OpenGL framebuffer window
-rather than writing it to a file.
+Display a line drawing of the m35 truck in rtwizard's endpoint-owned Obol
+view rather than writing it to a file.
 ====
 
 .Cutting-plane animation
 ====
-[source,console]
+[source,bash]
 ----
-$ rtwizard --no-gui -i model.g -c all -o cutaway.apng \
+rtwizard --no-gui -i model.g -c all -o cutaway.apng \
          --cut-steps 30 --cut-direction 0/0/-1 --animation-fps 12
 ----
 Creates a 30-frame APNG with the cutting plane advancing in the negative Z

@@ -61,6 +61,8 @@ getRegionByName(struct voxelRegion *head, const char *regionName) {
 		BU_ALLOC(ret, struct voxelRegion);
 		head->nextRegion = ret;
 		ret->regionName  = bu_strdup(regionName);
+		ret->regionDistance = 0.0;
+		ret->nextRegion = NULL;
 	    }
 	}
     }
@@ -89,6 +91,9 @@ hit_voxelize(struct application *ap, struct partition *PartHeadp, struct seg *UN
     fastf_t           sizeVoxel     = voxelHits->sizeVoxel;
     fastf_t          *fillDistances = voxelHits->fillDistances;
     fastf_t           gridDistance  = ap->a_user * sizeVoxel;
+
+    if (ap->a_user <= 0)
+	return 0;
 
     while (pp != PartHeadp) {
 	/**
@@ -165,7 +170,7 @@ hit_voxelize(struct application *ap, struct partition *PartHeadp, struct seg *UN
 void
 voxelize(struct rt_i *rtip, fastf_t sizeVoxel[3], int levelOfDetail, void (*create_boxes)(void *callBackData, int x, int y, int z, const char *regionName, fastf_t percentageFill), void *callBackData)
 {
-    struct rayInfo voxelHits;
+    struct rayInfo voxelHits = {0};
     int            numVoxel[3];
     int            yMin;
     int            zMin;

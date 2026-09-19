@@ -39,8 +39,9 @@
 // FIXME: Global
 extern struct rt_wdb rtg_headwdb;
 
-/* Dispatch the MGED-only remnants of the historical Tcl database object. */
-extern int mged_wdb_db_cmd(struct rt_wdb *wdbp, int argc, const char **argv);
+int mged_event_batch_begin_dbip(struct db_i *dbip);
+void mged_event_batch_end_dbip(struct db_i *dbip, int started);
+int mged_event_notify_database_metadata_changed_dbip(struct db_i *dbip);
 
 #endif  /* MGED_MGED_WDB_H */
 

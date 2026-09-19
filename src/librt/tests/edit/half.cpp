@@ -69,19 +69,24 @@ check_half_units(const fastf_t local2base)
 
     struct rt_half_internal *half = (struct rt_half_internal *)s->es_int.idb_ptr;
     RT_HALF_CK_MAGIC(half);
-    fastf_t values[3] = {0.0, 0.0, 0.0};
-    if (EDOBJ[ID_HALF].ft_edit_get_params(s, ECMD_HALF_SET_D, values) != 1 ||
-        !NEAR_EQUAL(values[0], initial_local, VUNITIZE_TOL))
+    struct rt_edit_cmd_values values;
+    if (rt_edit_cmd_values_get(s, ECMD_HALF_SET_D, &values) !=
+	    RT_EDIT_VALUE_OK ||
+	values.value_count != 1 || !values.value_valid[0] ||
+	!NEAR_EQUAL(values.values[0], initial_local, VUNITIZE_TOL))
         bu_exit(1, "Halfspace getter did not return local units\n");
 
     EDOBJ[ID_HALF].ft_set_edit_mode(s, ECMD_HALF_SET_D);
     s->e_inpara = 1;
     s->e_para[0] = edited_local;
-    rt_edit_process(s);
+    if (rt_edit_process_result(s) != BRLCAD_OK)
+	bu_exit(1, "Halfspace distance edit failed\n");
     if (!NEAR_EQUAL(half->eqn[W], edited_base, VUNITIZE_TOL))
         bu_exit(1, "Halfspace distance was not converted to base units\n");
-    if (EDOBJ[ID_HALF].ft_edit_get_params(s, ECMD_HALF_SET_D, values) != 1 ||
-        !NEAR_EQUAL(values[0], edited_local, VUNITIZE_TOL))
+    if (rt_edit_cmd_values_get(s, ECMD_HALF_SET_D, &values) !=
+	    RT_EDIT_VALUE_OK ||
+	values.value_count != 1 || !values.value_valid[0] ||
+	!NEAR_EQUAL(values.values[0], edited_local, VUNITIZE_TOL))
         bu_exit(1, "Halfspace getter did not round-trip local units\n");
 
     s->e_inpara = 0;
@@ -98,8 +103,10 @@ check_half_units(const fastf_t local2base)
         bu_exit(1, "Halfspace parameter text did not round-trip\n");
     bu_vls_free(&params);
 
-    if (EDOBJ[ID_HALF].ft_edit_get_params(s, -1, values) != 0 ||
-        EDOBJ[ID_HALF].ft_edit_get_params(s, ECMD_HALF_SET_D, NULL) >= 0)
+    if (rt_edit_cmd_values_get(s, -1, &values) !=
+	    RT_EDIT_VALUE_UNAVAILABLE ||
+	rt_edit_cmd_values_get(s, ECMD_HALF_SET_D, NULL) !=
+	    RT_EDIT_VALUE_ERROR)
         bu_exit(1, "Halfspace getter accepted invalid arguments\n");
 
     rt_edit_destroy(s);

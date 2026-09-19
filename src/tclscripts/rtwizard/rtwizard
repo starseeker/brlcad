@@ -318,7 +318,17 @@ if {[info exists ::use_gui]} {
 	}
      }
 
-     db autoview v1
+     # A null presentation has no render loop to realize a retained scene.
+     # Frame the actual render targets directly so camera construction is
+     # deterministic and never depends on asynchronous display progress.
+     set autoview_objects [lsort -unique [concat \
+	 $::RtWizard::wizard_state(color_objlist) \
+	 $::RtWizard::wizard_state(line_objlist) \
+	 $::RtWizard::wizard_state(ghost_objlist)]]
+     if {![llength $autoview_objects]} {
+	error "rtwizard: no objects available for autoview"
+     }
+     db autoview v1 {*}$autoview_objects
      db aet v1 $::RtWizard::wizard_state(init_azimuth) $::RtWizard::wizard_state(init_elevation) $::RtWizard::wizard_state(init_twist)
      db zoom v1 $::RtWizard::wizard_state(zoom)
      db perspective v1 $::RtWizard::wizard_state(perspective)

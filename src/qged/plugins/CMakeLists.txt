@@ -19,10 +19,17 @@ endfunction(qged_plugin name)
 add_custom_target(qged_plugins ALL DEPENDS qged_plugins_sentinel)
 set_target_properties(qged_plugins PROPERTIES FOLDER "BRL-CAD Plugins")
 
-set(plugin_ignore_files CMakeLists.txt plugin.h)
+# libqtcad's plugin reuse test is defined before src/qged in the top-level
+# build.  Make the dependency here once the qged aggregate target exists.
+if(TARGET test_qtcad_plugin_reuse)
+  add_dependencies(test_qtcad_plugin_reuse qged_plugins)
+endif()
+
+set(plugin_ignore_files CMakeLists.txt)
 cmakefiles(${plugin_ignore_files})
 
 # Plugins
+add_subdirectory(extensions)
 add_subdirectory(polygon)
 add_subdirectory(view)
 add_subdirectory(edit)

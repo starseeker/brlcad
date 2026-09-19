@@ -1,0 +1,296 @@
+{
+  "schema": "brlcad.qtcad.events",
+  "version": 1,
+  "events": [
+    {
+      "target": ".",
+      "action": "resize",
+      "arguments": {
+        "width": 1000,
+        "height": 760,
+        "stable_ms": 250,
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_batch",
+      "arguments": {
+        "commands": [
+          "view clear",
+          "draw -m1 measure.r",
+          "ae 0 90",
+          "center 0 0 0",
+          "size 6"
+        ]
+      }
+    },
+    {
+      "target": ".",
+      "action": "wait_canvas_ready",
+      "arguments": { "timeout_ms": 5000 }
+    },
+    {
+      "target": ".",
+      "action": "wait_progressive_view_ready",
+      "arguments": { "timeout_ms": 30000, "quiet_ms": 50 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "checkpoint",
+      "arguments": { "name": "measurement-base.png" }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.use-3d",
+      "action": "assert_state",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.length-1",
+      "action": "assert_state",
+      "arguments": { "text": "" }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.35, "y": 0.50, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_move",
+      "arguments": { "x": 0.50, "y": 0.50, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.50, "y": 0.50, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.50, "y": 0.50, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_move",
+      "arguments": { "x": 0.50, "y": 0.35, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.50, "y": 0.35, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.length-1",
+      "action": "assert_state",
+      "arguments": { "text_numeric_gt": 0.0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.length-2",
+      "action": "assert_state",
+      "arguments": { "text_numeric_gt": 0.0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.angle",
+      "action": "assert_state",
+      "arguments": { "text_numeric_value": 90.0, "tolerance": 0.1 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_line_layer_overlay",
+      "arguments": { "overlay_id": "tool:measurement", "exists": true, "point_count": 3 }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 30 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "checkpoint",
+      "arguments": { "name": "measurement-2d.png" }
+    },
+    {
+      "target": ".",
+      "action": "assert_image_delta",
+      "arguments": {
+        "reference": "measurement-base.png",
+        "candidate": "measurement-2d.png",
+        "min_changed_pixels": 50
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.radians",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.angle-label",
+      "action": "assert_state",
+      "arguments": { "text": "Measured Angle (rad):" }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.angle",
+      "action": "assert_state",
+      "arguments": { "text_numeric_value": 1.5707963267948966, "tolerance": 0.000001 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.60, "y": 0.60, "button": 2, "buttons": 2, "modifiers": 0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.length-1",
+      "action": "assert_state",
+      "arguments": { "text_numeric_value": 0.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.length-2",
+      "action": "assert_state",
+      "arguments": { "text_numeric_value": 0.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.angle",
+      "action": "assert_state",
+      "arguments": { "text_numeric_value": 0.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_line_layer_overlay",
+      "arguments": { "overlay_id": "tool:measurement", "exists": false }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 30 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "checkpoint",
+      "arguments": { "name": "measurement-cleared.png" }
+    },
+    {
+      "target": ".",
+      "action": "assert_image_delta",
+      "arguments": {
+        "reference": "measurement-base.png",
+        "candidate": "measurement-cleared.png",
+        "max_changed_pixels": 0
+      }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.60, "y": 0.60, "button": 2, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "resize",
+      "arguments": {
+        "width": 820,
+        "height": 620,
+        "stable_ms": 250,
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "checkpoint",
+      "arguments": { "name": "measurement-resized-base.png" }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.use-3d",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.42, "y": 0.50, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_move",
+      "arguments": { "x": 0.50, "y": 0.50, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.50, "y": 0.50, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.50, "y": 0.50, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_move",
+      "arguments": { "x": 0.50, "y": 0.42, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.50, "y": 0.42, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.length-1",
+      "action": "assert_state",
+      "arguments": { "text_numeric_gt": 0.0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.length-2",
+      "action": "assert_state",
+      "arguments": { "text_numeric_gt": 0.0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.measure.angle",
+      "action": "assert_state",
+      "arguments": { "text_numeric_value": 1.5707963267948966, "tolerance": 0.01 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_line_layer_overlay",
+      "arguments": { "overlay_id": "tool:measurement", "exists": true, "point_count": 3 }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 30 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "checkpoint",
+      "arguments": { "name": "measurement-3d.png" }
+    },
+    {
+      "target": ".",
+      "action": "assert_image_delta",
+      "arguments": {
+        "reference": "measurement-resized-base.png",
+        "candidate": "measurement-3d.png",
+        "min_changed_pixels": 20
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.info.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 20 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_line_layer_overlay",
+      "arguments": { "overlay_id": "tool:measurement", "exists": false }
+    }
+  ]
+}

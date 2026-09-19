@@ -34,25 +34,36 @@
 extern "C" {
 #include "bu/opt.h"
 #include "ged.h"
+#include "ged/draw.h"
 #include "rt/db_fullpath.h"
 #include "rt/directory.h"
 #include "rt/tree.h"
 }
 
-#include "bv/util.h"
-#include "bv/view_sets.h"
-
+#include "BObol/BExportAction.h"
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BSceneController.h"
+#include "BObol/BViewController.h"
+#include <Inventor/SoViewport.h>
 #include "../alphanum.h"
+#include "../ged_bobol_private.hpp"
 #include "../ged_private.h"
 
-#define LAST_SOLID(_sp) DB_FULL_PATH_CUR_DIR(&(_sp)->s_fullpath)
+struct who_solids_record {
+    std::string path;
+    int highlighted;
+    unsigned char color[3];
+    point_t bounds_center;
+    fastf_t bounds_radius;
+    size_t vlist_structure_count;
+    size_t vlist_point_count;
+    std::string geometry_report;
+};
 
 static void
 who_solids_usage(struct ged *gedp, const char *cmd_name, int subcmd_usage)
 {
-    const char *subcmd = (gedp->new_cmd_forms) ?
-	"  who solids [-V view] [-m #] [level]\n" :
-	"  who solids [level]\n";
+    const char *subcmd = "  who solids [-V view] [-m #] [level]\n";
 
     if (subcmd_usage) {
 	bu_vls_printf(gedp->ged_result_str,
@@ -126,43 +137,45 @@ who_solids_path_state(struct db_i *dbip, const char *path, struct db_tree_state 
 
 
 static void
-who_solids_print_scene_obj(struct bv_scene_obj *sp, struct db_i *dbip, int lvl, struct bu_vls *vls)
+who_solids_print_record(const struct who_solids_record &rec,
+			struct db_i *dbip,
+			int lvl,
+			struct bu_vls *vls)
 {
     struct db_tree_state ts = RT_DBTS_INIT_ZERO;
     unsigned char basecolor[3];
     int region_id = -1;
     int dflag = 0;
     int cflag = 0;
-    size_t nvlist = 0;
-    size_t npts = 0;
+    const char *path = NULL;
     const char *leaf = NULL;
 
-    struct ged_bv_data *bdata = (struct ged_bv_data *)sp->s_u_data;
+    if (!dbip || !vls)
+	return;
 
+    path = rec.path.c_str();
     if (lvl <= -2) {
-	if (bdata && LAST_SOLID(bdata))
-	    leaf = LAST_SOLID(bdata)->d_namep;
-	if (!leaf && bu_vls_strlen(&sp->s_name)) {
-	    leaf = strrchr(bu_vls_cstr(&sp->s_name), '/');
-	    leaf = leaf ? leaf + 1 : bu_vls_cstr(&sp->s_name);
+	if (path && *path) {
+	    leaf = strrchr(path, '/');
+	    leaf = leaf ? leaf + 1 : path;
 	}
 	if (leaf)
 	    bu_vls_printf(vls, "%s ", leaf);
 	return;
     }
 
-    bu_vls_printf(vls, "%s", bu_vls_cstr(&sp->s_name));
-    if ((lvl != -1) && (sp->s_iflag == UP))
+    bu_vls_printf(vls, "%s", path ? path : "");
+    if ((lvl != -1) && rec.highlighted)
 	bu_vls_printf(vls, " ILLUM");
     bu_vls_printf(vls, "\n");
 
     if (lvl <= 0)
 	return;
 
-    basecolor[0] = sp->s_color[0];
-    basecolor[1] = sp->s_color[1];
-    basecolor[2] = sp->s_color[2];
-    if (who_solids_path_state(dbip, bu_vls_cstr(&sp->s_name), &ts)) {
+    basecolor[0] = rec.color[0];
+    basecolor[1] = rec.color[1];
+    basecolor[2] = rec.color[2];
+    if (who_solids_path_state(dbip, path, &ts)) {
 	region_id = ts.ts_regionid;
 	if (ts.ts_mater.ma_color_valid) {
 	    basecolor[0] = ts.ts_mater.ma_color[0] * 255.0;
@@ -174,175 +187,216 @@ who_solids_print_scene_obj(struct bv_scene_obj *sp, struct db_i *dbip, int lvl, 
 	db_free_db_tree_state(&ts);
     }
 
-    cflag = (basecolor[0] != sp->s_color[0] ||
-	     basecolor[1] != sp->s_color[1] ||
-	     basecolor[2] != sp->s_color[2]);
+    cflag = (basecolor[0] != rec.color[0] ||
+	     basecolor[1] != rec.color[1] ||
+	     basecolor[2] != rec.color[2]);
 
     bu_vls_printf(vls, "  cent=(%.3f, %.3f, %.3f) sz=%g ",
-		  sp->s_center[X] * dbip->dbi_base2local,
-		  sp->s_center[Y] * dbip->dbi_base2local,
-		  sp->s_center[Z] * dbip->dbi_base2local,
-		  sp->s_size * dbip->dbi_base2local);
+		  rec.bounds_center[X] * dbip->dbi_base2local,
+		  rec.bounds_center[Y] * dbip->dbi_base2local,
+		  rec.bounds_center[Z] * dbip->dbi_base2local,
+		  rec.bounds_radius * dbip->dbi_base2local);
     bu_vls_printf(vls, "reg=%d\n", region_id);
     bu_vls_printf(vls, "  basecolor=(%d, %d, %d) color=(%d, %d, %d)%s%s\n",
 		  basecolor[0],
 		  basecolor[1],
 		  basecolor[2],
-		  sp->s_color[0],
-		  sp->s_color[1],
-		  sp->s_color[2],
+		  rec.color[0],
+		  rec.color[1],
+		  rec.color[2],
 		  dflag ? " D" : "",
 		  cflag ? " C" : "");
 
     if (lvl <= 1)
 	return;
 
-    struct bv_vlist *vp;
-    for (BU_LIST_FOR(vp, bv_vlist, &sp->s_vlist)) {
-	size_t i;
-	size_t nused = vp->nused;
-	int *cmd = vp->cmd;
-	point_t *pt = vp->pt;
+    if (lvl > 2)
+	bu_vls_printf(vls, "%s", rec.geometry_report.c_str());
 
-	BV_CK_VLIST(vp);
-	nvlist++;
-	npts += nused;
-
-	if (lvl <= 2)
-	    continue;
-
-	for (i = 0; i < nused; i++, cmd++, pt++) {
-	    bu_vls_printf(vls, "  %s (%g, %g, %g)\n",
-			  bv_vlist_get_cmd_description(*cmd),
-			  V3ARGS(*pt));
-	}
-    }
-
-    bu_vls_printf(vls, "  %zu vlist structures, %zu pts\n", nvlist, npts);
-    bu_vls_printf(vls, "  %zu pts (via bv_ck_vlist)\n", bv_ck_vlist(&sp->s_vlist));
+    bu_vls_printf(vls, "  %zu vlist structures, %zu pts\n",
+		  rec.vlist_structure_count,
+		  rec.vlist_point_count);
+    bu_vls_printf(vls, "  %zu pts (via semantic export)\n",
+		  rec.vlist_point_count);
 }
 
+static unsigned char
+who_solids_color_channel(float value)
+{
+    if (value <= 0.0f)
+	return 0;
+    if (value >= 1.0f)
+	return 255;
+    return static_cast<unsigned char>(value * 255.0f + 0.5f);
+}
 
 static void
-who_solids_print_view(struct bview *v, struct db_i *dbip, int mode, int lvl, struct bu_vls *vls)
+who_solids_collect_record(const SoBRLExportAction::ObjectRecord &rec,
+	const SoBRLExportAction &export_action, int lvl,
+	std::vector<struct who_solids_record> &objects)
 {
-    std::set<struct bv_scene_obj *> uniq;
-    std::vector<struct bv_scene_obj *> objs;
-    struct bu_ptbl *tbls[2];
+    if (rec.path.getLength() == 0 || rec.nonDatabaseSource ||
+	rec.overlayIntent || rec.hudIntent || rec.localSource || rec.sharedSource)
+	return;
 
+    struct who_solids_record out;
+    out.path = rec.path.getString();
+    out.highlighted = rec.highlighted;
+    SbColor color = rec.color;
+    if (!rec.lineIndices.empty()) {
+	const SoBRLExportAction::LineRecord &line =
+	    export_action.getLine(rec.lineIndices.front());
+	color = line.colorOverride ? line.color :
+	    (line.materialColorValid ? line.materialColor : line.color);
+    } else if (!rec.pointIndices.empty()) {
+	const SoBRLExportAction::PointRecord &point =
+	    export_action.getPoint(rec.pointIndices.front());
+	color = point.colorOverride ? point.color :
+	    (point.materialColorValid ? point.materialColor : point.color);
+    } else if (!rec.triangleIndices.empty()) {
+	const SoBRLExportAction::TriangleRecord &triangle =
+	    export_action.getTriangle(rec.triangleIndices.front());
+	color = triangle.colorOverride ? triangle.color :
+	    (triangle.materialColorValid ? triangle.materialColor :
+	     triangle.color);
+    }
+    out.color[0] = who_solids_color_channel(color[0]);
+    out.color[1] = who_solids_color_channel(color[1]);
+    out.color[2] = who_solids_color_channel(color[2]);
+    VSETALL(out.bounds_center, 0.0);
+    out.bounds_radius = 0.0;
+    if (!rec.bounds.isEmpty()) {
+	const SbVec3f center = rec.bounds.getCenter();
+	const SbVec3f diagonal = rec.bounds.getMax() - rec.bounds.getMin();
+	VSET(out.bounds_center, center[0], center[1], center[2]);
+	out.bounds_radius = 0.5 * diagonal.length();
+    }
+    out.vlist_structure_count = rec.lineIndices.size() +
+	rec.pointIndices.size() + rec.triangleIndices.size();
+    out.vlist_point_count = rec.lineIndices.size() * 2 +
+	rec.pointIndices.size() + rec.triangleIndices.size() * 3;
+
+    if (lvl > 2) {
+	struct bu_vls report = BU_VLS_INIT_ZERO;
+	for (int index : rec.lineIndices) {
+	    const SoBRLExportAction::LineRecord &line =
+		export_action.getLine(index);
+	    bu_vls_printf(&report,
+		"  line move (%g, %g, %g)\n  line draw (%g, %g, %g)\n",
+		line.a[0], line.a[1], line.a[2],
+		line.b[0], line.b[1], line.b[2]);
+	}
+	for (int index : rec.pointIndices) {
+	    const SbVec3f &point = export_action.getPoint(index).point;
+	    bu_vls_printf(&report, "  point draw (%g, %g, %g)\n",
+		point[0], point[1], point[2]);
+	}
+	for (int index : rec.triangleIndices) {
+	    const SoBRLExportAction::TriangleRecord &triangle =
+		export_action.getTriangle(index);
+	    const SbVec3f points[3] = {triangle.a, triangle.b, triangle.c};
+	    for (size_t i = 0; i < 3; i++)
+		bu_vls_printf(&report,
+		    "  indexed face %zu (%g, %g, %g)\n", i,
+		    points[i][0], points[i][1], points[i][2]);
+	}
+	out.geometry_report = bu_vls_cstr(&report);
+	bu_vls_free(&report);
+    }
+    objects.push_back(out);
+}
+
+static void
+who_solids_print_view(struct ged *gedp, struct ged_view_context *v,
+	struct db_i *dbip,
+	int mode, int lvl, struct bu_vls *vls)
+{
     if (!v)
 	return;
 
-    tbls[0] = bv_view_objs(v, BV_DB_OBJS);
-    tbls[1] = bv_view_objs(v, BV_DB_OBJS | BV_LOCAL_OBJS);
+    BObolViewController *controller = ged_bobol_view_controller(v);
+    SoBRLExportAction export_action;
+    std::vector<SoBRLExportAction::ObjectRecord> objects;
+    if (controller && controller->getViewport() &&
+	controller->getViewport()->getRoot()) {
+	(void)controller->realizePending();
+	export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
+	export_action.apply(controller->getViewport()->getRoot());
+	export_action.collectObjectRecords(objects,
+	    SoBRLExportAction::QUERY_VISIBLE_ONLY, nullptr, mode);
+    }
+    std::vector<struct who_solids_record> records;
+    std::set<std::string> recorded_instances;
+    for (const SoBRLExportAction::ObjectRecord &object : objects)
+	if (!object.ownerSourceInstanceKey.getLength() ||
+	    recorded_instances.insert(
+		object.ownerSourceInstanceKey.getString()).second)
+	    who_solids_collect_record(object, export_action, lvl, records);
 
-    for (size_t t = 0; t < 2; t++) {
-	struct bu_ptbl *tbl = tbls[t];
-	if (!tbl)
-	    continue;
-	for (size_t i = 0; i < BU_PTBL_LEN(tbl); i++) {
-	    struct bv_scene_obj *sp = (struct bv_scene_obj *)BU_PTBL_GET(tbl, i);
-	    if (!sp || uniq.find(sp) != uniq.end())
-		continue;
-	    if (mode >= 0 && sp->s_os->s_dmode != mode)
-		continue;
-	    uniq.insert(sp);
-	    objs.push_back(sp);
+    /* A source may be valid and visible before it has published display-level
+     * geometry.  Source inventory is the authoritative database-object list;
+     * the semantic exporter above supplements it with realized detail. */
+    std::vector<SoBRLDatabaseSource *> sources = controller ?
+	controller->getRenderDatabaseSources() :
+	std::vector<SoBRLDatabaseSource *>();
+    if (sources.empty()) {
+	BObolSceneController *scene = ged_bobol_scene(gedp);
+	if (scene) {
+	    for (int i = 0; i < scene->getDatabaseSourceCount(); i++) {
+		SoBRLDatabaseSource *source = scene->getDatabaseSource(i);
+		if (source)
+		    sources.push_back(source);
+	    }
 	}
     }
+    for (SoBRLDatabaseSource *source : sources) {
+	BObolDatabaseSourceSummary summary;
+	if (!source || !source->getSummary(summary) || !summary.valid ||
+	    !summary.visible || (mode >= 0 && summary.drawMode != mode) ||
+	    (summary.instanceKey.getLength() &&
+	     recorded_instances.find(summary.instanceKey.getString()) !=
+		recorded_instances.end()))
+	    continue;
 
-    std::sort(objs.begin(), objs.end(),
-	      [](const struct bv_scene_obj *a, const struct bv_scene_obj *b) {
-		  return alphanum_impl(bu_vls_cstr(&a->s_name), bu_vls_cstr(&b->s_name), NULL) < 0;
+	struct who_solids_record out;
+	out.path = summary.path.getString();
+	out.highlighted = summary.highlighted ? 1 : 0;
+	const SbColor color = summary.colorOverride ? summary.color :
+	    (summary.materialColorValid ? summary.materialColor : summary.color);
+	out.color[0] = who_solids_color_channel(color[0]);
+	out.color[1] = who_solids_color_channel(color[1]);
+	out.color[2] = who_solids_color_channel(color[2]);
+	VSETALL(out.bounds_center, 0.0);
+	out.bounds_radius = 0.0;
+	if (summary.sourceBoundsValid && !summary.sourceBounds.isEmpty()) {
+	    const SbVec3f center = summary.sourceBounds.getCenter();
+	    const SbVec3f diagonal = summary.sourceBounds.getMax() -
+		summary.sourceBounds.getMin();
+	    VSET(out.bounds_center, center[0], center[1], center[2]);
+	    out.bounds_radius = 0.5 * diagonal.length();
+	}
+	out.vlist_structure_count = 0;
+	out.vlist_point_count = 0;
+	for (int i = 0; i < source->getRealizedShapeSummaryCount(); i++) {
+	    BObolRealizedShapeSummary shape;
+	    if (!source->getRealizedShapeSummary(i, shape) || !shape.valid)
+		continue;
+	    out.vlist_structure_count += static_cast<size_t>(
+		shape.segmentCount + shape.pointPrimitiveCount +
+		shape.triangleCount);
+	    out.vlist_point_count += static_cast<size_t>(shape.pointCount);
+	}
+	records.push_back(out);
+    }
+
+    std::sort(records.begin(), records.end(),
+	      [](const struct who_solids_record &a,
+		 const struct who_solids_record &b) {
+		  return alphanum_impl(a.path.c_str(), b.path.c_str(), NULL) < 0;
 	      });
 
-    for (size_t i = 0; i < objs.size(); i++)
-	who_solids_print_scene_obj(objs[i], dbip, lvl, vls);
-}
-
-
-static void
-who_solids_print_display(struct bu_list *hdlp, struct db_i *dbip, int lvl, struct bu_vls *vls)
-{
-    struct display_list *gdlp;
-    struct display_list *next_gdlp;
-    struct bv_scene_obj *sp;
-
-    if (dbip == DBI_NULL)
-	return;
-
-    gdlp = BU_LIST_NEXT(display_list, hdlp);
-    while (BU_LIST_NOT_HEAD(gdlp, hdlp)) {
-	next_gdlp = BU_LIST_PNEXT(display_list, gdlp);
-
-	for (BU_LIST_FOR(sp, bv_scene_obj, &gdlp->dl_head_scene_obj)) {
-	    if (!sp->s_u_data)
-		continue;
-	    struct ged_bv_data *bdata = (struct ged_bv_data *)sp->s_u_data;
-
-	    if (lvl <= -2) {
-		if (bdata && LAST_SOLID(bdata))
-		    bu_vls_printf(vls, "%s ", LAST_SOLID(bdata)->d_namep);
-		continue;
-	    }
-
-	    db_path_to_vls(vls, &bdata->s_fullpath);
-	    if ((lvl != -1) && (sp->s_iflag == UP))
-		bu_vls_printf(vls, " ILLUM");
-	    bu_vls_printf(vls, "\n");
-
-	    if (lvl <= 0)
-		continue;
-
-	    bu_vls_printf(vls, "  cent=(%.3f, %.3f, %.3f) sz=%g ",
-			  sp->s_center[X] * dbip->dbi_base2local,
-			  sp->s_center[Y] * dbip->dbi_base2local,
-			  sp->s_center[Z] * dbip->dbi_base2local,
-			  sp->s_size * dbip->dbi_base2local);
-	    bu_vls_printf(vls, "reg=%d\n", sp->s_old.s_regionid);
-	    bu_vls_printf(vls, "  basecolor=(%d, %d, %d) color=(%d, %d, %d)%s%s%s\n",
-			  sp->s_old.s_basecolor[0],
-			  sp->s_old.s_basecolor[1],
-			  sp->s_old.s_basecolor[2],
-			  sp->s_color[0],
-			  sp->s_color[1],
-			  sp->s_color[2],
-			  sp->s_old.s_uflag ? " U" : "",
-			  sp->s_old.s_dflag ? " D" : "",
-			  sp->s_old.s_cflag ? " C" : "");
-
-	    if (lvl <= 1)
-		continue;
-
-	    size_t nvlist = 0;
-	    size_t npts = 0;
-	    struct bv_vlist *vp;
-	    for (BU_LIST_FOR(vp, bv_vlist, &sp->s_vlist)) {
-		size_t i;
-		size_t nused = vp->nused;
-		int *cmd = vp->cmd;
-		point_t *pt = vp->pt;
-
-		BV_CK_VLIST(vp);
-		nvlist++;
-		npts += nused;
-
-		if (lvl <= 2)
-		    continue;
-
-		for (i = 0; i < nused; i++, cmd++, pt++) {
-		    bu_vls_printf(vls, "  %s (%g, %g, %g)\n",
-				  bv_vlist_get_cmd_description(*cmd),
-				  V3ARGS(*pt));
-		}
-	    }
-
-	    bu_vls_printf(vls, "  %zu vlist structures, %zu pts\n", nvlist, npts);
-	    bu_vls_printf(vls, "  %zu pts (via bv_ck_vlist)\n", bv_ck_vlist(&sp->s_vlist));
-	}
-
-	gdlp = next_gdlp;
-    }
+    for (size_t i = 0; i < records.size(); i++)
+	who_solids_print_record(records[i], dbip, lvl, vls);
 }
 
 
@@ -404,20 +458,9 @@ who_solids_impl(struct ged *gedp, int argc, const char *argv[], int subcmd_usage
 	return BRLCAD_ERROR;
     }
 
-    if (!gedp->new_cmd_forms) {
-	if (bu_vls_strlen(&cvls) || mode != -1) {
-	    who_solids_usage(gedp, subcmd_usage ? "who" : cmd_name, subcmd_usage);
-	    bu_vls_free(&cvls);
-	    return BRLCAD_ERROR;
-	}
-	who_solids_print_display(gedp->i->ged_gdp->gd_headDisplay, gedp->dbip, lvl, gedp->ged_result_str);
-	bu_vls_free(&cvls);
-	return BRLCAD_OK;
-    }
-
-    struct bview *v = gedp->ged_gvp;
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     if (bu_vls_strlen(&cvls)) {
-	v = bv_set_find_view(&gedp->ged_views, bu_vls_cstr(&cvls));
+	v = ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
 	if (!v) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
@@ -431,7 +474,8 @@ who_solids_impl(struct ged *gedp, int argc, const char *argv[], int subcmd_usage
 	return BRLCAD_ERROR;
     }
 
-    who_solids_print_view(v, gedp->dbip, mode, lvl, gedp->ged_result_str);
+    who_solids_print_view(gedp, v, gedp->dbip, mode, lvl,
+	gedp->ged_result_str);
     return BRLCAD_OK;
 }
 

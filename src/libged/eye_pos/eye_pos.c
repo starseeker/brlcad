@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -47,8 +49,11 @@ ged_eye_pos_core(struct ged *gedp, int argc, const char *argv[])
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     /* get eye position */
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
     if (argc == 1) {
-	VSCALE(eye_pos, gedp->ged_gvp->gv_eye_pos, sval);
+	bv_eye_pos_get(eye_pos, view);
+	VSCALE(eye_pos, eye_pos, sval);
 	bn_encode_vect(gedp->ged_result_str, eye_pos, 1);
 	return BRLCAD_OK;
     }
@@ -83,12 +88,16 @@ ged_eye_pos_core(struct ged *gedp, int argc, const char *argv[])
 	VMOVE(eye_pos, scan);
     }
 
-    VSCALE(gedp->ged_gvp->gv_eye_pos, eye_pos, sval);
+    point_t view_eye_pos;
+    VSCALE(view_eye_pos, eye_pos, sval);
+    bv_eye_pos_set(view, view_eye_pos);
 
     /* update perspective matrix */
-    mike_persp_mat(gedp->ged_gvp->gv_pmat, gedp->ged_gvp->gv_eye_pos);
+    mat_t pmat;
+    mike_persp_mat(pmat, view_eye_pos);
+    bv_pmat_set(view, pmat);
 
-    bv_update(gedp->ged_gvp);
+    ged_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

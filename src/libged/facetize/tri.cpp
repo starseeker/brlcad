@@ -47,6 +47,7 @@
 #include "bu/process.h"
 #include "bu/snooze.h"
 #include "bu/datetime.h"
+#include "ged/event.h"
 #include "../ged_private.h"
 #include "./ged_facetize.h"
 #include "./process.h"
@@ -1764,8 +1765,10 @@ int
 _ged_facetize_booleval_tri_to_db(struct _ged_facetize_state *s, struct db_i *dbip, struct rt_wdb *wdbp, int argc, const char **argv, const char *oname, struct bu_list *vlfree, struct db_i *odbip, int curr_cnt, int total_cnt)
 {
     union tree *ftree;
-    if (!dbip || !wdbp || !argv || !oname || !odbip)
+    if (!s || !dbip || !wdbp || !argv || !oname || !odbip)
 	return BRLCAD_ERROR;
+    int output_written = 0;
+    const bool publish_output = s->gedp && odbip == s->gedp->dbip;
 
     if (total_cnt < 0) {
 	facetize_log(s, 1, "Processing %s [%d perturb]...", oname, curr_cnt);
@@ -1871,6 +1874,9 @@ _ged_facetize_booleval_tri_to_db(struct _ged_facetize_state *s, struct db_i *dbi
 	    facetize_log_current_failure(s, "unable to write empty BoT to the database");
 	    return BRLCAD_ERROR;
 	}
+	output_written = 1;
+	if (publish_output)
+	    (void)ged_event_notify_object_added(s->gedp, oname, NULL);
 	facetize_log(s, 1, " Success.\n");
 	return BRLCAD_OK;
     }
@@ -1965,6 +1971,7 @@ _ged_facetize_booleval_tri_to_db(struct _ged_facetize_state *s, struct db_i *dbi
 	    facetize_log_current_failure(s, "unable to write evaluated BoT to the database");
 	    return BRLCAD_ERROR;
 	}
+	output_written = 1;
     } else {
 	// Evaluation didn't produce a tree - unless we've been told not to,
 	// prepare an empty BoT
@@ -1986,6 +1993,9 @@ _ged_facetize_booleval_tri_to_db(struct _ged_facetize_state *s, struct db_i *dbi
 		facetize_log_current_failure(s, "unable to write empty BoT to the database");
 		return BRLCAD_ERROR;
 	    }
+	    output_written = 1;
+	    if (publish_output)
+		(void)ged_event_notify_object_added(s->gedp, oname, NULL);
 	    facetize_log(s, 1, "Success.\n");
 	    return BRLCAD_OK;
 	}
@@ -2006,9 +2016,13 @@ _ged_facetize_booleval_tri_to_db(struct _ged_facetize_state *s, struct db_i *dbi
 		    facetize_log_current_failure(s, "BoT fixup succeeded but writing the repaired BoT failed");
 		    return BRLCAD_ERROR;
 		}
+		output_written = 1;
 	    }
 	}
     }
+
+    if (output_written && publish_output)
+	(void)ged_event_notify_object_added(s->gedp, oname, NULL);
 
     facetize_log(s, 1, " Success.\n");
     return BRLCAD_OK;

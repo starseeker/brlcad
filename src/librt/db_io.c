@@ -99,6 +99,47 @@ db_read(const struct db_i *dbip, void *addr, size_t count, b_off_t offset)
 }
 
 
+const unsigned char *
+db_external_view(const struct db_i *dbip, const struct directory *dp,
+		 size_t *nbytes)
+{
+    size_t bytes;
+
+    if (nbytes)
+	*nbytes = 0;
+    if (!dbip || !dp || !nbytes)
+	return NULL;
+    RT_CK_DBI(dbip);
+    RT_CK_DIR(dp);
+
+    if (db_version(dbip) < 5) {
+	if (dp->d_len > SIZE_MAX / sizeof(union record))
+	    return NULL;
+	bytes = dp->d_len * sizeof(union record);
+    } else {
+	bytes = dp->d_len;
+    }
+    if (!bytes)
+	return NULL;
+
+    if (dp->d_flags & RT_DIR_INMEM) {
+	if (!dp->d_un.ptr)
+	    return NULL;
+	*nbytes = bytes;
+	return (const unsigned char *)dp->d_un.ptr;
+    }
+    if (dp->d_addr == RT_DIR_PHONY_ADDR || !dbip->i ||
+	!dbip->i->dbi_inmem || dp->d_addr < 0)
+	return NULL;
+    if ((size_t)dp->d_addr > (size_t)dbip->i->dbi_eof ||
+	bytes > (size_t)dbip->i->dbi_eof - (size_t)dp->d_addr)
+	return NULL;
+
+    *nbytes = bytes;
+    return (const unsigned char *)dbip->i->dbi_inmem + dp->d_addr;
+}
+
+
 union record *
 db_getmrec(const struct db_i *dbip, const struct directory *dp)
 {

@@ -8,8 +8,24 @@ set(
   ui_text.c
 )
 
-brlcad_addexec(brlcad-launcher "${LAUNCHER_SRCS}" "libdm;libicv;libbu")
+brlcad_addexec(brlcad-launcher "${LAUNCHER_SRCS}" "libBObol;libimgstream;libicv;libbu")
 target_include_directories(brlcad-launcher BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+if(TARGET libqtcad)
+  get_property(LAUNCHER_QT_PROVIDER TARGET libqtcad
+    PROPERTY QTCAD_OBOL_DISPLAY_PROVIDER_AVAILABLE)
+endif()
+if(LAUNCHER_QT_PROVIDER)
+  target_link_libraries(brlcad-launcher libqtcad)
+  target_compile_definitions(brlcad-launcher PRIVATE HAVE_QTCAD_OBOL_DISPLAY_PROVIDER)
+elseif(TARGET libtclcad)
+  get_property(LAUNCHER_TCL_PROVIDER TARGET libtclcad
+    PROPERTY TCLCAD_OBOL_DISPLAY_PROVIDER_AVAILABLE)
+  if(LAUNCHER_TCL_PROVIDER)
+    target_link_libraries(brlcad-launcher libtclcad)
+    target_compile_definitions(brlcad-launcher PRIVATE HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER)
+  endif()
+endif()
 
 # Application manifests, discovered at run time by the launcher (nothing is
 # hard-coded).  New GUI programs appear in the launcher simply by installing an

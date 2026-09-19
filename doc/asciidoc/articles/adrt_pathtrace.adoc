@@ -44,7 +44,8 @@ Several front ends drive that library:
 
 * *`adrt`* -- a single-process, headless renderer that writes an image file.
   This is the tool used throughout this article.
-* *`isst`* -- an interactive Tcl/Tk + OpenGL viewer for real-time fly-throughs.
+* *`isst`* -- an interactive Tcl/Tk viewer for real-time fly-throughs.  ADRT
+  renders RGB images that the Tk photo widget presents directly.
 * *`adrt_master`* / *`adrt_slave`* -- a networked master/worker pair (the
   "distributed" in ADRT) that farms tiles out to compute nodes for an external
   observer.

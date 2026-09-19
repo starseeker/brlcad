@@ -81,7 +81,6 @@ unset(_geo_flags)
 find_package_eigen(REQUIRED)
 find_package_gte(REQUIRED)
 find_package_spsr(REQUIRED)
-brlcad_find_package(manifold REQUIRED)
 
 set(
   LIBBG_SOURCES
@@ -94,11 +93,13 @@ set(
   clip.c
   clipper.cpp
   decimate.cpp
+  line_layer.c
   lseg_lseg.cpp
   lseg_pt.cpp
   obr.cpp
   pca.cpp
   plane.cpp
+  plot3.c
   polygon.c
   polygon_op.cpp
   polygon_triangulate.cpp
@@ -119,13 +120,14 @@ set(
   trimesh_split.cpp
   vert_tree.c
   util.c
+  vlist.c
   # Geogram sources compiled as part of libbg
   ${GEOGRAM_SRCS}
 )
 
 # Note - libbg_deps is defined by ${BRLCAD_SOURCE_DIR}/src/source_dirs.cmake
 set(BG_PUBLIC_LIBS ${libbg_deps})
-set(BG_PRIVATE_LIBS manifold::manifold)
+set(BG_PRIVATE_LIBS ${WINSOCK_LIB})
 if(UNIX)
   list(APPEND BG_PRIVATE_LIBS pthread dl)
 endif()
@@ -148,14 +150,16 @@ brlcad_addlib(libbg "${LIBBG_SOURCES}" "" "${BG_INCLUDE_DIRS}"
   PUBLIC_LIBS ${BG_PUBLIC_LIBS}
   PRIVATE_LIBS ${BG_PRIVATE_LIBS}
   # These files define macros that conflict when batched into the same unity TU:
+  # - plot3.c defines PLOT3_IMPLEMENTATION and must compile exactly once.
   # - polygon.c, polygon_triangulate.cpp, trimesh_isect.cpp, trimesh_plot3.cpp:
-  #   all define PLOT_PREFIX_STR to remap plot3 function names, causing
-  #   -Werror redefinition errors and unresolved bg_plot3_* symbols.
+  #   define or consume PLOT_PREFIX_STR to remap plot3 function names, causing
+  #   -Werror redefinition errors and unresolved bg_plot3_* symbols if merged.
   # - geogram files need special rounding and fp-contract flags that must
   #   not affect the surrounding libbg unity TU.
   UNITY_BUILD_SKIP
     polygon.c
     polygon_triangulate.cpp
+    plot3.c
     spsr.cpp
     trimesh_isect.cpp
     trimesh_plot3.cpp
@@ -170,36 +174,6 @@ foreach(_bg_target libbg libbg-obj libbg-static libbg-brlcad-obj)
   endif()
 endforeach()
 set_target_properties(libbg PROPERTIES VERSION 20.0.1 SOVERSION 20)
-
-# Detria's adaptive predicates rely on the floating-point expression tree in
-# detria.hpp.  Keep its single translation unit out of unity builds and forbid
-# contraction, reassociation, and unsafe finite-only assumptions.
-if(MSVC)
-  set_source_files_properties(
-    polygon_triangulate.cpp
-    PROPERTIES COMPILE_OPTIONS "/fp:strict"
-  )
-else()
-  set(_detria_strict_options)
-  foreach(_detria_flag
-      -ffp-contract=off
-      -frounding-math
-      -fno-associative-math
-      -fno-finite-math-only
-      -fno-unsafe-math-optimizations)
-    string(MAKE_C_IDENTIFIER "${_detria_flag}" _detria_flag_id)
-    set(_detria_check_var "HAVE_${_detria_flag_id}")
-    check_cxx_compiler_flag("${_detria_flag}" ${_detria_check_var})
-    if(${_detria_check_var})
-      list(APPEND _detria_strict_options "${_detria_flag}")
-    endif()
-  endforeach()
-  set_source_files_properties(
-    polygon_triangulate.cpp
-    PROPERTIES COMPILE_OPTIONS "${_detria_strict_options}"
-  )
-endif()
-
 check_linker_flag("CXX" "-Wno-error=maybe-uninitialized" BG_LINKER_WNO_MAYBE_UNINITIALIZED)
 if(BG_LINKER_WNO_MAYBE_UNINITIALIZED)
   target_link_options(libbg PRIVATE -Wno-maybe-uninitialized)
@@ -224,6 +198,16 @@ foreach(_bg_target libbg libbg-obj libbg-static libbg-brlcad-obj)
     set_property(TARGET ${_bg_target} APPEND PROPERTY COMPILE_DEFINITIONS "EIGEN_DONT_VECTORIZE")
   endif()
 endforeach()
+
+if(HIDE_INTERNAL_SYMBOLS)
+  set_property(TARGET libbg APPEND PROPERTY COMPILE_DEFINITIONS "PLOT3_DLL_EXPORTS")
+  if(TARGET libbg-obj)
+    set_property(TARGET libbg-obj APPEND PROPERTY COMPILE_DEFINITIONS "PLOT3_DLL_EXPORTS")
+  endif(TARGET libbg-obj)
+  if(TARGET libbg-brlcad-obj)
+    set_property(TARGET libbg-brlcad-obj APPEND PROPERTY COMPILE_DEFINITIONS "PLOT3_DLL_EXPORTS")
+  endif(TARGET libbg-brlcad-obj)
+endif(HIDE_INTERNAL_SYMBOLS)
 
 add_subdirectory(tests)
 

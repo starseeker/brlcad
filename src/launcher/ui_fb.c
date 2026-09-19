@@ -19,12 +19,8 @@
  */
 /** @file ui_fb.c
  *
- * Windowed front end for the BRL-CAD launcher, drawn entirely with libfb (no
- * Tcl/Tk or Qt).  A rendered splash image is blitted with libicv/libfb, menu
- * entries are drawn as clickable panels labeled with the VFONT text helper, and
- * mouse/keyboard interaction is driven through the libfb input-event API
- * (fb_set_interactive / fb_next_event).
- *
+ * Windowed front end for the BRL-CAD launcher.  Menu pixels use imgstream;
+ * a display session owns presentation and normalized application input.
  */
 
 #include "common.h"
@@ -37,7 +33,13 @@
 #include "bu/mime.h"
 #include "bu/snooze.h"
 #include "icv.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
+#include "BObol/BDisplaySession.h"
+#if defined(HAVE_QTCAD_OBOL_DISPLAY_PROVIDER)
+#  include "qtcad/display_provider.h"
+#elif defined(HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER)
+#  include "tclcad/setup.h"
+#endif
 
 #include "launcher.h"
 #include "fbtext.h"
@@ -45,15 +47,15 @@
 #define QUIT_ACTION (-1)
 
 /* Palette (R,G,B). */
-static const RGBpixel col_bg        = { 26, 28, 34 };
-static const RGBpixel col_panel     = { 52, 58, 70 };
-static const RGBpixel col_panel_off = { 38, 40, 46 };
-static const RGBpixel col_hover     = { 178, 66, 42 };
-static const RGBpixel col_border    = { 84, 92, 108 };
-static const RGBpixel col_accent    = { 200, 80, 50 };
-static const RGBpixel col_text      = { 235, 238, 242 };
-static const RGBpixel col_text_dim  = { 150, 156, 168 };
-static const RGBpixel col_text_off  = { 96, 100, 110 };
+static const unsigned char col_bg[3]        = { 26, 28, 34 };
+static const unsigned char col_panel[3]     = { 52, 58, 70 };
+static const unsigned char col_panel_off[3] = { 38, 40, 46 };
+static const unsigned char col_hover[3]     = { 178, 66, 42 };
+static const unsigned char col_border[3]    = { 84, 92, 108 };
+static const unsigned char col_accent[3]    = { 200, 80, 50 };
+static const unsigned char col_text[3]      = { 235, 238, 242 };
+static const unsigned char col_text_dim[3]  = { 150, 156, 168 };
+static const unsigned char col_text_off[3]  = { 96, 100, 110 };
 
 struct button {
     int x, yb, w, h;	/* framebuffer coords (origin lower-left) */
@@ -62,10 +64,10 @@ struct button {
 
 
 static void
-fill_rect(struct fb *fbp, int x, int yb, int w, int h, const RGBpixel c)
+fill_rect(imgstream_fb_t *fbp, int x, int yb, int w, int h, const unsigned char c[3])
 {
-    int rW = fb_getwidth(fbp);
-    int rH = fb_getheight(fbp);
+    int rW = imgstream_fb_width(fbp);
+    int rH = imgstream_fb_height(fbp);
     unsigned char *row;
     int i, yy;
 
@@ -83,13 +85,13 @@ fill_rect(struct fb *fbp, int x, int yb, int w, int h, const RGBpixel c)
 	row[i * 3 + BLU] = c[BLU];
     }
     for (yy = yb; yy < yb + h; yy++)
-	(void)fb_write(fbp, x, yy, row, w);
+	(void)imgstream_fb_write(fbp, x, yy, row, w);
     bu_free(row, "fill_rect row");
 }
 
 
 static void
-draw_border(struct fb *fbp, int x, int yb, int w, int h, const RGBpixel c)
+draw_border(imgstream_fb_t *fbp, int x, int yb, int w, int h, const unsigned char c[3])
 {
     fill_rect(fbp, x, yb, w, 1, c);
     fill_rect(fbp, x, yb + h - 1, w, 1, c);
@@ -101,16 +103,16 @@ draw_border(struct fb *fbp, int x, int yb, int w, int h, const RGBpixel c)
 /*
  * Blit an icv image upright with its lower-left corner at (sx, sy) in
  * framebuffer coordinates.  libicv's uchar row buffer is bottom-up (row 0 is
- * the bottom of the image), matching libfb's bottom-up rows, so the copy is a
- * straight 1:1 mapping.  Doing this directly (rather than via fb_read_icv)
- * keeps the orientation consistent with the rest of the fb_write drawing below.
+ * the bottom of the image), matching imgstream's bottom-up rows, so the copy is a
+ * straight 1:1 mapping.  Doing this directly (rather than via imgstream_fb_read_icv)
+ * keeps the orientation consistent with the rest of the imgstream_fb_write drawing below.
  */
 static void
-blit_icv(struct fb *fbp, icv_image_t *img, int sx, int sy)
+blit_icv(imgstream_fb_t *fbp, icv_image_t *img, int sx, int sy)
 {
     unsigned char *rgb;
     int iw, ih, i;
-    int rH = fb_getheight(fbp);
+    int rH = imgstream_fb_height(fbp);
 
     if (!img)
 	return;
@@ -123,7 +125,7 @@ blit_icv(struct fb *fbp, icv_image_t *img, int sx, int sy)
 	int fy = sy + i;
 	if (fy < 0 || fy >= rH)
 	    continue;
-	(void)fb_write(fbp, sx, fy, rgb + (size_t)i * iw * 3, iw);
+	(void)imgstream_fb_write(fbp, sx, fy, rgb + (size_t)i * iw * 3, iw);
     }
     bu_free(rgb, "blit_icv rgb");
 }
@@ -171,13 +173,20 @@ load_splash(int maxw, int maxh)
 
 
 static void
-redraw(struct fb *fbp, struct fbtext *ft, struct app_registry *r,
+redraw(imgstream_fb_t *fbp, struct fbtext *ft, struct app_registry *r,
        icv_image_t *splash, struct button *btns, int nbtns, int hover)
 {
-    int rW = fb_getwidth(fbp);
-    int rH = fb_getheight(fbp);
+    int rW = imgstream_fb_width(fbp);
+    int rH = imgstream_fb_height(fbp);
     int i;
     int lh = fbtext_line_height(ft);
+    const int text_padding = 18;
+    int description_offset = fbtext_string_width(ft, "Quit") + 2 * text_padding;
+    for (i = 0; i < r->count; i++) {
+	const int name_extent = fbtext_string_width(ft, r->apps[i].name) + 2 * text_padding;
+	if (name_extent > description_offset)
+	    description_offset = name_extent;
+    }
 
     fill_rect(fbp, 0, 0, rW, rH, col_bg);
 
@@ -200,8 +209,8 @@ redraw(struct fb *fbp, struct fbtext *ft, struct app_registry *r,
 	int avail = 1;
 	const char *name = "Quit";
 	const char *desc = "Exit the launcher";
-	const RGBpixel *tcol = &col_text;
-	const RGBpixel *dcol = &col_text_dim;
+	const unsigned char *tcol = col_text;
+	const unsigned char *dcol = col_text_dim;
 
 	if (b->action != QUIT_ACTION) {
 	    struct app_entry *e = &r->apps[b->action];
@@ -217,29 +226,29 @@ redraw(struct fb *fbp, struct fbtext *ft, struct app_registry *r,
 	draw_border(fbp, b->x, b->yb, b->w, b->h, col_border);
 
 	if (!avail) {
-	    tcol = &col_text_off;
-	    dcol = &col_text_off;
+	    tcol = col_text_off;
+	    dcol = col_text_off;
 	}
 
 	/* Name at the left, description further right, vertically centered. */
-	fbtext_draw(fbp, ft, b->x + 18, b->yb + (b->h - lh) / 2, name, *tcol);
+	fbtext_draw(fbp, ft, b->x + 18, b->yb + (b->h - lh) / 2, name, tcol);
 	if (desc && desc[0]) {
 	    struct bu_vls label = BU_VLS_INIT_ZERO;
 	    if (b->action != QUIT_ACTION && !avail)
 		bu_vls_sprintf(&label, "%s  (not installed)", desc);
 	    else
 		bu_vls_sprintf(&label, "%s", desc);
-	    fbtext_draw(fbp, ft, b->x + 260, b->yb + (b->h - lh) / 2, bu_vls_cstr(&label), *dcol);
+	    fbtext_draw(fbp, ft, b->x + description_offset, b->yb + (b->h - lh) / 2, bu_vls_cstr(&label), dcol);
 	    bu_vls_free(&label);
 	}
     }
 
     /* Footer hint. */
     fbtext_draw(fbp, ft, 44, 18,
-		"Click an entry, or press its number.  Press q or Esc to quit.",
+		"Click an entry.  q / Esc: Quit",
 		col_text_dim);
 
-    fb_flush(fbp);
+    imgstream_fb_flush(fbp);
 }
 
 
@@ -272,19 +281,86 @@ activate(struct app_registry *r, struct button *b, int *running)
 }
 
 
+enum { LAUNCHER_MENU_INPUT = 1, LAUNCHER_PRIMARY_BUTTON = 0 };
+
+struct menu_input {
+    struct app_registry *registry;
+    struct button *buttons;
+    int count;
+    int hover;
+    int running;
+    int redraw;
+    int viewport_changed;
+    int image_width;
+    int image_height;
+    unsigned int viewport_width;
+    unsigned int viewport_height;
+};
+
+static int
+menu_input_event(void *data, BObolInputAction UNUSED(action), const BObolInputEvent *event)
+{
+    struct menu_input *menu = (struct menu_input *)data;
+    int hit;
+    switch (event->type) {
+	case BOBOL_INPUT_CLOSE:
+	    menu->running = 0;
+	    break;
+	case BOBOL_INPUT_POINTER_MOTION:
+	case BOBOL_INPUT_POINTER_RELEASE:
+	    if (!menu->viewport_width || !menu->viewport_height)
+		return BOBOL_INPUT_RESULT_UNHANDLED;
+	    hit = hit_test(menu->buttons, menu->count,
+		(int)((double)event->x * menu->image_width / menu->viewport_width),
+		menu->image_height - 1 -
+		(int)((double)event->y * menu->image_height / menu->viewport_height));
+	    if (event->type == BOBOL_INPUT_POINTER_MOTION && hit != menu->hover) {
+		menu->hover = hit;
+		menu->redraw = 1;
+	    }
+	    if (event->type == BOBOL_INPUT_POINTER_RELEASE && event->button == LAUNCHER_PRIMARY_BUTTON && hit >= 0) {
+		activate(menu->registry, &menu->buttons[hit], &menu->running);
+		menu->redraw = 1;
+	    }
+	    break;
+	case BOBOL_INPUT_KEY_PRESS:
+	    if (event->key == 'Q' || event->key == 'q' || event->key == 27) {
+		menu->running = 0;
+	    } else if (event->key >= '1' && event->key <= '9' &&
+		event->key - '1' < menu->count) {
+		activate(menu->registry, &menu->buttons[event->key - '1'], &menu->running);
+		menu->redraw = 1;
+	    } else if ((event->key == '\r' || event->key == '\n') && menu->hover >= 0) {
+		activate(menu->registry, &menu->buttons[menu->hover], &menu->running);
+		menu->redraw = 1;
+	    }
+	    break;
+	case BOBOL_INPUT_RESIZE:
+	    menu->viewport_width = event->width;
+	    menu->viewport_height = event->height;
+	    menu->viewport_changed = 1;
+	    menu->redraw = 1;
+	    break;
+	case BOBOL_INPUT_EXPOSE:
+	    menu->redraw = 1;
+	    break;
+	default:
+	    return BOBOL_INPUT_RESULT_UNHANDLED;
+    }
+    return BOBOL_INPUT_RESULT_HANDLED;
+}
+
 int
 ui_fb_run(struct app_registry *r)
 {
-    struct fb *fbp;
+    imgstream_fb_t *fbp;
     struct fbtext ft;
     icv_image_t *splash;
     struct button *btns;
     int nbtns;
     int rW, rH;
     int i;
-    int running = 1;
-    int hover = -1;
-    int need_redraw = 1;
+    bobol_display_session_t *session;
     long rate;
 
     const int win_w = 820;
@@ -296,29 +372,29 @@ ui_fb_run(struct app_registry *r)
     if (!r || r->count == 0)
 	return -1;
 
-    fbp = fb_open(NULL, win_w, win_h);
-    if (fbp == FB_NULL)
+#if defined(HAVE_QTCAD_OBOL_DISPLAY_PROVIDER)
+    if (!qtcad_obol_display_provider_register())
 	return -1;
+#elif defined(HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER)
+    if (!tclcad_obol_display_provider_register())
+	return -1;
+#else
+    return -1;
+#endif
+    session = bobol_display_session_open("/dev/swrast", win_w, win_h, "BRL-CAD");
+    if (!session)
+	return -1;
+    fbp = bobol_display_session_framebuffer(session);
 
-    /* If we did not get a real window (e.g. the null device), fall back. */
-    {
-	const char *nm = fb_get_name(fbp);
-	if (nm && (bu_strncmp(nm, "/dev/null", 9) == 0 || strstr(nm, "null") != NULL)) {
-	    fb_close(fbp);
-	    return -1;
-	}
-    }
-
-    rW = fb_getwidth(fbp);
-    rH = fb_getheight(fbp);
+    rW = imgstream_fb_width(fbp);
+    rH = imgstream_fb_height(fbp);
 
     if (fbtext_open(&ft, NULL) != 0) {
 	/* No font available -- not usable as a graphical menu. */
-	fb_close(fbp);
+	bobol_display_session_close(session);
 	return -1;
     }
 
-    fb_set_interactive(fbp, 1);
 
     splash = load_splash(rW - 40, 300);
 
@@ -340,77 +416,62 @@ ui_fb_run(struct app_registry *r)
 	}
     }
 
-    rate = fb_poll_rate(fbp);
-    if (rate <= 0)
-	rate = 15000;
-
-    while (running) {
-	struct fb_event e;
-
-	if (need_redraw) {
-	    redraw(fbp, &ft, r, splash, btns, nbtns, hover);
-	    need_redraw = 0;
-	}
-
-	if (fb_next_event(fbp, &e)) {
-	    switch (e.type) {
-		case FB_EVENT_CLOSE:
-		    running = 0;
-		    break;
-		case FB_EVENT_MOTION:
-		    {
-			int h = hit_test(btns, nbtns, e.x, e.y);
-			if (h != hover) {
-			    hover = h;
-			    need_redraw = 1;
-			}
-		    }
-		    break;
-		case FB_EVENT_BUTTON_RELEASE:
-		    if (e.button == 1) {
-			int h = hit_test(btns, nbtns, e.x, e.y);
-			if (h >= 0)
-			    activate(r, &btns[h], &running);
-			need_redraw = 1;
-		    }
-		    break;
-		case FB_EVENT_KEY_PRESS:
-		    {
-			int k = e.keycode;
-			if (k == 'q' || k == 'Q' || k == 27 /* Esc */) {
-			    running = 0;
-			} else if (k >= '1' && k <= '9') {
-			    int idx = k - '1';
-			    if (idx < nbtns) {
-				activate(r, &btns[idx], &running);
-				need_redraw = 1;
-			    }
-			} else if (k == '\r' || k == '\n') {
-			    if (hover >= 0) {
-				activate(r, &btns[hover], &running);
-				need_redraw = 1;
-			    }
-			}
-		    }
-		    break;
-		case FB_EVENT_EXPOSE:
-		case FB_EVENT_RESIZE:
-		    need_redraw = 1;
-		    break;
-		default:
-		    break;
-	    }
-	} else {
-	    bu_snooze(rate);
-	}
+    struct menu_input menu = {r, btns, nbtns, -1, 1, 1, 1, rW, rH,
+	(unsigned int)win_w, (unsigned int)win_h};
+    const BObolInputBinding bindings[] = {
+	{BOBOL_INPUT_POINTER_MOTION, BOBOL_INPUT_ANY, BOBOL_INPUT_ANY, 0, 0, 0, LAUNCHER_MENU_INPUT},
+	{BOBOL_INPUT_POINTER_RELEASE, BOBOL_INPUT_ANY, BOBOL_INPUT_ANY, 0, 0, 0, LAUNCHER_MENU_INPUT},
+	{BOBOL_INPUT_KEY_PRESS, BOBOL_INPUT_ANY, BOBOL_INPUT_ANY, 0, 0, 0, LAUNCHER_MENU_INPUT},
+	{BOBOL_INPUT_RESIZE, BOBOL_INPUT_ANY, BOBOL_INPUT_ANY, 0, 0, 0, LAUNCHER_MENU_INPUT},
+	{BOBOL_INPUT_CLOSE, BOBOL_INPUT_ANY, BOBOL_INPUT_ANY, 0, 0, 0, LAUNCHER_MENU_INPUT},
+	{BOBOL_INPUT_EXPOSE, BOBOL_INPUT_ANY, BOBOL_INPUT_ANY, 0, 0, 0, LAUNCHER_MENU_INPUT}
+    };
+    const BObolInputActionLayer layer = {"launcher", bindings,
+	sizeof(bindings) / sizeof(bindings[0]), menu_input_event};
+    bobol_display_endpoint_t *endpoint = bobol_display_session_endpoint(session);
+    if (!bobol_display_endpoint_input_action_layer_set(endpoint, &layer, &menu, &menu)) {
+	if (splash)
+	    icv_destroy(splash);
+	bu_free(btns, "buttons");
+	fbtext_close(&ft);
+	bobol_display_session_close(session);
+	return -1;
     }
+    rate = bobol_display_session_poll_rate(session);
+    int status = 0;
+    while (menu.running) {
+	if (menu.viewport_changed && menu.viewport_width && menu.viewport_height) {
+	    if (imgstream_fb_viewport(fbp, 0, 0, (int)menu.viewport_width,
+		    (int)menu.viewport_height) != 0) {
+		bu_log("brlcad-launcher: unable to resize menu presentation\n");
+		status = -1;
+		break;
+	    }
+	    menu.viewport_changed = 0;
+	}
+	if (menu.redraw) {
+	    redraw(fbp, &ft, r, splash, btns, nbtns, menu.hover);
+	    menu.redraw = 0;
+	}
+	const int poll_status = bobol_display_session_poll(session);
+	if (poll_status != 0) {
+	    if (poll_status < 0) {
+		bu_log("brlcad-launcher: display event processing failed\n");
+		status = -1;
+	    }
+	    break;
+	}
+	if (rate > 0)
+	    bu_snooze(rate);
+    }
+    (void)bobol_display_endpoint_input_action_layer_clear_if(endpoint, &menu);
 
     if (splash)
 	icv_destroy(splash);
     bu_free(btns, "buttons");
     fbtext_close(&ft);
-    fb_close(fbp);
-    return 0;
+    bobol_display_session_close(session);
+    return status;
 }
 
 /*

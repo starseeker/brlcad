@@ -51,7 +51,7 @@ ISST_MainWindow::ISST_MainWindow()
     file_menu->addAction(isst_exit);
 
     // Set up Display canvas
-    canvas = new isstGL();
+    canvas = new isstView();
     canvas->setMinimumSize(512,512);
     setCentralWidget(canvas);
 
@@ -113,4 +113,3 @@ void ISST_MainWindow::save_image()
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-

@@ -38,6 +38,7 @@
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
 #include "rt/rt_ecmds.h"
 #include "test_utils.h"
 
@@ -141,23 +142,29 @@ rt_edit_test_tgc(void)
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size = 73.3197;
-    v->gv_isize = 1.0 / v->gv_size;
-    v->gv_scale = 0.5 * v->gv_size;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init(&v);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
 
     struct rt_tgc_internal *edit_tgc = (struct rt_tgc_internal *)s->es_int.idb_ptr;
+
+    point_t tgc_endpoint = {5.0, 3.0, 18.0};
+    if (!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_H, 8.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_H_V, 8.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_H_CD, 8.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_H_V_AB, 8.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_A, 3.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_AB, 3.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_ABCD, 3.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_B, 2.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_C, 2.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_CD, 2.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_D, 1.5) ||
+	!rt_edit_test_point_value(s, ECMD_TGC_MV_H, tgc_endpoint) ||
+	!rt_edit_test_point_value(s, ECMD_TGC_MV_HH, tgc_endpoint))
+	bu_exit(1, "ERROR: TGC descriptor current-value readback failed\n");
 
     vect_t mousevec;
 
@@ -528,8 +535,8 @@ rt_edit_test_tgc(void)
     {
 	int xpos = 1372;
 	int ypos = 1383;
-	mousevec[X] = xpos * INV_BV;
-	mousevec[Y] = ypos * INV_BV;
+	mousevec[X] = xpos * RT_INV_VIEW;
+	mousevec[Y] = ypos * RT_INV_VIEW;
 	mousevec[Z] = 0;
     }
 
@@ -537,7 +544,7 @@ rt_edit_test_tgc(void)
     if ((*EDOBJ[dp->d_minor_type].ft_edit_xy)(s, mousevec) == BRLCAD_ERROR)
 	bu_exit(1, "ERROR: ECMD_TGC_SCALE_H(xy) failed ft_edit_xy: %s\n", bu_vls_cstr(s->log_str));
 
-    /* es_scale = 1 + 0.25*|ypos*INV_BV| = 1.16882...; h_new = h * es_scale */
+    /* es_scale = 1 + 0.25*|ypos*RT_INV_VIEW| = 1.16882...; h_new = h * es_scale */
     VSET(cmp_tgc->h, 0, 0, 9.3505859375);
 
     rt_edit_process(s);
@@ -555,8 +562,8 @@ rt_edit_test_tgc(void)
     {
 	int xpos = 1482;
 	int ypos = 762;
-	mousevec[X] = xpos * INV_BV;
-	mousevec[Y] = ypos * INV_BV;
+	mousevec[X] = xpos * RT_INV_VIEW;
+	mousevec[Y] = ypos * RT_INV_VIEW;
 	mousevec[Z] = 0;
     }
 
@@ -589,8 +596,8 @@ rt_edit_test_tgc(void)
     {
 	int xpos = 500;
 	int ypos = -300;
-	mousevec[X] = xpos * INV_BV;
-	mousevec[Y] = ypos * INV_BV;
+	mousevec[X] = xpos * RT_INV_VIEW;
+	mousevec[Y] = ypos * RT_INV_VIEW;
 	mousevec[Z] = 0;
     }
 

@@ -238,7 +238,7 @@ static const struct rt_edit_param_desc vol_thresh_hi_params[] = {
 
 static const struct rt_edit_cmd_desc vol_cmds[] = {
     {
-	ECMD_VOL_FNAME,       /* cmd_id       */
+	ECMD_VOL_FNAME, RT_EDIT_CMD_NAME(ECMD_VOL_FNAME),       /* cmd_id       */
 	"File Name",          /* label        */
 	"data",               /* category     */
 	1,                    /* nparam       */
@@ -248,7 +248,7 @@ static const struct rt_edit_cmd_desc vol_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_VOL_FSIZE,       /* cmd_id       */
+	ECMD_VOL_FSIZE, RT_EDIT_CMD_NAME(ECMD_VOL_FSIZE),       /* cmd_id       */
 	"File Size (X Y Z)",  /* label        */
 	"geometry",           /* category     */
 	3,                    /* nparam       */
@@ -258,7 +258,7 @@ static const struct rt_edit_cmd_desc vol_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_VOL_CSIZE,       /* cmd_id       */
+	ECMD_VOL_CSIZE, RT_EDIT_CMD_NAME(ECMD_VOL_CSIZE),       /* cmd_id       */
 	"Voxel Size (X Y Z)", /* label        */
 	"geometry",           /* category     */
 	3,                    /* nparam       */
@@ -268,7 +268,7 @@ static const struct rt_edit_cmd_desc vol_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_VOL_THRESH_LO,   /* cmd_id       */
+	ECMD_VOL_THRESH_LO, RT_EDIT_CMD_NAME(ECMD_VOL_THRESH_LO),   /* cmd_id       */
 	"Threshold (low)",    /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -278,7 +278,7 @@ static const struct rt_edit_cmd_desc vol_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_VOL_THRESH_HI,   /* cmd_id       */
+	ECMD_VOL_THRESH_HI, RT_EDIT_CMD_NAME(ECMD_VOL_THRESH_HI),   /* cmd_id       */
 	"Threshold (hi)",     /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -295,13 +295,52 @@ static const struct rt_edit_prim_desc vol_prim_desc = {
     5,                    /* ncmd         */
     vol_cmds              /* cmds         */,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_GENERATED,
+    NULL,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
 rt_edit_vol_edit_desc(void)
 {
     return &vol_prim_desc;
+}
+
+C_DECL int
+rt_edit_vol_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
+{
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    struct rt_vol_internal *vol =
+	(struct rt_vol_internal *)s->es_int.idb_ptr;
+    RT_VOL_CK_MAGIC(vol);
+
+    switch (cmd_id) {
+	case ECMD_VOL_FNAME:
+	    rt_edit_cmd_values_set_string(result, 0, vol->name);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_VOL_FSIZE:
+	    rt_edit_cmd_values_set_value(result, 0, (fastf_t)vol->xdim);
+	    rt_edit_cmd_values_set_value(result, 1, (fastf_t)vol->ydim);
+	    rt_edit_cmd_values_set_value(result, 2, (fastf_t)vol->zdim);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_VOL_CSIZE:
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    vol->cellsize[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_VOL_THRESH_LO:
+	    rt_edit_cmd_values_set_value(result, 0, (fastf_t)vol->lo);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_VOL_THRESH_HI:
+	    rt_edit_cmd_values_set_value(result, 0, (fastf_t)vol->hi);
+	    return RT_EDIT_VALUE_OK;
+	default:
+	    return RT_EDIT_VALUE_UNAVAILABLE;
+    }
 }
 
 /* set voxel size */
@@ -426,18 +465,23 @@ ecmd_vol_fname(struct rt_edit *s)
 {
     struct rt_vol_internal *vol =
 	(struct rt_vol_internal *)s->es_int.idb_ptr;
-    char *fname = NULL;
+    const char *fname = NULL;
     struct stat stat_buf;
     bu_clbk_t f = NULL;
     void *d = NULL;
 
     RT_VOL_CK_MAGIC(vol);
 
-    const char *av[2] = {NULL};
-    av[0] = vol->name;
-    rt_edit_map_clbk_get(&f, &d, s->m, ECMD_GET_FILENAME, BU_CLBK_DURING);
-    if (f)
-	(*f)(1, (const char **)av, d, &fname);
+    if (s->e_nstr > 0) {
+	fname = s->e_str[0];
+    } else {
+	const char *av[2] = {NULL};
+	av[0] = vol->name;
+	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_GET_FILENAME,
+	    BU_CLBK_DURING);
+	if (f)
+	    (*f)(1, (const char **)av, d, &fname);
+    }
 
     if (fname) {
 	if (stat(fname, &stat_buf)) {

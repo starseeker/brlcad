@@ -1,0 +1,1982 @@
+/*        T E S T _ Q T C A D _ O B O L _ R E A L _ M O D E L S . C P P
+ * BRL-CAD
+ *
+ * Copyright (c) 2026 United States Government as represented by
+ * the U.S. Army Research Laboratory.
+ */
+
+#include "common.h"
+
+#include "ged/display_obol_private.h"
+
+#include "BObol/BExportAction.h"
+#include "BObol/BLodService.h"
+#include "BObol/BMeshShape.h"
+#include "BObol/BSceneController.h"
+#include "BObol/BViewController.h"
+#include "BObol/BVListShape.h"
+#include "bu/color.h"
+#include "bu/app.h"
+#include "bu/env.h"
+#include "bu/file.h"
+#include "bu/process.h"
+#include "bu/str.h"
+#include "bu/datetime.h"
+#include "ged.h"
+#include "ged/draw.h"
+#include "icv.h"
+#include "qtcad/QgObolMeasure.h"
+#include "qtcad/QgObolPick.h"
+#include "qtcad/QgObolSnap.h"
+#include "qtcad/QgView.h"
+#include "rt/db_attr.h"
+#include "rt/db_io.h"
+#include "rt/mater.h"
+
+#include "qtcad_obol_test_presentation.h"
+
+#include <Inventor/SoViewport.h>
+#include <Inventor/nodes/SoGroup.h>
+
+#include <QApplication>
+#include <QCoreApplication>
+#include <QImage>
+#include <QString>
+
+#include <float.h>
+#include <fstream>
+#include <math.h>
+#include <stdint.h>
+#include <set>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string>
+#include <string.h>
+#include <thread>
+#include <chrono>
+#include <vector>
+
+#define FAIL(_msg) \
+    do { \
+	fprintf(stderr, "FAIL: %s\n", _msg); \
+	return 1; \
+    } while (0)
+
+struct model_case {
+    const char *name;
+    const char *file;
+    const char *root;
+    int gedDrawMode;
+    int obolDrawMode;
+    int minWireShapes;
+    int minWireSegments;
+    int minMeshShapes;
+    int minMeshTriangles;
+    int exerciseInteractions;
+    int pickAllStress;
+    int expectM35TableColor;
+    int deferLeafExpansion;
+    int strictFallback;
+};
+
+struct geometry_counts {
+    int shapeCount;
+    int segmentCount;
+    int meshCount;
+    int triangleCount;
+};
+
+/* A single BREP source item may legitimately spend tens of seconds in the
+ * production tessellator without publishing an intermediate completion.  The
+ * external 180-second CTest timeout remains the hang guard; this smaller
+ * deadline catches a stalled progressive handoff without misclassifying a
+ * productive cold tessellation as a LoD liveliness failure. */
+static constexpr int64_t REAL_MODEL_PROGRESSIVE_SETTLE_TIMEOUT_US = 120000000;
+
+class real_model_test_cache {
+public:
+    real_model_test_cache()
+    {
+	const char *configured = getenv("BU_DIR_CACHE");
+	if (configured && configured[0]) {
+	    available = true;
+	    return;
+	}
+
+	const std::string leaf = "qtcad_obol_real_models_" +
+	    std::to_string(bu_pid()) + "_cache";
+	bu_dir(path, MAXPATHLEN, BU_DIR_CURR, leaf.c_str(), NULL);
+	bu_dirclear(path);
+	bu_mkdir(path);
+	available = bu_file_directory(path) &&
+	    bu_setenv("BU_DIR_CACHE", path, 1) == 0;
+	owned = available;
+    }
+
+    ~real_model_test_cache()
+    {
+	if (owned)
+	    bu_dirclear(path);
+    }
+
+    bool isAvailable() const
+    {
+	return available;
+    }
+
+private:
+    char path[MAXPATHLEN] = {0};
+    bool available = false;
+    bool owned = false;
+};
+
+static int
+lit_pixel_count(const QImage &image)
+{
+    QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
+    int count = 0;
+    for (int y = 0; y < rgba.height(); y++) {
+	const unsigned char *line = rgba.constScanLine(y);
+	for (int x = 0; x < rgba.width(); x++) {
+	    const unsigned char *p = line + x * 4;
+	    if (p[0] > 32 || p[1] > 32 || p[2] > 32)
+		count++;
+	}
+    }
+    return count;
+}
+
+static int
+m35_table_color_pixel_count(const QImage &image)
+{
+    QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
+    int count = 0;
+    for (int y = 0; y < rgba.height(); y++) {
+	const unsigned char *line = rgba.constScanLine(y);
+	for (int x = 0; x < rgba.width(); x++) {
+	    const unsigned char *p = line + x * 4;
+	    /* M35's active global region-id color table is 210/146/1.
+	     * Allow antialiasing and lighting variation while excluding the
+	     * default red wire color, white, and the blue view background. */
+	    if (p[0] >= 120 && p[1] >= 70 && p[1] < p[0] && p[2] <= 80 &&
+		p[0] >= p[2] + 80 && p[1] >= p[2] + 50)
+		count++;
+	}
+    }
+    return count;
+}
+
+static int
+nist_pmi7_10_color_mask(const QImage &image)
+{
+    QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
+    int counts[3] = {0, 0, 0};
+    for (int y = 0; y < rgba.height(); y++) {
+	const unsigned char *line = rgba.constScanLine(y);
+	for (int x = 0; x < rgba.width(); x++) {
+	    const unsigned char *p = line + x * 4;
+	    /* Lit pixels from the cyan, orange, and yellow regions.  The fourth
+	     * region is intentionally neutral gray and is verified from exported
+	     * material metadata below. */
+	    if (p[0] >= 50 && p[1] >= 75 && p[2] >= 85 &&
+		p[1] >= p[0] + 15 && p[2] >= p[0] + 20)
+		counts[0]++;
+	    if (p[0] >= 85 && p[1] >= 65 && p[2] >= 45 &&
+		p[0] >= p[1] + 10 && p[1] >= p[2] + 15)
+		counts[1]++;
+	    if (p[0] >= 75 && p[1] >= 80 && p[2] >= 50 &&
+		p[1] >= p[2] + 20 && p[0] >= p[2] + 15)
+		counts[2]++;
+	}
+    }
+    return (counts[0] >= 20 ? 1 : 0) |
+	(counts[1] >= 20 ? 2 : 0) |
+	(counts[2] >= 20 ? 4 : 0);
+}
+
+static int
+image_byte_diff(const QImage &a, const QImage &b)
+{
+    if (a.size() != b.size())
+	return -1;
+    QImage ar = a.convertToFormat(QImage::Format_RGBA8888);
+    QImage br = b.convertToFormat(QImage::Format_RGBA8888);
+    int different = 0;
+    for (int y = 0; y < ar.height(); y++) {
+	const unsigned char *ap = ar.constScanLine(y);
+	const unsigned char *bp = br.constScanLine(y);
+	for (int x = 0; x < ar.width() * 4; x++)
+	    different += ap[x] != bp[x];
+    }
+    return different;
+}
+
+static fastf_t
+image_ssim(const QImage &a, const QImage &b)
+{
+    if (a.size() != b.size())
+	return -1.0;
+    QImage ar = a.convertToFormat(QImage::Format_RGBA8888);
+    QImage br = b.convertToFormat(QImage::Format_RGBA8888);
+    icv_image_t *ai = icv_create((size_t)ar.width(),
+	(size_t)ar.height(), ICV_COLOR_SPACE_RGB);
+    icv_image_t *bi = icv_create((size_t)br.width(),
+	(size_t)br.height(), ICV_COLOR_SPACE_RGB);
+    if (!ai || !bi) {
+	if (ai)
+	    icv_destroy(ai);
+	if (bi)
+	    icv_destroy(bi);
+	return -1.0;
+    }
+    for (int y = 0; y < ar.height(); y++) {
+	const unsigned char *ap = ar.constScanLine(y);
+	const unsigned char *bp = br.constScanLine(y);
+	for (int x = 0; x < ar.width(); x++) {
+	    size_t offset = ((size_t)y * (size_t)ar.width() +
+		(size_t)x) * 3;
+	    for (int c = 0; c < 3; c++) {
+		ai->data[offset + (size_t)c] = ap[x * 4 + c] / 255.0;
+		bi->data[offset + (size_t)c] = bp[x * 4 + c] / 255.0;
+	    }
+	}
+    }
+    fastf_t score = icv_adiff(ai, bi, ICV_DIFF_SSIM);
+    icv_destroy(ai);
+    icv_destroy(bi);
+    return score;
+}
+
+static int
+model_path(const char *modelFile, char *dbpath, size_t dbpathLen)
+{
+    const char *brlcadRoot = getenv("BRLCAD_ROOT");
+    if (brlcadRoot)
+	snprintf(dbpath, dbpathLen, "%s/share/db/%s", brlcadRoot, modelFile);
+    else
+	snprintf(dbpath, dbpathLen, "share/db/%s", modelFile);
+
+    return bu_file_exists(dbpath, NULL);
+}
+
+static int
+should_run_case(int argc, char **argv, const char *name)
+{
+    if (argc <= 1)
+	return 1;
+
+    for (int i = 1; i < argc; i++) {
+	if (BU_STR_EQUAL(argv[i], "all") || BU_STR_EQUAL(argv[i], name))
+	    return 1;
+    }
+
+    return 0;
+}
+
+static int
+case_was_requested(int argc, char **argv, const char *name)
+{
+    for (int i = 1; i < argc; i++) {
+	if (BU_STR_EQUAL(argv[i], name))
+	    return 1;
+    }
+
+    return 0;
+}
+
+static int
+timing_enabled()
+{
+    return BU_STR_EQUAL(getenv("BOBOL_QTCAD_REAL_MODEL_TIMING"), "1");
+}
+
+static int
+system_gl_enabled()
+{
+    return BU_STR_EQUAL(getenv("BOBOL_QTCAD_REAL_MODEL_GL"), "1");
+}
+
+static int
+lod_enabled()
+{
+    return !BU_STR_EQUAL(getenv("BOBOL_QTCAD_REAL_MODEL_LOD"), "off");
+}
+
+static BObolViewController::SoftwareWireMode
+software_wire_mode()
+{
+    const char *value = getenv("BOBOL_QTCAD_SOFTWARE_WIRE");
+    if (BU_STR_EQUAL(value, "fast"))
+	return BObolViewController::SOFTWARE_WIRE_FAST;
+    if (BU_STR_EQUAL(value, "quality"))
+	return BObolViewController::SOFTWARE_WIRE_QUALITY;
+    return BObolViewController::SOFTWARE_WIRE_AUTO;
+}
+
+static const char *
+software_wire_mode_name(BObolViewController::SoftwareWireMode mode)
+{
+    switch (mode) {
+	case BObolViewController::SOFTWARE_WIRE_FAST:
+	    return "fast";
+	case BObolViewController::SOFTWARE_WIRE_QUALITY:
+	    return "quality";
+	default:
+	    return "auto";
+    }
+}
+
+static void
+print_timing(const struct model_case &testCase, const char *phase, int64_t start)
+{
+    if (!timing_enabled())
+	return;
+    double elapsed = (double)(bu_gettime() - start) / 1000000.0;
+    fprintf(stderr, "TIMING %s %s %.3f sec\n", testCase.name, phase, elapsed);
+}
+
+static int
+copy_file(const char *src_path, const char *dst_path)
+{
+    if (!src_path || !dst_path)
+	return 0;
+
+    std::ifstream src(src_path, std::ios::binary);
+    std::ofstream dst(dst_path, std::ios::binary | std::ios::trunc);
+    if (!src || !dst)
+	return 0;
+
+    dst << src.rdbuf();
+    return !src.bad() && dst.good();
+}
+
+static int
+path_has_component_suffix(const char *path, const char *suffix)
+{
+    if (!path || !suffix || !suffix[0])
+	return 0;
+
+    auto split_components = [](const char *str) {
+	std::vector<std::string> components;
+	std::string cur;
+	while (str && *str) {
+	    if (*str == '/') {
+		if (!cur.empty()) {
+		    components.push_back(cur);
+		    cur.clear();
+		}
+	    } else {
+		cur.push_back(*str);
+	    }
+	    str++;
+	}
+	if (!cur.empty())
+	    components.push_back(cur);
+	return components;
+    };
+
+    auto strip_instance = [](const std::string &component) {
+	size_t atPos = component.rfind('@');
+	if (atPos == std::string::npos || atPos == 0 ||
+		atPos + 1 >= component.size())
+	    return component;
+	for (size_t i = atPos + 1; i < component.size(); i++) {
+	    if (component[i] < '0' || component[i] > '9')
+		return component;
+	}
+	return component.substr(0, atPos);
+    };
+
+    std::vector<std::string> pathComponents = split_components(path);
+    std::vector<std::string> suffixComponents = split_components(suffix);
+    if (suffixComponents.empty() ||
+	    pathComponents.size() < suffixComponents.size())
+	return 0;
+
+    size_t offset = pathComponents.size() - suffixComponents.size();
+    for (size_t i = 0; i < suffixComponents.size(); i++) {
+	if (strip_instance(pathComponents[offset + i]) !=
+		strip_instance(suffixComponents[i]))
+	    return 0;
+    }
+    return 1;
+}
+
+static int
+summary_from_compact_instance(SoBRLDatabaseSource *source,
+	const BObolCompactInstanceSummary &instance,
+	BObolDatabaseSourceSummary &summary)
+{
+    if (!source || !instance.valid || !source->getSummary(summary) ||
+	!summary.valid)
+	return 0;
+
+    summary.path = instance.path;
+    summary.materialColorValid = instance.materialColorValid;
+    summary.materialColor = instance.materialColor;
+    summary.databaseMetadataValid = TRUE;
+    summary.databaseRegionId = instance.regionId;
+    summary.databaseAirCode = instance.airCode;
+    summary.databaseMaterialId = instance.materialId;
+    summary.databaseLos = instance.los;
+    summary.databaseMaterialColorValid = instance.materialColorValid;
+    summary.databaseMaterialColor = instance.materialColor;
+    return 1;
+}
+
+static int
+source_material_matches_rgb(const BObolDatabaseSourceSummary &summary,
+	const unsigned char rgb[3])
+{
+    if (!summary.valid || !summary.materialColorValid)
+	return 0;
+
+    return fabsf(summary.materialColor[0] - ((float)rgb[0] / 255.0f)) < 1.0e-5f &&
+	fabsf(summary.materialColor[1] - ((float)rgb[1] / 255.0f)) < 1.0e-5f &&
+	fabsf(summary.materialColor[2] - ((float)rgb[2] / 255.0f)) < 1.0e-5f;
+}
+
+static int
+source_material_matches_db_color(struct ged *gedp,
+	const BObolDatabaseSourceSummary &summary,
+	unsigned char expectedRgb[3])
+{
+    if (expectedRgb) {
+	expectedRgb[0] = 0;
+	expectedRgb[1] = 0;
+	expectedRgb[2] = 0;
+    }
+    if (!gedp || !gedp->dbip || !summary.valid)
+	return 0;
+
+    const char *path = summary.path.getString();
+    while (path && *path == '/')
+	path++;
+    if (!path || !path[0])
+	return 0;
+
+    struct db_full_path fp;
+    db_full_path_init(&fp);
+    if (db_string_to_path(&fp, gedp->dbip, path) != 0) {
+	db_free_full_path(&fp);
+	return 0;
+    }
+
+    struct bu_color color = BU_COLOR_INIT_ZERO;
+    unsigned char rgb[3] = {0, 0, 0};
+    db_full_path_color(&color, &fp, gedp->dbip);
+    int ret = bu_color_to_rgb_chars(&color, rgb);
+    db_free_full_path(&fp);
+    if (!ret)
+	return 0;
+    if (expectedRgb) {
+	expectedRgb[0] = rgb[0];
+	expectedRgb[1] = rgb[1];
+	expectedRgb[2] = rgb[2];
+    }
+    return source_material_matches_rgb(summary, rgb);
+}
+
+static int
+all_source_materials_match_db_colors(struct ged *gedp,
+	BObolSceneController *controller)
+{
+    if (!gedp || !gedp->dbip || !controller)
+	return 0;
+
+    const int sourceCount = controller->getDatabaseSourceCount();
+    int materialCount = 0;
+    for (int i = 0; i < sourceCount; i++) {
+	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+	BObolDatabaseSourceSummary summary;
+	if (!source || !source->getSummary(summary) || !summary.valid)
+	    return 0;
+	if (source->hasCompactInstanceIndex()) {
+	    const int instanceCount = source->getCompactInstanceCount();
+	    for (int j = 0; j < instanceCount; j++) {
+		BObolCompactInstanceHandle handle;
+		BObolCompactInstanceSummary instance;
+		if (!source->getCompactInstanceHandle(j, handle) ||
+		    !source->getCompactInstanceSummary(handle, instance) ||
+		    !summary_from_compact_instance(source, instance, summary))
+		    return 0;
+		/* The synthetic whole-target extent is presentation feedback, not
+		 * an authored database occurrence.  Its path is deliberately the
+		 * draw root, whose own default color may differ from descendant
+		 * region materials.  Warm compact startup retains this hidden record
+		 * until terminal adoption; including it made the fallback verifier
+		 * reject correct leaf colors while the cold triangle-export path
+		 * passed the identical scene. */
+		if (BU_STR_EQUAL(instance.geometryKind.getString(),
+			"overview-aabb"))
+		    continue;
+		SbColor expected;
+		if (!bobol_database_source_path_material_color(gedp->dbip,
+			summary.path.getString(), expected) ||
+		    !summary.materialColorValid ||
+		    fabsf(summary.materialColor[0] - expected[0]) >= 1.0e-5f ||
+		    fabsf(summary.materialColor[1] - expected[1]) >= 1.0e-5f ||
+		    fabsf(summary.materialColor[2] - expected[2]) >= 1.0e-5f ||
+		    !instance.appearanceColorValid ||
+		    fabsf(instance.appearanceColor[0] - expected[0]) >= 1.0e-5f ||
+		    fabsf(instance.appearanceColor[1] - expected[1]) >= 1.0e-5f ||
+		    fabsf(instance.appearanceColor[2] - expected[2]) >= 1.0e-5f) {
+		    fprintf(stderr,
+			"material sweep/reference mismatch: source=%d path=%s "
+			"valid=%d actual=(%.9g %.9g %.9g) appearance_valid=%d "
+			"appearance=(%.9g %.9g %.9g) expected=(%.9g %.9g %.9g)\n",
+			i, summary.path.getString(),
+			(int)summary.materialColorValid,
+			summary.materialColor[0], summary.materialColor[1],
+			summary.materialColor[2], (int)instance.appearanceColorValid,
+			instance.appearanceColor[0], instance.appearanceColor[1],
+			instance.appearanceColor[2], expected[0], expected[1], expected[2]);
+		    return 0;
+		}
+		materialCount++;
+	    }
+	    continue;
+	}
+
+	SbColor expected;
+	if (!bobol_database_source_path_material_color(gedp->dbip,
+		summary.path.getString(), expected) ||
+	    !summary.materialColorValid ||
+	    fabsf(summary.materialColor[0] - expected[0]) >= 1.0e-5f ||
+	    fabsf(summary.materialColor[1] - expected[1]) >= 1.0e-5f ||
+	    fabsf(summary.materialColor[2] - expected[2]) >= 1.0e-5f) {
+	    fprintf(stderr,
+		"material sweep/reference mismatch: source=%d path=%s "
+		"valid=%d actual=(%.9g %.9g %.9g) expected=(%.9g %.9g %.9g)\n",
+		i, summary.path.getString(),
+		(int)summary.materialColorValid,
+		summary.materialColor[0], summary.materialColor[1],
+		summary.materialColor[2], expected[0], expected[1], expected[2]);
+	    return 0;
+	}
+	materialCount++;
+    }
+    return materialCount > 0;
+}
+
+static SoBRLDatabaseSource *
+find_source_by_path_suffix(BObolSceneController *controller,
+	const char *suffix,
+	BObolDatabaseSourceSummary &summary)
+{
+    summary = BObolDatabaseSourceSummary();
+    if (!controller || !suffix)
+	return NULL;
+
+    const int sourceCount = controller->getDatabaseSourceCount();
+    for (int i = 0; i < sourceCount; i++) {
+	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+	if (!source || !source->getSummary(summary) || !summary.valid)
+	    continue;
+	if (source->hasCompactInstanceIndex()) {
+	    const int instanceCount = source->getCompactInstanceCount();
+	    for (int j = 0; j < instanceCount; j++) {
+		BObolCompactInstanceHandle handle;
+		BObolCompactInstanceSummary instance;
+		if (!source->getCompactInstanceHandle(j, handle) ||
+		    !source->getCompactInstanceSummary(handle, instance) ||
+		    !summary_from_compact_instance(source, instance, summary))
+		    continue;
+		if (path_has_component_suffix(summary.path.getString(), suffix))
+		    return source;
+	    }
+	    continue;
+	}
+	if (path_has_component_suffix(summary.path.getString(), suffix))
+	    return source;
+    }
+
+    summary = BObolDatabaseSourceSummary();
+    return NULL;
+}
+
+static void
+accumulate_geometry_counts(SoNode *node, struct geometry_counts &counts)
+{
+    if (!node)
+	return;
+
+    if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
+	SoBRLVListShape *shape = static_cast<SoBRLVListShape *>(node);
+	counts.shapeCount++;
+	counts.segmentCount += shape->getSegmentCount();
+	return;
+    }
+
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	SoBRLMeshShape *mesh = static_cast<SoBRLMeshShape *>(node);
+	counts.meshCount++;
+	counts.triangleCount += mesh->getTriangleCount();
+	return;
+    }
+
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	SoGroup *group = static_cast<SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++)
+	    accumulate_geometry_counts(group->getChild(i), counts);
+    }
+}
+
+static struct geometry_counts
+realized_geometry_counts(SoBRLDatabaseSource *source)
+{
+    struct geometry_counts counts = {0, 0, 0, 0};
+    if (!source)
+	return counts;
+
+    for (int i = 0; i < source->getNumChildren(); i++)
+	accumulate_geometry_counts(source->getChild(i), counts);
+    return counts;
+}
+
+static struct geometry_counts
+realized_geometry_counts(BObolSceneController *scene,
+			 BObolViewController *controller,
+			 int expectedDrawMode,
+			 int *realizedSources,
+			 int *modeMismatches)
+{
+    struct geometry_counts counts = {0, 0, 0, 0};
+    if (realizedSources)
+	*realizedSources = 0;
+    if (modeMismatches)
+	*modeMismatches = 0;
+    if (!scene || !controller)
+	return counts;
+
+    const int sourceCount = scene->getDatabaseSourceCount();
+    for (int i = 0; i < sourceCount; i++) {
+	SoBRLDatabaseSource *source = scene->getDatabaseSource(i);
+	if (!source)
+	    continue;
+	if (source->drawMode.getValue() != expectedDrawMode) {
+	    if (modeMismatches)
+		(*modeMismatches)++;
+	    continue;
+	}
+	if (source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
+	    continue;
+	if (realizedSources)
+	    (*realizedSources)++;
+	struct geometry_counts sourceCounts = realized_geometry_counts(source);
+	counts.shapeCount += sourceCounts.shapeCount;
+	counts.segmentCount += sourceCounts.segmentCount;
+	counts.meshCount += sourceCounts.meshCount;
+	counts.triangleCount += sourceCounts.triangleCount;
+    }
+
+    /* Retained batches deliberately decouple source records from emitted
+     * shape nodes.  Validate their public export records when geometry is no
+     * longer parented directly below each database source. */
+    if (!counts.segmentCount && !counts.triangleCount &&
+	controller->getViewport() && controller->getViewport()->getRoot()) {
+	SoBRLExportAction export_action;
+	export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
+	export_action.apply(controller->getViewport()->getRoot());
+	std::set<std::string> line_paths;
+	std::set<std::string> triangle_paths;
+	for (int i = 0; i < export_action.getLineCount(); i++) {
+	    const SoBRLExportAction::LineRecord &record = export_action.getLine(i);
+	    line_paths.insert(record.path.getString());
+	}
+	for (int i = 0; i < export_action.getTriangleCount(); i++) {
+	    const SoBRLExportAction::TriangleRecord &record =
+		export_action.getTriangle(i);
+	    triangle_paths.insert(record.path.getString());
+	}
+	counts.shapeCount = static_cast<int>(line_paths.size());
+	counts.segmentCount = export_action.getLineCount();
+	counts.meshCount = static_cast<int>(triangle_paths.size());
+	counts.triangleCount = export_action.getTriangleCount();
+    }
+
+    /* Compact PoP payloads are view-local retained CAD-assembly state rather
+     * than child shape nodes.  DISPLAY_LEVEL export still reports the
+     * structural occurrence records, so use the controller's authoritative
+     * accounting for the geometry actually presented by that path. */
+    const size_t activeCadPayloads = controller->getActiveLodCadPayloadCount();
+    const size_t activeFaces = controller->getActiveLodFaceCount();
+    if (activeCadPayloads > 0 && activeFaces > 0) {
+	const int payloadCount = static_cast<int>(std::min<size_t>(
+	    activeCadPayloads, static_cast<size_t>(INT_MAX)));
+	const int faceCount = static_cast<int>(std::min<size_t>(
+	    activeFaces, static_cast<size_t>(INT_MAX)));
+	if (expectedDrawMode == SoBRLDatabaseSource::SHADED) {
+	    counts.meshCount = payloadCount;
+	    counts.triangleCount = faceCount;
+	} else if (expectedDrawMode == SoBRLDatabaseSource::WIREFRAME) {
+	    counts.shapeCount = payloadCount;
+	    counts.segmentCount = faceCount > INT_MAX / 3 ?
+		INT_MAX : faceCount * 3;
+	}
+    }
+
+    return counts;
+}
+
+static int
+wait_for_view_lod_idle(QgView &view, BObolViewController *controller,
+	int timeoutMilliseconds)
+{
+    if (!controller)
+	return 0;
+    const int64_t deadline = bu_gettime() +
+	static_cast<int64_t>(timeoutMilliseconds) * 1000;
+    int64_t quietSince = 0;
+    while (bu_gettime() < deadline) {
+	QCoreApplication::processEvents();
+	(void)controller->advanceProgressiveWork(NULL, NULL);
+	if (controller->hasPendingLodRefinementFrame() ||
+	    controller->isRenderRequested()) {
+	    view.need_update(QG_VIEW_REFRESH);
+	    controller->requestLodCapacityRender("real-model-lod-settle");
+	    QCoreApplication::processEvents();
+	    QImage feedback;
+	    (void)qtcad_obol_present_requested_frame(view, controller,
+		feedback);
+	}
+
+	BObolLodService *service = controller->getLodService();
+	const bool serviceIdle = !service ||
+	    (service->pendingTaskCountForDiagnostics() == 0 &&
+	     service->delayedTaskCountForDiagnostics() == 0 &&
+	     service->inFlightCount() == 0 &&
+	     service->activeRequestCountForDiagnostics() == 0 &&
+	     service->queuedResultCountForDiagnostics() == 0 &&
+	     service->queuedCacheWriteCountForDiagnostics() == 0);
+	const bool idle = !controller->hasProgressiveWorkPending() &&
+	    !controller->hasPendingLodResults() &&
+	    !controller->hasPendingLodSubmissions() &&
+	    !controller->hasPendingLodRefinementFrame() &&
+	    !controller->isRenderRequested() && serviceIdle;
+	const int64_t now = bu_gettime();
+	if (idle) {
+	    if (!quietSince)
+		quietSince = now;
+	    if (now - quietSince >= 100000)
+		return 1;
+	} else {
+	    quietSince = 0;
+	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return 0;
+}
+
+static int
+nist_database_materials_are_correct(struct ged *gedp,
+	BObolViewController *controller, const char *model_name)
+{
+    if (!gedp || !gedp->dbip || !controller || !controller->getViewport() ||
+	!controller->getViewport()->getRoot())
+	return 0;
+
+    SoBRLExportAction exportAction;
+    exportAction.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
+    exportAction.apply(controller->getViewport()->getRoot());
+    if (exportAction.getTriangleCount() <= 0) {
+	BObolSceneController scene(controller->getRenderSceneRoot());
+	return controller->getActiveLodCadPayloadCount() > 0 ?
+	    all_source_materials_match_db_colors(gedp, &scene) : 0;
+    }
+
+    for (int i = 0; i < exportAction.getTriangleCount(); i++) {
+	const SoBRLExportAction::TriangleRecord &triangle =
+	    exportAction.getTriangle(i);
+	SbColor expected;
+	const int expectedValid =
+	    bobol_database_source_path_material_color(gedp->dbip,
+		triangle.path.getString(), expected) ? 1 : 0;
+	if (!expectedValid || !triangle.materialColorValid ||
+	    fabsf(triangle.materialColor[0] - expected[0]) >= 1.0e-5f ||
+	    fabsf(triangle.materialColor[1] - expected[1]) >= 1.0e-5f ||
+	    fabsf(triangle.materialColor[2] - expected[2]) >= 1.0e-5f) {
+	    fprintf(stderr,
+		"%s triangle/database material mismatch: path=%s "
+		"expected_valid=%d actual_valid=%d "
+		"actual=(%.9g %.9g %.9g) expected=(%.9g %.9g %.9g)\n",
+		model_name, triangle.path.getString(), expectedValid,
+		triangle.materialColorValid,
+		triangle.materialColor[0], triangle.materialColor[1],
+		triangle.materialColor[2], expected[0], expected[1], expected[2]);
+	    return 0;
+	}
+    }
+    return 1;
+}
+
+static int
+nist_pmi7_10_materials_are_correct(BObolViewController *controller)
+{
+    if (!controller || !controller->getViewport() ||
+	!controller->getViewport()->getRoot())
+	return 0;
+
+    const unsigned char expected[4][3] = {
+	{153, 231, 254}, {255, 206, 142},
+	{237, 255, 168}, {178, 178, 178}
+    };
+    int seen = 0;
+    SoBRLExportAction exportAction;
+    exportAction.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
+    exportAction.apply(controller->getViewport()->getRoot());
+    for (int i = 0; i < exportAction.getTriangleCount(); i++) {
+	const SoBRLExportAction::TriangleRecord &triangle =
+	    exportAction.getTriangle(i);
+	if (!triangle.materialColorValid)
+	    return 0;
+	int match = -1;
+	for (int color = 0; color < 4; color++) {
+	    if (fabsf(triangle.materialColor[0] - expected[color][0] / 255.0f) < 1.0e-5f &&
+		fabsf(triangle.materialColor[1] - expected[color][1] / 255.0f) < 1.0e-5f &&
+		fabsf(triangle.materialColor[2] - expected[color][2] / 255.0f) < 1.0e-5f) {
+		match = color;
+		break;
+	    }
+	}
+	if (match < 0) {
+	    fprintf(stderr,
+		"NIST_MBE_PMI_7-10 unexpected triangle material: path=%s "
+		"actual=(%.9g %.9g %.9g)\n", triangle.path.getString(),
+		triangle.materialColor[0], triangle.materialColor[1],
+		triangle.materialColor[2]);
+	    return 0;
+	}
+	seen |= 1 << match;
+    }
+    if (seen == 0 && controller->getActiveLodCadPayloadCount() > 0) {
+	BObolSceneController scene(controller->getRenderSceneRoot());
+	const int sourceCount = scene.getDatabaseSourceCount();
+	for (int i = 0; i < sourceCount; i++) {
+	    SoBRLDatabaseSource *source = scene.getDatabaseSource(i);
+	    if (!source || !source->hasCompactInstanceIndex())
+		continue;
+	    for (int j = 0; j < source->getCompactInstanceCount(); j++) {
+		BObolCompactInstanceHandle handle;
+		BObolCompactInstanceSummary instance;
+		if (!source->getCompactInstanceHandle(j, handle) ||
+		    !source->getCompactInstanceSummary(handle, instance) ||
+		    !instance.appearanceColorValid)
+		    return 0;
+		int match = -1;
+		for (int color = 0; color < 4; color++) {
+		    if (fabsf(instance.appearanceColor[0] -
+			    expected[color][0] / 255.0f) < 1.0e-5f &&
+			fabsf(instance.appearanceColor[1] -
+			    expected[color][1] / 255.0f) < 1.0e-5f &&
+			fabsf(instance.appearanceColor[2] -
+			    expected[color][2] / 255.0f) < 1.0e-5f) {
+			match = color;
+			break;
+		    }
+		}
+		if (match < 0)
+		    return 0;
+		seen |= 1 << match;
+	    }
+	}
+    }
+    return seen == 0xf;
+}
+
+static float
+distance_between(const SbVec3f &a, const SbVec3f &b)
+{
+    return (a - b).length();
+}
+
+static int
+longest_export_line(const SoBRLExportAction &exportAction,
+	SoBRLExportAction::LineRecord &line)
+{
+    float longest = -FLT_MAX;
+    int found = 0;
+
+    for (int i = 0; i < exportAction.getLineCount(); i++) {
+	const SoBRLExportAction::LineRecord &candidate = exportAction.getLine(i);
+	float length = distance_between(candidate.a, candidate.b);
+	if (length > longest) {
+	    longest = length;
+	    line = candidate;
+	    found = 1;
+	}
+    }
+
+    return found && longest > 0.0f;
+}
+
+static int
+exercise_real_model_interactions(const struct model_case &testCase,
+	QgView &view,
+	BObolViewController *controller)
+{
+    int64_t phaseStart = bu_gettime();
+    std::vector<QgObolPickRecord> picks;
+    bool pickAll = testCase.pickAllStress ? true : false;
+    int pickCount = qg_obol_pick_point(&view,
+	    view.width() / 2, view.height() / 2,
+	    80.0f, pickAll, picks);
+    print_timing(testCase, pickAll ? "pick-all-stress" : "pick", phaseStart);
+    if (pickCount <= 0 || picks.empty() ||
+	    picks[0].path.empty() ||
+	    picks[0].sourceName.empty() ||
+	    picks[0].primitiveIndex < 0) {
+	fprintf(stderr, "%s:%s qtcad Obol pick workflow did not return BRL-CAD identity\n",
+		testCase.file, testCase.root);
+	return 0;
+    }
+    if (pickAll) {
+	if (pickCount < 2) {
+	    fprintf(stderr, "%s:%s qtcad Obol pick-all stress did not return multiple hits\n",
+		    testCase.file, testCase.root);
+	    return 0;
+	}
+	for (size_t i = 1; i < picks.size(); i++) {
+	    if (picks[i].distance < picks[i - 1].distance) {
+		fprintf(stderr, "%s:%s qtcad Obol pick-all stress returned unordered hits\n",
+			testCase.file, testCase.root);
+		return 0;
+	    }
+	}
+    }
+
+    phaseStart = bu_gettime();
+    SoBRLExportAction exportAction;
+    exportAction.apply(controller->getViewport()->getRoot());
+    SoBRLExportAction::LineRecord line;
+    print_timing(testCase, "export-longest-line", phaseStart);
+    if (!longest_export_line(exportAction, line)) {
+	fprintf(stderr, "%s:%s did not export a measurable Obol line\n",
+		testCase.file, testCase.root);
+	return 0;
+    }
+
+    phaseStart = bu_gettime();
+    SbVec3f midpoint = (line.a + line.b) * 0.5f;
+    QgObolSnapRecord snap;
+    if (!qg_obol_snap_point(&view, midpoint, 0.5f,
+	    QgObolSnapRecord::MIDPOINT, snap) ||
+	    snap.kind != QgObolSnapRecord::MIDPOINT ||
+	    snap.path.empty() ||
+	    snap.primitiveIndex < 0 ||
+	    snap.distance > 0.001f) {
+	fprintf(stderr, "%s:%s qtcad Obol snap workflow did not find a real-model midpoint\n",
+		testCase.file, testCase.root);
+	return 0;
+    }
+    print_timing(testCase, "snap", phaseStart);
+
+    phaseStart = bu_gettime();
+    SbVec3f measurePoints[2] = {line.a, line.b};
+    if (!qg_obol_measure_update_overlay(&view, "real-model::measurement",
+	    measurePoints, 2, NULL)) {
+	fprintf(stderr, "%s:%s qtcad Obol measure workflow did not publish an overlay\n",
+		testCase.file, testCase.root);
+	return 0;
+    }
+
+    SoBRLExportAction measuredExport;
+    measuredExport.apply(controller->getViewport()->getRoot());
+    print_timing(testCase, "measure-update-export", phaseStart);
+    if (measuredExport.getLineCount() <= exportAction.getLineCount()) {
+	fprintf(stderr, "%s:%s qtcad Obol measure overlay was not visible to Obol export\n",
+		testCase.file, testCase.root);
+	return 0;
+    }
+
+    phaseStart = bu_gettime();
+    if (!qg_obol_measure_clear_overlay(&view, "real-model::measurement")) {
+	fprintf(stderr, "%s:%s qtcad Obol measure workflow did not clear its overlay\n",
+		testCase.file, testCase.root);
+	return 0;
+    }
+
+    SoBRLExportAction clearedExport;
+    clearedExport.apply(controller->getViewport()->getRoot());
+    print_timing(testCase, "measure-clear-export", phaseStart);
+    if (clearedExport.getLineCount() != exportAction.getLineCount()) {
+	fprintf(stderr, "%s:%s qtcad Obol measure overlay remained after clear\n",
+		testCase.file, testCase.root);
+	return 0;
+    }
+
+    return 1;
+}
+
+static int
+sync_draw_case(const struct model_case &testCase)
+{
+    int64_t totalStart = bu_gettime();
+    const int viewportWidth = testCase.expectM35TableColor ? 320 : 220;
+    const int viewportHeight = testCase.expectM35TableColor ? 240 : 170;
+    char dbpath[MAXPATHLEN] = {0};
+    if (!model_path(testCase.file, dbpath, sizeof(dbpath))) {
+	fprintf(stderr, "missing qtcad Obol workflow model: %s\n", dbpath);
+	return 0;
+    }
+
+    struct ged *gedp = ged_open("db", dbpath, 1);
+    print_timing(testCase, "ged-open", totalStart);
+    if (!gedp) {
+	fprintf(stderr, "failed to open qtcad Obol workflow model: %s\n", dbpath);
+	return 0;
+    }
+
+    QgView view(NULL, system_gl_enabled() ? QgViewType::GL : QgViewType::SW);
+    view.resize(viewportWidth, viewportHeight);
+    /* QgView is a composite widget.  Even with Qt's offscreen platform it
+     * must be shown once so layout assigns the requested size to the child
+     * canvas; otherwise the test silently captures the 100x50 size hint and
+     * turns visual checks into fragile thumbnail-pixel thresholds. */
+    view.show();
+    QCoreApplication::processEvents();
+    struct ged_view_context *view_ctx =
+	ged_view_context_from_bv(view.viewContext());
+    ged_view_active_ctx_set(gedp, view_ctx);
+    /* FPS text is intentionally time-varying and is covered by the focused
+     * canvas-controller test.  It must not contaminate this test's retained
+     * geometry redraw comparison. */
+    struct bv_params_state deterministicParams = BV_PARAMS_STATE_INIT;
+    struct bv *deterministicView =
+	bv_context_view(static_cast<struct bv_context *>(view.viewContext()));
+    if (deterministicView &&
+	bv_params_state_get(&deterministicParams, deterministicView)) {
+	deterministicParams.draw_fps = 0;
+	(void)bv_params_state_set(deterministicView, &deterministicParams);
+    }
+    (void)ged_view_context_host_attach(gedp, view_ctx);
+    if (!ged_view_context_obol_endpoint_set(
+	    view_ctx, view.displayEndpoint(), 0)) {
+	ged_close(gedp);
+	return 0;
+    }
+
+    BObolViewController *controller = view.obolViewController();
+    if (!controller) {
+	ged_close(gedp);
+	return 0;
+    }
+    const BObolViewController::SoftwareWireMode wireMode =
+	software_wire_mode();
+    const int lodEnabled = lod_enabled();
+    ged_view_lod_policy lodPolicy;
+    if (!ged_view_lod_policy_get(&lodPolicy, view_ctx)) {
+	ged_close(gedp);
+	return 0;
+    }
+    lodPolicy.policy = lodEnabled ? BV_LOD_AUTO : BV_LOD_OFF;
+    lodPolicy.mesh_enabled = lodEnabled;
+    lodPolicy.csg_enabled = lodEnabled;
+    lodPolicy.zoom_refresh = lodEnabled;
+    if (!ged_view_lod_policy_apply(view_ctx, &lodPolicy)) {
+	ged_close(gedp);
+	return 0;
+    }
+    const int progressiveDraw = testCase.deferLeafExpansion && lodEnabled;
+    controller->setSoftwareWireMode(wireMode);
+    if (timing_enabled()) {
+	fprintf(stderr, "CONFIG %s renderer=%s lod=%s software_wire=%s size=%dx%d\n",
+	    testCase.name, system_gl_enabled() ? "system-gl" : "osmesa",
+	    lodEnabled ? "auto" : "off", software_wire_mode_name(wireMode),
+	    viewportWidth, viewportHeight);
+    }
+    controller->setViewportSize(viewportWidth, viewportHeight);
+    controller->clearDatabaseSources();
+    controller->requestLodCapacityRender("real-model-empty-baseline");
+    QCoreApplication::processEvents();
+    QImage emptyImage;
+    view.get_viewport_image(emptyImage);
+
+    const char *draw_path = testCase.root;
+    struct ged_scene_draw_request draw_request;
+    ged_scene_draw_request_init(&draw_request);
+    draw_request.view = view_ctx;
+    draw_request.paths = &draw_path;
+    draw_request.path_count = 1;
+    draw_request.style.draw_mode =
+	static_cast<enum ged_scene_draw_mode>(testCase.gedDrawMode);
+    draw_request.realization.mode = progressiveDraw ?
+	GED_SCENE_REALIZE_PROGRESSIVE : GED_SCENE_REALIZE_EAGER;
+    draw_request.realization.strict = testCase.strictFallback;
+
+    struct ged_scene_result *result = ged_scene_result_create();
+    int64_t phaseStart = bu_gettime();
+    int drawRet = ged_scene_draw(gedp, &draw_request, result) ==
+	GED_SCENE_OK ? 1 : -1;
+    print_timing(testCase, "ged-draw-transaction", phaseStart);
+    phaseStart = bu_gettime();
+    int changed = ged_scene_result_changed(result);
+    if (changed)
+	view.need_update(QG_VIEW_REFRESH);
+    print_timing(testCase, "obol-sync-transaction", phaseStart);
+    if (drawRet < 0) {
+	const char *drawErrors = ged_scene_result_diagnostic(result);
+	fprintf(stderr, "%s:%s GED draw failed: %s\n", testCase.file,
+		testCase.root, drawErrors ? drawErrors : "");
+	ged_scene_result_destroy(result);
+	ged_close(gedp);
+	return 0;
+    }
+    ged_scene_result_destroy(result);
+
+    /* QgView endpoints use the same deferred publication boundary as the
+     * interactive canvas.  Drain it explicitly before inspecting geometry. */
+    (void)controller->realizePending();
+    BObolSceneController geometryScene(controller->getRenderSceneRoot());
+    (void)geometryScene.realizePending();
+    const int sourceCount = geometryScene.getDatabaseSourceCount();
+    if (!changed || sourceCount <= 0) {
+	fprintf(stderr, "%s:%s did not create Obol database sources\n",
+		testCase.file, testCase.root);
+	ged_close(gedp);
+	return 0;
+    }
+
+    int realizedSources = 0;
+    int modeMismatches = 0;
+    phaseStart = bu_gettime();
+    struct geometry_counts counts = realized_geometry_counts(&geometryScene,
+	controller, testCase.obolDrawMode, &realizedSources, &modeMismatches);
+    if (realizedSources <= 0 || modeMismatches > 0) {
+	fprintf(stderr,
+		"%s:%s produced invalid Obol database sources: sources=%d realized=%d mode_mismatches=%d expected_mode=%d\n",
+		testCase.file, testCase.root, sourceCount, realizedSources,
+		modeMismatches, testCase.obolDrawMode);
+	ged_close(gedp);
+	return 0;
+    }
+
+    if (progressiveDraw) {
+	/* The bounded startup proxy is intentionally line geometry regardless
+	 * of the requested final representation.  Its final detail is checked
+	 * after progressive work settles below. */
+    } else if (testCase.obolDrawMode == SoBRLDatabaseSource::SHADED) {
+	if (counts.meshCount < testCase.minMeshShapes ||
+		counts.triangleCount < testCase.minMeshTriangles) {
+	    fprintf(stderr,
+		    "%s:%s shaded Obol geometry too small: sources=%d realized=%d meshes=%d triangles=%d\n",
+		    testCase.file, testCase.root, sourceCount, realizedSources,
+		    counts.meshCount, counts.triangleCount);
+	    ged_close(gedp);
+	    return 0;
+	}
+    } else {
+	if (counts.shapeCount < testCase.minWireShapes ||
+		counts.segmentCount < testCase.minWireSegments) {
+	    fprintf(stderr,
+		    "%s:%s wire Obol geometry too small: sources=%d realized=%d shapes=%d segments=%d\n",
+		    testCase.file, testCase.root, sourceCount, realizedSources,
+		    counts.shapeCount, counts.segmentCount);
+	    ged_close(gedp);
+	    return 0;
+	}
+    }
+    print_timing(testCase, "geometry-count-check", phaseStart);
+
+    /* The BRL-CAD bv camera is authoritative and is reapplied before each
+     * endpoint paint.  Coin's local viewAll alone is therefore transient and
+     * leaves eager/LoD-off runs at the default 1000-unit view size. */
+    const char *initialAutoviewCommand[1] = {"autoview"};
+    (void)ged_exec_autoview(gedp, 1, initialAutoviewCommand);
+    controller->requestLodCapacityRender("real-model-visible");
+    QCoreApplication::processEvents();
+    phaseStart = bu_gettime();
+    QImage visibleImage;
+    view.get_viewport_image(visibleImage);
+    const char *capturePath = getenv("BOBOL_QTCAD_REAL_MODEL_CAPTURE");
+    if (capturePath && capturePath[0] != '\0')
+	(void)visibleImage.save(QString::fromUtf8(capturePath));
+    int litPixels = lit_pixel_count(visibleImage);
+    QImage comparisonEmpty = emptyImage.size() == visibleImage.size() ?
+	emptyImage : emptyImage.scaled(visibleImage.size(), Qt::IgnoreAspectRatio,
+	    Qt::SmoothTransformation);
+    int visibleByteDiff = image_byte_diff(comparisonEmpty, visibleImage);
+    fastf_t visibleSsim = image_ssim(comparisonEmpty, visibleImage);
+    /* A deferred cold draw publishes its root immediately, but the exact
+     * aggregate/leaf bounds arrive on the occurrence stream.  Wait only for
+     * the first useful visual here; the separate settling check below proves
+     * that boxes are replaced by the requested BREP meshes. */
+    if (progressiveDraw &&
+	(visibleImage.isNull() || litPixels < 20 || visibleByteDiff < 100 ||
+	 visibleSsim >= 0.9999)) {
+	for (int attempt = 0; attempt < 2000; attempt++) {
+	    QCoreApplication::processEvents();
+	    (void)controller->advanceProgressiveWork(NULL, NULL);
+	    const char *autoviewCommand[1] = {"autoview"};
+	    (void)ged_exec_autoview(gedp, 1, autoviewCommand);
+	    view.need_update(QG_VIEW_REFRESH);
+	    controller->requestLodCapacityRender("real-model-first-progressive-visual");
+	    QCoreApplication::processEvents();
+	    view.get_viewport_image(visibleImage);
+	    litPixels = lit_pixel_count(visibleImage);
+	    comparisonEmpty = emptyImage.size() == visibleImage.size() ?
+		emptyImage : emptyImage.scaled(visibleImage.size(),
+		    Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+	    visibleByteDiff = image_byte_diff(comparisonEmpty, visibleImage);
+	    visibleSsim = image_ssim(comparisonEmpty, visibleImage);
+	    if (!visibleImage.isNull() && litPixels >= 20 &&
+		visibleByteDiff >= 100 && visibleSsim < 0.9999)
+		break;
+	    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+    }
+    print_timing(testCase, "render-readback", phaseStart);
+    if (visibleImage.isNull() || litPixels < 20 || visibleByteDiff < 100 ||
+	visibleSsim >= 0.9999) {
+	fprintf(stderr, "%s:%s qtcad Obol capture did not show geometry: width=%d height=%d lit=%d diff=%d ssim=%.9g\n",
+		testCase.file, testCase.root,
+		visibleImage.width(), visibleImage.height(), litPixels,
+		visibleByteDiff, visibleSsim);
+	ged_close(gedp);
+	return 0;
+    }
+    const int nistSingleMaterialCase =
+	testCase.obolDrawMode == SoBRLDatabaseSource::SHADED &&
+	BU_STR_EQUAL(testCase.root, "Document") &&
+	strstr(testCase.file, "nist/NIST_MBE_PMI_");
+
+    if (nistSingleMaterialCase && !progressiveDraw &&
+	!nist_database_materials_are_correct(gedp, controller, testCase.file)) {
+	fprintf(stderr,
+	    "%s:%s did not preserve the BREP region's database material\n",
+	    testCase.file, testCase.root);
+	ged_close(gedp);
+	return 0;
+    }
+
+    if (BU_STR_EQUAL(testCase.name, "nist_pmi7_10_shaded") &&
+	!progressiveDraw &&
+	!nist_pmi7_10_materials_are_correct(controller)) {
+	fprintf(stderr,
+	    "%s:%s did not preserve all four region materials\n",
+	    testCase.file, testCase.root);
+	ged_close(gedp);
+	return 0;
+    }
+    if (testCase.expectM35TableColor) {
+	const int tableColorPixels = m35_table_color_pixel_count(visibleImage);
+	if (tableColorPixels < 20) {
+	    fprintf(stderr,
+		    "%s:%s did not render the active M35 region-id color table: table_color_pixels=%d\n",
+		    testCase.file, testCase.root, tableColorPixels);
+	    ged_close(gedp);
+	    return 0;
+	}
+    }
+    if (BU_STR_EQUAL(testCase.name, "nist_pmi7_10_shaded") &&
+	!progressiveDraw) {
+	const int colorMask = nist_pmi7_10_color_mask(visibleImage);
+	if (colorMask != 7) {
+	    fprintf(stderr,
+		"%s:%s did not visibly render the cyan, orange, and yellow "
+		"regions: color_mask=0x%x\n", testCase.file, testCase.root,
+		colorMask);
+	    ged_close(gedp);
+	    return 0;
+	}
+    }
+    /* A deferred draw first publishes a bounded proxy.  Drain its background
+     * realization and verify that the requested final representation replaces
+     * the proxy without losing the database material color. */
+    if (progressiveDraw) {
+	BObolProgressiveStatus progressiveStatus;
+	int settled = 0;
+	const int64_t settleDeadline = bu_gettime() +
+	    REAL_MODEL_PROGRESSIVE_SETTLE_TIMEOUT_US;
+	int64_t lastFeedbackFrame = 0;
+	for (int attempt = 0; bu_gettime() < settleDeadline; attempt++) {
+	    QCoreApplication::processEvents();
+	    const int advanced = controller->advanceProgressiveWork(NULL,
+		&progressiveStatus);
+	    /* Hidden software views do not receive a normal expose/paint stream.
+	     * The production coordinator intentionally gates richer cuts on a
+	     * completed presentation, so supply that feedback at a bounded 10 Hz
+	     * instead of either starving it or rendering on every 1 ms poll. */
+	    const int64_t now = bu_gettime();
+	    if (progressiveStatus.hasMore &&
+		(controller->hasPendingLodRefinementFrame() ||
+		 lastFeedbackFrame == 0 || now - lastFeedbackFrame >= 100000)) {
+		view.need_update(QG_VIEW_REFRESH);
+		controller->requestLodCapacityRender("real-model-progressive-feedback");
+		QCoreApplication::processEvents();
+		QImage feedbackImage;
+		(void)qtcad_obol_present_requested_frame(view, controller,
+		    feedbackImage);
+		lastFeedbackFrame = bu_gettime();
+	    }
+	    if (!progressiveStatus.hasMore &&
+		(progressiveStatus.changed || advanced == 0 || attempt > 0)) {
+		settled = 1;
+		break;
+	    }
+	    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	if (!settled) {
+	    BObolLodConvergenceStatus convergence;
+	    controller->getLodConvergenceStatus(convergence);
+	    fprintf(stderr, "%s:%s deferred realization did not settle: "
+		"providers=%zu/%zu lod=%zu/%zu submitted=%zu cached=%zu "
+		"expanded=%zu existing=%zu remaining=%zu proxies=%zu "
+		"pending=%zu in_flight=%zu results=%zu writes=%zu "
+		"changed=%d more=%d controller={work=%d results=%d "
+		"submissions=%d refinement_frame=%d render=%d interaction=%d} "
+		"convergence={phase=%d expected=%zu "
+		"available=%zu visible=%zu active=%zu satisfied=%zu "
+		"fraction=%.3g ready=%d background=%d refine=%d "
+		"calibrate=%d handoff=%d point=%d}\n",
+		testCase.file, testCase.root,
+		progressiveStatus.providerAdvanced,
+		progressiveStatus.providerCount,
+		progressiveStatus.lodResultsApplied,
+		progressiveStatus.lodResultsProcessed,
+		progressiveStatus.submitted,
+		progressiveStatus.alreadyCached,
+		progressiveStatus.expanded,
+		progressiveStatus.existing,
+		progressiveStatus.remaining,
+		progressiveStatus.proxyPublished,
+		progressiveStatus.pendingTasks,
+		progressiveStatus.inFlight,
+		progressiveStatus.queuedResults,
+		progressiveStatus.queuedCacheWrites,
+		progressiveStatus.changed,
+		progressiveStatus.hasMore,
+		controller->hasProgressiveWorkPending() ? 1 : 0,
+		controller->hasPendingLodResults() ? 1 : 0,
+		controller->hasPendingLodSubmissions() ? 1 : 0,
+		controller->hasPendingLodRefinementFrame() ? 1 : 0,
+		controller->isRenderRequested() ? 1 : 0,
+		controller->isLodInteractionActive() ? 1 : 0,
+		convergence.phase,
+		convergence.expectedLeafCount,
+		convergence.availableLeafCount,
+		convergence.visibleTargetCount,
+		convergence.activePayloadCount,
+		convergence.satisfiedPayloadCount,
+		static_cast<double>(convergence.fraction),
+		convergence.viewReady ? 1 : 0,
+		convergence.backgroundPending ? 1 : 0,
+		convergence.refinementFramePending ? 1 : 0,
+		convergence.budgetCalibrationPending ? 1 : 0,
+		convergence.stablePresentationHandoffPending ? 1 : 0,
+		convergence.pointProxyCalibrationPending ? 1 : 0);
+	    ged_close(gedp);
+	    return 0;
+	}
+	const char *settledAutoviewCommand[1] = {"autoview"};
+	(void)ged_exec_autoview(gedp, 1, settledAutoviewCommand);
+	view.need_update(QG_VIEW_REFRESH);
+	controller->requestLodCapacityRender("real-model-deferred-settled");
+	QCoreApplication::processEvents();
+	QImage settledImage;
+	view.get_viewport_image(settledImage);
+	if (capturePath && capturePath[0] != '\0')
+	    (void)settledImage.save(QString::fromUtf8(capturePath) +
+		QStringLiteral(".settled.png"));
+	const int settledTableColorPixels = testCase.expectM35TableColor ?
+	    m35_table_color_pixel_count(settledImage) : 0;
+	BObolSceneController settledScene(controller->getRenderSceneRoot());
+	struct geometry_counts settledCounts = realized_geometry_counts(
+	    &settledScene, controller, testCase.obolDrawMode, NULL, NULL);
+	/* A no-op retained-assembly synchronization must not touch its source.
+	 * Repeated touches here cause every interactive redraw to rebuild the
+	 * render plan, which is especially costly for M35. */
+	const int settledSourceCount = settledScene.getDatabaseSourceCount();
+	for (int i = 0; i < settledSourceCount; i++) {
+	    SoBRLDatabaseSource *source = settledScene.getDatabaseSource(i);
+	    if (!source || !source->prepareCompiledAssembly())
+		continue;
+	    const SbUniqueId stableNodeId = source->getNodeId();
+	    for (int repeat = 0; repeat < 4; repeat++) {
+		if (!source->prepareCompiledAssembly() ||
+		    source->getNodeId() != stableNodeId) {
+		    fprintf(stderr,
+			"%s:%s no-op compact assembly synchronization changed "
+			"source node id\n", testCase.file, testCase.root);
+		    ged_close(gedp);
+		    return 0;
+		}
+	    }
+	}
+	/* Exercise the interactive camera-update path as well.  M35 has enough
+	 * retained sources to use the cross-source render batch, whose visual
+	 * state must also remain stable across view-only revisions. */
+	if (testCase.obolDrawMode == SoBRLDatabaseSource::SHADED &&
+	    testCase.expectM35TableColor) {
+	    /* This regression targets retained batch synchronization, not the
+	     * asynchronous LoD provider.  Keep the database lifetime local to
+	     * this test by preventing a camera update from launching worker
+	     * requests just before ged_close. */
+	    controller->setLodAutoSubmit(FALSE);
+	    view.aet(35.0, 25.0, 0.0);
+	    view.need_update(QG_VIEW_REFRESH);
+	    for (int frame = 0; frame < 6; frame++) {
+		QCoreApplication::processEvents();
+		QImage rotatedImage;
+		view.get_viewport_image(rotatedImage);
+		if (rotatedImage.isNull() ||
+		    m35_table_color_pixel_count(rotatedImage) < 20) {
+		    fprintf(stderr,
+			"%s:%s interactive camera update lost shaded M35 "
+			"geometry or table colors\n", testCase.file,
+			testCase.root);
+		    ged_close(gedp);
+		    return 0;
+		}
+	    }
+	}
+	const int settledGeometryTooSmall =
+	    testCase.obolDrawMode == SoBRLDatabaseSource::SHADED ?
+	    (settledCounts.meshCount < testCase.minMeshShapes ||
+	     settledCounts.triangleCount < testCase.minMeshTriangles) :
+	    (settledCounts.shapeCount < testCase.minWireShapes ||
+	     settledCounts.segmentCount < testCase.minWireSegments);
+	if ((testCase.expectM35TableColor && settledTableColorPixels < 20) ||
+	    settledGeometryTooSmall) {
+	    fprintf(stderr,
+		"%s:%s settled deferred draw lost M35 table colors or detail: "
+		"table_color_pixels=%d shapes=%d segments=%d meshes=%d triangles=%d\n",
+		testCase.file, testCase.root, settledTableColorPixels,
+		settledCounts.shapeCount, settledCounts.segmentCount,
+		settledCounts.meshCount, settledCounts.triangleCount);
+	    ged_close(gedp);
+	    return 0;
+	}
+	if (nistSingleMaterialCase &&
+	    !nist_database_materials_are_correct(gedp, controller,
+		testCase.file)) {
+	    fprintf(stderr,
+		"%s:%s settled deferred BREP draw lost region material state\n",
+		testCase.file, testCase.root);
+	    ged_close(gedp);
+	    return 0;
+	}
+	if (BU_STR_EQUAL(testCase.name, "nist_pmi7_10_shaded") &&
+	    nist_pmi7_10_color_mask(settledImage) != 7) {
+	    fprintf(stderr,
+		"%s:%s settled deferred BREP draw lost one or more region colors\n",
+		testCase.file, testCase.root);
+	    ged_close(gedp);
+	    return 0;
+	}
+	if (BU_STR_EQUAL(testCase.name, "nist_pmi7_10_shaded") &&
+	    !nist_pmi7_10_materials_are_correct(controller)) {
+	    fprintf(stderr,
+		"%s:%s settled deferred BREP draw lost region material metadata\n",
+		testCase.file, testCase.root);
+	    ged_close(gedp);
+	    return 0;
+	}
+	if (BU_STR_EQUAL(testCase.name, "nist_pmi7_10_wire") &&
+	    controller->getActiveLodMeshPayloadCount() != 0) {
+	    fprintf(stderr,
+		"%s:%s deferred BREP wire draw retained a shaded PoP "
+		"overlay: mesh_payloads=%zu\n",
+		testCase.file, testCase.root,
+		controller->getActiveLodMeshPayloadCount());
+	    ged_close(gedp);
+	    return 0;
+	}
+	print_timing(testCase, "total", totalStart);
+	ged_close(gedp);
+	return 1;
+    }
+    /* get_viewport_image is an observational export traversal.  Only an
+     * endpoint paint consumes a render request; asserting otherwise here
+     * races legitimate follow-up requests from presentation synchronization
+     * and contradicts the canvas-controller contract. */
+
+    /* Eager source realization and view-dependent LoD are independent.  The
+     * autoview above may legitimately start a short render-budget calibration
+     * even though no provider work remains.  Compare explicit redraws only
+     * after that camera epoch is quiet; comparing them to the pre-autoview
+     * full-capacity source confused expected LoD activation with lost geometry. */
+    if (lodEnabled && !wait_for_view_lod_idle(view, controller, 10000)) {
+	fprintf(stderr, "%s:%s eager view LoD did not become idle\n",
+	    testCase.file, testCase.root);
+	ged_close(gedp);
+	return 0;
+    }
+
+    struct ged_scene_redraw_request redraw_request;
+    ged_scene_redraw_request_init(&redraw_request);
+    redraw_request.view = view_ctx;
+    struct ged_scene_result *redraw_result = ged_scene_result_create();
+    phaseStart = bu_gettime();
+    int redrawRet = ged_scene_redraw(gedp, &redraw_request,
+	redraw_result) == GED_SCENE_OK ? 1 : -1;
+    if (ged_scene_result_changed(redraw_result))
+	view.need_update(QG_VIEW_REFRESH);
+    int64_t redrawUs = bu_gettime() - phaseStart;
+    print_timing(testCase, "redraw-transaction", phaseStart);
+    ged_scene_result_destroy(redraw_result);
+    QCoreApplication::processEvents();
+    QImage redrawnImage;
+    view.get_viewport_image(redrawnImage);
+    BObolSceneController firstRedrawScene(controller->getRenderSceneRoot());
+    struct geometry_counts firstRedrawCounts = realized_geometry_counts(
+	&firstRedrawScene, controller, testCase.obolDrawMode, NULL, NULL);
+    if (capturePath && capturePath[0] != '\0')
+	(void)redrawnImage.save(
+	    QString::fromUtf8(capturePath) + QStringLiteral(".redraw1.png"));
+
+    struct ged_scene_result *second_redraw_result = ged_scene_result_create();
+    int64_t secondRedrawStart = bu_gettime();
+    int secondRedrawRet = ged_scene_redraw(gedp, &redraw_request,
+	second_redraw_result) == GED_SCENE_OK ? 1 : -1;
+    if (ged_scene_result_changed(second_redraw_result))
+	view.need_update(QG_VIEW_REFRESH);
+    int64_t secondRedrawUs = bu_gettime() - secondRedrawStart;
+    ged_scene_result_destroy(second_redraw_result);
+    QCoreApplication::processEvents();
+    QImage secondRedrawnImage;
+    view.get_viewport_image(secondRedrawnImage);
+    if (capturePath && capturePath[0] != '\0')
+	(void)secondRedrawnImage.save(
+	    QString::fromUtf8(capturePath) + QStringLiteral(".redraw2.png"));
+
+    fastf_t redrawSsim = image_ssim(redrawnImage, secondRedrawnImage);
+    int redrawByteDiff = image_byte_diff(redrawnImage, secondRedrawnImage);
+    int redrawLitPixels = lit_pixel_count(secondRedrawnImage);
+    int maxRasterDiff = redrawnImage.width() * redrawnImage.height() * 4 / 100;
+    BObolSceneController redrawScene(controller->getRenderSceneRoot());
+    struct geometry_counts redrawCounts = realized_geometry_counts(&redrawScene,
+	controller, testCase.obolDrawMode, NULL, NULL);
+    if (redrawRet < 0 || secondRedrawRet < 0 ||
+	redrawUs > 10000000 || secondRedrawUs > 10000000 ||
+	firstRedrawScene.getDatabaseSourceCount() != sourceCount ||
+	redrawScene.getDatabaseSourceCount() != sourceCount ||
+	redrawByteDiff < 0 || redrawByteDiff > maxRasterDiff ||
+	redrawCounts.shapeCount != firstRedrawCounts.shapeCount ||
+	redrawCounts.segmentCount != firstRedrawCounts.segmentCount ||
+	redrawCounts.meshCount != firstRedrawCounts.meshCount ||
+	redrawCounts.triangleCount != firstRedrawCounts.triangleCount) {
+	fprintf(stderr,
+		"%s:%s retained Obol redraw failed: ret=%d/%d elapsed=%.3f/%.3f sec sources=%d/%d/%d image_diff=%d/%d ssim=%.9g lit=%d/%d geometry=%d,%d,%d,%d/%d,%d,%d,%d (initial=%d,%d,%d,%d)\n",
+		testCase.file, testCase.root, redrawRet, secondRedrawRet,
+		(double)redrawUs / 1000000.0,
+		(double)secondRedrawUs / 1000000.0,
+		firstRedrawScene.getDatabaseSourceCount(),
+		redrawScene.getDatabaseSourceCount(), sourceCount,
+		redrawByteDiff, maxRasterDiff, redrawSsim,
+		redrawLitPixels, lit_pixel_count(redrawnImage),
+		redrawCounts.shapeCount, redrawCounts.segmentCount,
+		redrawCounts.meshCount, redrawCounts.triangleCount,
+		firstRedrawCounts.shapeCount, firstRedrawCounts.segmentCount,
+		firstRedrawCounts.meshCount, firstRedrawCounts.triangleCount,
+		counts.shapeCount, counts.segmentCount, counts.meshCount,
+		counts.triangleCount);
+	ged_close(gedp);
+	return 0;
+    }
+
+    if (testCase.exerciseInteractions &&
+	    !exercise_real_model_interactions(testCase, view, controller)) {
+	ged_close(gedp);
+	return 0;
+    }
+
+    print_timing(testCase, "total", totalStart);
+    ged_close(gedp);
+    return 1;
+}
+
+static int
+sync_material_refresh_to_view(struct ged *gedp, QgView &view)
+{
+    struct ged_scene_result *result = ged_scene_result_create();
+    int changed = ged_scene_materials_changed(gedp, result) ==
+	GED_SCENE_OK && ged_scene_result_changed(result);
+    if (changed)
+	view.need_update(QG_VIEW_REFRESH);
+    ged_scene_result_destroy(result);
+    return changed;
+}
+
+static int
+replace_global_color_table(struct ged *gedp, const char *table)
+{
+    if (!gedp || !gedp->dbip || !table)
+	return 0;
+
+    if (db5_update_attribute(DB5_GLOBAL_OBJECT_NAME, "regionid_colortable",
+	    table, gedp->dbip) != 0)
+	return 0;
+
+    db_mater_free(gedp->dbip);
+    std::vector<char> tableCopy(strlen(table) + 1);
+    memcpy(tableCopy.data(), table, strlen(table) + 1);
+    db5_import_color_table(gedp->dbip, tableCopy.data());
+    return 1;
+}
+
+static int
+exercise_m35_color_table_mutation(void)
+{
+    int64_t totalStart = bu_gettime();
+    int64_t phaseStart = totalStart;
+    auto report_phase = [&phaseStart](const char *name) {
+	int64_t now = bu_gettime();
+	fprintf(stderr, "m35_color_table_mutation:%s %.6f sec\n", name,
+		(double)(now - phaseStart) / 1000000.0);
+	phaseStart = now;
+    };
+    char src_db[MAXPATHLEN] = {0};
+    if (!model_path("m35.g", src_db, sizeof(src_db))) {
+	fprintf(stderr, "missing qtcad Obol m35 color-table source model: %s\n",
+		src_db);
+	return 0;
+    }
+
+    char tmp_db[MAXPATHLEN] = {0};
+    FILE *tmp_fp = bu_temp_file(tmp_db, sizeof(tmp_db));
+    if (!tmp_fp) {
+	fprintf(stderr, "failed to allocate qtcad Obol m35 color-table temp database\n");
+	return 0;
+    }
+    fclose(tmp_fp);
+
+    if (!copy_file(src_db, tmp_db)) {
+	fprintf(stderr, "failed to copy m35 color-table source database %s to %s\n",
+		src_db, tmp_db);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+
+    struct ged *gedp = ged_open("db", tmp_db, 1);
+    if (!gedp) {
+	fprintf(stderr, "failed to open qtcad Obol m35 color-table copy: %s\n",
+		tmp_db);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+
+    QgView view(NULL, QgViewType::SW);
+    view.resize(220, 170);
+    struct ged_view_context *view_ctx =
+	ged_view_context_from_bv(view.viewContext());
+    ged_view_active_ctx_set(gedp, view_ctx);
+    (void)ged_view_context_host_attach(gedp, view_ctx);
+    if (!ged_view_context_obol_endpoint_set(
+	    view_ctx, view.displayEndpoint(), 0)) {
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+
+    BObolViewController *controller = view.obolViewController();
+    if (!controller) {
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+    controller->clearDatabaseSources();
+    report_phase("setup");
+
+    const char *all_path = "all.g";
+    struct ged_scene_draw_request draw_request;
+    ged_scene_draw_request_init(&draw_request);
+    draw_request.view = view_ctx;
+    draw_request.paths = &all_path;
+    draw_request.path_count = 1;
+    draw_request.style.draw_mode = GED_SCENE_DRAW_WIRE;
+    draw_request.realization.mode = GED_SCENE_REALIZE_EAGER;
+    struct ged_scene_result *result = ged_scene_result_create();
+    int drawRet = ged_scene_draw(gedp, &draw_request, result) ==
+	GED_SCENE_OK ? 1 : -1;
+    report_phase("draw-transaction");
+    int changed = ged_scene_result_changed(result);
+    if (changed)
+	view.need_update(QG_VIEW_REFRESH);
+    if (drawRet < 0 || !changed) {
+	fprintf(stderr, "m35 color-table draw/sync failed: draw=%d changed=%d errors=%s\n",
+		drawRet, changed, ged_scene_result_diagnostic(result));
+	ged_scene_result_destroy(result);
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+    ged_scene_result_destroy(result);
+    report_phase("initial-draw");
+
+    BObolSceneController render_scene(controller->getRenderSceneRoot());
+    BObolSceneController *source_controller = &render_scene;
+
+    BObolDatabaseSourceSummary canary_summary;
+    SoBRLDatabaseSource *canary = find_source_by_path_suffix(source_controller,
+	    "r850/s850", canary_summary);
+    unsigned char expectedRgb[3] = {0, 0, 0};
+    if (!canary || !source_material_matches_db_color(gedp, canary_summary,
+	    expectedRgb)) {
+	fprintf(stderr,
+		"m35 color-table canary initial color mismatch: found=%d path=%s valid=%d expected=(%u %u %u) color=(%.9g %.9g %.9g)\n",
+		canary ? 1 : 0,
+		canary ? canary_summary.path.getString() : "",
+		canary ? (int)canary_summary.materialColorValid : 0,
+		expectedRgb[0], expectedRgb[1], expectedRgb[2],
+		canary ? canary_summary.materialColor[0] : 0.0f,
+		canary ? canary_summary.materialColor[1] : 0.0f,
+		canary ? canary_summary.materialColor[2] : 0.0f);
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+
+    /* Aggregate metadata describes the draw root, not every compact leaf.
+     * A root fallback must not erase the individual full-path colors. */
+    (void)canary->setDatabaseMetadataState(TRUE, 0, 0, 0, 0, TRUE,
+	SbColor(1.0f, 1.0f, 1.0f), SbString("aggregate-test"));
+    if (!all_source_materials_match_db_colors(gedp, source_controller)) {
+	fprintf(stderr,
+		"m35 aggregate metadata overrode compact occurrence colors\n");
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+
+    const char *global_color_av[6] = {
+	"color", "0", "15000", "20", "30", "40"
+    };
+    if (ged_exec_color(gedp, 6, global_color_av) != BRLCAD_OK) {
+	fprintf(stderr, "m35 color-table global color mutation did not sync\n");
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+    report_phase("global-color-refresh");
+
+    if (!all_source_materials_match_db_colors(gedp, source_controller)) {
+	fprintf(stderr, "m35 color-table cached sweep disagrees with full-path colors\n");
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+    report_phase("global-color-reference-validation");
+
+    canary = find_source_by_path_suffix(source_controller, "r850/s850",
+	    canary_summary);
+    if (!canary || !source_material_matches_db_color(gedp, canary_summary,
+	    expectedRgb)) {
+	fprintf(stderr,
+		"m35 color-table canary global update mismatch: found=%d path=%s valid=%d expected=(%u %u %u) color=(%.9g %.9g %.9g)\n",
+		canary ? 1 : 0,
+		canary ? canary_summary.path.getString() : "",
+		canary ? (int)canary_summary.materialColorValid : 0,
+		expectedRgb[0], expectedRgb[1], expectedRgb[2],
+		canary ? canary_summary.materialColor[0] : 0.0f,
+		canary ? canary_summary.materialColor[1] : 0.0f,
+		canary ? canary_summary.materialColor[2] : 0.0f);
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+
+    const char *new_id_color_av[6] = {
+	"color", "16001", "16001", "80", "90", "100"
+    };
+    if (ged_exec_color(gedp, 6, new_id_color_av) != BRLCAD_OK) {
+	fprintf(stderr, "m35 color-table new region-id color mutation did not sync\n");
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+    report_phase("new-id-color-refresh");
+
+    const char *item_av[3] = {"item", "r850", "16001"};
+    if (ged_exec_item(gedp, 3, item_av) != BRLCAD_OK) {
+	fprintf(stderr, "m35 color-table region-id mutation did not sync\n");
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+    report_phase("item-refresh");
+
+    canary = find_source_by_path_suffix(source_controller, "r850/s850",
+	    canary_summary);
+    if (!canary || canary_summary.databaseRegionId != 16001 ||
+	!source_material_matches_db_color(gedp, canary_summary, expectedRgb)) {
+	fprintf(stderr,
+		"m35 color-table canary region-id update mismatch: found=%d path=%s region=%d valid=%d expected=(%u %u %u) color=(%.9g %.9g %.9g)\n",
+		canary ? 1 : 0,
+		canary ? canary_summary.path.getString() : "",
+		canary ? canary_summary.databaseRegionId : -1,
+		canary ? (int)canary_summary.materialColorValid : 0,
+		expectedRgb[0], expectedRgb[1], expectedRgb[2],
+		canary ? canary_summary.materialColor[0] : 0.0f,
+		canary ? canary_summary.materialColor[1] : 0.0f,
+		canary ? canary_summary.materialColor[2] : 0.0f);
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+
+    const char *direct_table =
+	"{0 15000 60 70 80} {16001 16001 120 130 140} {17002 17002 200 210 220} ";
+    if (!replace_global_color_table(gedp, direct_table) ||
+	    !sync_material_refresh_to_view(gedp, view)) {
+	fprintf(stderr, "m35 color-table direct _GLOBAL mutation did not sync\n");
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+    report_phase("direct-global-refresh");
+
+    canary = find_source_by_path_suffix(source_controller, "r850/s850",
+	    canary_summary);
+    if (!canary || !source_material_matches_db_color(gedp, canary_summary,
+	    expectedRgb)) {
+	fprintf(stderr,
+		"m35 color-table canary direct _GLOBAL update mismatch: found=%d path=%s valid=%d expected=(%u %u %u) color=(%.9g %.9g %.9g)\n",
+		canary ? 1 : 0,
+		canary ? canary_summary.path.getString() : "",
+		canary ? (int)canary_summary.materialColorValid : 0,
+		expectedRgb[0], expectedRgb[1], expectedRgb[2],
+		canary ? canary_summary.materialColor[0] : 0.0f,
+		canary ? canary_summary.materialColor[1] : 0.0f,
+		canary ? canary_summary.materialColor[2] : 0.0f);
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+
+    if (db5_update_attribute("r850", "region_id", "17002", gedp->dbip) != 0 ||
+	    !sync_material_refresh_to_view(gedp, view)) {
+	fprintf(stderr, "m35 color-table direct region-id attribute mutation did not sync\n");
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+    report_phase("direct-region-refresh");
+
+    canary = find_source_by_path_suffix(source_controller, "r850/s850",
+	    canary_summary);
+    if (!canary || canary_summary.databaseRegionId != 17002 ||
+	!source_material_matches_db_color(gedp, canary_summary, expectedRgb)) {
+	fprintf(stderr,
+		"m35 color-table canary direct region-id attr update mismatch: found=%d path=%s region=%d valid=%d expected=(%u %u %u) color=(%.9g %.9g %.9g)\n",
+		canary ? 1 : 0,
+		canary ? canary_summary.path.getString() : "",
+		canary ? canary_summary.databaseRegionId : -1,
+		canary ? (int)canary_summary.materialColorValid : 0,
+		expectedRgb[0], expectedRgb[1], expectedRgb[2],
+		canary ? canary_summary.materialColor[0] : 0.0f,
+		canary ? canary_summary.materialColor[1] : 0.0f,
+		canary ? canary_summary.materialColor[2] : 0.0f);
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+
+    print_timing({"m35_color_table_mutation", "m35.g", "all.g",
+	    GED_SCENE_DRAW_WIRE, SoBRLDatabaseSource::WIREFRAME,
+	    0, 0, 0, 0, 0, 0, 0, 0, 0}, "total", totalStart);
+
+    ged_close(gedp);
+    bu_file_delete(tmp_db);
+    return 1;
+}
+
+int
+main(int argc, char **argv)
+{
+    bu_setprogname(argv[0]);
+    bu_setenv("LIBRT_USE_COMB_INSTANCE_SPECIFIERS", "1", 1);
+
+    real_model_test_cache cache;
+    if (!cache.isAvailable())
+	FAIL("could not create an isolated writable LoD cache");
+
+    QApplication app(argc, argv);
+
+    const struct model_case cases[] = {
+	{"pinewood_wire", "pinewood.g", "pinewood", GED_SCENE_DRAW_WIRE,
+	    SoBRLDatabaseSource::WIREFRAME, 2, 41, 0, 0, 0, 0, 0, 0, 0},
+	{"pinewood_shaded", "pinewood.g", "pinewood", GED_SCENE_DRAW_SHADED,
+	    SoBRLDatabaseSource::SHADED, 0, 0, 21, 501, 0, 0, 0, 0, 0},
+	{"havoc_wire", "havoc.g", "havoc", GED_SCENE_DRAW_WIRE,
+	    SoBRLDatabaseSource::WIREFRAME, 10, 100, 0, 0, 0, 0, 0, 0, 0},
+	{"m35_wire_interactions", "m35.g", "all.g", GED_SCENE_DRAW_WIRE,
+	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 1, 0, 1, 0, 0},
+	{"m35_wire_pick_all_stress", "m35.g", "all.g", GED_SCENE_DRAW_WIRE,
+	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 1, 1, 1, 0, 0},
+	{"m35_deferred_wire_color", "m35.g", "all.g", GED_SCENE_DRAW_WIRE,
+	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 0, 0, 1, 1, 0},
+	{"m35_deferred_shaded_color", "m35.g", "all.g", GED_SCENE_DRAW_SHADED,
+	    SoBRLDatabaseSource::SHADED, 0, 0, 100, 1000, 0, 0, 1, 1, 1},
+	{"nist_pmi1_shaded", "nist/NIST_MBE_PMI_1.g", "Document",
+	    GED_SCENE_DRAW_SHADED, SoBRLDatabaseSource::SHADED,
+	    0, 0, 1, 100, 0, 0, 0, 1, 0},
+	{"nist_pmi2_shaded", "nist/NIST_MBE_PMI_2.g", "Document",
+	    GED_SCENE_DRAW_SHADED, SoBRLDatabaseSource::SHADED,
+	    0, 0, 1, 100, 0, 0, 0, 1, 0},
+	{"nist_pmi3_shaded", "nist/NIST_MBE_PMI_3.g", "Document",
+	    GED_SCENE_DRAW_SHADED, SoBRLDatabaseSource::SHADED,
+	    0, 0, 1, 100, 0, 0, 0, 1, 0},
+	{"nist_pmi4_shaded", "nist/NIST_MBE_PMI_4.g", "Document",
+	    GED_SCENE_DRAW_SHADED, SoBRLDatabaseSource::SHADED,
+	    0, 0, 1, 100, 0, 0, 0, 1, 0},
+	{"nist_pmi5_shaded", "nist/NIST_MBE_PMI_5.g", "Document",
+	    GED_SCENE_DRAW_SHADED, SoBRLDatabaseSource::SHADED,
+	    0, 0, 1, 100, 0, 0, 0, 1, 0},
+	{"nist_pmi6_shaded", "nist/NIST_MBE_PMI_6.g", "Document",
+	    GED_SCENE_DRAW_SHADED, SoBRLDatabaseSource::SHADED,
+	    0, 0, 1, 100, 0, 0, 0, 1, 0},
+	{"nist_pmi11_shaded", "nist/NIST_MBE_PMI_11.g", "Document",
+	    GED_SCENE_DRAW_SHADED, SoBRLDatabaseSource::SHADED,
+	    0, 0, 1, 100, 0, 0, 0, 1, 0},
+	{"nist_pmi7_10_shaded", "nist/NIST_MBE_PMI_7-10.g",
+	    "NIST_MBE_PMI_7-10.3dm", GED_SCENE_DRAW_SHADED,
+	    SoBRLDatabaseSource::SHADED, 0, 0, 4, 100, 0, 0, 0, 1, 0},
+	{"nist_pmi7_10_wire", "nist/NIST_MBE_PMI_7-10.g",
+	    "NIST_MBE_PMI_7-10.3dm", GED_SCENE_DRAW_WIRE,
+	    SoBRLDatabaseSource::WIREFRAME, 4, 100, 0, 0, 0, 0, 0, 1, 0}
+    };
+
+    int ran = 0;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+	if (!should_run_case(argc, argv, cases[i].name))
+	    continue;
+	ran = 1;
+	if (!sync_draw_case(cases[i]))
+	    FAIL("qtcad Obol real-model draw workflow should pass");
+    }
+
+    if (should_run_case(argc, argv, "m35_color_table_mutation")) {
+	ran = 1;
+	if (!exercise_m35_color_table_mutation())
+	    FAIL("qtcad Obol m35 color-table mutation workflow should pass");
+    }
+
+    if (BU_STR_EQUAL(getenv("BOBOL_QTCAD_GENERIC_TWIN"), "1")) {
+	const struct model_case genericTwinCase = {
+	    "generic_twin_wire", "faa/Generic_Twin.g", "all", GED_SCENE_DRAW_WIRE,
+	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 0, 0, 0, 0, 0
+	};
+	if (should_run_case(argc, argv, genericTwinCase.name)) {
+	    ran = 1;
+	    if (!sync_draw_case(genericTwinCase))
+		FAIL("qtcad Obol Generic_Twin maturity workflow should pass");
+	}
+    } else if (case_was_requested(argc, argv, "generic_twin_wire")) {
+	    FAIL("qtcad Obol Generic_Twin maturity workflow should pass");
+    }
+
+    if (!ran)
+	FAIL("unknown qtcad Obol real-model case requested");
+
+    return 0;
+}
+
+// Local Variables:
+// mode: C++
+// tab-width: 8
+// c-basic-offset: 4
+// indent-tabs-mode: t
+// c-file-style: "stroustrup"
+// End:
+// ex: shiftwidth=4 tabstop=8

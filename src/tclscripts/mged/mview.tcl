@@ -25,7 +25,7 @@ if ![info exists mged_default(bd)] {
     set mged_default(bd) 2
 }
 
-proc openmv { id w wc dpy dtype } {
+proc openmv { id w wc dpy host_type } {
     global win_to_id
     global mged_default
     global faceplate
@@ -37,61 +37,15 @@ proc openmv { id w wc dpy dtype } {
     frame $wc.llF -relief sunken -borderwidth $mged_default(bd)
     frame $wc.lrF -relief sunken -borderwidth $mged_default(bd)
 
-    attach -d $dpy -t 0 -n $w.ul $dtype
-    dm set zclip $mged_default(zclip)
-    if { $dtype == "rtgl" } {
-	dm set zclip 1
-	dm set zbuffer 1
+    foreach pane {ul ur ll lr} {
+	attach -d $dpy -t 0 -n $w.$pane $host_type
+	dm set view.zclip $mged_default(zclip)
+	dm set renderer.depth_test $mged_default(zbuffer)
+	dm set renderer.lighting $mged_default(lighting)
+	set faceplate $mged_default(faceplate)
+	set orig_gui $mged_default(orig_gui)
+	set perspective_mode $mged_default(perspective_mode)
     }
-    if { $dtype == "ogl" } {
-	dm set zbuffer $mged_default(zbuffer)
-	dm set lighting $mged_default(lighting)
-    }
-    set faceplate $mged_default(faceplate)
-    set orig_gui $mged_default(orig_gui)
-    set perspective_mode $mged_default(perspective_mode)
-
-    attach -d $dpy -t 0 -n $w.ur $dtype
-    dm set zclip $mged_default(zclip)
-    if { $dtype == "rtgl" } {
-	dm set zclip 1
-	dm set zbuffer 1
-    }
-    if { $dtype == "ogl" } {
-	dm set zbuffer $mged_default(zbuffer)
-	dm set lighting $mged_default(lighting)
-    }
-    set faceplate $mged_default(faceplate)
-    set orig_gui $mged_default(orig_gui)
-    set perspective_mode $mged_default(perspective_mode)
-
-    attach -d $dpy -t 0 -n $w.ll $dtype
-    dm set zclip $mged_default(zclip)
-    if { $dtype == "rtgl" } {
-	dm set zclip 1
-	dm set zbuffer 1
-    }
-    if { $dtype == "ogl" } {
-	dm set zbuffer $mged_default(zbuffer)
-	dm set lighting $mged_default(lighting)
-    }
-    set faceplate $mged_default(faceplate)
-    set orig_gui $mged_default(orig_gui)
-    set perspective_mode $mged_default(perspective_mode)
-
-    attach -d $dpy -t 0 -n $w.lr $dtype
-    dm set zclip $mged_default(zclip)
-    if { $dtype == "rtgl" } {
-	dm set zclip 1
-	dm set zbuffer 1
-    }
-    if { $dtype == "ogl" } {
-	dm set zbuffer $mged_default(zbuffer)
-	dm set lighting $mged_default(lighting)
-    }
-    set faceplate $mged_default(faceplate)
-    set orig_gui $mged_default(orig_gui)
-    set perspective_mode $mged_default(perspective_mode)
 
     set win_to_id($w.ul) $id
     set win_to_id($w.ur) $id
@@ -135,92 +89,92 @@ proc mview_build_menubar { id } {
 }
 
 proc menu_accelerator_bindings_for_clone { id parent w pos } {
-    bind $w <Alt-ButtonPress-1> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-ButtonPress-1> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#settings %X %Y; break"
-    bind $w <Alt-ButtonPress-2> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-ButtonPress-2> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#modes %X %Y; break"
-    bind $w <Alt-F> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-F> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#file %X %Y; break"
-    bind $w <Alt-f> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-f> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#file %X %Y; break"
-    bind $w <Alt-E> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-E> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#edit %X %Y; break"
-    bind $w <Alt-e> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-e> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#edit %X %Y; break"
-    bind $w <Alt-C> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-C> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#create %X %Y; break"
-    bind $w <Alt-c> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-c> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#create %X %Y; break"
-    bind $w <Alt-V> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-V> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#view %X %Y; break"
-    bind $w <Alt-v> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-v> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#view %X %Y; break"
-    bind $w <Alt-R> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-R> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#viewring %X %Y; break"
-    bind $w <Alt-r> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-r> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#viewring %X %Y; break"
-    bind $w <Alt-S> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-S> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#settings %X %Y; break"
-    bind $w <Alt-s> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-s> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#settings %X %Y; break"
-    bind $w <Alt-M> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-M> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#modes %X %Y; break"
-    bind $w <Alt-m> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-m> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#modes %X %Y; break"
-    bind $w <Alt-I> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-I> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#misc %X %Y; break"
-    bind $w <Alt-i> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-i> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#misc %X %Y; break"
-    bind $w <Alt-T> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-T> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#tools %X %Y; break"
-    bind $w <Alt-t> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-t> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#tools %X %Y; break"
-    bind $w <Alt-H> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-H> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#help %X %Y; break"
-    bind $w <Alt-h> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-h> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup $parent.menubar.#$id#menubar#help %X %Y; break"
 }
 
 proc menu_accelerator_bindings { id w pos } {
-    bind $w <Alt-ButtonPress-1> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-ButtonPress-1> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.settings %X %Y; break"
-    bind $w <Alt-ButtonPress-2> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-ButtonPress-2> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.modes %X %Y; break"
-    bind $w <Alt-F> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-F> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.file %X %Y; break"
-    bind $w <Alt-f> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-f> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.file %X %Y; break"
-    bind $w <Alt-E> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-E> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.edit %X %Y; break"
-    bind $w <Alt-e> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-e> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.edit %X %Y; break"
-    bind $w <Alt-C> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-C> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.create %X %Y; break"
-    bind $w <Alt-c> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-c> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.create %X %Y; break"
-    bind $w <Alt-V> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-V> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.view %X %Y; break"
-    bind $w <Alt-v> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-v> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.view %X %Y; break"
-    bind $w <Alt-R> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-R> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.viewring %X %Y; break"
-    bind $w <Alt-r> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-r> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.viewring %X %Y; break"
-    bind $w <Alt-S> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-S> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.settings %X %Y; break"
-    bind $w <Alt-s> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-s> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.settings %X %Y; break"
-    bind $w <Alt-M> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-M> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.modes %X %Y; break"
-    bind $w <Alt-m> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-m> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.modes %X %Y; break"
-    bind $w <Alt-T> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-T> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.tools %X %Y; break"
-    bind $w <Alt-t> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-t> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.tools %X %Y; break"
-    bind $w <Alt-H> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-H> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.help %X %Y; break"
-    bind $w <Alt-h> "set mged_gui($id,dm_loc) $pos; set_active_dm $id;\
+    bind $w <Alt-h> "set mged_gui($id,pane_loc) $pos; set_active_pane $id;\
 	    tk_popup .$id.menubar.help %X %Y; break"
 }
 
@@ -248,7 +202,7 @@ proc releasemv { id } {
     catch  { release $mged_gui($id,top).lr }
 
     # If all the windows are gone, we're closing the application
-    if { !$mged_gui($id,show_cmd) && !$mged_gui($id,show_dm)} {
+    if { !$mged_gui($id,show_cmd) && !$mged_gui($id,show_graphics)} {
 	exit
     }
 }
@@ -315,7 +269,7 @@ proc setmv { id } {
 	grid rowconfigure $mged_gui($id,dmc) 1 -weight 0
 
 	unpackmv $id
-	grid $mged_gui($id,dmc).$mged_gui($id,dm_loc)\F -in $mged_gui($id,dmc) \
+	grid $mged_gui($id,dmc).$mged_gui($id,pane_loc)\F -in $mged_gui($id,dmc) \
 	    -sticky "nsew" -row 0 -column 0 -rowspan 2 -columnspan 2
     }
 }

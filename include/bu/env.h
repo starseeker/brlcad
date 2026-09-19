@@ -61,6 +61,7 @@ BU_EXPORT extern int bu_setenv(const char *name, const char *value, int overwrit
  * peak resident physical memory over its lifetime, returning -1 when that
  * information is unavailable.  Accounting of pages shared with other
  * processes is platform specific.
+ * BU_MEM_AVAIL includes reclaimable cache when the platform reports it.
  *
  * Returns -1 on error and the size of the requested memory type on
  * success.  Optionally if sz is non-NULL, the size of the requested

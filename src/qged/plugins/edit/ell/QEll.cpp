@@ -7,295 +7,674 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
  * version 2.1 as published by the Free Software Foundation.
- *
- * This library is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this file; see the file named COPYING for more
- * information.
  */
 /** @file QEll.cpp
  *
+ * Ellipsoid adapter for the shared descriptor-generated primitive editor.
+ * Geometry state and transactions live in GED; this class only presents the
+ * current session snapshot as retained edit feedback.
  */
 
 #include "common.h"
-#include <QLabel>
-#include <QLineEdit>
-#include <QButtonGroup>
-#include <QGroupBox>
-#include "../../../QgEdApp.h"
+
+#include <QEvent>
+#include <QVBoxLayout>
+
+#include "BObol/BEditManipulator.h"
+#include "BObol/BViewController.h"
+#include "BObol/BViewStore.h"
+#include "bv.h"
+#include "ged.h"
+#include "ged/edit.h"
+#include "ged/plugin/obol.h"
+#include "ged/selection.h"
+#include "rt/db_fullpath.h"
+#include "rt/edit.h"
+#include "rt/geom.h"
+#include "qtcad/QgPluginContext.h"
+#include "qtcad/QgPrimitiveEdit.h"
+#include "qtcad/QgSignalFlags.h"
+#include "../qged_edit_preview_util.h"
 #include "QEll.h"
+
+#include <Inventor/nodes/SoCamera.h>
+#include <Inventor/tools/SbModernUtils.h>
+
+#include <algorithm>
+#include <cmath>
+
+
+namespace {
+
+enum QEllManipulatorAction {
+    QELL_MANIPULATOR_PRESS = 0x454c4c01u,
+    QELL_MANIPULATOR_RELEASE = 0x454c4c02u,
+    QELL_MANIPULATOR_MOTION = 0x454c4c03u
+};
+
+static const char *qell_manipulator_name = "_ell_edit_manipulator";
+static constexpr int qell_manipulator_overlay_order = 100;
+
+}
+
+
+struct QEllManipulatorState {
+    QEll *owner = nullptr;
+    struct ged_view_context *view_context = nullptr;
+    bobol_display_endpoint_t *endpoint = nullptr;
+    BObolViewController *controller = nullptr;
+    BObolFeatureHandle feature;
+    SoBRLEditManipulator::Handle active =
+	SoBRLEditManipulator::HANDLE_NONE;
+    fastf_t local_lengths[3] = {0.0, 0.0, 0.0};
+    int command_ids[3] = {0, 0, 0};
+    float drag_base_length = 0.0f;
+    float drag_f0 = 0.0f;
+    float drag_fx = 0.0f;
+    float drag_fy = 0.0f;
+};
+
+
+static SoBRLEditManipulator *
+qell_manipulator_node(QEllManipulatorState *state,
+	const BObolFeatureHandle *published = nullptr)
+{
+    if (!state || !state->controller)
+	return nullptr;
+    BObolFeatureHandle current;
+    SoNode *node = qged_edit_feature_resolve(state->controller,
+	published ? *published : state->feature, current);
+    if (!node ||
+	!node->isOfType(SoBRLEditManipulator::getClassTypeId()))
+	return nullptr;
+    state->feature = current;
+    return static_cast<SoBRLEditManipulator *>(node);
+}
+
+
+static void
+qell_manipulator_result(const BObolCommandResult &result, void *userData)
+{
+    QEllManipulatorState *state =
+	static_cast<QEllManipulatorState *>(userData);
+    if (!state)
+	return;
+    if (result.status == BObolCommandResultStatus::Updated) {
+	(void)qell_manipulator_node(state, &result.feature);
+	return;
+    }
+    if (result.status != BObolCommandResultStatus::Removed ||
+	(state->feature.isValid() && state->feature.id != result.feature.id))
+	return;
+    if (state->endpoint)
+	(void)bobol_display_endpoint_input_action_layer_clear_if(
+	    state->endpoint, state);
+    state->view_context = nullptr;
+    state->endpoint = nullptr;
+    state->controller = nullptr;
+    state->feature = BObolFeatureHandle();
+    state->active = SoBRLEditManipulator::HANDLE_NONE;
+}
+
+
+static bool
+qell_manipulator_publish(QEllManipulatorState *state, const char *sourcePath,
+	const SbVec3f &center, const SbVec3f axes[3], uint32_t revision,
+	SoBRLEditManipulator::Handle hover,
+	SoBRLEditManipulator::Handle active)
+{
+    if (!state || !state->controller)
+	return false;
+
+    SbModernUtils::SoNodeRef nodeOwner(new SoBRLEditManipulator);
+    auto *node = static_cast<SoBRLEditManipulator *>(nodeOwner.get());
+    node->manipulatorId = "ell.axes";
+    node->sessionRevision = revision;
+    node->setEllipsoidAxes(center, axes[0], axes[1], axes[2]);
+    node->setHoverHandle(hover);
+    node->setActiveHandle(active);
+
+    const BObolFeatureHandle feature = qged_edit_manipulator_publish(
+	state->controller, qell_manipulator_name, node, state,
+	"qged::ell-edit", qell_manipulator_result, sourcePath,
+	qell_manipulator_overlay_order);
+    return qell_manipulator_node(state, &feature) != nullptr;
+}
+
+
+static bool
+qell_manipulator_republish(QEllManipulatorState *state,
+	const char *sourcePath, SoBRLEditManipulator::Handle hover,
+	SoBRLEditManipulator::Handle active)
+{
+    SoBRLEditManipulator *node = qell_manipulator_node(state);
+    if (!node)
+	return false;
+    const SbVec3f axes[3] = {
+	node->axis(SoBRLEditManipulator::HANDLE_AXIS_A),
+	node->axis(SoBRLEditManipulator::HANDLE_AXIS_B),
+	node->axis(SoBRLEditManipulator::HANDLE_AXIS_C)
+    };
+    return qell_manipulator_publish(state, sourcePath, node->center(), axes,
+	node->sessionRevision.getValue(), hover, active);
+}
+
+
+static void
+qell_manipulator_clear(QEllManipulatorState *state)
+{
+    if (!state)
+	return;
+    if (state->endpoint)
+	(void)bobol_display_endpoint_input_action_layer_clear_if(
+	    state->endpoint, state);
+    BObolViewController *controller = state->controller;
+    const BObolFeatureHandle feature = state->feature;
+    state->active = SoBRLEditManipulator::HANDLE_NONE;
+    if (controller && feature.isValid())
+	(void)controller->features().remove(feature);
+    state->view_context = nullptr;
+    state->endpoint = nullptr;
+    state->controller = nullptr;
+    state->feature = BObolFeatureHandle();
+}
+
+
+static int
+qell_manipulator_command(const struct rt_edit_prim_desc *descriptor,
+	const char *parameter_name)
+{
+    if (!descriptor || !parameter_name)
+	return 0;
+    for (int i = 0; i < descriptor->ncmd; i++) {
+	const struct rt_edit_cmd_desc *command = &descriptor->cmds[i];
+	if (command->nparam != 1 || !command->params ||
+	    command->params[0].type != RT_EDIT_PARAM_SCALAR ||
+	    !command->params[0].name)
+	    continue;
+	if (BU_STR_EQUAL(command->params[0].name, parameter_name))
+	    return command->cmd_id;
+    }
+    return 0;
+}
+
 
 QEll::QEll()
     : QWidget()
 {
-    // TODO - in an ideal world the "default" values would be set
-    // and updated in response to view changes (if widget is continually
-    // visible) or when it becomes visible...
-    ell.magic = RT_ELL_INTERNAL_MAGIC;
-    VSET(ell.v, 0, 0, 0);
-    VSET(ell.a, 100, 0, 0);
-    VSET(ell.b, 0, 200, 0);
-    VSET(ell.c, 0, 0, 300);
+    QVBoxLayout *layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    editor = new QgPrimitiveEdit(this);
+    editor->setObjectName(QStringLiteral("ell.sharedPrimitiveEditor"));
+    layout->addWidget(editor);
 
-
-    QVBoxLayout *l = new QVBoxLayout;
-
-    QLabel *ell_name_label = new QLabel("Object name:");
-    l->addWidget(ell_name_label);
-    ell_name = new QLineEdit();
-    l->addWidget(ell_name);
-
-    QGroupBox *abox = new QGroupBox("Elements");
-    QVBoxLayout *abl = new QVBoxLayout;
-    abl->setAlignment(Qt::AlignTop);
-    O_pnt = new QCheckBox("O:");
-    abl->addWidget(O_pnt);
-    A_axis = new QCheckBox("A:");
-    abl->addWidget(A_axis);
-    B_axis = new QCheckBox("B:");
-    abl->addWidget(B_axis);
-    C_axis = new QCheckBox("C:");
-    abl->addWidget(C_axis);
-    abox->setLayout(abl);
-    l->addWidget(abox);
-
-    QGroupBox *ac_box = new QGroupBox("Actions");
-    QVBoxLayout *acl = new QVBoxLayout;
-    write_edit = new QPushButton("Apply");
-    acl->addWidget(write_edit);
-    make_sph = new QPushButton("Make sph");
-    acl->addWidget(make_sph);
-    reset_values = new QPushButton("Reset");
-    acl->addWidget(reset_values);
-    ac_box->setLayout(acl);
-    l->addWidget(ac_box);
-
-
-    l->setAlignment(Qt::AlignTop);
-    this->setLayout(l);
-    setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
-
-
-    QObject::connect(ell_name, &QLineEdit::textEdited, this, &QEll::update_viewobj_name);
+    connect(editor, &QgPrimitiveEdit::targetChanged,
+	this, &QEll::target_changed);
+    connect(editor, &QgPrimitiveEdit::sessionEvent,
+	this, &QEll::update_preview);
 }
+
 
 QEll::~QEll()
 {
-    if (p)
-	bv_obj_put(p);
-    bu_vls_free(&oname);
+    clear_preview();
 }
 
+
 void
-QEll::read_from_db()
+QEll::setContext(QgPluginContext *ctx)
 {
-    QgModel *m = ((QgEdApp *)qApp)->mdl;
-    if (!m)
-	return;
-    struct ged *gedp = m->gedp;
-    if (!gedp)
-	return;
-    struct db_i *dbip = gedp->dbip;
-    if (!dbip)
-	return;
-
-    if (!dp || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_ELL) {
-	return;
-    }
-
-    struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;
-    if (rt_db_get_internal(&intern, dp, dbip, NULL) < 0)
-	return;
-    struct rt_ell_internal *ellp = (struct rt_ell_internal *)intern.idb_ptr;
-    RT_ELL_CK_MAGIC(ellp);
-    VMOVE(ell.v, ellp->v);
-    VMOVE(ell.a, ellp->a);
-    VMOVE(ell.b, ellp->b);
-    VMOVE(ell.c, ellp->c);
-    rt_db_free_internal(&intern);
-
-    // We have pulled new data from disk - let the wireframe know
-    update_obj_wireframe();
+    m_ctx = ctx;
+    editor->setGed(getGed());
 }
 
-void
-QEll::write_to_db()
+
+struct ged *
+QEll::getGed() const
 {
-    if (!bu_vls_strlen(&oname))
-	return;
-    QgModel *m = ((QgEdApp *)qApp)->mdl;
-    if (!m)
-	return;
-    struct ged *gedp = m->gedp;
-    if (!gedp)
-	return;
-    struct db_i *dbip = gedp->dbip;
-    if (!dbip)
-	return;
-
-    struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;
-    intern.idb_major_type = DB5_MAJORTYPE_BRLCAD;
-    intern.idb_type = ID_ELL;
-    intern.idb_ptr = &ell;
-    intern.idb_meth = &OBJ[intern.idb_type];
-
-    dp = db_lookup(dbip, bu_vls_cstr(&oname), LOOKUP_QUIET);
-
-    if (dp == RT_DIR_NULL)
-	dp = db_diradd(dbip, bu_vls_cstr(&oname), RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID, (void *)&intern.idb_type);
-
-    if (dp == RT_DIR_NULL) {
-	rt_db_free_internal(&intern);
-	return;
-    }
-
-    if (rt_db_put_internal(dp, dbip, &intern) < 0) {
-	rt_db_free_internal(&intern);
-	return;
-    }
-
-    rt_db_free_internal(&intern);
-
-    emit view_updated(QG_VIEW_DB);
+    return m_ctx ? m_ctx->getGed() : nullptr;
 }
 
+
 void
-QEll::update_obj_wireframe()
+QEll::clear_labels()
 {
-    QgModel *m = ((QgEdApp *)qApp)->mdl;
-    if (!m)
-	return;
-    struct ged *gedp = m->gedp;
-    if (!gedp)
-	return;
-    struct bview *v = gedp->ged_gvp;
-    if (!v)
-	return;
-
-    // Make the object, if we've not already done so
-    if (!p)
-	p = bv_obj_get(v, BV_VIEW_OBJS);
-
-    // Clear any old wireframes, labels, etc.
-    bv_obj_reset(p);
-
-    // Use whatever view is current to drive the update
-    p->s_v = v;
-
-    // Set up the rt_db_internal and trigger the plotting routine with the
-    // current ell parameters
-    struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;
-    intern.idb_major_type = DB5_MAJORTYPE_BRLCAD;
-    intern.idb_type = ID_ELL;
-    intern.idb_ptr = &ell;
-    intern.idb_meth = &OBJ[intern.idb_type];
-    if (!intern.idb_meth->ft_plot)
-	return;
-    struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-    struct bn_tol *tol = &wdbp->wdb_tol;
-    struct bg_tess_tol *ttol = &wdbp->wdb_ttol;
-    intern.idb_meth->ft_plot(&p->s_vlist, &intern, ttol, tol, p->s_v);
-
-    // At least for now, mimic the MGED behavior and make editing wireframes white
-    const char *wcolor = "255/255/255";
-    const char *av[2] = {wcolor, NULL};
-    struct bu_color cval;
-    bu_opt_color(NULL, 1, (const char **)&av[0], (void *)&cval);
-    bu_color_to_rgb_chars(&cval, p->s_color);
-
-    // When editing, we show the labels (if any)
-    struct rt_point_labels pl[8+1];
-    int lcnt = 0;
-    mat_t idn_mat;
-    MAT_IDN(idn_mat);
-    if (intern.idb_meth->ft_labels)
-	lcnt = intern.idb_meth->ft_labels(pl, 8, idn_mat, &intern, tol);
-
-    for (int i = 0; i < lcnt; i++) {
-	struct bv_scene_obj *s = bv_obj_get_child(p);
-	struct bv_label *la;
-	BU_GET(la, struct bv_label);
-	s->s_i_data = (void *)la;
-
-	BU_LIST_INIT(&(s->s_vlist));
-	VSET(s->s_color, 255, 255, 0);
-	s->s_type_flags |= BV_DBOBJ_BASED;
-	s->s_type_flags |= BV_LABELS;
-	BU_VLS_INIT(&la->label);
-
-	bu_vls_sprintf(&la->label, "%s", pl[i].str);
-	VMOVE(la->p, pl[i].pt);
-    }
-
-    p->s_flag = UP;
-    // TODO - we should be able to set UP or DOWN on the various labels
-    // when their respective controls are enabled/disabled...
-
-    emit view_updated(QG_VIEW_REFRESH);
+    (void)qged_edit_feature_remove_all(m_ctx, "_ell_edit_labels");
 }
 
+
 void
-QEll::update_viewobj_name(const QString &)
+QEll::clear_preview()
 {
-    QgModel *m = ((QgEdApp *)qApp)->mdl;
-    if (!m)
-	return;
-    struct ged *gedp = m->gedp;
-    if (!gedp)
-	return;
-    struct bview *v = gedp->ged_gvp;
-    if (!v)
-	return;
+    clear_labels();
+    clear_manipulator();
+    preview_path.clear();
+}
 
-    // Make the view object, if we've not already done so
-    if (!p)
-	p = bv_obj_get(v, BV_VIEW_OBJS);
 
-    // Make sure the view object names match whatever the dialog says
-    // is the current (proposed) name for the written object
-    bu_vls_trunc(&oname, 0);
-    if (ell_name->placeholderText().length())
-	bu_vls_sprintf(&oname, "%s", ell_name->placeholderText().toLocal8Bit().data());
-    if (ell_name->text().length())
-	bu_vls_sprintf(&oname, "%s", ell_name->text().toLocal8Bit().data());
-    if (!bu_vls_strlen(&oname))
-	return;
-    bu_vls_sprintf(&p->s_name, "%s:%s", bu_vls_cstr(&v->gv_name), bu_vls_cstr(&oname));
+void
+QEll::clear_manipulator()
+{
+    for (QEllManipulatorState *state : manipulator_states) {
+	qell_manipulator_clear(state);
+	delete state;
+    }
+    manipulator_states.clear();
+}
 
-    // Update the directory pointer to reflect the name.  If there is a change,
-    // and that change points us to a new object, we need to read the info from
-    // that object
-    struct directory *ndp = db_lookup(gedp->dbip, bu_vls_cstr(&oname), LOOKUP_QUIET);
-    if (ndp != dp) {
-	dp = ndp;
-	if (dp) {
-	    read_from_db();
-	} else {
-	    // Turning off wireframe - obj name is now invalid
-	    p->s_flag = DOWN;
-	    emit view_updated(QG_VIEW_REFRESH);
+
+void
+QEll::update_manipulator(const point_t center, const vect_t axis_a,
+	const vect_t axis_b, const vect_t axis_c,
+	const fastf_t local_lengths[3], uint64_t revision)
+{
+    const std::vector<struct ged_view_context *> contexts =
+	qged_edit_ged_view_contexts(m_ctx);
+    for (auto it = manipulator_states.begin();
+	it != manipulator_states.end();) {
+	QEllManipulatorState *state = *it;
+	bobol_display_endpoint_t *endpoint = state && state->view_context ?
+	    ged_plugin_obol_endpoint_get(state->view_context) : nullptr;
+	BObolViewController *controller = state && state->view_context ?
+	    ged_plugin_obol_view_controller(state->view_context) : nullptr;
+	if (!state || std::find(contexts.begin(), contexts.end(),
+		state->view_context) == contexts.end() ||
+	    endpoint != state->endpoint || controller != state->controller) {
+	    qell_manipulator_clear(state);
+	    delete state;
+	    it = manipulator_states.erase(it);
+	    continue;
+	}
+	++it;
+    }
+
+    const struct rt_edit_prim_desc *descriptor = nullptr;
+    int commandIds[3] = {0, 0, 0};
+    if (ged_edit_session_descriptor_get(getGed(), editor->session(),
+	    &descriptor) == GED_EDIT_OK) {
+	commandIds[0] = qell_manipulator_command(descriptor, "a");
+	commandIds[1] = qell_manipulator_command(descriptor, "b");
+	commandIds[2] = qell_manipulator_command(descriptor, "c");
+    }
+
+    for (struct ged_view_context *viewContext : contexts) {
+	bobol_display_endpoint_t *endpoint =
+	    ged_plugin_obol_endpoint_get(viewContext);
+	BObolViewController *controller =
+	    ged_plugin_obol_view_controller(viewContext);
+	if (!endpoint || !controller)
+	    continue;
+	QEllManipulatorState *state = nullptr;
+	for (QEllManipulatorState *candidate : manipulator_states) {
+	    if (candidate && candidate->view_context == viewContext) {
+		state = candidate;
+		break;
+	    }
+	}
+	const bool created = !state;
+	if (!state) {
+	    state = new QEllManipulatorState;
+	    state->owner = this;
+	    state->view_context = viewContext;
+	    state->endpoint = endpoint;
+	    state->controller = controller;
+	}
+
+	state->local_lengths[0] = local_lengths[0];
+	state->local_lengths[1] = local_lengths[1];
+	state->local_lengths[2] = local_lengths[2];
+	state->command_ids[0] = commandIds[0];
+	state->command_ids[1] = commandIds[1];
+	state->command_ids[2] = commandIds[2];
+	const SbVec3f displayCenter(static_cast<float>(center[0]),
+	    static_cast<float>(center[1]), static_cast<float>(center[2]));
+	const SbVec3f displayAxes[3] = {
+	    SbVec3f(static_cast<float>(axis_a[0]), static_cast<float>(axis_a[1]),
+		static_cast<float>(axis_a[2])),
+	    SbVec3f(static_cast<float>(axis_b[0]), static_cast<float>(axis_b[1]),
+		static_cast<float>(axis_b[2])),
+	    SbVec3f(static_cast<float>(axis_c[0]), static_cast<float>(axis_c[1]),
+		static_cast<float>(axis_c[2]))
+	};
+	SoBRLEditManipulator *current = qell_manipulator_node(state);
+	const auto hover = current ?
+	    static_cast<SoBRLEditManipulator::Handle>(
+		current->hoverHandle.getValue()) :
+	    SoBRLEditManipulator::HANDLE_NONE;
+	if (!qell_manipulator_publish(state,
+		preview_path.toUtf8().constData(), displayCenter, displayAxes,
+		static_cast<uint32_t>(revision), hover, state->active)) {
+	    if (created) {
+		qell_manipulator_clear(state);
+		delete state;
+	    }
+	    continue;
+	}
+
+	if (created) {
+	    static const unsigned int modifiers = BOBOL_INPUT_MOD_SHIFT |
+		BOBOL_INPUT_MOD_CONTROL | BOBOL_INPUT_MOD_ALT |
+		BOBOL_INPUT_MOD_META;
+	    static const BObolInputBinding bindings[] = {
+		{BOBOL_INPUT_POINTER_PRESS, BOBOL_INPUT_ANY, 0, 0,
+		 modifiers, 1200, QELL_MANIPULATOR_PRESS},
+		{BOBOL_INPUT_POINTER_RELEASE, BOBOL_INPUT_ANY, 0, 0,
+		 modifiers, 1200, QELL_MANIPULATOR_RELEASE},
+		{BOBOL_INPUT_POINTER_MOTION, BOBOL_INPUT_ANY,
+		 BOBOL_INPUT_ANY, 0, modifiers, 1200,
+		 QELL_MANIPULATOR_MOTION}
+	    };
+	    static const BObolInputActionLayer layer = {
+		"qged-ell-edit-manipulator", bindings,
+		sizeof(bindings) / sizeof(bindings[0]),
+		QEll::manipulator_input
+	    };
+	    if (!bobol_display_endpoint_input_action_layer_set(endpoint,
+		    &layer, state, state)) {
+		qell_manipulator_clear(state);
+		delete state;
+		continue;
+	    }
+	    manipulator_states.push_back(state);
 	}
     }
 }
 
-bool
-QEll::eventFilter(QObject *, QEvent *e)
+
+int
+QEll::manipulator_input(void *user_data, BObolInputAction action,
+	const BObolInputEvent *event)
 {
-    if (e->type() == QEvent::MouseButtonPress || e->type() == QEvent::MouseButtonRelease ||   e->type() == QEvent::MouseButtonDblClick || e->type() == QEvent::MouseMove) {
-	bu_log("ell mouse event\n");
+    QEllManipulatorState *state =
+	static_cast<QEllManipulatorState *>(user_data);
+    return state && state->owner ?
+	state->owner->handle_manipulator_input(state, action, event) :
+	BOBOL_INPUT_RESULT_UNHANDLED;
+}
+
+
+int
+QEll::handle_manipulator_input(QEllManipulatorState *state,
+	BObolInputAction action,
+	const BObolInputEvent *event)
+{
+    SoBRLEditManipulator *node = qell_manipulator_node(state);
+    if (!state || !node || !state->controller || !event)
+	return BOBOL_INPUT_RESULT_UNHANDLED;
+    int width = 0;
+    int height = 0;
+    const struct bv_context *context =
+	reinterpret_cast<const struct bv_context *>(state->view_context);
+    if (context) {
+	width = bv_context_width_get(context);
+	height = bv_context_height_get(context);
     }
+    if (width <= 0 || height <= 0) {
+	const SbVec2s viewport = state->controller->getViewportRegion().
+	    getViewportSizePixels();
+	width = static_cast<int>(viewport[0]);
+	height = static_cast<int>(viewport[1]);
+    }
+    SoCamera *camera = state->controller->getCamera();
+    if (!camera || width <= 0 || height <= 0)
+	return BOBOL_INPUT_RESULT_UNHANDLED;
+
+    if (action == QELL_MANIPULATOR_PRESS) {
+	const SoBRLEditManipulator::Handle handle = node->hitTest(
+	    event->x, event->y, width, height, camera);
+	const int index = static_cast<int>(handle);
+	if (handle == SoBRLEditManipulator::HANDLE_NONE || index < 0 ||
+	    index >= 3 || !state->command_ids[index])
+	    return BOBOL_INPUT_RESULT_UNHANDLED;
+	float f0 = 0.0f;
+	float f10 = 0.0f;
+	float f01 = 0.0f;
+	if (!node->projectedScale(handle, 0, 0, width, height,
+		camera, f0) ||
+	    !node->projectedScale(handle, 1, 0, width, height,
+		camera, f10) ||
+	    !node->projectedScale(handle, 0, 1, width, height,
+		camera, f01))
+	    return BOBOL_INPUT_RESULT_UNHANDLED;
+	if (ged_edit_session_checkpoint(getGed(), editor->session()) !=
+	    GED_EDIT_OK)
+	    return BOBOL_INPUT_RESULT_UNHANDLED;
+	state->active = handle;
+	state->drag_base_length =
+	    static_cast<float>(state->local_lengths[index]);
+	state->drag_f0 = f0;
+	state->drag_fx = f10 - f0;
+	state->drag_fy = f01 - f0;
+	(void)qell_manipulator_republish(state,
+	    preview_path.toUtf8().constData(), handle, handle);
+	return BOBOL_INPUT_RESULT_HANDLED;
+    }
+
+    if (action == QELL_MANIPULATOR_MOTION) {
+	if (state->active == SoBRLEditManipulator::HANDLE_NONE) {
+	    const SoBRLEditManipulator::Handle hover = node->hitTest(
+		event->x, event->y, width, height, camera);
+	    const bool changed = node->hoverHandle.getValue() !=
+		static_cast<int>(hover);
+	    if (changed)
+		(void)qell_manipulator_republish(state,
+		    preview_path.toUtf8().constData(), hover,
+		    SoBRLEditManipulator::HANDLE_NONE);
+	    return hover == SoBRLEditManipulator::HANDLE_NONE ?
+		BOBOL_INPUT_RESULT_UNHANDLED : BOBOL_INPUT_RESULT_HANDLED;
+	}
+
+	const int index = static_cast<int>(state->active);
+	const float factor = std::max(1.0e-9f,
+	    state->drag_f0 + state->drag_fx * static_cast<float>(event->x) +
+	    state->drag_fy * static_cast<float>(event->y));
+	fastf_t value[1] = {
+	    static_cast<fastf_t>(state->drag_base_length * factor)
+	};
+	struct ged_edit_command_input input = {};
+	input.command_id = state->command_ids[index];
+	input.values = value;
+	input.value_count = 1;
+	input.view = state->view_context;
+	const enum ged_edit_status result = ged_edit_session_apply(getGed(),
+	    editor->session(), &input);
+	if (result != GED_EDIT_OK) {
+	    /* Press established a checkpoint.  A primitive handler rejection may
+	     * have touched private edit bookkeeping even when geometry validation
+	     * fails, so terminate the drag and restore the authoritative session. */
+	    state->active = SoBRLEditManipulator::HANDLE_NONE;
+	    if (result == GED_EDIT_REJECTED || result == GED_EDIT_ERROR)
+		(void)ged_edit_session_revert(getGed(), editor->session());
+	    else
+		editor->refreshFromSession();
+	    if (state->controller) {
+		(void)qell_manipulator_republish(state,
+		    preview_path.toUtf8().constData(),
+		    SoBRLEditManipulator::HANDLE_NONE,
+		    SoBRLEditManipulator::HANDLE_NONE);
+		if (state->controller)
+		    state->controller->requestLodCapacityRender(
+			"ell-edit-manipulator-rejected");
+	    }
+	}
+	return BOBOL_INPUT_RESULT_HANDLED;
+    }
+
+    if (action == QELL_MANIPULATOR_RELEASE) {
+	if (state->active == SoBRLEditManipulator::HANDLE_NONE)
+	    return BOBOL_INPUT_RESULT_UNHANDLED;
+	state->active = SoBRLEditManipulator::HANDLE_NONE;
+	const SoBRLEditManipulator::Handle hover = node->hitTest(
+	    event->x, event->y, width, height, camera);
+	(void)qell_manipulator_republish(state,
+	    preview_path.toUtf8().constData(), hover,
+	    SoBRLEditManipulator::HANDLE_NONE);
+	return BOBOL_INPUT_RESULT_HANDLED;
+    }
+    return BOBOL_INPUT_RESULT_UNHANDLED;
+}
+
+
+void
+QEll::target_changed(const QString &path)
+{
+    if (path != preview_path)
+	clear_preview();
+}
+
+
+void
+QEll::refresh_preview()
+{
+    editor->refreshFromSession();
+    update_preview(static_cast<int>(GED_EDIT_SESSION_UPDATE), 0);
+}
+
+
+void
+QEll::update_preview(int kindValue, qulonglong UNUSED(revision))
+{
+    const enum ged_edit_session_event_kind kind =
+	static_cast<enum ged_edit_session_event_kind>(kindValue);
+    if (kind == GED_EDIT_SESSION_COMMIT || kind == GED_EDIT_SESSION_CANCEL ||
+	kind == GED_EDIT_SESSION_INVALIDATE) {
+	clear_preview();
+	emit view_updated(kind == GED_EDIT_SESSION_COMMIT ?
+	    QG_VIEW_DB : QG_VIEW_REFRESH);
+	return;
+    }
+
+    struct ged *gedp = getGed();
+    const ged_edit_session_ref session = editor->session();
+    const QString path = editor->targetPath();
+    if (!gedp || !gedp->dbip || path.isEmpty() ||
+	ged_edit_session_ref_is_null(session))
+	return;
+
+    struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;
+    if (ged_edit_session_internal_copy(gedp, session, &intern) != GED_EDIT_OK ||
+	intern.idb_type != ID_ELL || !intern.idb_ptr) {
+	rt_db_free_internal(&intern);
+	return;
+    }
+
+    struct db_full_path fullPath;
+    db_full_path_init(&fullPath);
+    mat_t pathMatrix;
+    MAT_IDN(pathMatrix);
+    const QByteArray pathBytes = path.toUtf8();
+    const bool pathOk = db_string_to_path(&fullPath, gedp->dbip,
+	pathBytes.constData()) == 0 && db_path_to_mat(gedp->dbip, &fullPath,
+	pathMatrix, static_cast<int>(fullPath.fp_len) - 1);
+    db_free_full_path(&fullPath);
+    if (!pathOk) {
+	rt_db_free_internal(&intern);
+	return;
+    }
+
+    struct rt_ell_internal *source =
+	static_cast<struct rt_ell_internal *>(intern.idb_ptr);
+    RT_ELL_CK_MAGIC(source);
+    struct rt_ell_internal display = *source;
+    MAT4X3PNT(display.v, pathMatrix, source->v);
+    MAT4X3VEC(display.a, pathMatrix, source->a);
+    MAT4X3VEC(display.b, pathMatrix, source->b);
+    MAT4X3VEC(display.c, pathMatrix, source->c);
+
+    struct bn_tol tolerance = BN_TOL_INIT_TOL;
+
+    struct rt_db_internal displayIntern = intern;
+    displayIntern.idb_ptr = &display;
+    struct rt_point_labels pointLabels[9];
+    int labelCount = 0;
+    if (displayIntern.idb_meth && displayIntern.idb_meth->ft_labels)
+	labelCount = displayIntern.idb_meth->ft_labels(pointLabels, 8,
+	    bn_mat_identity, &displayIntern, &tolerance);
+    const unsigned char labelColor[3] = {255, 255, 0};
+    (void)qged_edit_feature_labels_replace_all(m_ctx, "_ell_edit_labels",
+	pointLabels, labelCount, labelColor);
+
+    preview_path = path;
+    const fastf_t localLengths[3] = {
+	MAGNITUDE(source->a), MAGNITUDE(source->b), MAGNITUDE(source->c)
+    };
+    struct ged_edit_session_info sessionInfo = {};
+    const uint64_t sessionRevision = ged_edit_session_info_get(gedp,
+	session, &sessionInfo) == GED_EDIT_OK ? sessionInfo.revision : 0;
+    update_manipulator(display.v, display.a, display.b, display.c,
+	localLengths, sessionRevision);
+    rt_db_free_internal(&intern);
+    emit view_updated(QG_VIEW_REFRESH);
+}
+
+
+void
+QEll::sync_selection()
+{
+    struct ged *gedp = getGed();
+    if (!gedp || !gedp->dbip)
+	return;
+
+    QString selectedPath;
+    if (ged_selection_count(gedp, nullptr) == 1) {
+	struct bu_vls paths = BU_VLS_INIT_ZERO;
+	(void)ged_selection_list_paths(gedp, nullptr, &paths);
+	selectedPath = QString::fromUtf8(bu_vls_cstr(&paths)).trimmed();
+	bu_vls_free(&paths);
+
+	struct db_full_path fullPath;
+	db_full_path_init(&fullPath);
+	const QByteArray pathBytes = selectedPath.toUtf8();
+	const bool isEll = !selectedPath.isEmpty() &&
+	    db_string_to_path(&fullPath, gedp->dbip,
+		pathBytes.constData()) == 0 &&
+	    DB_FULL_PATH_CUR_DIR(&fullPath) &&
+	    DB_FULL_PATH_CUR_DIR(&fullPath)->d_minor_type ==
+		DB5_MINORTYPE_BRLCAD_ELL;
+	db_free_full_path(&fullPath);
+	if (!isEll)
+	    selectedPath.clear();
+    }
+
+    if (selectedPath.isEmpty()) {
+	/* Preserve a manually entered target across unrelated selection changes. */
+	if (!selection_path.isEmpty() &&
+	    editor->targetPath() == selection_path)
+	    editor->setTargetPath(QString());
+	selection_path.clear();
+	return;
+    }
+
+    selection_path = selectedPath;
+    editor->setTargetPath(selectedPath);
+}
+
+
+void
+QEll::reset_for_database()
+{
+    selection_path.clear();
+    clear_preview();
+    editor->setGed(nullptr);
+    editor->setTargetPath(QString());
+    editor->setGed(getGed());
+    emit view_updated(QG_VIEW_REFRESH);
+}
+
+
+bool
+QEll::eventFilter(QObject *, QEvent *)
+{
     return false;
 }
 
-// Local Variables:
-// tab-width: 8
-// mode: C++
-// c-basic-offset: 4
-// indent-tabs-mode: t
-// c-file-style: "stroustrup"
-// End:
-// ex: shiftwidth=4 tabstop=8
+/*
+ * Local Variables:
+ * mode: C++
+ * tab-width: 8
+ * c-basic-offset: 4
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

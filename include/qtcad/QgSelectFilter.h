@@ -27,38 +27,53 @@
 
 #include "common.h"
 
-extern "C" {
-#include "bu/color.h"
-#include "bu/ptbl.h"
-#include "bg/polygon.h"
-#include "bv.h"
-#include "raytrace.h"
-}
-
 #include <QBoxLayout>
 #include <QEvent>
 #include <QMouseEvent>
-#include <QObject>
 #include <QWidget>
+#include <string>
+#include <vector>
 #include "qtcad/defines.h"
+#include "qtcad/QgViewFilter.h"
+
+struct db_i;
+struct ged_pick_result;
+
+/* Application-local action IDs used only by QgSelectFilter handlers. */
+enum QgSelectInputAction {
+    QG_SELECT_INPUT_BEGIN = 1,
+    QG_SELECT_INPUT_UPDATE,
+    QG_SELECT_INPUT_COMMIT,
+    QG_SELECT_INPUT_CANCEL
+};
 
 // Filters designed for specific editing modes
-class QTCAD_EXPORT QgSelectFilter : public QObject
-{
-    Q_OBJECT
+class QTCAD_EXPORT QgSelectFilter : public QgViewFilter {
+	Q_OBJECT
+	Q_DISABLE_COPY_MOVE(QgSelectFilter)
+
 
     public:
+	QgSelectFilter();
+	~QgSelectFilter() override;
 	// Primary mouse interaction.  This differs a bit for the
 	// various selection types, hence the virtual definition
 	// in the base class.
-	virtual bool eventFilter(QObject *, QEvent *) { return false; }
+	bool eventFilter(QObject *, QEvent *) override
+	{
+		return false;
+	}
 
-	// Recover info from view (common logic for all selection modes)
-	QMouseEvent *view_sync(QEvent *e);
+	const std::vector<std::string> &selected_paths() const;
 
-	struct bu_ptbl selected_set = BU_PTBL_INIT_ZERO;
-
-	struct bview *v = NULL;
+	/**
+	 * Apply one endpoint-routed application selection gesture.  Qt event
+	 * filters may use the same implementation, but application tools should
+	 * route through their display endpoint rather than installing raw-event
+	 * paths.
+	 */
+	bool semanticInput(BObolInputAction action,
+		const BObolInputEvent *event);
 
 	// Whenever we're doing selections, we may want either all the objects
 	// that match the selection criteria, or just the "closest" object.
@@ -66,38 +81,63 @@ class QTCAD_EXPORT QgSelectFilter : public QObject
 	// caller to request the more limited result as well.
 	bool first_only = false;
 
-    signals:
-        void view_updated(int);
-};
-
-class QTCAD_EXPORT QgSelectPntFilter: public QgSelectFilter
-{
-    Q_OBJECT
-
-    public:
-	bool eventFilter(QObject *, QEvent *e);
-};
-
-class QTCAD_EXPORT QgSelectBoxFilter: public QgSelectFilter
-{
-    Q_OBJECT
-
-    public:
-	bool eventFilter(QObject *, QEvent *e);
+    protected:
+	void clear_selected_result();
+	void set_selected_result(struct ged_pick_result *res);
+	void set_selected_paths(const std::vector<std::string> &paths);
+	virtual bool applySemanticInput(BObolInputAction action,
+		const BObolInputEvent *event);
 
     private:
-	fastf_t px = -FLT_MAX;
-	fastf_t py = -FLT_MAX;
+	class QgSelectFilterPrivate;
+	QgSelectFilterPrivate *m = nullptr;
 };
 
-class QTCAD_EXPORT QgSelectRayFilter: public QgSelectFilter
-{
-    Q_OBJECT
+class QTCAD_EXPORT QgSelectPntFilter: public QgSelectFilter {
+	Q_OBJECT
+	Q_DISABLE_COPY_MOVE(QgSelectPntFilter)
 
-    public:
-	bool eventFilter(QObject *, QEvent *e);
 
-	struct db_i *dbip = NULL;
+public:
+	QgSelectPntFilter() = default;
+	bool eventFilter(QObject *, QEvent *e) override;
+
+    protected:
+	bool applySemanticInput(BObolInputAction action,
+		const BObolInputEvent *event) override;
+};
+
+class QTCAD_EXPORT QgSelectBoxFilter: public QgSelectFilter {
+	Q_OBJECT
+	Q_DISABLE_COPY_MOVE(QgSelectBoxFilter)
+
+
+public:
+	QgSelectBoxFilter() = default;
+	bool eventFilter(QObject *, QEvent *e) override;
+
+private:
+	bool applySemanticInput(BObolInputAction action,
+		const BObolInputEvent *event) override;
+	fastf_t px = -FLT_MAX;
+	fastf_t py = -FLT_MAX;
+	bool active = false;
+};
+
+class QTCAD_EXPORT QgSelectRayFilter: public QgSelectFilter {
+	Q_OBJECT
+	Q_DISABLE_COPY_MOVE(QgSelectRayFilter)
+
+
+public:
+	QgSelectRayFilter() = default;
+	bool eventFilter(QObject *, QEvent *e) override;
+
+	struct db_i *dbip = nullptr;
+
+    protected:
+	bool applySemanticInput(BObolInputAction action,
+		const BObolInputEvent *event) override;
 };
 
 #endif /* QGSELECTFILTER_H */
@@ -110,4 +150,3 @@ class QTCAD_EXPORT QgSelectRayFilter: public QgSelectFilter
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

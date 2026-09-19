@@ -12,20 +12,18 @@
 # (Windows) if OpenSSL is not found.
 find_package(OpenSSL QUIET)
 
-brlcad_addexec(remrt "../rt/opt.c;ihost.c;remrt.c" "liboptical;libdm")
+brlcad_addexec(remrt "../rt/opt.c;ihost.c;remrt.c" "liboptical;libimgstream;libpkg")
 target_include_directories(remrt BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(remrt ${M_LIBRARY} ${WINSOCK_LIB})
-add_target_deps(remrt dm_plugins)
 if(OpenSSL_FOUND OR OPENSSL_FOUND)
   target_link_libraries(remrt OpenSSL::SSL OpenSSL::Crypto)
   target_compile_definitions(remrt PRIVATE HAVE_OPENSSL_RAND_H=1 HAVE_OPENSSL_SSL_H=1)
 endif()
 
-brlcad_addexec(rtsrv "../rt/usage.cpp;../rt/view.c;../rt/do.c;../rt/grid.c;../rt/heatgraph.c;../rt/opt.c;../rt/scanline.c;../rt/worker.c;rtsrv.c" "libdm;liboptical;libpkg;libicv")
+brlcad_addexec(rtsrv "../rt/usage.cpp;../rt/view.c;../rt/do.c;../rt/grid.c;../rt/heatgraph.c;../rt/opt.c;../rt/progressive.c;../rt/scanline.c;../rt/worker.c;rtsrv.c" "libimgstream;liboptical;libpkg;libicv")
 target_include_directories(rtsrv BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_property(TARGET rtsrv APPEND PROPERTY COMPILE_DEFINITIONS "RTSRV")
 target_link_libraries(rtsrv ${WINSOCK_LIB})
-add_target_deps(rtsrv dm_plugins)
 if(OpenSSL_FOUND OR OPENSSL_FOUND)
   target_link_libraries(rtsrv OpenSSL::SSL OpenSSL::Crypto)
   target_compile_definitions(rtsrv PRIVATE HAVE_OPENSSL_RAND_H=1 HAVE_OPENSSL_SSL_H=1)

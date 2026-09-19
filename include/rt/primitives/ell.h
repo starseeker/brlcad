@@ -30,7 +30,12 @@
 
 __BEGIN_DECLS
 
+struct bg_tess_tol;
+struct bn_tol;
+struct rt_primitive_lod_realization;
+
 RT_EXPORT extern int rt_ell_is_sph(const struct rt_db_internal* ip);
+RT_EXPORT extern int rt_ell_wireframe_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol);
 
 /* TODO - can this move elsewhere? */
 RT_EXPORT extern void rt_ell_16pnts(fastf_t *ov,

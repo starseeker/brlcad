@@ -612,18 +612,20 @@ rt_rec_shot(struct soltab *stp, struct xray *rp, struct application *ap, struct 
 
     /* sanity check that we don't end up with too many hits */
     if (nhits > 3) {
-	bu_log("rt_rec_shot(%s): %d unique hits?!?  %g, %g, %g, %g\n",
-	       stp->st_name, nhits,
-	       hits[0].hit_dist,
-	       hits[1].hit_dist,
-	       hits[2].hit_dist,
-	       hits[3].hit_dist);
+	if (RT_G_DEBUG & RT_DEBUG_SHOOT)
+	    bu_log("rt_rec_shot(%s): %d unique hits?!?  %g, %g, %g, %g\n",
+		   stp->st_name, nhits,
+		   hits[0].hit_dist,
+		   hits[1].hit_dist,
+		   hits[2].hit_dist,
+		   hits[3].hit_dist);
     } else if (nhits > 2) {
-	bu_log("rt_rec_shot(%s): %d unique hits?!?  %g, %g, %g\n",
-	       stp->st_name, nhits,
-	       hits[0].hit_dist,
-	       hits[1].hit_dist,
-	       hits[2].hit_dist);
+	if (RT_G_DEBUG & RT_DEBUG_SHOOT)
+	    bu_log("rt_rec_shot(%s): %d unique hits?!?  %g, %g, %g\n",
+		   stp->st_name, nhits,
+		   hits[0].hit_dist,
+		   hits[1].hit_dist,
+		   hits[2].hit_dist);
     } else if (nhits == 1) {
 	/* Ray is probably tangent to body of cylinder or a single hit
 	 * on only an end plate.  This could be considered a MISS, but
