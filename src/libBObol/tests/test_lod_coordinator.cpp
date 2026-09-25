@@ -9056,17 +9056,15 @@ test_availability_and_publication(void)
     }
 
     availability.setProviderPendingCount(7);
-    availability.noteResultsReady(1234);
-    availability.noteResultsReady(5678);
+    availability.noteResultQueueReady(1234);
+    availability.noteResultQueueReady(5678);
     if (availability.providerPendingCount() != 7 ||
-	!availability.resultsPending() ||
 	availability.firstResultReadyMicroseconds() != 1234) {
 	std::fprintf(stderr, "FAIL: availability producer/result ledger\n");
 	return 1;
     }
-    availability.resetResultQueue();
-    if (availability.resultsPending() ||
-	availability.firstResultReadyMicroseconds() != 0) {
+    availability.resetResultQueueObservation();
+    if (availability.firstResultReadyMicroseconds() != 0) {
 	std::fprintf(stderr, "FAIL: availability result reset\n");
 	return 1;
     }

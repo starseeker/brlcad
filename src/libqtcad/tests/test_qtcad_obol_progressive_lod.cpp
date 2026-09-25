@@ -1282,20 +1282,19 @@ process_until_proxy_kind(BObolViewController *controller,
 	if (controller->getActiveLodProxyPayloadCount(expected_kind) >=
 	    min_active_payload_count)
 	    return 1;
-	if (service.inFlightCount() == 0 &&
-	    service.queuedResultCountForDiagnostics() == 0 &&
-	    service.pendingTaskCountForDiagnostics() == 0)
+	const BObolLodServiceWorkStatus work = service.workStatus();
+	if (work.inFlightTasks == 0 && work.queuedResults == 0 &&
+	    work.pendingTasks == 0)
 	    break;
 	std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 
+    const BObolLodServiceWorkStatus work = service.workStatus();
     fprintf(stderr, "qtcad Obol progressive LoD did not reach %s proxy kind %d with %zu active payloads, current=%d active=%zu applied=%zu pending=%zu queued=%zu in_flight=%zu\n",
 	    label, expected_kind, min_active_payload_count,
 	    0,
 	    controller->getActiveLodProxyPayloadCount(expected_kind), applied_total,
-	    service.pendingTaskCountForDiagnostics(),
-	    service.queuedResultCountForDiagnostics(),
-	    service.inFlightCount());
+	    work.pendingTasks, work.queuedResults, work.inFlightTasks);
     return 0;
 }
 
@@ -1318,18 +1317,18 @@ process_until_mesh(BObolViewController *controller,
 	if (controller->getActiveLodMeshPayloadCount() >=
 	    min_active_payload_count)
 	    return 1;
-	if (service.inFlightCount() == 0 &&
-	    service.queuedResultCountForDiagnostics() == 0 &&
-	    service.pendingTaskCountForDiagnostics() == 0)
+	const BObolLodServiceWorkStatus work = service.workStatus();
+	if (work.inFlightTasks == 0 && work.queuedResults == 0 &&
+	    work.pendingTasks == 0)
 	    break;
 	std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 
+    const BObolLodServiceWorkStatus work = service.workStatus();
     fprintf(stderr, "qtcad Obol progressive LoD did not reach %zu active mesh payloads, active=%zu applied=%zu pending=%zu queued=%zu in_flight=%zu\n",
 	    min_active_payload_count, controller->getActiveLodMeshPayloadCount(),
-	    applied_total, service.pendingTaskCountForDiagnostics(),
-	    service.queuedResultCountForDiagnostics(),
-	    service.inFlightCount());
+	    applied_total, work.pendingTasks, work.queuedResults,
+	    work.inFlightTasks);
     return 0;
 }
 

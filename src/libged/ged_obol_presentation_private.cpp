@@ -986,50 +986,19 @@ ged_obol_faceplate_sync_lod_progress(
     }
     BObolLodConvergenceStatus status;
     controller->getLodConvergenceStatus(status);
+    const BObolLodProgressDisplayStatus display =
+	status.progressDisplayStatus();
     const size_t displayedPrimitiveCount =
 	status.presentedPrimitiveCountValid ?
 	status.presentedPrimitiveCount : status.activeFaces;
 
-    if (!status.hasLodState) {
+    if (!display.visible) {
 	publication.remove(track_name);
 	publication.remove(fill_name);
 	publication.remove(label_name);
 	return;
     }
-
-    /* "View ready" is a terminal user contract, not a synonym for the
-     * controller's idle enum.  Keep this guard at the observation boundary so
-     * a defective or partially published snapshot degrades to "Finalizing"
-     * instead of making a false completion claim. */
-    const bool terminalReady =
-	status.phase == BOBOL_LOD_CONVERGENCE_IDLE && status.terminal &&
-	status.viewReady && !status.backgroundPending &&
-	status.fraction >= 1.0f;
-
-    /* Selection, highlighting, and manipulator changes own one exact
-     * presentation frame, but they do not rebalance LoD.  The shared control
-     * ledger deliberately tracks that frame so terminal waiters cannot race
-     * its style update; do not turn the same bookkeeping into a misleading
-     * "Balancing detail" flash.  Real capacity, point, publication, or
-     * background work contributes another obligation or one of the explicit
-     * calibration flags and continues through the normal HUD path. */
-    if (status.semanticPresentationFramePending) {
-	publication.remove(track_name);
-	publication.remove(fill_name);
-	publication.remove(label_name);
-	return;
-    }
-
-    const bool show =
-	status.phase != BOBOL_LOD_CONVERGENCE_IDLE ||
-	status.backgroundPending || status.performanceLimited ||
-	status.failedSourceCount > 0 || !terminalReady;
-    if (!show) {
-	publication.remove(track_name);
-	publication.remove(fill_name);
-	publication.remove(label_name);
-	return;
-    }
+    const bool terminalReady = display.terminalReady;
 
     int color[3] = {96, 220, 255};
     struct bu_vls text = BU_VLS_INIT_ZERO;

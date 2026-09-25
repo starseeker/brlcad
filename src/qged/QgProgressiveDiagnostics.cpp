@@ -222,6 +222,8 @@ qged_append_progressive_control_diagnostic_values(
 	static_cast<qint64>(status.inFlight));
     sample.insert(QStringLiteral("lod_convergence_queued_results"),
 	static_cast<qint64>(status.queuedResults));
+    sample.insert(QStringLiteral("lod_convergence_shared_producer_leases"),
+	static_cast<qint64>(status.sharedProducerLeases));
     sample.insert(QStringLiteral("lod_convergence_source_preparation_providers"),
 	static_cast<qint64>(status.sourcePreparationProviderCount));
     sample.insert(QStringLiteral("lod_source_preparation_completed_units"),
@@ -1935,22 +1937,21 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	requestedProgressiveCadCutMax);
     BObolLodService *service = controller->getLodService();
     if (service) {
+	const BObolLodServiceWorkStatus work = service->workStatus();
 	sample.insert(QStringLiteral("lod_service_in_flight_tasks"),
-	    static_cast<qint64>(service->inFlightCount()));
+	    static_cast<qint64>(work.inFlightTasks));
 	sample.insert(QStringLiteral("lod_service_result_reservations"),
-	    static_cast<qint64>(
-		service->resultReservationCountForDiagnostics()));
+	    static_cast<qint64>(work.resultReservations));
 	sample.insert(QStringLiteral("lod_service_available_result_capacity"),
 	    static_cast<qint64>(service->availableResultTaskCapacity()));
 	sample.insert(QStringLiteral("lod_service_pending_tasks"),
-	    static_cast<qint64>(service->pendingTaskCountForDiagnostics()));
+	    static_cast<qint64>(work.pendingTasks));
 	sample.insert(QStringLiteral("lod_service_active_requests"),
-	    static_cast<qint64>(service->activeRequestCountForDiagnostics()));
+	    static_cast<qint64>(work.activeRequests));
 	sample.insert(QStringLiteral("lod_service_queued_results"),
-	    static_cast<qint64>(service->queuedResultCountForDiagnostics()));
+	    static_cast<qint64>(work.queuedResults));
 	sample.insert(QStringLiteral("lod_service_queued_cache_writes"),
-	    static_cast<qint64>(
-		service->queuedCacheWriteCountForDiagnostics()));
+	    static_cast<qint64>(work.queuedCacheWrites));
 	sample.insert(QStringLiteral("lod_service_completed_tasks"),
 	    static_cast<qint64>(service->completedTaskCountForDiagnostics()));
 	sample.insert(QStringLiteral("lod_service_resident_assets"),
@@ -1959,25 +1960,25 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	sample.insert(QStringLiteral("lod_service_resident_bytes"),
 	    static_cast<qint64>(
 		service->residentMeshBytesForDiagnostics()));
+	const BObolLodResidentCapacityStatus residentCapacity =
+	    service->residentCapacityStatus();
 	sample.insert(QStringLiteral("lod_service_stable_resident_bytes"),
 	    static_cast<qint64>(
-		service->stableResidentMeshBytesForDiagnostics()));
+		residentCapacity.stableResidentBytes));
 	sample.insert(QStringLiteral("lod_service_reserved_growth_bytes"),
 	    static_cast<qint64>(
-		service->reservedResidentMeshGrowthBytesForDiagnostics()));
+		residentCapacity.reservedGrowthBytes));
 	sample.insert(QStringLiteral("lod_service_resident_admission_revision"),
 	    static_cast<qint64>(
 		service->residentMeshAdmissionRevision()));
 	sample.insert(QStringLiteral("lod_service_resident_limit_bytes"),
-	    static_cast<qint64>(service->getResidentMeshLimit()));
+	    static_cast<qint64>(residentCapacity.residentLimitBytes));
 	sample.insert(QStringLiteral("lod_service_working_set_limit_bytes"),
 	    static_cast<qint64>(service->getWorkingSetLimit()));
 	sample.insert(QStringLiteral("lod_service_active_working_set_bytes"),
-	    static_cast<qint64>(
-		service->activeWorkingSetBytesForDiagnostics()));
+	    static_cast<qint64>(work.activeWorkingSetBytes));
 	sample.insert(QStringLiteral("lod_service_executing_tasks"),
-	    static_cast<qint64>(
-		service->executingTaskCountForDiagnostics()));
+	    static_cast<qint64>(work.executingTasks));
 	sample.insert(QStringLiteral("lod_service_peak_working_set_bytes"),
 	    static_cast<qint64>(
 		service->peakWorkingSetBytesForDiagnostics()));

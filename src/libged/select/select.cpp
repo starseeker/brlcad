@@ -197,7 +197,7 @@ select_visible_database_records(struct ged_view_context *view_ctx,
 	return false;
 
     export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
-    export_action.apply(controller->getViewport()->getRoot());
+    export_action.applyViewport(*controller->getViewport());
     export_action.collectObjectRecords(records,
 	SoBRLExportAction::QUERY_VISIBLE_ONLY |
 	SoBRLExportAction::QUERY_DATABASE_OBJECTS);

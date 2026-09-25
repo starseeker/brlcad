@@ -613,7 +613,7 @@ dl_botdump(struct _ged_bot_dump_client_data *d)
 	return;
     SoBRLExportAction export_action;
     export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
-    export_action.apply(controller->getViewport()->getRoot());
+    export_action.applyViewport(*controller->getViewport());
     std::vector<SoBRLExportAction::ObjectRecord> records;
     export_action.collectObjectRecords(records,
 	SoBRLExportAction::QUERY_VISIBLE_ONLY |

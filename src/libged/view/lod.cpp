@@ -64,14 +64,10 @@ lod_service_has_work(BObolViewController *controller)
 	return 0;
 
     BObolLodService *service = controller->getLodService();
-    return controller->hasPendingLodSubmissions() ||
-	controller->hasPendingLodResults() ||
-	controller->hasProgressiveWorkPending() ||
-	(service && (service->inFlightCount() > 0 ||
-	service->pendingTaskCountForDiagnostics() > 0 ||
-	service->queuedResultCountForDiagnostics() > 0 ||
-	service->queuedCacheWriteCountForDiagnostics() > 0 ||
-	service->delayedTaskCountForDiagnostics() > 0));
+    const BObolHostWorkSnapshot hostWork =
+	controller->getHostWorkSnapshot();
+    return hostWork.pumpPending() ||
+	(service && !service->workStatus().isIdle());
 }
 
 static int
@@ -467,10 +463,13 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		return BRLCAD_ERROR;
 	    }
 	    BObolLodService *service = view_controller->getLodService();
+	    const BObolLodServiceWorkStatus work = service ?
+		service->workStatus() :
+		BObolLodServiceWorkStatus();
 	    const SbString &diagnostics = view_controller->getLastLodDiagnostics();
 	    bu_vls_printf(gedp->ged_result_str, "attached: 1\n");
 	    bu_vls_printf(gedp->ged_result_str, "running: %d\n",
-		service && service->isRunning() ? 1 : 0);
+		work.running ? 1 : 0);
 	    bu_vls_printf(gedp->ged_result_str, "auto_submit: %d\n",
 		view_controller->isLodAutoSubmitEnabled() ? 1 : 0);
 	    bu_vls_printf(gedp->ged_result_str, "pending_submissions: %d\n",
@@ -517,15 +516,15 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		"calibrated_render_cost_per_second: %.0f\n",
 		view_controller->getCalibratedLodRenderCostPerSecond());
 	    bu_vls_printf(gedp->ged_result_str, "in_flight: %zu\n",
-		service ? service->inFlightCount() : 0);
+		work.inFlightTasks);
 	    bu_vls_printf(gedp->ged_result_str, "pending_tasks: %zu\n",
-		service ? service->pendingTaskCountForDiagnostics() : 0);
+		work.pendingTasks);
 	    bu_vls_printf(gedp->ged_result_str, "queued_results: %zu\n",
-		service ? service->queuedResultCountForDiagnostics() : 0);
+		work.queuedResults);
 	    bu_vls_printf(gedp->ged_result_str, "queued_cache_writes: %zu\n",
-		service ? service->queuedCacheWriteCountForDiagnostics() : 0);
+		work.queuedCacheWrites);
 	    bu_vls_printf(gedp->ged_result_str, "delayed_tasks: %zu\n",
-		service ? service->delayedTaskCountForDiagnostics() : 0);
+		work.delayedTasks);
 	    bu_vls_printf(gedp->ged_result_str, "last_visited_meshes: %u\n",
 		view_controller->getLastLodVisitedMeshCount());
 	    bu_vls_printf(gedp->ged_result_str, "last_submitted_tasks: %u\n",
@@ -618,15 +617,17 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		return BRLCAD_ERROR;
 	    }
 	    BObolLodService *service = view_controller->getLodService();
+	    const BObolLodServiceWorkStatus work = service ?
+		service->workStatus() :
+		BObolLodServiceWorkStatus();
 	    const SbString &diagnostics = view_controller->getLastLodDiagnostics();
 	    redraw_view();
 	    bu_vls_printf(gedp->ged_result_str,
 			  "submitted=%u applied=%u queued=%zu in_flight=%zu pending=%zu\n",
 			  view_controller->getLastLodSubmittedTaskCount(),
 			  view_controller->getLastLodAppliedResultCount(),
-			  service ? service->queuedResultCountForDiagnostics() : 0,
-			  service ? service->inFlightCount() : 0,
-			  service ? service->pendingTaskCountForDiagnostics() : 0);
+			  work.queuedResults, work.inFlightTasks,
+			  work.pendingTasks);
 	    if (diagnostics.getLength() > 0)
 		bu_vls_printf(gedp->ged_result_str, "%s\n",
 			      diagnostics.getString());
@@ -676,6 +677,9 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 
 	    BObolLodService *service = view_controller ?
 		view_controller->getLodService() : NULL;
+	    const BObolLodServiceWorkStatus work = service ?
+		service->workStatus() :
+		BObolLodServiceWorkStatus();
 	    const SbString diagnostics = view_controller ?
 		view_controller->getLastLodDiagnostics() : SbString();
 	    redraw_view();
@@ -690,10 +694,8 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 			  view_controller && view_controller->hasPendingLodSubmissions() ? 1 : 0,
 			  view_controller && view_controller->hasPendingLodResults() ? 1 : 0,
 			  view_controller && view_controller->hasProgressiveWorkPending() ? 1 : 0,
-			  service ? service->queuedResultCountForDiagnostics() : 0,
-			  service ? service->inFlightCount() : 0,
-			  service ? service->pendingTaskCountForDiagnostics() : 0,
-			  service ? service->delayedTaskCountForDiagnostics() : 0);
+			  work.queuedResults, work.inFlightTasks,
+			  work.pendingTasks, work.delayedTasks);
 	    if (diagnostics.getLength() > 0)
 		bu_vls_printf(gedp->ged_result_str, "%s\n",
 			      diagnostics.getString());

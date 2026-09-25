@@ -63,11 +63,8 @@ constexpr fastf_t DEFAULT_LEADER_X = 6.0;
 constexpr fastf_t DEFAULT_LEADER_Y = 3.0;
 constexpr fastf_t DEFAULT_LEADER_MARGIN_SCALE = 2.0;
 constexpr fastf_t DEFAULT_SCREEN_TEXT_HEIGHT_MM = 3.0;
-/* The display-plane renderer uses this nominal density.  --dpi makes the
- * physical size explicit for displays whose effective density differs. */
-constexpr fastf_t DEFAULT_SCREEN_DPI = 96.0;
-constexpr fastf_t MILLIMETERS_PER_INCH = 25.4;
-constexpr fastf_t DISPLAY_PIXELS_PER_MM = DEFAULT_SCREEN_DPI / MILLIMETERS_PER_INCH;
+constexpr fastf_t DEFAULT_SCREEN_DPI = RT_ANNOT_SCREEN_DPI;
+constexpr fastf_t DISPLAY_PIXELS_PER_MM = RT_ANNOT_DISPLAY_PIXELS_PER_MM;
 constexpr double AUTODIM_TEXT_WIDTH_SCALE = 0.65;
 /* Layout penalties deliberately dominate the smaller rewards so avoiding
  * collisions and crossings wins over merely moving a label farther out. */
@@ -86,7 +83,6 @@ constexpr int DEFAULT_ARC_SEGMENTS = 24;
 const char *ATTR_KIND = "annotate:kind";
 const char *ATTR_MEMBERS = "annotate:members";
 const char *ATTR_SOURCES = "annotate:sources";
-const char *ATTR_COLOR = "rgb";
 const char *ATTR_BOUNDS = "annotate:bounds";
 const char *ATTR_BOX_CORNERS = "annotate:box-corners";
 const char *ATTR_AXES = "annotate:axes";
@@ -551,7 +547,7 @@ set_kind(struct ged *gedp, const char *name, const char *kind,
 	    struct bu_vls value = BU_VLS_INIT_ZERO;
 	    bu_color_to_rgb_chars(&opts.color.value, rgb);
 	    bu_vls_sprintf(&value, "%u/%u/%u", rgb[0], rgb[1], rgb[2]);
-	    ret = bu_avs_add(&avs, ATTR_COLOR, bu_vls_cstr(&value)) < 0;
+	    ret = bu_avs_add(&avs, db5_standard_attribute(ATTR_COLOR), bu_vls_cstr(&value)) < 0;
 	    bu_vls_free(&value);
 	}
 	if (!ret && bu_vls_strlen(&opts.associated_object))
@@ -2177,7 +2173,7 @@ cmd_autodim_impl(void *data, int argc, const char **argv,
 	add_attr(ATTR_ITALIC, opts.italic ? "1" : "0");
 	if (opts.color.set) {
 	    bu_vls_sprintf(&number, "%u/%u/%u", rgb[0], rgb[1], rgb[2]);
-	    add_attr(ATTR_COLOR, bu_vls_cstr(&number));
+	    add_attr(db5_standard_attribute(ATTR_COLOR), bu_vls_cstr(&number));
 	}
 	if (!attr_ret)
 	    attr_ret = db5_update_attributes(group_dp, &avs, gedp->dbip);
@@ -2323,6 +2319,9 @@ update_leader(struct ged *gedp, const char *name, bool view_only)
 	bu_vls_printf(gedp->ged_result_str, "Unable to read annotation '%s'", name);
 	return BRLCAD_ERROR;
     }
+    /* Earlier annotation records use rgb; a later canonical color edit must
+     * take precedence when reconstructing the annotation's creation options. */
+    (void)db5_standardize_avs(&avs);
     const char *kind = bu_avs_get(&avs, ATTR_KIND);
     const char *text = bu_avs_get(&avs, ATTR_LEADER_TEXT);
     point_t stored_target, stored_at;
@@ -2364,7 +2363,7 @@ update_leader(struct ged *gedp, const char *name, bool view_only)
     append_option(args, "--font", bu_avs_get(&avs, ATTR_FONT));
     append_option(args, "--line-width", bu_avs_get(&avs, ATTR_LINE_WIDTH));
     append_option(args, "--line-style", bu_avs_get(&avs, ATTR_LINE_STYLE));
-    append_option(args, "--color", bu_avs_get(&avs, ATTR_COLOR));
+    append_option(args, "--color", bu_avs_get(&avs, db5_standard_attribute(ATTR_COLOR)));
     if (attribute_enabled(bu_avs_get(&avs, ATTR_BOLD)))
 	args.emplace_back("--bold");
     if (attribute_enabled(bu_avs_get(&avs, ATTR_ITALIC)))
@@ -2421,6 +2420,7 @@ update_autodim(struct ged *gedp, const char *name, bool view_only)
 	bu_vls_printf(gedp->ged_result_str, "Unable to read annotation '%s'", name);
 	return BRLCAD_ERROR;
     }
+    (void)db5_standardize_avs(&avs);
     const char *kind = bu_avs_get(&avs, ATTR_KIND);
     const char *sources_attr = bu_avs_get(&avs, ATTR_SOURCES);
     const char *axes_attr = bu_avs_get(&avs, ATTR_AXES);
@@ -2472,7 +2472,7 @@ update_autodim(struct ged *gedp, const char *name, bool view_only)
 	args.emplace_back("--bold");
     if (attribute_enabled(bu_avs_get(&avs, ATTR_ITALIC)))
 	args.emplace_back("--italic");
-    append_option(args, "--color", bu_avs_get(&avs, ATTR_COLOR));
+    append_option(args, "--color", bu_avs_get(&avs, db5_standard_attribute(ATTR_COLOR)));
     args.push_back(temporary_name);
 
     std::istringstream sources_input(sources_attr);

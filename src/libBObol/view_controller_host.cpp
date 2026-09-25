@@ -1460,7 +1460,7 @@ BObolViewController::commitRenderRequest(BObolPreparedRenderRequest &request) no
     request.decision = this->d->renderRequest.request(std::move(request.reason),
 	request.capacityRelevant, request.planningRelevant);
     if (this->d->renderRequest.pending())
-	this->d->lodExactPresentationFrame.noteFrameRequested();
+	this->d->noteExactPresentationFrameRequested();
     if (request.decision.changed) {
 	bobol_identity_advance(this->d->hostWorkRevision);
 	bobol_identity_advance(this->d->renderRequestSerial);
@@ -1686,8 +1686,8 @@ BObolViewController::clearRenderRequest(void)
 	if (changed) {
 	    bobol_identity_advance(this->d->hostWorkRevision);
 	    bobol_identity_advance(this->d->renderRequestSerial);
-	    if (this->d->lodExactPresentationFrame.framePending()) {
-		this->d->lodExactPresentationFrame.noteRequestRetired();
+	    if (this->d->exactPresentationFrameAwaiting()) {
+		this->d->noteExactPresentationRequestRetired();
 		exactRequestRetired = TRUE;
 	    }
 	}

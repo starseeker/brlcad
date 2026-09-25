@@ -1,11 +1,5 @@
 brlcad_addexec(test_bobol_prototype test_prototype.cpp "libBObol;libwdb;libbg;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libBObol_prototype COMMAND test_bobol_prototype)
-if(TARGET pinewood.g)
-  add_dependencies(test_bobol_prototype pinewood.g)
-endif(TARGET pinewood.g)
-if(TARGET havoc.g)
-  add_dependencies(test_bobol_prototype havoc.g)
-endif(TARGET havoc.g)
 set_property(TEST libBObol_prototype APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 
 # This manually-invoked qualification executable recursively audits every
@@ -34,7 +28,7 @@ brlcad_add_test(NAME libBObol_lod_realization COMMAND test_bobol_lod_realization
 
 brlcad_addexec(test_bobol_lod_service test_lod_service.cpp "libBObol;libwdb;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
 brlcad_add_test(NAME libBObol_lod_service COMMAND test_bobol_lod_service)
-if(BRLCAD_ENABLE_ADDRESS_SANITIZER OR BRLCAD_ENABLE_UNDEFINED_SANITIZER OR BRLCAD_SANITIZE_THREAD)
+if(BRLCAD_ENABLE_ADDRESS_SANITIZER OR BRLCAD_ENABLE_UNDEFINED_SANITIZER OR BRLCAD_ENABLE_THREAD_SANITIZER)
   set_tests_properties(libBObol_lod_service PROPERTIES TIMEOUT 60)
 else()
   # This integration test performs bounded worker/cache lifecycles.  Its
@@ -53,10 +47,40 @@ brlcad_addexec(test_bobol_compact_publication test_compact_publication.cpp
 # These exhaustive allocation-failure sweeps run near three minutes on a
 # loaded development build. Keep enough margin for normal scheduler variance.
 set(_bobol_publication_sweep_timeout 300)
-brlcad_add_test(NAME libBObol_compact_publication COMMAND test_bobol_compact_publication source-suite)
-brlcad_add_test(NAME libBObol_state_publication COMMAND test_bobol_compact_publication state-suite)
-set_tests_properties(libBObol_compact_publication libBObol_state_publication PROPERTIES
+if(BRLCAD_ENABLE_ADDRESS_SANITIZER OR BRLCAD_ENABLE_UNDEFINED_SANITIZER OR BRLCAD_ENABLE_THREAD_SANITIZER)
+  # Instrumented allocation-failure sweeps take several times longer than the
+  # ordinary build.  Keep the complete matrix runnable through its CTest label.
+  set(_bobol_publication_sweep_timeout 1200)
+endif()
+set(_bobol_publication_tests)
+if(BRLCAD_ENABLE_THREAD_SANITIZER)
+  # TSan makes the complete allocation-failure matrices longer than a useful
+  # single test process. Stable round-robin shards retain every selector while
+  # localizing failures and keeping each result within the bounded timeout.
+  set(_bobol_publication_shard_count 8)
+  math(EXPR _bobol_publication_last_shard "${_bobol_publication_shard_count} - 1")
+  foreach(_bobol_publication_shard RANGE 0 ${_bobol_publication_last_shard})
+    set(_source_test "libBObol_compact_publication_${_bobol_publication_shard}")
+    set(_state_test "libBObol_state_publication_${_bobol_publication_shard}")
+    brlcad_add_test(NAME "${_source_test}" COMMAND test_bobol_compact_publication
+      "source-suite-${_bobol_publication_shard}")
+    brlcad_add_test(NAME "${_state_test}" COMMAND test_bobol_compact_publication
+      "state-suite-${_bobol_publication_shard}")
+    list(APPEND _bobol_publication_tests "${_source_test}" "${_state_test}")
+  endforeach()
+  unset(_bobol_publication_shard_count)
+  unset(_bobol_publication_last_shard)
+  unset(_bobol_publication_shard)
+  unset(_source_test)
+  unset(_state_test)
+else()
+  brlcad_add_test(NAME libBObol_compact_publication COMMAND test_bobol_compact_publication source-suite)
+  brlcad_add_test(NAME libBObol_state_publication COMMAND test_bobol_compact_publication state-suite)
+  list(APPEND _bobol_publication_tests libBObol_compact_publication libBObol_state_publication)
+endif()
+set_tests_properties(${_bobol_publication_tests} PROPERTIES
   LABELS "bobol_headless;bobol_sanitizer" TIMEOUT "${_bobol_publication_sweep_timeout}")
+unset(_bobol_publication_tests)
 unset(_bobol_publication_sweep_timeout)
 
 brlcad_addexec(test_bobol_lod_source_evidence
@@ -74,7 +98,7 @@ brlcad_add_test(NAME libBObol_retained_allocation_oracle
 
 brlcad_addexec(test_bobol_lod_coordinator
   "test_lod_coordinator.cpp;test_lod_admission_policy_header.cpp;test_lod_capacity_policy_header.cpp;test_lod_delivery_policy_header.cpp;test_lod_scene_evidence_header.cpp;test_lod_view_policy_header.cpp;../lod_admission_policy.cpp;../lod_presentation_policy.cpp;../lod_view_quality_history.cpp;../lod_static_quality.cpp"
-  "libbu" TEST ALL_CXX)
+  "libbu;Obol::Obol" TEST ALL_CXX)
 set_source_files_properties(
   test_lod_admission_policy_header.cpp
   test_lod_capacity_policy_header.cpp
@@ -232,6 +256,7 @@ brlcad_add_test(NAME libBObol_installed_package_consumer
     "-DBUILD_DIR=${CMAKE_BINARY_DIR}"
     "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/package_consumer"
     "-DSTAGE_DIR=${CMAKE_CURRENT_BINARY_DIR}/installed-package"
+    "-DOBOL_PACKAGE_DIR=${Obol_DIR}"
     "-DCONFIG=$<CONFIG>"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/check_installed_package.cmake")
 set(_bobol_package_consumer_timeout 300)

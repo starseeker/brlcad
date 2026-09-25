@@ -28,6 +28,8 @@
 class BObolLodService;
 class SoBRLDatabaseSource;
 class SoBRLMeshShape;
+class SoViewport;
+struct BObolDisplayPlaneView;
 struct db_i;
 struct BObolRealizedShapeSummary;
 
@@ -37,6 +39,12 @@ class BOBOL_EXPORT SoBRLExportAction : public SoAction {
     SO_ACTION_HEADER(SoBRLExportAction);
 
 public:
+    /** Export a viewport using its camera and pixel dimensions for screen
+     * annotations. Ordinary apply(node/path) retains camera-independent
+     * export: annotation offsets occupy the local XY plane at their anchor.
+     * The view context lasts only for this traversal. */
+    void applyViewport(const SoViewport &viewport);
+
     enum GeometryPolicy {
 	FULL_DETAIL = 0,
 	DISPLAY_LEVEL = 1
@@ -85,8 +93,13 @@ public:
 	int ghosted;
 	int hiddenLine;
 	int editEmphasis;
+	/* Compatibility classification: zero is solid, nonzero is patterned. */
 	int lineStyle;
-	int lineWidth;
+	/* Effective 16-bit repeating mask and repeat factor. */
+	uint16_t linePattern;
+	uint16_t linePatternFactor;
+	/* Effective pixel width, including authored segment width. */
+	float lineWidth;
 	SbString editIntentId;
 	SbString editIntentRole;
 	uint32_t lodPolicy;
@@ -200,6 +213,8 @@ public:
 	SbVec3f lodBoundsMax;
 	int colorOverride;
 	SbColor color;
+	/* Semantic blanking fill; the output background supplies its color. */
+	int backgroundMask;
 	SbVec3f a;
 	SbVec3f b;
 	SbVec3f c;
@@ -345,6 +360,7 @@ protected:
 
 private:
     friend class SoBRLDatabaseSource;
+    const BObolDisplayPlaneView *displayPlaneView = NULL;
     static void nodeAction(SoAction *action, SoNode *node);
     static void databaseSourceAction(SoAction *action, SoNode *node);
     static void vlistShapeAction(SoAction *action, SoNode *node);
@@ -367,7 +383,8 @@ private:
 	    const SbString &materialShader, int primitiveIndex,
 	    int selected, int highlighted, int ghosted,
 	int hiddenLine, int editEmphasis,
-	int lineStyle, int lineWidth,
+	int lineStyle, uint16_t linePattern, uint16_t linePatternFactor,
+	float lineWidth,
 	const SbString &editIntentId,
 	    const SbString &editIntentRole,
 	    uint32_t lodPolicy,
@@ -406,9 +423,11 @@ private:
 	    const SbVec3f &lodBoundsMax,
 	    int colorOverride, const SbColor &color,
 	    const SbVec3f &a, const SbVec3f &b, const SbVec3f &c);
-    void applyLastLineMetadata(const BObolRealizedShapeSummary &summary);
+    void applyLastLineMetadata(const BObolRealizedShapeSummary &summary,
+	float effectiveTransparency);
     void applyLastPointMetadata(const BObolRealizedShapeSummary &summary);
-    void applyLastTriangleMetadata(const BObolRealizedShapeSummary &summary);
+    void applyLastTriangleMetadata(const BObolRealizedShapeSummary &summary,
+	float effectiveTransparency, int backgroundMask);
 
     std::vector<LineRecord> lines;
     std::vector<PointRecord> points;

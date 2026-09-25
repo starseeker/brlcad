@@ -51,7 +51,7 @@ endif(TARGET ged_test_draw)
 set(annotate_test_ctrls annotate.apng)
 brlcad_addexec(ged_test_annotate "annotate.cpp;util.cpp" "libged;libBObol;PNG::PNG;ZLIB::ZLIB;Threads::Threads" TEST)
 if (TARGET ged_test_annotate)
-  foreach(tdp ${obol_test_deps};ged-annotate;ged-attr;ged-g;ged-kill)
+  foreach(tdp ${obol_test_deps};ged-annotate;ged-attr;ged-g;ged-kill;ged-plot;ged-png;ged-ps)
     if (TARGET ${tdp})
       add_dependencies(ged_test_annotate ${tdp})
     endif ()
@@ -273,7 +273,27 @@ if(NOT MSVC AND NOT BRLCAD_OPTIMIZED)
     endif()
   endforeach()
   brlcad_add_test(NAME ged_test_obol_draw_sync COMMAND ged_test_obol_draw_sync)
-  set_property(TEST ged_test_obol_draw_sync APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  brlcad_add_test(NAME ged_test_obol_production_flow_lifecycle
+    COMMAND ged_test_obol_draw_sync production-flow-lifecycle)
+  brlcad_add_test(NAME ged_test_obol_deferred_result_acceptance
+    COMMAND ged_test_obol_draw_sync deferred-result-acceptance)
+  brlcad_add_test(NAME ged_test_obol_deferred_source_replacement
+    COMMAND ged_test_obol_draw_sync deferred-source-replacement)
+  set_tests_properties(
+    ged_test_obol_draw_sync
+    ged_test_obol_production_flow_lifecycle
+    ged_test_obol_deferred_result_acceptance
+    ged_test_obol_deferred_source_replacement
+    PROPERTIES
+      ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR}
+      LABELS "bobol_flow;bobol_headless"
+      RESOURCE_LOCK ged_obol_draw_sync_fixture)
+  set_tests_properties(ged_test_obol_draw_sync PROPERTIES TIMEOUT 60)
+  set_tests_properties(
+    ged_test_obol_production_flow_lifecycle
+    ged_test_obol_deferred_result_acceptance
+    ged_test_obol_deferred_source_replacement
+    PROPERTIES TIMEOUT 30)
 endif()
 distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_obol_draw_sync_tmp.g)
 

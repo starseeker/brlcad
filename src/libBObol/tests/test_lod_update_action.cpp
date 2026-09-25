@@ -49,6 +49,7 @@
 #include <Inventor/SbVec3f.h>
 #include <Inventor/SoPickedPoint.h>
 #include <Inventor/SoOffscreenRenderer.h>
+#include <Inventor/actions/SoCallbackAction.h>
 #include <Inventor/actions/SoGetBoundingBoxAction.h>
 #include <Inventor/actions/SoRayPickAction.h>
 #include <Inventor/nodes/SoCamera.h>
@@ -1775,12 +1776,7 @@ static int
 wait_for_service_idle(BObolLodService &service)
 {
     for (int i = 0; i < 400; i++) {
-	if (service.inFlightCount() == 0 &&
-	    service.pendingTaskCountForDiagnostics() == 0 &&
-	    service.queuedResultCountForDiagnostics() == 0 &&
-	    service.queuedCacheWriteCountForDiagnostics() == 0 &&
-	    service.delayedTaskCountForDiagnostics() == 0 &&
-	    service.activeRequestCountForDiagnostics() == 0)
+	if (service.workStatus().isIdle())
 	    return 0;
 	std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -4218,13 +4214,163 @@ test_scene_database_source_summary(void)
 	}
     }
 
+    {
+	BObolCompactLodInstanceSummary compactSummary;
+	if (!ownedSource->getCompactLodInstanceSummary(0, compactSummary) ||
+	    !compactSummary.valid || compactSummary.path.getLength() == 0) {
+	    printf("FAIL: compact source should expose a presentation target\n");
+	    ownedRoot->unref();
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    return 1;
+	}
+	const char *instanceKey = summary.instanceKey.getString();
+	const std::vector<SbString> selectedPaths{compactSummary.path};
+	const uint64_t structuralRevision =
+	    ownedScene.getStructuralRevision();
+	uint64_t frameRevision = ownedScene.getFrameRevision();
+	if (ownedScene.syncDatabaseSourceInstanceCompactSelectedPaths(
+		instanceKey, selectedPaths) <= 0 ||
+	    ownedScene.getFrameRevision() <= frameRevision) {
+	    printf("FAIL: scene controller should own compact selection publication\n");
+	    ownedRoot->unref();
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    return 1;
+	}
+	frameRevision = ownedScene.getFrameRevision();
+	if (ownedScene.applyDatabaseSourceInstanceCompactSelectionDelta(
+		instanceKey, {}, selectedPaths) <= 0 ||
+	    ownedScene.getFrameRevision() <= frameRevision) {
+	    printf("FAIL: scene controller should own compact selection deltas\n");
+	    ownedRoot->unref();
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    return 1;
+	}
+	frameRevision = ownedScene.getFrameRevision();
+	if (ownedScene.setDatabaseSourceInstanceCompactVisibilityFrontier(
+		instanceKey, {}) <= 0 ||
+	    ownedScene.getFrameRevision() <= frameRevision) {
+	    printf("FAIL: scene controller should own compact visibility frontiers\n");
+	    ownedRoot->unref();
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    return 1;
+	}
+	frameRevision = ownedScene.getFrameRevision();
+	if (ownedScene.clearDatabaseSourceInstanceCompactVisibilityFrontier(
+		instanceKey) <= 0 ||
+	    ownedScene.getFrameRevision() <= frameRevision) {
+	    printf("FAIL: scene controller should clear compact visibility frontiers\n");
+	    ownedRoot->unref();
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    return 1;
+	}
+	if (!ownedSource->getCompactLodInstanceSummary(0, compactSummary)) {
+	    printf("FAIL: compact source should retain its presentation target\n");
+	    ownedRoot->unref();
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    return 1;
+	}
+	const SbBool presentationVisible = compactSummary.visible;
+	const SbBool presentationSelected = compactSummary.selected;
+	const SbBool presentationHighlighted = compactSummary.highlighted;
+	frameRevision = ownedScene.getFrameRevision();
+	if (ownedScene.setDatabaseSourceInstanceCompactDisplayStateForPath(
+		instanceKey, "", TRUE, 0, FALSE, 0, FALSE, 1,
+		presentationHighlighted ? FALSE : TRUE) <= 0 ||
+	    ownedScene.getFrameRevision() <= frameRevision) {
+	    printf("FAIL: scene controller should own compact display publication\n");
+	    ownedRoot->unref();
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    return 1;
+	}
+	frameRevision = ownedScene.getFrameRevision();
+	if (ownedScene.setDatabaseSourceInstanceCompactDisplayStateForPath(
+		instanceKey, "", TRUE, 0, FALSE, 0, FALSE, 1,
+		presentationHighlighted) <= 0 ||
+	    ownedScene.getFrameRevision() <= frameRevision ||
+	    ownedScene.getStructuralRevision() != structuralRevision ||
+	    !ownedSource->getCompactLodInstanceSummary(0, compactSummary) ||
+	    compactSummary.visible != presentationVisible ||
+	    compactSummary.selected != presentationSelected ||
+	    compactSummary.highlighted != presentationHighlighted) {
+	    printf("FAIL: compact presentation owner should preserve final state\n");
+	    ownedRoot->unref();
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    return 1;
+	}
+	frameRevision = ownedScene.getFrameRevision();
+	if (ownedScene.syncDatabaseSourceInstanceCompactSelectedPaths(
+		instanceKey, {}) != 0 ||
+	    ownedScene.getFrameRevision() != frameRevision ||
+	    ownedScene.syncDatabaseSourceInstanceCompactSelectedPaths(
+		"missing-source", {}) != -1) {
+	    printf("FAIL: compact presentation owner should preserve no-op revisions\n");
+	    ownedRoot->unref();
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    return 1;
+	}
+    }
+
+    const uint32_t beforeSourceInvalidationRevision =
+	ownedSource->sourceRevision.getValue();
+    const uint64_t beforeSourceInvalidationFrame =
+	ownedScene.getFrameRevision();
+    const BObolSourceRealizationStamp beforeSourceInvalidationStamp =
+	ownedSource->captureRealizationStamp();
+    BObolRealizedShapeSummary invalidatedShape;
+    if (ownedScene.markDatabaseSourceInstanceStale(
+	    summary.instanceKey.getString(),
+	    SoBRLDatabaseSource::STALE_SOURCE) != 1 ||
+	ownedSource->sourceRevision.getValue() !=
+	    beforeSourceInvalidationRevision + 1 ||
+	ownedScene.getFrameRevision() <= beforeSourceInvalidationFrame ||
+	!ownedSource->getRealizedShapeSummary(0, invalidatedShape) ||
+	invalidatedShape.ownerSourceRevision !=
+	    beforeSourceInvalidationRevision + 1 ||
+	!invalidatedShape.ownerSourceStale ||
+	!(invalidatedShape.ownerStaleReason &
+	    SoBRLDatabaseSource::STALE_SOURCE)) {
+	printf("FAIL: source invalidation should publish revision and owned state together\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    const uint64_t beforeFallbackFrame = ownedScene.getFrameRevision();
+    const BObolSourceRealizationStamp fallbackStamp =
+	ownedSource->captureRealizationStamp();
+    if (ownedScene.realizeDatabaseSourceInstanceWireframe(
+	    summary.instanceKey.getString(), beforeSourceInvalidationStamp) ||
+	ownedScene.getFrameRevision() != beforeFallbackFrame ||
+	!ownedScene.realizeDatabaseSourceInstanceWireframe(
+	    summary.instanceKey.getString(), fallbackStamp) ||
+	ownedScene.getFrameRevision() <= beforeFallbackFrame ||
+	ownedSource->realizationStatus.getValue() !=
+	    SoBRLDatabaseSource::REALIZED ||
+	ownedSource->stale.getValue()) {
+	printf("FAIL: scene owner should stamp and publish wireframe fallback\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
     if (ownedScene.replaceDatabaseSource("lod-submit.bot", dbip,
-					 SoBRLDatabaseSource::WIREFRAME, 25) != 1 ||
+					 SoBRLDatabaseSource::WIREFRAME, 26) != 1 ||
 	ownedScene.getDatabaseSourceCount() != 1 ||
 	ownedScene.getDatabaseSource(0) != ownedSource ||
 	ownedScene.findDatabaseSource("lod-submit.bot") != ownedSource ||
 	ownedSource->drawMode.getValue() != SoBRLDatabaseSource::WIREFRAME ||
-	ownedSource->sourceRevision.getValue() != 25 ||
+	ownedSource->sourceRevision.getValue() != 26 ||
 	!ownedScene.getDatabaseSourceSummary(0, summary) ||
 	summary.drawTreeDepth != 3 ||
 	bu_strcmp(summary.parentGroupPath.getString(), "draw/group") != 0 ||
@@ -10720,7 +10866,9 @@ test_compact_input_retarget(SoBRLViewLodGroup *root, SoBRLDatabaseSource *source
     controller.setViewportSize(800, 600);
     controller.setLodService(&service);
     controller.setLodAutoSubmit(TRUE);
-    const size_t maximumPassPumps = 16;
+    /* A retarget can owe two complete occurrence passes.  Bound the test by
+     * that work rather than by how many entries fit one timed owner turn. */
+    const size_t maximumPassPumps = occurrenceCount * 2 + 1;
     const uint32_t rescanFact = BObolLodControlRefinement::bit(
 	BObolLodControlRefinement::Fact::SUBMISSION_RESCAN);
     size_t censusVisited = 0;
@@ -12638,13 +12786,39 @@ test_compact_aabb_stream_upgrade(void)
 	    observed.summary.selectable &&
 	    BU_STR_EQUAL(observed.summary.recordRole.getString(), "database") &&
 	    testSource->queryCompactRectangle(identity, identity,
-		-1.0f, -1.0f, 1.0f, 1.0f, records) == 1;
+		SbVec2s(256, 256), -1.0f, -1.0f, 1.0f, 1.0f, records) == 1;
     };
 
     SoBRLDatabaseSource *singleLeafStream = new SoBRLDatabaseSource;
     singleLeafStream->ref();
     singleLeafStream->path = "single-leaf.s";
     singleLeafStream->instanceKey = "single-leaf-stream";
+    BObolCompactOccurrence rootBox = rootLeaf;
+    rootBox.geometry = rootOverview.geometry;
+    rootBox.summary.geometryKind = "aabb";
+    if (!ret &&
+	(singleLeafStream->setCompactOccurrenceRegistry({rootOverview}) != 1 ||
+	 singleLeafStream->mergeCompactOccurrences({rootBox}, TRUE) != 1 ||
+	 !rootLeafIsPickable(singleLeafStream))) {
+	printf("FAIL: streamed root leaf box inherited its overview's baseline\n");
+	ret = 1;
+    }
+    /* Coverage can refine its priority overview after the leaf was drained.
+     * Equal geometry tiers must not let that late extent erase the leaf's
+     * source contract or restore the overview's unpickable baseline. */
+    if (!ret &&
+	(singleLeafStream->mergeCompactOccurrences({rootOverview}, TRUE) != 0 ||
+	 !rootLeafIsPickable(singleLeafStream) ||
+	 !singleLeafStream->hasDisplayMeshLodRequests())) {
+	printf("FAIL: late overview replaced a streamed root leaf box\n");
+	ret = 1;
+    }
+    if (!ret &&
+	(singleLeafStream->mergeCompactOccurrences({rootLeaf}, TRUE) != 1 ||
+	 !rootLeafIsPickable(singleLeafStream))) {
+	printf("FAIL: streamed root leaf box did not upgrade to its mesh\n");
+	ret = 1;
+    }
     if (!ret &&
 	(singleLeafStream->setCompactOccurrenceRegistry({rootOverview}) != 1 ||
 	 singleLeafStream->mergeCompactOccurrences({rootLeaf}, TRUE) != 1 ||
@@ -15791,6 +15965,30 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    ret = 1;
 		}
 	    }
+	}
+    }
+
+    /* A callback/export traversal has no per-view LoD binding. It must still
+     * compile the shared source geometry after another view has published a
+     * different part for that occurrence. */
+    if (!ret) {
+	SoCallbackAction callback;
+	callback.apply(source);
+	SoCADAssembly *compiled = NULL;
+	for (int child = 0; child < source->getNumChildren(); ++child) {
+	    SoNode *node = source->getChild(child);
+	    if (node->isOfType(SoCADAssembly::getClassTypeId()))
+		compiled = static_cast<SoCADAssembly *>(node);
+	}
+	BObolCompactOccurrence base;
+	const std::vector<Obol::InstanceId> ids = compiled ?
+	    compiled->instanceIds() : std::vector<Obol::InstanceId>();
+	const std::optional<Obol::InstanceRecord> record = ids.size() == 1 ?
+	    compiled->getInstanceRecord(ids[0]) : std::optional<Obol::InstanceRecord>();
+	if (!source->getCompactOccurrence(0, base) || !record ||
+	    compiled->partGeometry(record->part) != base.geometry.get()) {
+	    printf("FAIL: view-specific presentation corrupted shared source compilation\n");
+	    ret = 1;
 	}
     }
 

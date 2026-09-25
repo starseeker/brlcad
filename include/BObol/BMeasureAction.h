@@ -25,6 +25,8 @@
 class BObolLodService;
 class SoBRLDatabaseSource;
 class SoBRLMeshShape;
+class SoViewport;
+struct BObolDisplayPlaneView;
 struct db_i;
 
 class BOBOL_EXPORT SoBRLMeasureAction : public SoAction {
@@ -64,6 +66,12 @@ public:
     SoBRLMeasureAction(void);
     virtual ~SoBRLMeasureAction(void);
     static void initClass(void);
+
+    /** Measure a viewport using its camera and pixel dimensions for display-
+     * plane geometry. Ordinary apply(node/path) retains the stored XY layout
+     * at its model anchor. PATH_LOCAL_SPACE always reports stored coordinates.
+     * The viewport context lasts only for this traversal. */
+    void applyViewport(const SoViewport &viewport);
 
     void setQueryPoint(const SbVec3f &point);
     void clearQueryPoint(void);
@@ -141,6 +149,7 @@ protected:
 
 private:
     friend class SoBRLDatabaseSource;
+    const BObolDisplayPlaneView *displayPlaneView = NULL;
     static void nodeAction(SoAction *action, SoNode *node);
     static void databaseSourceAction(SoAction *action, SoNode *node);
     static void vlistShapeAction(SoAction *action, SoNode *node);

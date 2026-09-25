@@ -42,6 +42,7 @@
 #include <Inventor/tools/SbModernUtils.h>
 #include <algorithm>
 #include <math.h>
+#include <map>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -1042,23 +1043,50 @@ ged_draw_group_erase_subpath_for_path(
 }
 
 
-static int ged_obol_collect_view_database_sources(
-    struct ged_view_context *view_ctx,
-    BObolViewController *controller,
-    void *userdata);
+struct ged_obol_database_source_owner {
+    SbModernUtils::SoNodeRef source;
+    BObolSceneController *scene;
+};
 
-static std::set<SoBRLDatabaseSource *>
-ged_obol_attached_database_sources(struct ged *gedp)
+using ged_obol_database_source_owners =
+    std::map<SoBRLDatabaseSource *, ged_obol_database_source_owner>;
+
+static void
+ged_obol_collect_scene_database_source_owners(
+    BObolSceneController *scene, ged_obol_database_source_owners &owners)
 {
-    std::set<SoBRLDatabaseSource *> sources;
-    BObolSceneController *owned = ged_draw_obol_scene_controller(gedp);
-    if (owned) {
-	for (int i = 0; i < owned->getDatabaseSourceCount(); i++)
-	    sources.insert(owned->getDatabaseSource(i));
+    if (!scene)
+	return;
+    for (int i = 0; i < scene->getDatabaseSourceCount(); ++i) {
+	SoBRLDatabaseSource *source = scene->getDatabaseSource(i);
+	if (source)
+	    owners.emplace(source,
+		ged_obol_database_source_owner{
+		    SbModernUtils::SoNodeRef(source), scene});
     }
+}
+
+static int
+ged_obol_collect_view_database_source_owners(
+    struct ged_view_context *UNUSED(view_ctx),
+    BObolViewController *controller, void *userdata)
+{
+    auto *owners = static_cast<ged_obol_database_source_owners *>(userdata);
+    if (controller && owners)
+	ged_obol_collect_scene_database_source_owners(
+	    controller->getSceneController(), *owners);
+    return 1;
+}
+
+static ged_obol_database_source_owners
+ged_obol_attached_database_source_owners(struct ged *gedp)
+{
+    ged_obol_database_source_owners owners;
+    ged_obol_collect_scene_database_source_owners(
+	ged_draw_obol_scene_controller(gedp), owners);
     ged_bobol_view_controllers_foreach(gedp,
-	ged_obol_collect_view_database_sources, &sources);
-    return sources;
+	ged_obol_collect_view_database_source_owners, &owners);
+    return owners;
 }
 
 
@@ -1082,9 +1110,12 @@ ged_draw_obol_source_visibility_frontier_set(
     }
 
     int changed = 0;
-    const std::set<SoBRLDatabaseSource *> sources =
-	ged_obol_attached_database_sources(gedp);
-    for (SoBRLDatabaseSource *source : sources) {
+    const ged_obol_database_source_owners owners =
+	ged_obol_attached_database_source_owners(gedp);
+    for (const auto &entry : owners) {
+	SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(
+	    entry.second.source.get());
+	BObolSceneController *owner = entry.second.scene;
 	BObolDatabaseSourceSummary summary;
 	if (!source || !source->getSummary(summary) || !summary.valid ||
 	    !ged_obol_database_source_instance_in_scope(summary, view_ctx) ||
@@ -1095,7 +1126,8 @@ ged_draw_obol_source_visibility_frontier_set(
 	    ged_obol_semantic_path_string(source_path) !=
 		ged_obol_semantic_path_string(root_path))
 	    continue;
-	if (source->setCompactInstanceVisibilityFrontier(frontier) > 0)
+	if (owner->setDatabaseSourceInstanceCompactVisibilityFrontier(
+		summary.instanceKey.getString(), frontier) > 0)
 	    changed++;
     }
     return changed;
@@ -1128,9 +1160,12 @@ ged_draw_obol_source_visibility_overrides_set(
     }
 
     int changed = 0;
-    const std::set<SoBRLDatabaseSource *> sources =
-	ged_obol_attached_database_sources(gedp);
-    for (SoBRLDatabaseSource *source : sources) {
+    const ged_obol_database_source_owners owners =
+	ged_obol_attached_database_source_owners(gedp);
+    for (const auto &entry : owners) {
+	SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(
+	    entry.second.source.get());
+	BObolSceneController *owner = entry.second.scene;
 	BObolDatabaseSourceSummary summary;
 	if (!source || !source->getSummary(summary) || !summary.valid ||
 	    !ged_obol_database_source_instance_in_scope(summary, view_ctx) ||
@@ -1141,8 +1176,8 @@ ged_draw_obol_source_visibility_overrides_set(
 	    ged_obol_semantic_path_string(source_path) !=
 		ged_obol_semantic_path_string(root_path))
 	    continue;
-	if (source->setCompactInstanceVisibilityOverrides(
-		rule_paths, rule_states) > 0)
+	if (owner->setDatabaseSourceInstanceCompactVisibilityOverrides(
+		summary.instanceKey.getString(), rule_paths, rule_states) > 0)
 	    changed++;
     }
     return changed;
@@ -1160,9 +1195,12 @@ ged_draw_obol_source_visibility_frontier_clear(
 	return 0;
 
     int changed = 0;
-    const std::set<SoBRLDatabaseSource *> sources =
-	ged_obol_attached_database_sources(gedp);
-    for (SoBRLDatabaseSource *source : sources) {
+    const ged_obol_database_source_owners owners =
+	ged_obol_attached_database_source_owners(gedp);
+    for (const auto &entry : owners) {
+	SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(
+	    entry.second.source.get());
+	BObolSceneController *owner = entry.second.scene;
 	BObolDatabaseSourceSummary summary;
 	if (!source || !source->getSummary(summary) || !summary.valid ||
 	    !ged_obol_database_source_instance_in_scope(summary, view_ctx) ||
@@ -1173,7 +1211,8 @@ ged_draw_obol_source_visibility_frontier_clear(
 	    ged_obol_semantic_path_string(source_path) !=
 		ged_obol_semantic_path_string(root_path))
 	    continue;
-	if (source->clearCompactInstanceVisibilityFrontier() > 0)
+	if (owner->clearDatabaseSourceInstanceCompactVisibilityFrontier(
+		summary.instanceKey.getString()) > 0)
 	    changed++;
     }
     return changed;
@@ -1473,37 +1512,6 @@ ged_draw_obol_database_source_set_selected_for_instance_key(
     return changed > 0 ? 1 : 0;
 }
 
-static void
-ged_obol_collect_database_sources(SoNode *node,
-	std::set<SoBRLDatabaseSource *> &sources)
-{
-    if (!node)
-	return;
-    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
-	sources.insert(static_cast<SoBRLDatabaseSource *>(node));
-	return;
-    }
-    if (!node->isOfType(SoGroup::getClassTypeId()))
-	return;
-
-    SoGroup *group = static_cast<SoGroup *>(node);
-    for (int i = 0; i < group->getNumChildren(); i++)
-	ged_obol_collect_database_sources(group->getChild(i), sources);
-}
-
-static int
-ged_obol_collect_view_database_sources(
-    struct ged_view_context *UNUSED(view_ctx),
-    BObolViewController *controller, void *userdata)
-{
-    std::set<SoBRLDatabaseSource *> *sources =
-	static_cast<std::set<SoBRLDatabaseSource *> *>(userdata);
-    if (controller && sources)
-	ged_obol_collect_database_sources(controller->getRenderSceneRoot(),
-	    *sources);
-    return 1;
-}
-
 static int
 ged_obol_request_exact_selection_presentation(
     struct ged_view_context *UNUSED(view_ctx),
@@ -1548,15 +1556,8 @@ ged_draw_obol_database_sources_sync_selected_paths(
     if (!gedp || !gedp->i || !gedp->i->ged_gdp)
 	return 0;
 
-    std::set<SoBRLDatabaseSource *> sources;
-    BObolSceneController *owned = ged_draw_obol_scene_controller(gedp);
-    if (owned) {
-	for (int i = 0; i < owned->getDatabaseSourceCount(); i++)
-	    sources.insert(owned->getDatabaseSource(i));
-    }
-
-    ged_bobol_view_controllers_foreach(gedp,
-	ged_obol_collect_view_database_sources, &sources);
+    const ged_obol_database_source_owners owners =
+	ged_obol_attached_database_source_owners(gedp);
     int applied = 0;
     std::vector<SbString> compact_selected_paths;
     compact_selected_paths.reserve(path_count);
@@ -1564,7 +1565,10 @@ ged_draw_obol_database_sources_sync_selected_paths(
 	if (paths[i] && paths[i][0])
 	    compact_selected_paths.push_back(SbString(paths[i]));
     }
-    for (SoBRLDatabaseSource *source : sources) {
+    for (const auto &entry : owners) {
+	SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(
+	    entry.second.source.get());
+	BObolSceneController *owner = entry.second.scene;
 	BObolDatabaseSourceSummary sourceSummary;
 	if (!source || !source->getSummary(sourceSummary) ||
 	    !sourceSummary.valid)
@@ -1573,19 +1577,26 @@ ged_draw_obol_database_sources_sync_selected_paths(
 	 * Index installation and streamed additions will then apply it directly,
 	 * rather than performing a delayed full-scene catch-up during the next
 	 * unrelated draw or erase operation. */
-	applied += source->syncCompactInstanceSelectedPaths(
-	    compact_selected_paths);
+	const char *instanceKey = sourceSummary.instanceKey.getString();
+	const SbBool hasCompactInstances =
+	    source->getCompactInstanceCount() > 0;
+	const int compactChanged =
+	    owner->syncDatabaseSourceInstanceCompactSelectedPaths(
+		instanceKey, compact_selected_paths);
+	if (compactChanged > 0)
+	    applied += compactChanged;
 
 	/* Compact occurrences own their individual selection presentation.  Once
 	 * they exist, also selecting their aggregate source styles the retired
 	 * overview/root proxy a second time and can make a white box reappear over
 	 * an otherwise correct selected model. */
-	const SbBool sourceSelected = source->getCompactInstanceCount() > 0 ?
+	const SbBool sourceSelected = hasCompactInstances ?
 	    FALSE : (ged_obol_path_in_selected_set(
 		sourceSummary.path.getString(), paths, path_count) ? TRUE : FALSE);
 	if (sourceSummary.selected == sourceSelected)
 	    continue;
-	const int changed = source->setDisplayState(FALSE,
+	const int changed = owner->setDatabaseSourceInstanceState(instanceKey,
+	    FALSE,
 	    sourceSummary.sourceRevision, sourceSummary.inputsRevision,
 	    sourceSummary.visible, sourceSelected, sourceSummary.highlighted,
 	    sourceSummary.lineStyle, sourceSummary.lineWidth,
@@ -1683,7 +1694,7 @@ ged_draw_obol_database_sources_apply_selection_delta(
 	    removed.push_back(SbString(removed_paths[i]));
     }
 
-    int applied = 0;
+    ged_obol_database_source_owners targets;
     for (BObolSceneController *scene : scenes) {
 	std::set<SoBRLDatabaseSource *> sources;
 	for (size_t i = 0; added_paths && i < added_count; i++)
@@ -1691,26 +1702,43 @@ ged_draw_obol_database_sources_apply_selection_delta(
 	for (size_t i = 0; removed_paths && i < removed_count; i++)
 	    ged_obol_selection_sources_for_path(scene, removed_paths[i], sources);
 
-	for (SoBRLDatabaseSource *source : sources) {
-	    BObolDatabaseSourceSummary summary;
-	    if (!source || !source->getSummary(summary) || !summary.valid)
-		continue;
-	    applied += source->applyCompactInstanceSelectionDelta(added,
-		removed);
-	    const SbBool selected = source->getCompactInstanceCount() > 0 ?
-		FALSE : (ged_obol_path_in_selected_set(summary.path.getString(),
-		    selected_paths, selected_count) ? TRUE : FALSE);
-	    if (summary.selected != selected) {
-		const int changed = source->setDisplayState(FALSE,
-		    summary.sourceRevision, summary.inputsRevision,
-		    summary.visible, selected, summary.highlighted,
-		    summary.lineStyle, summary.lineWidth,
-		    summary.transparency, summary.colorOverride,
-		    summary.color, summary.materialColorValid,
-		    summary.materialColor, summary.materialRevision);
-		if (changed > 0)
-		    applied++;
-	    }
+	for (SoBRLDatabaseSource *source : sources)
+	    if (source)
+		targets.emplace(source,
+		    ged_obol_database_source_owner{
+			SbModernUtils::SoNodeRef(source), scene});
+    }
+
+    int applied = 0;
+    for (const auto &entry : targets) {
+	SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(
+	    entry.second.source.get());
+	BObolSceneController *owner = entry.second.scene;
+	BObolDatabaseSourceSummary summary;
+	if (!source->getSummary(summary) || !summary.valid)
+	    continue;
+	const char *instanceKey = summary.instanceKey.getString();
+	const SbBool hasCompactInstances =
+	    source->getCompactInstanceCount() > 0;
+	const int compactChanged =
+	    owner->applyDatabaseSourceInstanceCompactSelectionDelta(
+		instanceKey, added, removed);
+	if (compactChanged > 0)
+	    applied += compactChanged;
+	const SbBool selected = hasCompactInstances ? FALSE :
+	    (ged_obol_path_in_selected_set(summary.path.getString(),
+		selected_paths, selected_count) ? TRUE : FALSE);
+	if (summary.selected != selected) {
+	    const int changed = owner->setDatabaseSourceInstanceState(
+		instanceKey, FALSE,
+		summary.sourceRevision, summary.inputsRevision,
+		summary.visible, selected, summary.highlighted,
+		summary.lineStyle, summary.lineWidth,
+		summary.transparency, summary.colorOverride,
+		summary.color, summary.materialColorValid,
+		summary.materialColor, summary.materialRevision);
+	    if (changed > 0)
+		applied++;
 	}
     }
     ged_obol_selection_presentation_request(gedp, applied);

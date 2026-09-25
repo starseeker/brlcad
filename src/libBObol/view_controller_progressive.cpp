@@ -614,7 +614,7 @@ BObolViewController::advanceProgressiveWork(
 	this->d->lodService->queuedResultCountForGeneration(
 	    this->d->lodActiveGeneration) : 0;
     const SbBool havePendingLodResults =
-	this->hasPendingLodResults() || queuedLodResults > 0;
+	queuedLodResults > 0 ? TRUE : FALSE;
     const SbBool holdRicherResultsDuringInteraction =
 	havePendingLodResults && this->d->lodInteractionSession.active() &&
 	!this->d->lodViewDemandPolicy.interactionScaleChanged() &&
@@ -666,7 +666,7 @@ BObolViewController::advanceProgressiveWork(
 	    if (this->d->lodService &&
 		this->d->lodService->queuedResultCountForGeneration(
 		    this->d->lodActiveGeneration) > 0) {
-		this->d->lodAvailabilityLedger.noteResultsReady(bu_gettime());
+		this->d->lodAvailabilityLedger.noteResultQueueReady(bu_gettime());
 	    }
 	}
     }
@@ -805,13 +805,10 @@ BObolViewController::advanceProgressiveWork(
 	 * the original task/result wave is quiet it is safe to start exactly one
 	 * sparse retry pass; pending service work prevents repeated rescans while
 	 * that retry is in flight. */
-	const bool serviceWorkQuiescent =
-	    this->d->lodService->activeTaskCountForGeneration(
-		this->d->lodActiveGeneration) == 0 &&
-	    this->d->lodService->queuedResultCountForGeneration(
-		this->d->lodActiveGeneration) == 0 &&
-	    this->d->lodService->queuedCacheWriteCountForGeneration(
-		this->d->lodActiveGeneration) == 0;
+	const BObolLodGenerationWorkStatus generationWork =
+	    this->d->lodService->generationWorkStatus(
+		this->d->lodActiveGeneration);
+	const bool serviceWorkQuiescent = generationWork.isIdle();
 	/* A resident drain owns the population until its compaction/application
 	 * transaction retires.  Starting the sparse retry during that interval
 	 * makes the submit action correctly suppress growth but incorrectly spends
@@ -931,22 +928,15 @@ BObolViewController::advanceProgressiveWork(
      * sample it here.  Previously these fields remained zero and the common
      * host pump could declare a frame stable while a PoP task was still
      * queued or running. */
+    BObolLodGenerationWorkStatus generationWork;
     if (this->d->lodService) {
-	localStatus.pendingTasks +=
-	    this->d->lodService->pendingTaskCountForGeneration(
-		this->d->lodActiveGeneration);
-	localStatus.pendingTasks +=
-	    this->d->lodService->delayedTaskCountForGeneration(
-		this->d->lodActiveGeneration);
-	localStatus.inFlight +=
-	    this->d->lodService->executingTaskCountForGeneration(
-		this->d->lodActiveGeneration);
-	localStatus.queuedResults +=
-	    this->d->lodService->queuedResultCountForGeneration(
-		this->d->lodActiveGeneration);
-	localStatus.queuedCacheWrites +=
-	    this->d->lodService->queuedCacheWriteCountForGeneration(
-		this->d->lodActiveGeneration);
+	generationWork = this->d->lodService->generationWorkStatus(
+	    this->d->lodActiveGeneration);
+	localStatus.pendingTasks += generationWork.pendingTasks;
+	localStatus.pendingTasks += generationWork.delayedTasks;
+	localStatus.inFlight += generationWork.executingTasks;
+	localStatus.queuedResults += generationWork.queuedResults;
+	localStatus.queuedCacheWrites += generationWork.queuedCacheWrites;
 	/* Resident compaction planning is owner-thread work scoped to one view.
 	 * lodCompactionPolicy below owns this controller's plan, and completed
 	 * worker results wake only consumers which receive them.  The service's
@@ -966,14 +956,7 @@ BObolViewController::advanceProgressiveWork(
     if (pending_service_work)
 	localStatus.hasMore = 1;
     const int pending_lod_realization_work =
-	this->d->lodService &&
-	(this->d->lodService->activeTaskCountForGeneration(
-	     this->d->lodActiveGeneration) > 0 ||
-	 this->d->lodService->queuedResultCountForGeneration(
-	     this->d->lodActiveGeneration) > 0 ||
-	 this->d->lodService->queuedCacheWriteCountForGeneration(
-	     this->d->lodActiveGeneration) > 0) ?
-	1 : 0;
+	this->d->lodService && !generationWork.isIdle() ? 1 : 0;
 
     /* Refinement and reclamation are separate phases.  A quiet view first
      * reaches its fast 1 px display target and may then enter the bounded
@@ -1096,11 +1079,13 @@ BObolViewController::advanceProgressiveWork(
 	this->d->lastSceneRenderTimeNanoseconds,
 	this->d->lastRenderTimeNanoseconds);
     publicationInputs.interactive = this->d->lodInteractionSession.active() != FALSE;
-    const bool publicationServiceProducer = this->d->lodService &&
-	(this->d->lodService->activeTaskCountForGeneration(
-	     this->d->lodActiveGeneration) > 0 ||
-	 this->d->lodService->queuedResultCountForGeneration(
-	     this->d->lodActiveGeneration) > 0);
+    const BObolLodGenerationWorkStatus publicationGenerationWork =
+	this->d->lodService ?
+	    this->d->lodService->generationWorkStatus(
+		this->d->lodActiveGeneration) :
+	    BObolLodGenerationWorkStatus();
+    const bool publicationServiceProducer =
+	publicationGenerationWork.hasResultWork();
     const bool publicationSubmissionPaused =
 	BObolLodAdmissionPlanner::presentationPausesSubmission(
 	    this->d->lodPointAdmissionFrame.pending(),
@@ -1140,7 +1125,7 @@ BObolViewController::advanceProgressiveWork(
 	 * RENDER once the frame request owns this debt. */
 	localStatus.hasMore = 1;
 	const SbBool exactFrameRequestPending =
-	    this->d->lodExactPresentationFrame.requestPending() ? TRUE : FALSE;
+	    this->d->exactPresentationFrameRequestPending() ? TRUE : FALSE;
 	const SbBool nonExactFramePending =
 	    this->d->lodPresentationTransaction.barrierPending() ||
 	    this->d->lodAdmissionEvidence.capacity().presentationFramePending() ||
@@ -1345,17 +1330,12 @@ BObolViewController::synchronizeProgressiveWorkPending(void)
 	    "lod-static-overscan-resident-growth");
 
     const auto workPending = [this]() {
-	const bool servicePending = this->d->lodService &&
-	    (this->d->lodService->pendingTaskCountForGeneration(
-		 this->d->lodActiveGeneration) > 0 ||
-	     this->d->lodService->delayedTaskCountForGeneration(
-		 this->d->lodActiveGeneration) > 0 ||
-	     this->d->lodService->executingTaskCountForGeneration(
-		 this->d->lodActiveGeneration) > 0 ||
-	     this->d->lodService->queuedResultCountForGeneration(
-		 this->d->lodActiveGeneration) > 0 ||
-	     this->d->lodService->queuedCacheWriteCountForGeneration(
-		 this->d->lodActiveGeneration) > 0);
+	const BObolLodGenerationWorkStatus generationWork =
+	    this->d->lodService ?
+		this->d->lodService->generationWorkStatus(
+		    this->d->lodActiveGeneration) :
+		BObolLodGenerationWorkStatus();
+	const bool servicePending = !generationWork.isIdle();
 	const bool renderPending =
 	    this->getHostWorkSnapshot().renderPending();
 	const bool sourceInputsPending =
@@ -1383,7 +1363,8 @@ BObolViewController::synchronizeProgressiveWorkPending(void)
 		  this->d->lodResidentAdmissionRetryRevision &&
 	      viewState->hasRetriableMemoryLimitedPayload(
 		  residentAdmissionRevision)));
-	return this->d->lodControllerPumpPending(renderPending) ||
+	return this->d->lodControllerPumpPending(
+		   renderPending, generationWork.queuedResults != 0) ||
 	    this->d->lodAvailabilityLedger.providerPendingCount() > 0 ||
 	    servicePending || sourceInputsPending || residentAdmissionPending;
     };
@@ -1420,7 +1401,7 @@ BObolViewController::synchronizeProgressiveWorkPending(void)
 		presentationState->lastCadPresentationFrameExact(),
 	    primitivePresentationCurrent,
 	    this->d->lodConvergenceCandidateCount(), activePayloads,
-	    this->d->lodExactPresentationFrame.pending())) {
+	    this->d->exactPresentationFramePending())) {
 	const std::vector<SoBRLDatabaseSource *> sources =
 	    controller_render_database_source_roots(this);
 	if (!sources.empty()) {
@@ -1461,7 +1442,7 @@ BObolViewController::synchronizeProgressiveWorkPending(void)
 		presentationState->hasCadPresentationAssemblies(),
 	    presentationState &&
 		presentationState->lastCadPresentationFrameExact(),
-	    this->d->lodExactPresentationFrame.pending())) {
+	    this->d->exactPresentationFramePending())) {
 	this->d->requireExactPresentationFrame();
 	/* Repairing a stale presentation record does not test renderer capacity.
 	 * In particular, a selection/style change must never reopen geometry

@@ -43,6 +43,7 @@
 
 #include "../ged_private.h"
 #include "../ged_bobol_private.hpp"
+#include "../ged_obol_output_private.hpp"
 
 
 static unsigned int img_size = 512;
@@ -74,22 +75,42 @@ struct stroke {
  * a zero-length stroke.
  */
 static void
-raster(unsigned char **image, struct stroke *vp, const unsigned char *color, size_t size)
+png_write_pixel(unsigned char **image, int x, int y,
+	const unsigned char *color, float transparency, size_t size)
 {
-    size_t dy;          /* raster within active band */
+    if (!image || !color || x < 0 || x >= static_cast<int>(size) ||
+	y < 1 || y > static_cast<int>(size))
+	return;
+    unsigned char *pixel = &image[size - static_cast<size_t>(y)][x * 3];
+    for (size_t component = 0; component < 3; ++component) {
+	pixel[component] = static_cast<unsigned char>(
+	    ged_obol_output_composite_channel(color[component] / 255.0f,
+		pixel[component] / 255.0f, transparency) * 255.0f + 0.5f);
+    }
+}
 
-    /*
-     * Write the color of this vector on all pixels.
-     */
-    for (dy = vp->pixel.y; dy <= size;) {
+static void
+raster(unsigned char **image, struct stroke *vp, const unsigned char *color,
+	float transparency, uint16_t pattern, uint16_t patternFactor,
+	unsigned int width, size_t size)
+{
+    int dy = vp->pixel.y;
+    size_t step = 0;
+    const int lowerRadius = static_cast<int>((width - 1u) / 2u);
+    const int upperRadius = static_cast<int>(width / 2u);
 
-        /* set the appropriate pixel in the buffer to color */
-        image[size-dy][vp->pixel.x*3] = color[0];
-        image[size-dy][vp->pixel.x*3+1] = color[1];
-        image[size-dy][vp->pixel.x*3+2] = color[2];
+    for (;;) {
+	if (ged_obol_output_pattern_draws(pattern, patternFactor, step)) {
+	    for (int y = dy - lowerRadius; y <= dy + upperRadius; ++y) {
+		for (int x = vp->pixel.x - lowerRadius;
+			x <= vp->pixel.x + upperRadius; ++x)
+		    png_write_pixel(image, x, y, color, transparency, size);
+	    }
+	}
 
-        if (vp->major-- == 0)
-            return;             /* Done */
+	if (vp->major-- == 0)
+	    return;             /* Done */
+	++step;
 
         if (vp->e < 0) {
             /* advance major & minor */
@@ -108,7 +129,9 @@ raster(unsigned char **image, struct stroke *vp, const unsigned char *color, siz
 }
 
 static void
-draw_stroke(unsigned char **image, struct coord *coord1, struct coord *coord2, const unsigned char *color, size_t size)
+draw_stroke(unsigned char **image, struct coord *coord1, struct coord *coord2,
+	const unsigned char *color, float transparency, uint16_t pattern,
+	uint16_t patternFactor, float lineWidth, size_t size)
 {
     struct stroke cur_stroke;
     struct stroke *vp = &cur_stroke;
@@ -144,7 +167,8 @@ draw_stroke(unsigned char **image, struct coord *coord1, struct coord *coord2, c
     vp->e = vp->major / 2 - vp->minor;  /* initial DDA error */
     vp->de = vp->major - vp->minor;
 
-    raster(image, vp, color, size);
+    raster(image, vp, color, transparency, pattern, patternFactor,
+	ged_obol_output_pixel_width(lineWidth), size);
 }
 
 struct png_segment_data {
@@ -155,6 +179,10 @@ struct png_segment_data {
     fastf_t delta;
     size_t size;
     size_t half_size;
+    float transparency;
+    uint16_t pattern;
+    uint16_t patternFactor;
+    float lineWidth;
 };
 
 static int
@@ -216,7 +244,9 @@ png_draw_segment_cb(const point_t a, const point_t b, void *data)
     coord1.y = start[1] * psd->half_size + psd->half_size;
     coord2.x = fin[0] * psd->half_size + psd->half_size;
     coord2.y = fin[1] * psd->half_size + psd->half_size;
-    draw_stroke(psd->image, &coord1, &coord2, psd->color, psd->size);
+    draw_stroke(psd->image, &coord1, &coord2, psd->color,
+	psd->transparency, psd->pattern, psd->patternFactor,
+	psd->lineWidth, psd->size);
 
     return 1;
 }
@@ -232,8 +262,153 @@ png_color_component(float value)
 }
 
 static void
-png_draw_visible_lines(struct ged_view_context *view_ctx, matp_t psmat,
-	fastf_t perspective, size_t size, size_t half_size,
+png_draw_line(const SoBRLExportAction::LineRecord &line, matp_t psmat,
+	fastf_t perspective, size_t size, size_t halfSize,
+	unsigned char **image)
+{
+    if (!line.linePattern)
+	return;
+    unsigned char color[3] = {
+	png_color_component(line.color[0]),
+	png_color_component(line.color[1]),
+	png_color_component(line.color[2])
+    };
+    struct png_segment_data psd;
+    psd.delta = psmat[15] * 0.0001;
+    if (psd.delta < 0.0)
+	psd.delta = -psd.delta;
+    if (psd.delta < SQRT_SMALL_FASTF)
+	psd.delta = SQRT_SMALL_FASTF;
+    psd.perspective = perspective;
+    psd.image = image;
+    psd.color = color;
+    psd.psmat = psmat;
+    psd.size = size;
+    psd.half_size = halfSize;
+    psd.transparency = line.transparency;
+    psd.pattern = line.linePattern;
+    psd.patternFactor = line.linePatternFactor;
+    psd.lineWidth = line.lineWidth;
+
+    point_t a = {line.a[0], line.a[1], line.a[2]};
+    point_t b = {line.b[0], line.b[1], line.b[2]};
+    (void)png_draw_segment_cb(a, b, &psd);
+}
+
+static bool
+png_project_point(const SbVec3f &point, matp_t psmat, fastf_t perspective,
+	size_t halfSize, double &x, double &y)
+{
+    point_t source = {point[0], point[1], point[2]};
+    if (perspective > 0.0 &&
+	    VDOT(source, &psmat[12]) + psmat[15] <= 0.0)
+	return false;
+    vect_t projected;
+    MAT4X3PNT(projected, psmat, source);
+    x = projected[X] * halfSize + halfSize;
+    y = projected[Y] * halfSize + halfSize;
+    return true;
+}
+
+static double
+png_edge(double ax, double ay, double bx, double by, double px, double py)
+{
+    return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+}
+
+static bool
+png_edge_covers(double edge, double ax, double ay, double bx, double by)
+{
+    if (edge < 0.0)
+	return true;
+    if (edge > 0.0)
+	return false;
+    const double dx = bx - ax;
+    const double dy = by - ay;
+    if (dy > 0.0)
+	return true;
+    if (dy < 0.0)
+	return false;
+    return dx < 0.0;
+}
+
+static void
+png_draw_annotation_triangle(
+	const SoBRLExportAction::TriangleRecord &triangle, matp_t psmat,
+	fastf_t perspective, size_t size, size_t halfSize,
+	unsigned char **image)
+{
+    double x[3];
+    double y[3];
+    if (!png_project_point(triangle.a, psmat, perspective, halfSize,
+	    x[0], y[0]) ||
+	!png_project_point(triangle.b, psmat, perspective, halfSize,
+	    x[1], y[1]) ||
+	!png_project_point(triangle.c, psmat, perspective, halfSize,
+	    x[2], y[2]))
+	return;
+    const double area = png_edge(x[0], y[0], x[1], y[1], x[2], y[2]);
+    if (NEAR_ZERO(area, SMALL_FASTF))
+	return;
+    /* Give adjacent triangles one shared-edge owner.  Without this half-open
+     * rule, translucent fills blend twice along triangulation diagonals. */
+    if (area > 0.0) {
+	std::swap(x[1], x[2]);
+	std::swap(y[1], y[2]);
+    }
+
+    const int minX = (std::max)(0, static_cast<int>(std::floor(
+	(std::min)({x[0], x[1], x[2]}))));
+    const int maxX = (std::min)(static_cast<int>(size) - 1,
+	static_cast<int>(std::ceil((std::max)({x[0], x[1], x[2]}))));
+    const int minY = (std::max)(1, static_cast<int>(std::floor(
+	(std::min)({y[0], y[1], y[2]}))));
+    const int maxY = (std::min)(static_cast<int>(size),
+	static_cast<int>(std::ceil((std::max)({y[0], y[1], y[2]}))));
+    unsigned char color[3] = {
+	triangle.backgroundMask ? bg_red : png_color_component(triangle.color[0]),
+	triangle.backgroundMask ? bg_green : png_color_component(triangle.color[1]),
+	triangle.backgroundMask ? bg_blue : png_color_component(triangle.color[2])
+    };
+    const float transparency = triangle.backgroundMask ? 0.0f :
+	triangle.transparency;
+    for (int py = minY; py <= maxY; ++py) {
+	for (int px = minX; px <= maxX; ++px) {
+	    const double sampleX = px + 0.5;
+	    const double sampleY = py + 0.5;
+	    const double e0 = png_edge(x[0], y[0], x[1], y[1],
+		sampleX, sampleY);
+	    const double e1 = png_edge(x[1], y[1], x[2], y[2],
+		sampleX, sampleY);
+	    const double e2 = png_edge(x[2], y[2], x[0], y[0],
+		sampleX, sampleY);
+	    if (png_edge_covers(e0, x[0], y[0], x[1], y[1]) &&
+		png_edge_covers(e1, x[1], y[1], x[2], y[2]) &&
+		png_edge_covers(e2, x[2], y[2], x[0], y[0]))
+		png_write_pixel(image, px, py, color, transparency, size);
+	}
+    }
+}
+
+static void
+png_draw_lines(const SoBRLExportAction &exportAction,
+	const std::vector<SoBRLExportAction::ObjectRecord> &records,
+	matp_t psmat, fastf_t perspective, size_t size, size_t halfSize,
+	unsigned char **image, bool annotations)
+{
+    for (const SoBRLExportAction::ObjectRecord &record : records) {
+	for (int lineIndex : record.lineIndices) {
+	    const SoBRLExportAction::LineRecord &line =
+		exportAction.getLine(lineIndex);
+	    if (ged_obol_output_is_annotation(line.geometryKind) == annotations)
+		png_draw_line(line, psmat, perspective, size, halfSize, image);
+	}
+    }
+}
+
+static void
+png_draw_visible_geometry(struct ged_view_context *view_ctx, matp_t psmat,
+	fastf_t perspective, size_t size, size_t halfSize,
 	unsigned char **image)
 {
     BObolViewController *controller = ged_bobol_view_controller(view_ctx);
@@ -243,38 +418,24 @@ png_draw_visible_lines(struct ged_view_context *view_ctx, matp_t psmat,
 
     SoBRLExportAction export_action;
     export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
-    export_action.apply(controller->getViewport()->getRoot());
+    export_action.applyViewport(*controller->getViewport());
 
     std::vector<SoBRLExportAction::ObjectRecord> records;
     export_action.collectObjectRecords(records,
 	SoBRLExportAction::QUERY_VISIBLE_ONLY);
+    png_draw_lines(export_action, records, psmat, perspective, size,
+	halfSize, image, false);
     for (const SoBRLExportAction::ObjectRecord &record : records) {
-	for (int line_index : record.lineIndices) {
-	    const SoBRLExportAction::LineRecord &line =
-		export_action.getLine(line_index);
-	    unsigned char color[3] = {
-		png_color_component(line.color[0]),
-		png_color_component(line.color[1]),
-		png_color_component(line.color[2])
-	    };
-	    struct png_segment_data psd;
-	    psd.delta = psmat[15] * 0.0001;
-	    if (psd.delta < 0.0)
-		psd.delta = -psd.delta;
-	    if (psd.delta < SQRT_SMALL_FASTF)
-		psd.delta = SQRT_SMALL_FASTF;
-	    psd.perspective = perspective;
-	    psd.image = image;
-	    psd.color = color;
-	    psd.psmat = psmat;
-	    psd.size = size;
-	    psd.half_size = half_size;
-
-	    point_t a = {line.a[0], line.a[1], line.a[2]};
-	    point_t b = {line.b[0], line.b[1], line.b[2]};
-	    (void)png_draw_segment_cb(a, b, &psd);
+	for (int triangleIndex : record.triangleIndices) {
+	    const SoBRLExportAction::TriangleRecord &triangle =
+		export_action.getTriangle(triangleIndex);
+	    if (ged_obol_output_is_annotation(triangle.geometryKind))
+		png_draw_annotation_triangle(triangle, psmat, perspective,
+		    size, halfSize, image);
 	}
     }
+    png_draw_lines(export_action, records, psmat, perspective, size,
+	halfSize, image, true);
 }
 
 static void
@@ -307,7 +468,7 @@ dl_png(struct ged_view_context *view_ctx, mat_t model2view, fastf_t perspective,
 	mat = newmat;
     }
 
-    png_draw_visible_lines(view_ctx, mat, perspective, size, half_size,
+    png_draw_visible_geometry(view_ctx, mat, perspective, size, half_size,
 	image);
 }
 

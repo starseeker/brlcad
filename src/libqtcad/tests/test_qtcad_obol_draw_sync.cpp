@@ -10,6 +10,7 @@
 #include "bv.h"
 
 #include "BObol/BDatabaseSource.h"
+#include "BObol/BLodService.h"
 #include "BObol/BLodRealization.h"
 #include "BObol/BViewController.h"
 #include "BObol/BViewStore.h"
@@ -18,6 +19,7 @@
 #include "bu/env.h"
 #include "bu/file.h"
 #include "bu/malloc.h"
+#include "bu/process.h"
 #include "bu/str.h"
 #include "ged.h"
 #include "ged/scene.h"
@@ -28,6 +30,7 @@
 #include "QgSceneSyncPrivate.h"
 #include "QgCanvasState.h"
 #include "qtcad/QgView.h"
+#include "qtcad_obol_test_presentation.h"
 #include "raytrace.h"
 #include "rt/db_fullpath.h"
 #include "wdb.h"
@@ -41,7 +44,9 @@
 #include <QImage>
 
 #include <algorithm>
+#include <chrono>
 #include <math.h>
+#include <memory>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -89,6 +94,24 @@ nonblack_pixel_count(const QImage &image)
 }
 
 static int
+image_byte_diff(const QImage &a, const QImage &b)
+{
+    QImage ar = a.convertToFormat(QImage::Format_RGBA8888);
+    QImage br = b.convertToFormat(QImage::Format_RGBA8888);
+    if (ar.size() != br.size())
+	return -1;
+
+    int changed = 0;
+    for (int y = 0; y < ar.height(); y++) {
+	const unsigned char *ap = ar.constScanLine(y);
+	const unsigned char *bp = br.constScanLine(y);
+	for (int x = 0; x < ar.bytesPerLine(); x++)
+	    changed += ap[x] != bp[x] ? 1 : 0;
+    }
+    return changed;
+}
+
+static int
 camera_positions_differ(const SbVec3f &a, const SbVec3f &b, float min_delta)
 {
     return fabsf(a[0] - b[0]) > min_delta ||
@@ -121,8 +144,43 @@ make_draw_sync_db(const char *dbpath)
     point_t bmax = { 1.0,  1.0,  1.0};
     point_t center = {5.0, 0.0, 0.0};
 
+    static constexpr int mesh_grid_size = 12;
+    static constexpr fastf_t mesh_height_step = 0.05;
+    const int mesh_vertex_count =
+	(mesh_grid_size + 1) * (mesh_grid_size + 1);
+    const int mesh_face_count = mesh_grid_size * mesh_grid_size * 2;
+    std::vector<fastf_t> mesh_vertices(mesh_vertex_count * 3, 0.0);
+    std::vector<int> mesh_faces(mesh_face_count * 3, 0);
+    for (int y = 0; y <= mesh_grid_size; y++) {
+	for (int x = 0; x <= mesh_grid_size; x++) {
+	    const int vertex = y * (mesh_grid_size + 1) + x;
+	    mesh_vertices[3 * vertex + X] = static_cast<fastf_t>(x);
+	    mesh_vertices[3 * vertex + Y] = static_cast<fastf_t>(y);
+	    mesh_vertices[3 * vertex + Z] =
+		static_cast<fastf_t>((x + y) % 3) * mesh_height_step;
+	}
+    }
+    for (int y = 0; y < mesh_grid_size; y++) {
+	for (int x = 0; x < mesh_grid_size; x++) {
+	    const int cell = y * mesh_grid_size + x;
+	    const int v0 = y * (mesh_grid_size + 1) + x;
+	    const int v1 = v0 + 1;
+	    const int v2 = v0 + mesh_grid_size + 1;
+	    const int v3 = v2 + 1;
+	    mesh_faces[6 * cell + 0] = v0;
+	    mesh_faces[6 * cell + 1] = v1;
+	    mesh_faces[6 * cell + 2] = v3;
+	    mesh_faces[6 * cell + 3] = v0;
+	    mesh_faces[6 * cell + 4] = v3;
+	    mesh_faces[6 * cell + 5] = v2;
+	}
+    }
+
     int ret = mk_rpp(wdbp, "box.s", bmin, bmax) == 0 &&
-	mk_sph(wdbp, "ball.s", center, 1.0) == 0;
+	mk_sph(wdbp, "ball.s", center, 1.0) == 0 &&
+	mk_bot(wdbp, "flow.bot", RT_BOT_SURFACE, RT_BOT_CCW, 0,
+	    mesh_vertex_count, mesh_face_count, mesh_vertices.data(),
+	    mesh_faces.data(), NULL, NULL) == 0;
     struct wmember pair;
     BU_LIST_INIT(&pair.l);
     ret = ret &&
@@ -549,6 +607,287 @@ check_terminal_error_hud(QgView &view, SoBRLDatabaseSource *source)
     return 0;
 }
 
+static int
+production_flow_view_open(struct ged *gedp,
+	std::unique_ptr<QgView> &view,
+	struct draw_observer_sync_context &observer,
+	ged_scene_observer_token &observer_token)
+{
+    static constexpr int viewport_width = 180;
+    static constexpr int viewport_height = 140;
+
+    view = std::make_unique<QgView>(nullptr, QgViewType::SW);
+    view->resize(viewport_width, viewport_height);
+    struct ged_view_context *view_ctx =
+	ged_view_context_from_bv(view->viewContext());
+    if (!view_ctx || !view->isValid() ||
+	!ged_view_set_context_add(ged_view_set_ctx(gedp), view_ctx) ||
+	!ged_view_context_host_attach(gedp, view_ctx))
+	return 0;
+
+    ged_view_active_ctx_set(gedp, view_ctx);
+    (void)bv_unit_conversion_set(bv_context_view(view->viewContext()),
+	gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
+    if (!qg_scene_bind(gedp, view.get()))
+	return 0;
+
+    observer.view = view.get();
+    observer.calls = 0;
+    observer.changed = 0;
+    observer_token = ged_scene_observer_add(gedp,
+	test_draw_observer, &observer);
+    return observer_token ? 1 : 0;
+}
+
+static void
+production_flow_view_close(struct ged *gedp,
+	std::unique_ptr<QgView> &view,
+	ged_scene_observer_token &observer_token)
+{
+    if (observer_token) {
+	(void)ged_scene_observer_remove(gedp, observer_token);
+	observer_token = 0;
+    }
+    ged_view_active_ctx_set(gedp, NULL);
+    view.reset();
+}
+
+static int
+production_flow_mesh_policy_enable(struct ged *gedp)
+{
+    const char *lod_enable[3] = {"view", "lod", "1"};
+    const char *mesh_enable[4] = {"view", "lod", "mesh", "1"};
+    const char *bot_threshold[4] = {
+	"view", "lod", "bot_threshold", "0"
+    };
+    return ged_exec_view(gedp, 3, lod_enable) == BRLCAD_OK &&
+	ged_exec_view(gedp, 4, mesh_enable) == BRLCAD_OK &&
+	ged_exec_view(gedp, 4, bot_threshold) == BRLCAD_OK;
+}
+
+static bool
+production_flow_service_idle(const BObolViewController *controller)
+{
+    BObolLodService *service = controller ? controller->getLodService() : NULL;
+    return service && service->workStatus().isIdle() &&
+	!controller->hasPendingLodResults() &&
+	!controller->hasPendingLodSubmissions();
+}
+
+static BObolLodResult
+production_flow_delayed_result(const BObolLodRequest &request, void *)
+{
+    BObolLodResult result;
+    result.request = request;
+    result.resultKind = BOBOL_LOD_RESULT_AABB;
+    result.qualityTier = request.qualityTier;
+    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
+    result.terminal = TRUE;
+    return result;
+}
+
+static int
+exercise_production_graphical_lifecycle(struct ged *gedp)
+{
+    static constexpr const char *mesh_path = "flow.bot";
+    static constexpr fastf_t loading_camera_scale = 18.0;
+    static constexpr int task_delay_milliseconds = 250;
+    static constexpr int delayed_task_timeout_seconds = 4;
+    static constexpr int worker_retirement_timeout_seconds = 2;
+    static constexpr int terminal_timeout_seconds = 8;
+    static constexpr int minimum_lit_pixels = 10;
+
+    std::unique_ptr<QgView> view;
+    struct draw_observer_sync_context observer = {NULL, 0, 0};
+    ged_scene_observer_token observer_token = 0;
+    auto fail = [&](const char *message) {
+	production_flow_view_close(gedp, view, observer_token);
+	fprintf(stderr, "FAIL: %s\n", message);
+	return 1;
+    };
+
+    if (!production_flow_view_open(gedp, view, observer, observer_token) ||
+	!production_flow_mesh_policy_enable(gedp))
+	return fail("graphical production flow should open its first LoD view");
+
+    BObolViewController *controller = view->obolViewController();
+    struct ged_view_context *view_ctx =
+	ged_view_context_from_bv(view->viewContext());
+    const char *draw_mesh[3] = {"draw", "-m1", mesh_path};
+    if (!controller || ged_exec_draw(gedp, 3, draw_mesh) != BRLCAD_OK ||
+	observer.calls <= 0 || observer.changed <= 0)
+	return fail("graphical production flow should draw through the GED observer");
+    if (!controller->syncCameraFromViewContext(view_ctx))
+	return fail("graphical production flow should sync its initial camera");
+
+    controller->requestLodCapacityRender("graphical-production-first-frame");
+    view->need_update(QG_VIEW_REFRESH);
+    QCoreApplication::processEvents();
+    (void)controller->advanceProgressiveWork(NULL, NULL);
+    QImage first_frame;
+    (void)qtcad_obol_present_requested_frame(*view, controller,
+	    first_frame);
+    if (first_frame.isNull() ||
+	lit_pixel_count(first_frame) < minimum_lit_pixels)
+	return fail("graphical production flow should present a visible first frame");
+
+    BObolLodService *service = controller->getLodService();
+    /* The headless half of FLOW-01 closes during a real delayed mesh task.
+     * Here an explicit service delay isolates the Qt ownership boundary from
+     * view-planner policy: destroying QgView must stop its managed workers
+     * regardless of whether this small model needs another visible cut. */
+    BObolLodTask delayed_task;
+    delayed_task.generation = controller->beginLodGeneration();
+    delayed_task.request.databaseId = "db://qtcad-production-flow";
+    delayed_task.request.databaseRevision = 1;
+    delayed_task.request.sourceRevision = 1;
+    delayed_task.request.objectPath = mesh_path;
+    delayed_task.request.objectName = mesh_path;
+    delayed_task.request.providerId = "qtcad-production-flow";
+    delayed_task.request.providerVersion = "1";
+    delayed_task.request.qualityTier = BOBOL_LOD_QUALITY_PROXY;
+    delayed_task.realize = production_flow_delayed_result;
+    delayed_task.debugDelayMilliseconds = task_delay_milliseconds;
+    delayed_task.publishResult = FALSE;
+    if (!service || !delayed_task.generation ||
+	service->submit(delayed_task) == 0)
+	return fail("graphical production flow should submit bounded delayed work");
+
+    bool delayed_task_observed = false;
+    const auto delayed_deadline = std::chrono::steady_clock::now() +
+	std::chrono::seconds(delayed_task_timeout_seconds);
+    do {
+	QCoreApplication::processEvents();
+	(void)controller->advanceProgressiveWork(NULL, NULL);
+	service = controller->getLodService();
+	if (service && service->delayedTaskCountForDiagnostics() > 0) {
+	    delayed_task_observed = true;
+	    break;
+	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < delayed_deadline);
+
+    SoBRLDatabaseSource *loading_source = source_for_path(controller,
+	mesh_path);
+    if (!delayed_task_observed || !loading_source)
+	return fail("graphical production flow should expose delayed mesh work");
+
+    struct bv *loading_view = bv_context_view(view->viewContext());
+    const uint64_t camera_revision = bv_frame_revision_get(loading_view);
+    bv_scale_set(loading_view, loading_camera_scale);
+    view->need_update(QG_VIEW_REFRESH);
+    QCoreApplication::processEvents();
+    if (bv_frame_revision_get(loading_view) <= camera_revision ||
+	!controller->syncCameraFromViewContext(view_ctx))
+	return fail("graphical production flow should accept camera input while loading");
+
+    const size_t closing_worker_count = controller->getManagedLodWorkerCount();
+#if defined(__linux__)
+    const size_t closing_thread_count =
+	bu_file_list("/proc/self/task", "[0-9]*", NULL);
+#endif
+    if (closing_worker_count == 0)
+	return fail("graphical production flow should close a worker-active view");
+    production_flow_view_close(gedp, view, observer_token);
+#if defined(__linux__)
+    bool workers_retired = false;
+    const auto worker_deadline = std::chrono::steady_clock::now() +
+	std::chrono::seconds(worker_retirement_timeout_seconds);
+    do {
+	const size_t current_threads =
+	    bu_file_list("/proc/self/task", "[0-9]*", NULL);
+	workers_retired = current_threads + closing_worker_count <=
+	    closing_thread_count;
+	if (!workers_retired)
+	    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (!workers_retired &&
+	std::chrono::steady_clock::now() < worker_deadline);
+    if (!workers_retired)
+	return fail("destroying the graphical view should retire its LoD workers");
+#endif
+
+    if (!production_flow_view_open(gedp, view, observer, observer_token) ||
+	!production_flow_mesh_policy_enable(gedp))
+	return fail("graphical production flow should reopen its LoD view");
+
+    controller = view->obolViewController();
+    view_ctx = ged_view_context_from_bv(view->viewContext());
+    struct bv *reopened_view = bv_context_view(view->viewContext());
+    bv_scale_set(reopened_view, loading_camera_scale);
+    view->need_update(QG_VIEW_REFRESH);
+    QCoreApplication::processEvents();
+    if (!controller || !controller->syncCameraFromViewContext(view_ctx) ||
+	!source_for_path(controller, mesh_path))
+	return fail("reopened graphical view should consume the retained GED scene");
+
+    controller->requestLodCapacityRender("graphical-production-reopen-baseline");
+    QImage baseline_frame;
+    (void)qtcad_obol_present_requested_frame(*view, controller,
+	    baseline_frame);
+    if (baseline_frame.isNull())
+	return fail("reopened graphical view should present its retained baseline");
+
+    observer.calls = 0;
+    observer.changed = 0;
+    const char *redraw[1] = {"redraw"};
+    if (ged_exec_redraw(gedp, 1, redraw) != BRLCAD_OK ||
+	observer.calls <= 0 || observer.changed <= 0)
+	return fail("reopened graphical view should redraw through the GED observer");
+
+    BObolProgressiveOptions options;
+    options.forceTerminalLodRefinement = TRUE;
+    BObolProgressiveStatus progress;
+    BObolLodConvergenceStatus convergence;
+    QImage terminal_frame;
+    const auto terminal_deadline = std::chrono::steady_clock::now() +
+	std::chrono::seconds(terminal_timeout_seconds);
+    do {
+	QCoreApplication::processEvents();
+	(void)controller->advanceProgressiveWork(&options, &progress);
+	controller->requestLodCapacityRender(
+	    "graphical-production-terminal-frame");
+	QImage candidate;
+	if (qtcad_obol_present_requested_frame(*view, controller, candidate))
+	    terminal_frame = candidate;
+	controller->getLodConvergenceStatus(convergence);
+	if (convergence.terminal && production_flow_service_idle(controller))
+	    break;
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < terminal_deadline);
+
+    SoBRLDatabaseSource *terminal_source = source_for_path(controller,
+	mesh_path);
+    const int pixel_difference = image_byte_diff(baseline_frame,
+	terminal_frame);
+    if (!convergence.terminal || !convergence.viewReady ||
+	convergence.terminalError || !production_flow_service_idle(controller) ||
+	!terminal_source || !terminal_source->isCompactOccurrenceRegistry() ||
+	controller->getActiveLodMeshPayloadCount() == 0 ||
+	terminal_frame.isNull() ||
+	lit_pixel_count(terminal_frame) < minimum_lit_pixels ||
+	pixel_difference <= 0) {
+	fprintf(stderr,
+	    "graphical production terminal=%d ready=%d error=%d source=%p "
+	    "compact=%d meshes=%zu lit=%d diff=%d service_idle=%d\n",
+	    convergence.terminal, convergence.viewReady,
+	    convergence.terminalError, static_cast<void *>(terminal_source),
+	    terminal_source ? terminal_source->isCompactOccurrenceRegistry() : -1,
+	    controller->getActiveLodMeshPayloadCount(),
+	    terminal_frame.isNull() ? 0 : lit_pixel_count(terminal_frame),
+	    pixel_difference, production_flow_service_idle(controller));
+	return fail("reopened graphical view should reach terminal output and release transient work");
+    }
+
+    const char *erase_mesh[2] = {"erase", mesh_path};
+    if (ged_exec_erase(gedp, 2, erase_mesh) != BRLCAD_OK ||
+	source_for_path(controller, mesh_path))
+	return fail("graphical production flow should erase its retained source");
+
+    production_flow_view_close(gedp, view, observer_token);
+    std::puts("PASS QgView production flow lifecycle: draw, camera input, close, reopen, terminal image, resource release");
+    return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -557,6 +896,20 @@ main(int argc, char **argv)
 
     QApplication app(argc, argv);
 
+    const bool production_flow = argc > 1 && BU_STR_EQUAL(argv[1],
+	"production-flow-lifecycle");
+    char production_cache_leaf[64] = {0};
+    char production_cache_dir[MAXPATHLEN] = {0};
+    if (production_flow) {
+	snprintf(production_cache_leaf, sizeof(production_cache_leaf),
+	    "qtcad_obol_draw_sync_cache_%d", bu_pid());
+	bu_dir(production_cache_dir, MAXPATHLEN, BU_DIR_CURR,
+	    production_cache_leaf, NULL);
+	bu_dirclear(production_cache_dir);
+	bu_mkdir(production_cache_dir);
+	bu_setenv("BU_DIR_CACHE", production_cache_dir, 1);
+    }
+
     const char *dbpath = "qtcad_obol_draw_sync_tmp.g";
     if (!make_draw_sync_db(dbpath))
 	FAIL("failed to create qtcad Obol draw-sync test database");
@@ -564,6 +917,14 @@ main(int argc, char **argv)
     struct ged *gedp = ged_open("db", dbpath, 1);
     if (!gedp)
 	FAIL("failed to open qtcad Obol draw-sync test database");
+
+    if (production_flow) {
+	const int result = exercise_production_graphical_lifecycle(gedp);
+	ged_close(gedp);
+	bu_file_delete(dbpath);
+	bu_dirclear(production_cache_dir);
+	return result;
+    }
 
     QgView view(NULL, QgViewType::SW);
     view.resize(180, 140);

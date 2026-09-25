@@ -811,8 +811,8 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	bot->faces[0] = 0; bot->faces[1] = 1; bot->faces[2] = 2;
 	bot->faces[3] = 3; bot->faces[4] = 4; bot->faces[5] = 5;
 
-	MAT_IDN(v->gv_view2model);
-	MAT_IDN(v->gv_model2view);
+	MAT_IDN(v.gv_view2model);
+	MAT_IDN(v.gv_model2view);
 	vect_t knob_state;
 	VSET(knob_state, 7.0, 8.0, 9.0);
 	VMOVE(s->k.tra_m_abs, knob_state);
@@ -846,8 +846,8 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	bot_reset(s, bot, b);
 	s->local2base = 25.4;
 	s->base2local = 1.0 / s->local2base;
-	MAT_IDN(v->gv_model2view);
-	MAT_IDN(v->gv_view2model);
+	MAT_IDN(v.gv_model2view);
+	MAT_IDN(v.gv_view2model);
 	VSETALL(s->curr_e_axes_pos, 0.0);
 	vect_t knob_state;
 	VSET(knob_state, 7.0, 8.0, 9.0);

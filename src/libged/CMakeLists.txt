@@ -944,6 +944,7 @@ set(
   brep/ged_brep.h
   check/check_private.h
   ged_bobol_private.hpp
+  ged_obol_output_private.hpp
   draw_obol_bridge_private.hpp
   ged_draw_private.h
   ged_draw_plugin_private.h

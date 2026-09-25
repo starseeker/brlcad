@@ -1876,11 +1876,19 @@ static bool
 controller_scene_light_equal(const BObolSceneLightRealization &left,
 	const BObolSceneLightRealization &right)
 {
-    return left.kind == right.kind && left.position == right.position &&
-	left.direction == right.direction && left.color == right.color &&
-	controller_scene_light_float_equal(left.intensity, right.intensity) &&
-	controller_scene_light_float_equal(left.coneAngleDeg,
-	    right.coneAngleDeg) && left.name == right.name;
+    if (left.kind != right.kind || left.color != right.color ||
+	!controller_scene_light_float_equal(left.intensity, right.intensity) ||
+	left.name != right.name)
+	return false;
+
+    if (left.kind == BOBOL_SCENE_LIGHT_DIRECTIONAL)
+	return left.direction == right.direction;
+    if (left.kind == BOBOL_SCENE_LIGHT_SPOT)
+	return left.position == right.position &&
+	    left.direction == right.direction &&
+	    controller_scene_light_float_equal(left.coneAngleDeg,
+		 right.coneAngleDeg);
+    return left.position == right.position;
 }
 
 static bool
@@ -1888,6 +1896,8 @@ controller_scene_lights_equal(
 	const std::vector<BObolSceneLightRealization> &left,
 	const std::vector<BObolSceneLightRealization> &right)
 {
+    if (&left == &right)
+	return true;
     return left.size() == right.size() &&
 	std::equal(left.begin(), left.end(), right.begin(),
 	    controller_scene_light_equal);

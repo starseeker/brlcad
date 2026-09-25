@@ -42,6 +42,7 @@
 
 #include "bg/line_layer.h"
 #include "bu/app.h"
+#include "bu/color.h"
 #include "bu/env.h"
 #include "bu/file.h"
 #include "bu/datetime.h"
@@ -61,6 +62,7 @@
 #include <Inventor/annex/HUD/nodekits/SoHUDKit.h>
 #include <Inventor/annex/HUD/nodes/SoHUDLabel.h>
 #include <Inventor/nodes/SoMatrixTransform.h>
+#include <Inventor/nodes/SoOrthographicCamera.h>
 #include <Inventor/nodes/SoPerspectiveCamera.h>
 #include <Inventor/nodes/SoSeparator.h>
 #include <Inventor/sensors/SoOneShotSensor.h>
@@ -566,34 +568,117 @@ make_constraint_object(struct rt_wdb *wdbp, const char *name)
 }
 
 static int
-make_line_annot(struct rt_wdb *wdbp, const char *name)
+make_line_annot(struct rt_wdb *wdbp, const char *name,
+	const std::vector<fastf_t> &widths = {},
+	const std::vector<uint32_t> &patterns = {},
+	const std::vector<std::array<unsigned char, 4>> &colors = {})
 {
     struct rt_annot_internal annot;
-    struct line_seg *ls;
-
     memset(&annot, 0, sizeof(annot));
     annot.magic = RT_ANNOT_INTERNAL_MAGIC;
     VSET(annot.V, 180.0, 20.0, 0.0);
-    annot.vert_count = 2;
+    annot.ant.count = std::max(
+	size_t(1), std::max(widths.size(),
+	    std::max(patterns.size(), colors.size())));
+    if ((!widths.empty() && widths.size() != annot.ant.count) ||
+	    (!patterns.empty() && patterns.size() != annot.ant.count) ||
+	    (!colors.empty() && colors.size() != annot.ant.count))
+	return 0;
+    annot.vert_count = 2 * annot.ant.count;
     annot.verts = (point2d_t *)bu_calloc(annot.vert_count, sizeof(point2d_t), "annot verts");
-    V2SET(annot.verts[0], 0.0, 0.0);
-    V2SET(annot.verts[1], 5.0, 3.0);
-
-    annot.ant.count = 1;
     annot.ant.reverse = (int *)bu_calloc(annot.ant.count, sizeof(int), "annot reverse");
     annot.ant.segments = (void **)bu_calloc(annot.ant.count, sizeof(void *), "annot segments");
-    BU_ALLOC(ls, struct line_seg);
-    ls->magic = CURVE_LSEG_MAGIC;
-    ls->start = 0;
-    ls->end = 1;
-    annot.ant.segments[0] = (void *)ls;
-
+    std::vector<rt_annot_seg_style> styles(annot.ant.count);
+    for (size_t i = 0; i < annot.ant.count; ++i) {
+	V2SET(annot.verts[2 * i], 0.0, 4.0 * i);
+	V2SET(annot.verts[2 * i + 1], 5.0, 3.0 + 4.0 * i);
+	struct line_seg *ls;
+	BU_ALLOC(ls, struct line_seg);
+	ls->magic = CURVE_LSEG_MAGIC;
+	ls->start = 2 * i;
+	ls->end = 2 * i + 1;
+	annot.ant.segments[i] = (void *)ls;
+	if (!widths.empty() && widths[i] > 0.0) {
+	    styles[i].flags |= RT_ANNOT_STYLE_WIDTH;
+	    styles[i].line_width = widths[i];
+	}
+	if (!patterns.empty())
+	    styles[i].line_pattern = patterns[i];
+	if (!colors.empty()) {
+	    styles[i].flags |= RT_ANNOT_STYLE_COLOR;
+	    std::copy(colors[i].begin(), colors[i].end(), styles[i].color);
+	}
+    }
+    if (!widths.empty() || !patterns.empty() || !colors.empty())
+	annot.styles = styles.data();
     int ret = (mk_annot(wdbp, name, &annot) == 0);
-    bu_free(ls, "annot line segment");
+    for (size_t i = 0; i < annot.ant.count; ++i)
+	bu_free(annot.ant.segments[i], "annot line segment");
     bu_free(annot.ant.segments, "annot segments");
     bu_free(annot.ant.reverse, "annot reverse");
     bu_free(annot.verts, "annot verts");
     return ret;
+}
+
+static int
+make_fill_annot(struct rt_wdb *wdbp, const char *name, bool withStroke = false,
+	bool withColor = false, bool asMask = false)
+{
+    if (withColor && asMask)
+	return 0;
+
+    struct rt_annot_internal annot = {};
+    annot.magic = RT_ANNOT_INTERNAL_MAGIC;
+    annot.flags = RT_ANNOT_MODEL_SPACE;
+    VSET(annot.V, 12.0, 8.0, 0.0);
+    VSET(annot.u_vec, 1.0, 0.0, 0.0);
+    VSET(annot.v_vec, 0.0, 1.0, 0.0);
+    point2d_t vertices[] = {
+	{-2.0, -2.0}, {2.0, -2.0}, {2.0, 2.0}, {-2.0, 2.0},
+	{-1.0, -1.0}, {-1.0, 1.0}, {1.0, 1.0}, {1.0, -1.0}
+    };
+    int indices[] = {0, 1, 2, 3, 4, 5, 6, 7};
+    int ends[] = {4, 8};
+    struct fill_seg fill = {};
+    fill.magic = ANN_FSEG_MAGIC;
+    fill.loop_count = 2;
+    fill.point_count = 8;
+    fill.loop_ends = ends;
+    fill.points = indices;
+    struct line_seg outlines[8] = {};
+    void *segments[10] = {};
+    int reverse[10] = {};
+    for (int i = 0; i < 8; ++i) {
+	outlines[i].magic = CURVE_LSEG_MAGIC;
+	outlines[i].start = i;
+	outlines[i].end = (i / 4) * 4 + (i + 1) % 4;
+	segments[i] = &outlines[i];
+    }
+    fill.legacy_start = 0;
+    fill.legacy_count = 8;
+    segments[8] = &fill;
+    struct line_seg stroke = {};
+    stroke.magic = CURVE_LSEG_MAGIC;
+    stroke.start = 0;
+    stroke.end = 2;
+    if (withStroke)
+	segments[9] = &stroke;
+    annot.vert_count = 8;
+    annot.verts = vertices;
+    annot.ant.count = withStroke ? 10 : 9;
+    annot.ant.segments = segments;
+    annot.ant.reverse = reverse;
+    struct rt_annot_seg_style styles[10] = {};
+    if (withColor) {
+	styles[8].flags = RT_ANNOT_STYLE_COLOR;
+	styles[8].color[0] = 255;
+	styles[8].color[3] = 128;
+    }
+    if (asMask)
+	styles[8].role = RT_ANNOT_ROLE_MASK;
+    if (withColor || asMask)
+	annot.styles = styles;
+    return mk_annot(wdbp, name, &annot) == 0;
 }
 
 static int
@@ -1166,7 +1251,17 @@ write_test_db(char *dbpath, size_t dbpath_len)
 	return 0;
     }
 
-    if (!make_line_annot(wdbp, "annot.s")) {
+    if (!make_line_annot(wdbp, "annot.s") ||
+	!make_line_annot(wdbp, "annot-width.s", {4.5, 0.0, 2.25}) ||
+	!make_line_annot(wdbp, "annot-style.s", {1.0, 2.0, 1.0},
+	    {RT_ANNOT_LINE_DOTTED, RT_ANNOT_LINE_CENTER,
+	     RT_ANNOT_LINE_CONTINUOUS},
+	    {{{255, 0, 0, 255}}, {{0, 255, 0, 192}},
+	     {{0, 0, 255, 255}}}) ||
+	!make_fill_annot(wdbp, "annot-fill.s") ||
+	!make_fill_annot(wdbp, "annot-fill-mixed.s", true) ||
+	!make_fill_annot(wdbp, "annot-fill-color.s", false, true) ||
+	!make_fill_annot(wdbp, "annot-fill-mask.s", false, false, true)) {
 	wdb_close(wdbp);
 	return 0;
     }
@@ -2045,6 +2140,362 @@ exercise_generated_primitive_wire_diagnostic(struct db_i *dbip,
 }
 
 static int
+exercise_annotation_fill(struct db_i *dbip)
+{
+    for (bool withStroke : {false, true}) {
+	for (bool shaded : {false, true}) {
+	    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+	    source->ref();
+	    const auto release = [](SoBRLDatabaseSource *node) { node->unref(); };
+	    const std::unique_ptr<SoBRLDatabaseSource, decltype(release)> owner(source, release);
+	    source->setDatabase(dbip);
+	    source->path = withStroke ? "annot-fill-mixed.s" : "annot-fill.s";
+	    source->drawMode = shaded ? SoBRLDatabaseSource::SHADED : SoBRLDatabaseSource::WIREFRAME;
+	    if (!(shaded ? source->realizeDatabaseMesh() : source->realizeDatabaseWireframe()))
+		return 0;
+	    BObolRealizedShapeSummary summary;
+	    if (!source->getRealizedShapeSummary(0, summary) ||
+		summary.shapeKind != BObolRealizedShapeSummary::SHAPE_VLIST)
+		return 0;
+	    SoBRLExportAction exported;
+	    exported.apply(source);
+	    double area = 0.0;
+	    for (int i = 0; i < exported.getTriangleCount(); ++i) {
+		const auto &triangle = exported.getTriangle(i);
+		area += (triangle.b - triangle.a).cross(triangle.c - triangle.a).length() * 0.5;
+		if (triangle.backgroundMask)
+		    return 0;
+	    }
+	    /* A four-by-four square minus its two-by-two hole. Triangulation
+	     * diagonals and compatibility outlines must not become wire strokes. */
+	    if (!EQUAL(area, 12.0) || exported.getLineCount() != (withStroke ? 1 : 0)) {
+		fprintf(stderr, "annotation fill lost area/hole semantics: mode=%d area=%g lines=%d triangles=%d\n",
+		    source->drawMode.getValue(), area, exported.getLineCount(), exported.getTriangleCount());
+		return 0;
+	    }
+	}
+    }
+
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->ref();
+    const auto release = [](SoBRLDatabaseSource *node) { node->unref(); };
+    const std::unique_ptr<SoBRLDatabaseSource, decltype(release)> owner(source,
+	release);
+    source->setDatabase(dbip);
+    source->path = "annot-fill-color.s";
+    if (!source->realizeDatabaseWireframe())
+	return 0;
+    SoBRLExportAction exported;
+    exported.apply(source);
+    const SbColor authoredColor(1.0f, 0.0f, 0.0f);
+    if (!exported.getTriangleCount())
+	return 0;
+    for (int i = 0; i < exported.getTriangleCount(); ++i) {
+	const auto &triangle = exported.getTriangle(i);
+	const float expectedTransparency = 1.0f - 128.0f / 255.0f;
+	if (!triangle.colorOverride || triangle.color != authoredColor ||
+		!nearly_equal(triangle.transparency, expectedTransparency)) {
+	    fprintf(stderr,
+		"annotation export lost authored fill color: triangle=%d override=%d color=%g/%g/%g transparency=%g\n",
+		i, triangle.colorOverride, double(triangle.color[0]),
+		double(triangle.color[1]), double(triangle.color[2]),
+		double(triangle.transparency));
+	    return 0;
+	}
+    }
+    BObolDatabaseSourceDisplayPatch patch;
+    patch.selectedValid = TRUE;
+    patch.selected = TRUE;
+    patch.selectedColorValid = TRUE;
+    patch.selectedColor.setValue(1.0f, 1.0f, 0.0f);
+    if (source->applyDisplayPatch(patch) < 0)
+	return 0;
+    SoBRLExportAction selected;
+    selected.apply(source);
+    for (int i = 0; i < selected.getTriangleCount(); ++i) {
+	if (selected.getTriangle(i).color != patch.selectedColor ||
+		!ZERO(selected.getTriangle(i).transparency) ||
+		selected.getTriangle(i).backgroundMask) {
+	    fprintf(stderr,
+		"annotation selection did not replace authored fill color: triangle=%d\n",
+		i);
+	    return 0;
+	}
+    }
+
+    source->path = "annot-fill-mask.s";
+    if (!source->realizeDatabaseWireframe())
+	return 0;
+    SoBRLExportAction maskExport;
+    maskExport.apply(source);
+    if (!maskExport.getTriangleCount())
+	return 0;
+    for (int i = 0; i < maskExport.getTriangleCount(); ++i) {
+	const auto &triangle = maskExport.getTriangle(i);
+	if (!triangle.backgroundMask || !ZERO(triangle.transparency)) {
+	    fprintf(stderr,
+		"annotation export lost background-mask semantics: triangle=%d mask=%d transparency=%g\n",
+		i, triangle.backgroundMask, double(triangle.transparency));
+	    return 0;
+	}
+    }
+    if (source->applyDisplayPatch(patch) < 0)
+	return 0;
+    SoBRLExportAction selectedMask;
+    selectedMask.apply(source);
+    for (int i = 0; i < selectedMask.getTriangleCount(); ++i) {
+	if (!selectedMask.getTriangle(i).backgroundMask ||
+		!ZERO(selectedMask.getTriangle(i).transparency)) {
+	    fprintf(stderr,
+		"annotation selection changed background-mask semantics: triangle=%d\n",
+		i);
+	    return 0;
+	}
+    }
+    return 1;
+}
+
+static int
+exercise_annotation_width(struct db_i *dbip)
+{
+    const std::array<float, 3> authoredWidths = {{4.5f, 1.0f, 2.25f}};
+    for (bool shaded : {false, true}) {
+	SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+	source->ref();
+	const auto release = [](SoBRLDatabaseSource *node) { node->unref(); };
+	const std::unique_ptr<SoBRLDatabaseSource, decltype(release)> owner(source, release);
+	source->setDatabase(dbip);
+	source->path = "annot-width.s";
+	source->drawMode = shaded ? SoBRLDatabaseSource::SHADED : SoBRLDatabaseSource::WIREFRAME;
+	if (!(shaded ? source->realizeDatabaseMesh() : source->realizeDatabaseWireframe()))
+	    return 0;
+	for (int baseWidth : {1, 3, 1}) {
+	    BObolDatabaseSourceDisplayPatch patch;
+	    patch.lineWidthValid = TRUE;
+	    patch.lineWidth = baseWidth;
+	    if (source->applyDisplayPatch(patch) < 0)
+		return 0;
+	    SoBRLExportAction exported;
+	    exported.apply(source);
+	    if (exported.getLineCount() != (int)authoredWidths.size())
+		return 0;
+	    for (size_t i = 0; i < authoredWidths.size(); ++i) {
+		const float expected = authoredWidths[i] * baseWidth;
+		if (!EQUAL(exported.getLine(i).lineWidth, expected)) {
+		    fprintf(stderr, "annotation export lost authored fractional width: mode=%d line=%zu base=%d actual=%g expected=%g\n",
+			source->drawMode.getValue(), i, baseWidth,
+			double(exported.getLine(i).lineWidth), double(expected));
+		    return 0;
+		}
+	    }
+	}
+    }
+    return 1;
+}
+
+static int
+exercise_annotation_style(struct db_i *dbip)
+{
+    const std::array<SbColor, 3> colors = {{
+	SbColor(1.0f, 0.0f, 0.0f), SbColor(0.0f, 1.0f, 0.0f),
+	SbColor(0.0f, 0.0f, 1.0f)}};
+    const std::array<int, 3> patterned = {{1, 1, 0}};
+    const std::array<uint16_t, 3> patterns = {{0x1111u, 0x18ffu, 0xffffu}};
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->ref();
+    const auto release = [](SoBRLDatabaseSource *node) { node->unref(); };
+    const std::unique_ptr<SoBRLDatabaseSource, decltype(release)> owner(
+	source, release);
+    source->setDatabase(dbip);
+    source->path = "annot-style.s";
+    if (!source->realizeDatabaseWireframe())
+	return 0;
+
+    SoBRLExportAction exported;
+    exported.apply(source);
+    if (exported.getLineCount() != 3)
+	return 0;
+    for (int i = 0; i < 3; ++i) {
+	const auto &line = exported.getLine(i);
+	const float expectedTransparency = i == 1 ? 1.0f - 192.0f / 255.0f : 0.0f;
+	if (!line.colorOverride || line.color != colors[i] ||
+		line.lineStyle != patterned[i] || line.linePattern != patterns[i] ||
+		line.linePatternFactor != 1u ||
+		!nearly_equal(line.transparency, expectedTransparency)) {
+	    fprintf(stderr,
+		"annotation export lost authored style: line=%d override=%d style=%d pattern=%04x/%u color=%g/%g/%g transparency=%g\n",
+		i, line.colorOverride, line.lineStyle,
+		static_cast<unsigned int>(line.linePattern),
+		static_cast<unsigned int>(line.linePatternFactor),
+		double(line.color[0]), double(line.color[1]),
+		double(line.color[2]), double(line.transparency));
+	    return 0;
+	}
+    }
+
+    BObolDatabaseSourceDisplayPatch patch;
+    patch.selectedValid = TRUE;
+    patch.selected = TRUE;
+    patch.selectedColorValid = TRUE;
+    patch.selectedColor.setValue(1.0f, 1.0f, 0.0f);
+    if (source->applyDisplayPatch(patch) < 0)
+	return 0;
+    SoBRLExportAction selected;
+    selected.apply(source);
+    for (int i = 0; i < selected.getLineCount(); ++i) {
+	const auto &line = selected.getLine(i);
+	if (line.color != patch.selectedColor || !ZERO(line.transparency)) {
+	    fprintf(stderr,
+		"annotation selection did not replace authored color: line=%d color=%g/%g/%g\n",
+		i, double(line.color[0]), double(line.color[1]),
+		double(line.color[2]));
+	    return 0;
+	}
+    }
+    return 1;
+}
+
+static int
+exercise_annotation_view_queries(struct db_i *dbip,
+	const SbViewportRegion &region)
+{
+    SoSeparator *scene = new SoSeparator;
+    scene->ref();
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "annot.s";
+    scene->addChild(source);
+    if (!source->realizeDatabaseWireframe()) {
+	scene->unref();
+	return 0;
+    }
+
+    BObolCompactOccurrence occurrence;
+    if (!source->getCompactOccurrence(0, occurrence) || !occurrence.geometry ||
+	!occurrence.geometry->displayPlane) {
+	scene->unref();
+	return 0;
+    }
+    const auto &plane = *occurrence.geometry->displayPlane;
+    const SbVec2s viewportSize = region.getViewportSizePixels();
+    SoOrthographicCamera *camera = new SoOrthographicCamera;
+    camera->position = plane.anchor + SbVec3f(0.0f, 0.0f, 100.0f);
+    camera->focalDistance = 100.0f;
+    camera->nearDistance = 1.0f;
+    camera->farDistance = 200.0f;
+    /* Two world units per stored display unit makes accidental viewless
+     * traversal observable while the displayed annotation stays fixed in
+     * pixels. */
+    camera->height = 2.0f * viewportSize[1] / plane.pixelsPerUnit;
+    SoViewport viewport;
+    viewport.setViewportRegion(region);
+    viewport.setSceneGraph(scene);
+    viewport.setCamera(camera);
+
+    SoBRLExportAction viewlessExport;
+    viewlessExport.apply(scene);
+    SoBRLExportAction viewportExport;
+    viewportExport.applyViewport(viewport);
+    if (viewlessExport.getLineCount() != 1 ||
+	viewportExport.getLineCount() != 1) {
+	scene->unref();
+	return 0;
+    }
+    const auto &viewlessLine = viewlessExport.getLine(0);
+    const auto &viewportLine = viewportExport.getLine(0);
+    const SbVec3f viewlessMidpoint = (viewlessLine.a + viewlessLine.b) * 0.5f;
+    const SbVec3f viewportMidpoint = (viewportLine.a + viewportLine.b) * 0.5f;
+    const float viewlessLength = (viewlessLine.b - viewlessLine.a).length();
+    const float viewportLength = (viewportLine.b - viewportLine.a).length();
+    if (viewlessMidpoint.equals(viewportMidpoint, 0.001f) ||
+	!nearly_equal(viewportLength, 2.0f * viewlessLength)) {
+	fprintf(stderr, "display-plane export fixture did not distinguish its camera\n");
+	scene->unref();
+	return 0;
+    }
+
+    SoBRLSnapAction snap;
+    snap.setEnabledKinds(SoBRLSnapAction::LINE_NEAREST);
+    snap.setTolerance(0.01f);
+    snap.setQueryPoint(viewportMidpoint);
+    snap.applyViewport(viewport);
+    if (!snap.hasCandidate() ||
+	!snap.getPoint().equals(viewportMidpoint, 0.001f)) {
+	fprintf(stderr, "display-plane snap missed viewport geometry\n");
+	scene->unref();
+	return 0;
+    }
+    snap.setQueryPoint(viewlessMidpoint);
+    snap.apply(scene);
+    if (!snap.hasCandidate() ||
+	!snap.getPoint().equals(viewlessMidpoint, 0.001f)) {
+	fprintf(stderr, "display-plane snap retained a previous camera\n");
+	scene->unref();
+	return 0;
+    }
+
+    SoBRLMeasureAction measure;
+    measure.setQueryPoint(viewportMidpoint);
+    measure.applyViewport(viewport);
+    if (measure.getSegmentCount() != 1 ||
+	!nearly_equal(measure.getTotalLength(), viewportLength) ||
+	!measure.hasNearestSegment() ||
+	!measure.getNearestPoint().equals(viewportMidpoint, 0.001f)) {
+	fprintf(stderr, "display-plane measurement missed viewport geometry\n");
+	scene->unref();
+	return 0;
+    }
+    measure.clearQueryPoint();
+    measure.apply(scene);
+    if (!nearly_equal(measure.getTotalLength(), viewlessLength)) {
+	fprintf(stderr, "display-plane measurement retained a previous camera\n");
+	scene->unref();
+	return 0;
+    }
+
+    SoBRLMeasureAction localMeasure;
+    localMeasure.setCoordinateSpace(SoBRLMeasureAction::PATH_LOCAL_SPACE);
+    localMeasure.applyViewport(viewport);
+    if (!nearly_equal(localMeasure.getTotalLength(), viewlessLength)) {
+	fprintf(stderr, "display-plane local measurement did not retain stored coordinates\n");
+	scene->unref();
+	return 0;
+    }
+
+    scene->unref();
+    return 1;
+}
+
+static int
+exercise_screen_annotation_legacy_rejection(struct db_i *dbip)
+{
+    directory *dp = db_lookup(dbip, "annot.s", LOOKUP_QUIET);
+    if (!dp)
+	return 0;
+
+    rt_db_internal intern;
+    RT_DB_INTERNAL_INIT(&intern);
+    if (rt_db_get_internal(&intern, dp, dbip, NULL) < 0)
+	return 0;
+
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->ref();
+    const int result = source->publishPrimitiveWireframe(&intern);
+    const int realizedShapeCount = source->getRealizedShapeCount();
+    const SbBool hasCompactIndex = source->hasCompactInstanceIndex();
+    source->unref();
+    rt_db_free_internal(&intern);
+
+    if (result != -1 || realizedShapeCount != 0 || hasCompactIndex) {
+	fprintf(stderr,
+	    "legacy vlist path accepted screen annotation: result=%d shapes=%d compact=%d\n",
+	    result, realizedShapeCount, int(hasCompactIndex));
+	return 0;
+    }
+    return 1;
+}
+
+static int
 exercise_generated_primitive_shaded_vlist(struct db_i *dbip,
 	const char *name,
 	int min_segments,
@@ -2125,10 +2576,23 @@ exercise_generated_primitive_shaded_vlist(struct db_i *dbip,
 	0.5f * (segmentA[1] + segmentB[1]),
 	0.5f * (segmentA[2] + segmentB[2]));
 
+    constexpr float pickHeight = 5.0f;
+    BObolCompactOccurrence occurrence;
+    if (source->getCompactOccurrence(0, occurrence) && occurrence.geometry &&
+	occurrence.geometry->displayPlane) {
+	/* Screen geometry needs a camera for picking. Choose one model unit
+	 * per stored display unit so this primitive-identity check can use the
+	 * same endpoints as viewless export. Separate pixel tests vary scale. */
+	auto *camera = new SoOrthographicCamera;
+	camera->height = viewport.getViewportSizePixels()[1] /
+	    occurrence.geometry->displayPlane->pixelsPerUnit;
+	camera->position = segmentMidpoint + SbVec3f(0.0f, 0.0f, pickHeight);
+	root->insertChild(camera, 0);
+    }
     SoRayPickAction pickAction(viewport);
     pickAction.setRay(
 	SbVec3f(segmentMidpoint[0], segmentMidpoint[1],
-		segmentMidpoint[2] + 5.0f),
+		segmentMidpoint[2] + pickHeight),
 	SbVec3f(0.0f, 0.0f, -1.0f));
     pickAction.apply(root);
     const SoPickedPoint *pickedPoint = pickAction.getPickedPoint();
@@ -5011,6 +5475,24 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!source->hasExactSourceBounds())
 	FAIL("completed direct database realization should certify exact source bounds");
 
+    /* Direct and grouped primitives use librt's effective color, including
+     * its default when no attribute is present. Region identity is separate. */
+    SbColor primitiveColor;
+    {
+	db_full_path path;
+	db_full_path_init(&path);
+	if (db_string_to_path(&path, dbip, "box.s") != 0) {
+	    db_free_full_path(&path);
+	    FAIL("primitive color reference path should resolve");
+	}
+	bu_color color;
+	db_full_path_color(&color, &path, dbip);
+	db_free_full_path(&path);
+	fastf_t rgb[3];
+	if (!bu_color_to_rgb_floats(&color, rgb))
+	    FAIL("primitive color reference should be valid RGB");
+	primitiveColor.setValue(float(rgb[0]), float(rgb[1]), float(rgb[2]));
+    }
     BObolRealizedShapeSummary directWireSummary;
     if (!source->hasCompactInstanceIndex() ||
 	source->getCompactInstanceCount() != 1 ||
@@ -5026,7 +5508,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (bu_strcmp(directWireSummary.sourceName.getString(), "box.s") != 0 ||
 	bu_strcmp(directWireSummary.sourceType.getString(), "arb8") != 0 ||
 	directWireSummary.sourceId != 7 ||
-	directWireSummary.materialColorValid ||
+	!directWireSummary.materialColorValid ||
+	!directWireSummary.materialColor.equals(primitiveColor, SMALL_FASTF) ||
 	directWireSummary.regionId != 0)
 	FAIL("direct primitive shape should preserve primitive identity fields");
     if (source->hasCompiledAssembly())
@@ -5171,7 +5654,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed mesh should preserve its full database path");
     if (bu_strcmp(directMeshSummary.sourceName.getString(), "box.s") != 0 ||
 	bu_strcmp(directMeshSummary.sourceType.getString(), "arb8") != 0 ||
-	directMeshSummary.sourceId != 7 || directMeshSummary.materialColorValid ||
+	directMeshSummary.sourceId != 7 || !directMeshSummary.materialColorValid ||
+	!directMeshSummary.materialColor.equals(primitiveColor, SMALL_FASTF) ||
 	directMeshSummary.regionId != 0)
 	FAIL("database-backed mesh should preserve primitive identity fields");
     if (source->prepareCompiledAssembly() != 1 ||
@@ -5208,7 +5692,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (bu_strcmp(pickDetail->getSourceName().getString(), "box.s") != 0 ||
 	bu_strcmp(pickDetail->getSourceType().getString(), "arb8") != 0 ||
 	pickDetail->getSourceId() != 7 ||
-	pickDetail->hasMaterialColor() ||
+	!pickDetail->hasMaterialColor() ||
+	!pickDetail->getMaterialColor().equals(primitiveColor, SMALL_FASTF) ||
 	pickDetail->getRegionId() != 0)
 	FAIL("database-backed mesh pick detail should preserve primitive identity fields");
 
@@ -5225,7 +5710,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	bu_strcmp(boxTriangle->sourceName.getString(), "box.s") != 0 ||
 	bu_strcmp(boxTriangle->sourceType.getString(), "arb8") != 0 ||
 	boxTriangle->sourceId != 7 ||
-	boxTriangle->materialColorValid ||
+	!boxTriangle->materialColorValid ||
+	!boxTriangle->materialColor.equals(primitiveColor, SMALL_FASTF) ||
 	boxTriangle->regionId != 0)
 	FAIL("database-backed shaded export should preserve primitive identity");
     bbox = dbMeshExport.getBounds();
@@ -5629,6 +6115,17 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    SbColor(1.0f, 1.0f, 1.0f),
 	    1, 0.5f, 0, SbVec3f(0.0f, 0.0f, 1.0f), viewport))
 	FAIL("database-backed PNTS per-point scale precedence should pass");
+    if (!exercise_annotation_fill(dbip))
+	bu_exit(EXIT_FAILURE, "FAIL: annotation fill must retain area and holes\n");
+
+    if (!exercise_annotation_width(dbip))
+	FAIL("annotation width must survive source compilation and export");
+    if (!exercise_annotation_style(dbip))
+	FAIL("annotation color and pattern must survive source compilation and export");
+    if (!exercise_annotation_view_queries(dbip, viewport))
+	FAIL("screen annotation snap and measurement must follow the active viewport");
+    if (!exercise_screen_annotation_legacy_rejection(dbip))
+	FAIL("legacy vlist publication must reject screen annotations");
     if (!exercise_generated_primitive(dbip, "annot.s", 1, 0, viewport))
 	FAIL("database-backed annotation wire primitive coverage should pass");
     if (!exercise_generated_primitive_shaded_vlist(dbip, "annot.s", 1, viewport))

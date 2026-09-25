@@ -238,6 +238,16 @@ bobol_cad_replace_scene(SoCADAssembly *assembly,
     const std::vector<Obol::InstanceUpdate> &instances,
     const char *operation)
 {
+    return bobol_cad_replace_scene(assembly, parts, instances.size(),
+	[&instances](size_t index) { return instances[index]; }, operation);
+}
+
+bool
+bobol_cad_replace_scene(SoCADAssembly *assembly,
+    const std::vector<Obol::PartUpdate> &parts, size_t instanceCount,
+    const std::function<Obol::InstanceUpdate(size_t)> &instanceAt,
+    const char *operation)
+{
     if (!assembly) {
 	bu_log("libBObol: rejected %s CAD scene replacement: null assembly\n",
 	    publication_operation(operation));
@@ -250,5 +260,5 @@ bobol_cad_replace_scene(SoCADAssembly *assembly,
 	return false;
     }
     return report_scene_replacement(
-	assembly->replaceScene(parts, instances), operation);
+	assembly->replaceScene(parts, instanceCount, instanceAt), operation);
 }

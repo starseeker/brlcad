@@ -16,6 +16,7 @@ set(
   database_source_summary.cpp
   database_source_types.cpp
   display_endpoint.cpp
+  display_plane_view_private.h
   display_session.cpp
   draw_cache.cpp
   draw_cache_private.h
@@ -209,6 +210,7 @@ cmakefiles(
   database_source_summary.cpp
   database_source_types.cpp
   display_endpoint.cpp
+  display_plane_view_private.h
   display_session.cpp
   draw_cache.cpp
   draw_cache_private.h

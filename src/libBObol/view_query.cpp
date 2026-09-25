@@ -572,7 +572,8 @@ bobol_rectangle_query_callback(void *data, SoCallbackAction *action,
 	    state->viewProjection, state->minimumX, state->minimumY,
 	    state->maximumX, state->maximumY, *state->records) :
 	source->queryCompactRectangle(action->getModelMatrix(),
-	    state->viewProjection, state->minimumX, state->minimumY,
+	    state->viewProjection, action->getViewportRegion().getViewportSizePixels(),
+	    state->minimumX, state->minimumY,
 	    state->maximumX, state->maximumY, *state->records);
     if (count < 0)
 	return SoCallbackAction::CONTINUE;
@@ -610,6 +611,7 @@ bobol_view_pick_registered_source_rectangle(
 	    source->querySourceRectangle(identity, viewProjection,
 		minimumX, minimumY, maximumX, maximumY, records) :
 	    source->queryCompactRectangle(identity, viewProjection,
+		controller->getViewportRegion().getViewportSizePixels(),
 		minimumX, minimumY, maximumX, maximumY, records);
 	if (count >= 0)
 	    handled = true;
@@ -796,7 +798,7 @@ bobol_view_snap_point_filtered(BObolViewController *controller,
     if (excluded.isValid() &&
 	controller->polygons().record(excluded, excludedPolygon))
 	action.setExcludedPath(excludedPolygon.name);
-    action.apply(controller->getViewport()->getRoot());
+    action.applyViewport(*controller->getViewport());
 
     if (geometryPolicy == SoBRLSnapAction::FULL_DETAIL &&
 	consumeSourceFullDetail) {

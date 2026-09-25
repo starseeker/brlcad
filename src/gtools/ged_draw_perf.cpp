@@ -640,7 +640,15 @@ run_once(const struct options &opts, int iter)
 	std::vector<SoBRLDatabaseSource *> sources;
 	if (controller)
 	    collect_database_sources(controller->getRenderSceneRoot(), sources);
-	if (sources.empty() || progressive_more) {
+	BObolSceneController *scene = controller ?
+	    controller->getSceneController() : NULL;
+	std::vector<SbString> sourceKeys;
+	for (SoBRLDatabaseSource *source : sources) {
+	    BObolDatabaseSourceSummary summary;
+	    if (scene && source && source->getSummary(summary) && summary.valid)
+		sourceKeys.push_back(summary.instanceKey);
+	}
+	if (sourceKeys.empty() || progressive_more) {
 	    style_ret = BRLCAD_ERROR;
 	} else {
 	    if (profile_started)
@@ -648,9 +656,8 @@ run_once(const struct options &opts, int iter)
 	    for (int update = 0; update < opts.style_updates; update++) {
 		const bool alternate = (update & 1) != 0;
 		const auto updateStart = std::chrono::steady_clock::now();
-		for (SoBRLDatabaseSource *source : sources) {
-		    if (!source)
-			continue;
+		for (const SbString &sourceKey : sourceKeys) {
+		    const char *instanceKey = sourceKey.getString();
 		    BObolDatabaseSourceDisplayPatch patch;
 		    patch.colorOverrideValid = TRUE;
 		    patch.colorOverride = TRUE;
@@ -661,8 +668,10 @@ run_once(const struct options &opts, int iter)
 		    patch.lineWidth = alternate ? 2 : 1;
 		    patch.lineStyleValid = TRUE;
 		    patch.lineStyle = alternate ? 1 : 0;
-		    (void)source->applyDisplayPatch(patch);
-		    (void)source->setCompactInstanceDisplayStateForPath("", TRUE,
+		    (void)scene->setDatabaseSourceInstanceDisplayPatch(
+			instanceKey, patch);
+		    (void)scene->setDatabaseSourceInstanceCompactDisplayStateForPath(
+			instanceKey, "", TRUE,
 			0, FALSE, 1, alternate ? TRUE : FALSE,
 			1, alternate ? FALSE : TRUE);
 		}

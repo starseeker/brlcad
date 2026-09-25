@@ -12,6 +12,7 @@
 #include <Obol/cad/CadSceneMutation.h>
 #include <Obol/cad/CadSceneRecords.h>
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -61,6 +62,11 @@ bool bobol_cad_validate_mutation(const SoCADAssembly *assembly,
 bool bobol_cad_replace_scene(SoCADAssembly *assembly,
     const std::vector<Obol::PartUpdate> &parts,
     const std::vector<Obol::InstanceUpdate> &instances,
+    const char *operation);
+
+bool bobol_cad_replace_scene(SoCADAssembly *assembly,
+    const std::vector<Obol::PartUpdate> &parts, size_t instanceCount,
+    const std::function<Obol::InstanceUpdate(size_t)> &instanceAt,
     const char *operation);
 
 #endif /* LIBBOBOL_CAD_PUBLICATION_PRIVATE_H */

@@ -209,6 +209,10 @@ main(int argc, char **argv)
     viewOverlay->nonDatabaseSource = TRUE;
     viewOverlay->drawMode = BOBOL_LOD_DRAW_WIRE;
     viewOverlay->recordRole = "overlay";
+    viewOverlay->colorOverride = TRUE;
+    viewOverlay->color.setValue(0.25f, 0.5f, 0.75f);
+    viewOverlay->lineStyle = 1;
+    viewOverlay->lineWidth = 3;
     viewOverlay->visible = FALSE;
     viewOverlay->setLineSet(overlayPoints, overlayCommands, 3);
 
@@ -315,6 +319,7 @@ main(int argc, char **argv)
 	    triangle.vertexIndexA != 10 ||
 	    triangle.vertexIndexB != 11 ||
 	    triangle.vertexIndexC != 12 ||
+	    triangle.style.backgroundMask ||
 	    !near_point(triangle.a, -1.0f, -1.0f, 0.0f) ||
 	    !near_point(triangle.b, 1.0f, -1.0f, 0.0f) ||
 	    !near_point(triangle.c, -1.0f, 1.0f, 0.0f)) {
@@ -383,6 +388,8 @@ main(int argc, char **argv)
 	    object.surfaceIndices[0] != 0 ||
 	    object.surfaceIndices[1] != 1 ||
 	    object.surfaceIndices[2] != 2 ||
+	    object.triangleStyles.size() != 1 ||
+	    object.triangleStyles[0].backgroundMask ||
 	    !near_point(object.surfacePoints[0], -1.0f, -1.0f, 0.0f) ||
 	    !near_point(object.surfacePoints[1], 1.0f, -1.0f, 0.0f) ||
 	    !near_point(object.surfacePoints[2], -1.0f, 1.0f, 0.0f)) {
@@ -453,6 +460,11 @@ main(int argc, char **argv)
 	    viewObject.lineCommands.size() != 2 ||
 	    viewObject.lineCommands[0] != SoBRLExportAction::LINE_MOVE ||
 	    viewObject.lineCommands[1] != SoBRLExportAction::LINE_DRAW ||
+	    viewObject.lineStyles.size() != 1 ||
+	    viewObject.lineStyles[0].color != SbColor(0.25f, 0.5f, 0.75f) ||
+	    !nearly_equal(viewObject.lineStyles[0].lineWidth, 3.0f) ||
+	    viewObject.lineStyles[0].linePattern != 0xcf33u ||
+	    viewObject.lineStyles[0].linePatternFactor != 1u ||
 	    !near_point(viewObject.linePoints[0], 0.0f, 0.0f, 0.0f) ||
 	    !near_point(viewObject.linePoints[1], 1.0f, 0.0f, 0.0f) ||
 	    !viewObject.pointSummary.valid ||
@@ -464,6 +476,17 @@ main(int argc, char **argv)
 	    viewObject.surfaceSummary.valid ||
 	    !viewObject.surfacePoints.empty() ||
 	    !viewObject.surfaceIndices.empty()) {
+	if (!viewObject.lineStyles.empty()) {
+	    const auto &style = viewObject.lineStyles[0];
+	    fprintf(stderr,
+		"qtcad line style: count=%zu color=%g/%g/%g width=%g pattern=0x%04x factor=%u\n",
+		viewObject.lineStyles.size(), double(style.color[0]),
+		double(style.color[1]), double(style.color[2]),
+		double(style.lineWidth), unsigned(style.linePattern),
+		unsigned(style.linePatternFactor));
+	} else {
+	    fprintf(stderr, "qtcad line style: count=0\n");
+	}
 	controller->setLodService(NULL);
 	sourceService.stop();
 	FAIL("qtcad Obol object query should preserve view-local line and point detail");

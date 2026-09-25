@@ -308,7 +308,7 @@ compact_rectangle_overlaps(const SbBox3f &localBounds,
 
 int
 SoBRLDatabaseSource::queryCompactRectangle(const SbMatrix &parentToWorld,
-	const SbMatrix &viewProjection,
+	const SbMatrix &viewProjection, const SbVec2s &viewportSize,
 	float minimumX, float minimumY, float maximumX, float maximumY,
 	std::vector<BObolViewPickRecord> &records) const
 {
@@ -322,9 +322,15 @@ SoBRLDatabaseSource::queryCompactRectangle(const SbMatrix &parentToWorld,
 	 this->d->compactIndex->entries) {
 	if (!entry.visible || !entry.selectable || !entry.geometry)
 	    continue;
-	const SbBox3f localBounds = compact_part_geometry_bounds(entry.geometry);
+	SbBox3f localBounds = compact_part_geometry_bounds(entry.geometry);
 	SbMatrix localToWorld = entry.localToSource;
 	localToWorld.multRight(parentToWorld);
+	if (entry.geometry->displayPlane) {
+	    if (!Obol::cadDisplayPlaneTransform(*entry.geometry->displayPlane,
+		    localToWorld, viewProjection, viewportSize, localToWorld))
+		continue;
+	    localBounds = Obol::cadPartGeometryBounds(*entry.geometry);
+	}
 	SbVec3f worldPoint;
 	float distance = FLT_MAX;
 	if (!compact_rectangle_overlaps(localBounds, localToWorld,
@@ -1224,10 +1230,17 @@ public:
 	BObolCompactOccurrenceRegistryState::PresentationOverride::Property property, SbBool state, float transparency);
     static int clearHighlightOverrides(SoBRLDatabaseSource &source);
     static int setFrontier(SoBRLDatabaseSource &source, SbBool active, SbBool defaultVisible,
-	const std::vector<SbString> &paths, const std::vector<SbBool> *states);
-    static int setSelection(SoBRLDatabaseSource &source, const std::vector<SbString> &paths);
+	const std::vector<SbString> &paths, const std::vector<SbBool> *states,
+	SoBRLDatabaseSource::PublicationCommit committed = nullptr,
+	void *context = nullptr);
+    static int setSelection(SoBRLDatabaseSource &source,
+	const std::vector<SbString> &paths,
+	SoBRLDatabaseSource::PublicationCommit committed = nullptr,
+	void *context = nullptr);
     static int selectionDelta(SoBRLDatabaseSource &source,
-	const std::vector<SbString> &added, const std::vector<SbString> &removed);
+	const std::vector<SbString> &added, const std::vector<SbString> &removed,
+	SoBRLDatabaseSource::PublicationCommit committed = nullptr,
+	void *context = nullptr);
 private:
     void stageOverrides(size_t ordinal,
 	const std::vector<BObolCompactOccurrenceRegistryState::PresentationOverride> &rules, bool visibility);
@@ -1296,10 +1309,43 @@ SoBRLDatabaseSource::setCompactInstanceDisplayStateForPath(const char *queryPath
 }
 
 int
+SoBRLDatabaseSource::setCompactInstanceDisplayStateForPath(const char *queryPath,
+    SbBool includeDescendants,
+    int visibleValid, SbBool nextVisible,
+    int selectedValid, SbBool nextSelected,
+    int highlightedValid, SbBool nextHighlighted,
+    PublicationCommit committed, void *context)
+{
+    const char *query = database_source_skip_leading_slash(
+	queryPath ? queryPath : "");
+    const bool leafQuery = query[0] && !strchr(query, '/') &&
+	!strchr(query, '@');
+    const BObolCompactPathMatch match = leafQuery ?
+	BOBOL_COMPACT_PATH_OBJECT :
+	(includeDescendants ? BOBOL_COMPACT_PATH_SUBTREE :
+	 BOBOL_COMPACT_PATH_EXACT);
+    return this->setCompactInstanceDisplayStateForPathMatch(queryPath,
+	match, visibleValid, nextVisible, selectedValid, nextSelected,
+	highlightedValid, nextHighlighted, committed, context);
+}
+
+int
 SoBRLDatabaseSource::setCompactInstanceDisplayStateForPathMatch(
     const char *queryPath, BObolCompactPathMatch match,
     int visibleValid, SbBool nextVisible, int selectedValid, SbBool nextSelected,
     int highlightedValid, SbBool nextHighlighted)
+{
+    return this->setCompactInstanceDisplayStateForPathMatch(queryPath, match,
+	visibleValid, nextVisible, selectedValid, nextSelected,
+	highlightedValid, nextHighlighted, nullptr, nullptr);
+}
+
+int
+SoBRLDatabaseSource::setCompactInstanceDisplayStateForPathMatch(
+    const char *queryPath, BObolCompactPathMatch match,
+    int visibleValid, SbBool nextVisible, int selectedValid, SbBool nextSelected,
+    int highlightedValid, SbBool nextHighlighted,
+    PublicationCommit committed, void *context)
 {
     if (!this->d->compactIndex || (match != BOBOL_COMPACT_PATH_EXACT &&
 	match != BOBOL_COMPACT_PATH_SUBTREE && match != BOBOL_COMPACT_PATH_OBJECT)) return 0;
@@ -1323,7 +1369,7 @@ SoBRLDatabaseSource::setCompactInstanceDisplayStateForPathMatch(
 	    return changed;
 	});
     });
-    return publication.publish(true);
+    return publication.publish(true, committed, context);
 }
 
 int
@@ -1686,7 +1732,8 @@ SoBRLDatabaseSource::clearCompactInstanceHighlightOverrides(void)
 
 int
 BObolCompactEntryPublication::setFrontier(SoBRLDatabaseSource &source, SbBool active, SbBool defaultVisible,
-    const std::vector<SbString> &paths, const std::vector<SbBool> *states)
+    const std::vector<SbString> &paths, const std::vector<SbBool> *states,
+    SoBRLDatabaseSource::PublicationCommit committed, void *context)
 {
     auto &state = *source.d;
     if (states && states->size() != paths.size()) return 0;
@@ -1706,6 +1753,7 @@ BObolCompactEntryPublication::setFrontier(SoBRLDatabaseSource &source, SbBool ac
     };
     if (!state.compactIndex) {
 	commit();
+	if (committed) committed(context);
 	source.touch();
 	return 1;
     }
@@ -1719,7 +1767,7 @@ BObolCompactEntryPublication::setFrontier(SoBRLDatabaseSource &source, SbBool ac
 	    return 1;
 	});
     }
-    const int changed = publication.publish(true, commit);
+    const int changed = publication.publish(true, commit, committed, context);
     return changed ? changed : 1;
 }
 
@@ -1730,6 +1778,15 @@ SoBRLDatabaseSource::setCompactInstanceVisibilityFrontier(const std::vector<SbSt
 }
 
 int
+SoBRLDatabaseSource::setCompactInstanceVisibilityFrontier(
+    const std::vector<SbString> &paths,
+    PublicationCommit committed, void *context)
+{
+    return BObolCompactEntryPublication::setFrontier(*this, TRUE, FALSE,
+	paths, nullptr, committed, context);
+}
+
+int
 SoBRLDatabaseSource::setCompactInstanceVisibilityOverrides(
     const std::vector<SbString> &paths, const std::vector<SbBool> &states)
 {
@@ -1737,9 +1794,26 @@ SoBRLDatabaseSource::setCompactInstanceVisibilityOverrides(
 }
 
 int
+SoBRLDatabaseSource::setCompactInstanceVisibilityOverrides(
+    const std::vector<SbString> &paths, const std::vector<SbBool> &states,
+    PublicationCommit committed, void *context)
+{
+    return BObolCompactEntryPublication::setFrontier(*this, TRUE, TRUE,
+	paths, &states, committed, context);
+}
+
+int
 SoBRLDatabaseSource::clearCompactInstanceVisibilityFrontier(void)
 {
     return BObolCompactEntryPublication::setFrontier(*this, FALSE, FALSE, {}, nullptr);
+}
+
+int
+SoBRLDatabaseSource::clearCompactInstanceVisibilityFrontier(
+    PublicationCommit committed, void *context)
+{
+    return BObolCompactEntryPublication::setFrontier(*this, FALSE, FALSE,
+	{}, nullptr, committed, context);
 }
 
 SbBool
@@ -1761,7 +1835,9 @@ BObolCompactEntryPublication::stageSelection(const std::unordered_map<size_t, Sb
 }
 
 int
-BObolCompactEntryPublication::setSelection(SoBRLDatabaseSource &source, const std::vector<SbString> &paths)
+BObolCompactEntryPublication::setSelection(SoBRLDatabaseSource &source,
+    const std::vector<SbString> &paths,
+    SoBRLDatabaseSource::PublicationCommit committed, void *context)
 {
     auto &current = source.d->compactSelectedPaths;
     bool same = current.size() == paths.size();
@@ -1771,6 +1847,7 @@ BObolCompactEntryPublication::setSelection(SoBRLDatabaseSource &source, const st
     std::vector<SbString> prepared(paths);
     if (!source.d->compactIndex) {
 	current.swap(prepared);
+	if (committed) committed(context);
 	source.touch();
 	return 1;
     }
@@ -1792,7 +1869,8 @@ BObolCompactEntryPublication::setSelection(SoBRLDatabaseSource &source, const st
     BObolCompactEntryPublication publication(source);
     publication.stageSelection(targets);
     publication.retireAggregateSelection(prepared);
-    const int changed = publication.publish(true, [&] { current.swap(prepared); });
+    const int changed = publication.publish(true,
+	[&] { current.swap(prepared); }, committed, context);
     return changed ? changed : 1;
 }
 
@@ -1803,8 +1881,18 @@ SoBRLDatabaseSource::syncCompactInstanceSelectedPaths(const std::vector<SbString
 }
 
 int
+SoBRLDatabaseSource::syncCompactInstanceSelectedPaths(
+    const std::vector<SbString> &paths,
+    PublicationCommit committed, void *context)
+{
+    return BObolCompactEntryPublication::setSelection(*this, paths,
+	committed, context);
+}
+
+int
 BObolCompactEntryPublication::selectionDelta(SoBRLDatabaseSource &source,
-    const std::vector<SbString> &added, const std::vector<SbString> &removed)
+    const std::vector<SbString> &added, const std::vector<SbString> &removed,
+    SoBRLDatabaseSource::PublicationCommit committed, void *context)
 {
     if (added.empty() && removed.empty()) return 0;
     int frontierChanged = 0;
@@ -1834,7 +1922,11 @@ BObolCompactEntryPublication::selectionDelta(SoBRLDatabaseSource &source,
 	}
     }
     if (!source.d->compactIndex) {
-	if (frontierChanged) { current.swap(prepared); source.touch(); }
+	if (frontierChanged) {
+	    current.swap(prepared);
+	    if (committed) committed(context);
+	    source.touch();
+	}
 	return frontierChanged;
     }
     const auto &index = *source.d->compactIndex;
@@ -1852,7 +1944,8 @@ BObolCompactEntryPublication::selectionDelta(SoBRLDatabaseSource &source,
     publication.stageSelection(targets);
     publication.retireAggregateSelection(prepared);
     if (!frontierChanged && publication.changes.empty() && !publication.clearSourceSelection) return 0;
-    const int changed = publication.publish(true, [&] { current.swap(prepared); });
+    const int changed = publication.publish(true,
+	[&] { current.swap(prepared); }, committed, context);
     return changed ? changed : std::max(frontierChanged, int(publication.clearSourceSelection));
 }
 
@@ -1861,6 +1954,16 @@ SoBRLDatabaseSource::applyCompactInstanceSelectionDelta(
     const std::vector<SbString> &added, const std::vector<SbString> &removed)
 {
     return BObolCompactEntryPublication::selectionDelta(*this, added, removed);
+}
+
+int
+SoBRLDatabaseSource::applyCompactInstanceSelectionDelta(
+    const std::vector<SbString> &added,
+    const std::vector<SbString> &removed,
+    PublicationCommit committed, void *context)
+{
+    return BObolCompactEntryPublication::selectionDelta(*this, added,
+	removed, committed, context);
 }
 
 

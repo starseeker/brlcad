@@ -350,7 +350,7 @@ struct BObolViewController::Impl : BObolLodCoordinator {
     {
 	const uint64_t mutationNanoseconds = this->controller ?
 	    this->controller->beginRenderTiming() : 0;
-	this->lodExactPresentationFrame.require(mutationNanoseconds);
+	this->requireExactPresentationFrameAfter(mutationNanoseconds);
 	if (this->controller)
 	    this->controller->markProgressiveWorkPending();
     }

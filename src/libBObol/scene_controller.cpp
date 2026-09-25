@@ -1311,6 +1311,25 @@ BObolSceneController::realizeDatabaseSourceInstance(
 }
 
 SbBool
+BObolSceneController::realizeDatabaseSourceInstanceWireframe(
+    const char *sourceInstanceKey,
+    const BObolSourceRealizationStamp &stamp)
+{
+    if (!sourceInstanceKey || !sourceInstanceKey[0])
+	return FALSE;
+    SoBRLDatabaseSource *source =
+	this->findIndexedDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return FALSE;
+    SbModernUtils::SoNodeRef sourceOwner(source);
+    if (this->findIndexedDatabaseSourceInstance(sourceInstanceKey) != source ||
+	!source->matchesRealizationStamp(stamp))
+	return FALSE;
+    auto publication = prepareRealizationEffects(*this, nullptr);
+    return source->realizeDatabaseWireframe(nullptr, publication.get());
+}
+
+SbBool
 BObolSceneController::adoptDatabaseSourceInstanceMeshLod(
     const char *sourceInstanceKey,
     const BObolSourceRealizationStamp &stamp,
@@ -4248,6 +4267,97 @@ BObolSceneController::applyPresentationTransaction(
 }
 
 int
+BObolSceneController::setDatabaseSourceInstanceCompactDisplayStateForPath(
+    const char *sourceInstanceKey, const char *path,
+    SbBool includeDescendants,
+    int visibleValid, SbBool visible,
+    int selectedValid, SbBool selected,
+    int highlightedValid, SbBool highlighted)
+{
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return -1;
+    SbModernUtils::SoNodeRef sourceOwner(source);
+    PeerEffects effects(*this, source);
+    return source->setCompactInstanceDisplayStateForPath(path,
+	includeDescendants, visibleValid, visible, selectedValid, selected,
+	highlightedValid, highlighted, PeerEffects::frameCommitted, &effects);
+}
+
+int
+BObolSceneController::setDatabaseSourceInstanceCompactVisibilityFrontier(
+    const char *sourceInstanceKey, const std::vector<SbString> &paths)
+{
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return -1;
+    SbModernUtils::SoNodeRef sourceOwner(source);
+    PeerEffects effects(*this, source);
+    return source->setCompactInstanceVisibilityFrontier(paths,
+	PeerEffects::frameCommitted, &effects);
+}
+
+int
+BObolSceneController::setDatabaseSourceInstanceCompactVisibilityOverrides(
+    const char *sourceInstanceKey, const std::vector<SbString> &paths,
+    const std::vector<SbBool> &states)
+{
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return -1;
+    SbModernUtils::SoNodeRef sourceOwner(source);
+    PeerEffects effects(*this, source);
+    return source->setCompactInstanceVisibilityOverrides(paths, states,
+	PeerEffects::frameCommitted, &effects);
+}
+
+int
+BObolSceneController::clearDatabaseSourceInstanceCompactVisibilityFrontier(
+    const char *sourceInstanceKey)
+{
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return -1;
+    SbModernUtils::SoNodeRef sourceOwner(source);
+    PeerEffects effects(*this, source);
+    return source->clearCompactInstanceVisibilityFrontier(
+	PeerEffects::frameCommitted, &effects);
+}
+
+int
+BObolSceneController::syncDatabaseSourceInstanceCompactSelectedPaths(
+    const char *sourceInstanceKey, const std::vector<SbString> &paths)
+{
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return -1;
+    SbModernUtils::SoNodeRef sourceOwner(source);
+    PeerEffects effects(*this, source);
+    return source->syncCompactInstanceSelectedPaths(paths,
+	PeerEffects::frameCommitted, &effects);
+}
+
+int
+BObolSceneController::applyDatabaseSourceInstanceCompactSelectionDelta(
+    const char *sourceInstanceKey, const std::vector<SbString> &addedPaths,
+    const std::vector<SbString> &removedPaths)
+{
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return -1;
+    SbModernUtils::SoNodeRef sourceOwner(source);
+    PeerEffects effects(*this, source);
+    return source->applyCompactInstanceSelectionDelta(addedPaths,
+	removedPaths, PeerEffects::frameCommitted, &effects);
+}
+
+int
 BObolSceneController::setDatabaseSourceDisplayName(const char *sourcePath,
 	const char *displayName)
 {
@@ -4675,10 +4785,9 @@ BObolSceneController::markDatabaseSourceInstanceStale(
     if (!changed)
 	return 0;
 
-    source->sourceRevision = nextSourceRevision;
-    source->markStale(staleReason);
-    this->advanceFrameRevision();
-    return 1;
+    PeerEffects effects(*this, source);
+    return source->publishStaleState(staleReason, nextSourceRevision,
+	PeerEffects::frameCommitted, &effects);
 }
 
 int

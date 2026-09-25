@@ -21,6 +21,24 @@
 
 class QgView;
 
+struct QTCAD_EXPORT QgObolExportLineStyle {
+    QgObolExportLineStyle(void);
+
+    SbColor color;
+    float transparency;
+    float lineWidth;
+    uint16_t linePattern;
+    uint16_t linePatternFactor;
+};
+
+struct QTCAD_EXPORT QgObolExportTriangleStyle {
+    QgObolExportTriangleStyle(void);
+
+    SbColor color;
+    float transparency;
+    bool backgroundMask;
+};
+
 struct QTCAD_EXPORT QgObolExportTriangleRecord {
     QgObolExportTriangleRecord(void);
 
@@ -49,6 +67,7 @@ struct QTCAD_EXPORT QgObolExportTriangleRecord {
     int vertexIndexA;
     int vertexIndexB;
     int vertexIndexC;
+    QgObolExportTriangleStyle style;
     SbVec3f a;
     SbVec3f b;
     SbVec3f c;
@@ -160,9 +179,13 @@ struct QTCAD_EXPORT QgObolExportObjectRecord {
     QgObolExportObjectSurfaceSummary surfaceSummary;
     std::vector<SbVec3f> linePoints;
     std::vector<int> lineCommands;
+    /** Effective styles in the same order as the object's exported lines. */
+    std::vector<QgObolExportLineStyle> lineStyles;
     std::vector<SbVec3f> points;
     std::vector<SbVec3f> surfacePoints;
     std::vector<int> surfaceIndices;
+    /** Effective styles in the same order as the object's surface triangles. */
+    std::vector<QgObolExportTriangleStyle> triangleStyles;
 };
 
 struct QTCAD_EXPORT QgObolExportObjectQuery {

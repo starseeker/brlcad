@@ -149,7 +149,7 @@ qg_obol_measure_geometry_full_detail(QgView *display,
     measureAction.setGeometryPolicy(SoBRLMeasureAction::FULL_DETAIL);
     if (query)
 	measureAction.setQueryPoint(*query);
-    measureAction.apply(controller->getViewport()->getRoot());
+    measureAction.applyViewport(*controller->getViewport());
     record.submittedSourceRequestCount =
 	qg_obol_measure_consume_source_full_detail(controller, measureAction);
     record.sourceFullDetailPending =

@@ -1842,6 +1842,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	     (!overviewGeometryOnly &&
 		presentation.geometryRevision != entry.geometryRevision) ||
 	     presentation.placementRevision != entry.placementRevision ||
+	     presentation.meshAssetCoordinates != payloadUsesSourceMeshCoordinates ||
 	     presentation.lodStructuralProxy !=
 		desiredLodStructuralProxy);
 	if (partChanged) {
@@ -1858,42 +1859,14 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		presentationStaging.removePartReference(previousPart);
 	    presentationStaging.addPartReference(desiredPart);
 	}
-	if (reset && i < this->d->compactIndex->instances.size()) {
-	    Obol::InstanceUpdate &update =
-		this->d->compactIndex->instances[i];
-	    update.record.part = desiredPart;
-	    update.record.localToRoot = desiredLocalToRoot;
-	    update.record.style = entry.style;
-	    update.record.lodStructuralProxy =
-		desiredLodStructuralProxy;
-	    update.record.lodCut = desiredActiveCut >= 0 ?
-		static_cast<uint8_t>(std::min<int>(
-		    Obol::ProgressiveCutLimit - 1, desiredActiveCut)) : 255;
-	} else if (recordChanged &&
-	    i < this->d->compactIndex->instances.size()) {
-	    Obol::InstanceUpdate &update =
-		this->d->compactIndex->instances[i];
-	    update.record.part = desiredPart;
-	    update.record.localToRoot = desiredLocalToRoot;
-	    /* The retained index record is structural storage and may predate a
-	     * selection/highlight delta.  A geometry or placement change publishes
-	     * a complete record, so carry the entry's authoritative effective style
-	     * in that same atomic update.  Otherwise the full record can overwrite a
-	     * newer selected style and the following selection revision is marked as
-	     * consumed without ever reaching the renderer. */
-	    update.record.style = entry.style;
-	    update.record.lodStructuralProxy =
-		desiredLodStructuralProxy;
-	    update.record.lodCut = desiredActiveCut >= 0 ?
-		static_cast<uint8_t>(std::min<int>(
-		    Obol::ProgressiveCutLimit - 1, desiredActiveCut)) : 255;
+	if (recordChanged) {
 	    changedInstanceIndices.push_back(i);
-	} else if (appearanceChanged || selectionChanged) {
+	} else if (!reset && (appearanceChanged || selectionChanged)) {
 	    Obol::InstanceStyleUpdate update;
 	    update.instance = entry.instance;
 	    update.style = entry.style;
 	    instanceStyles.push_back(update);
-	} else if (cutChanged) {
+	} else if (!reset && cutChanged) {
 	    Obol::InstanceLodUpdate update;
 	    update.instance = entry.instance;
 	    update.lodCut = desiredActiveCut >= 0 ?
@@ -1903,6 +1876,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	}
 	presentation.activeCut = desiredActiveCut;
 	presentation.lodStructuralProxy = desiredLodStructuralProxy;
+	presentation.meshAssetCoordinates = payloadUsesSourceMeshCoordinates;
 
 	if (incrementalUpdate) {
 	    const bool previousWire = previousChannels & (1u | 4u);
@@ -1985,32 +1959,54 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 
     if (publicationRequired) {
 	static constexpr size_t CadInstancePublicationBatchSize = 512;
-	const std::vector<Obol::InstanceUpdate> &compactInstances =
-	    this->d->compactIndex->instances;
+	/* Derive view records into bounded publication storage. The shared source
+	 * array also serves callback/export compilation and must never contain a
+	 * view's private part, cut or source-mesh placement. */
+	const auto instanceAt = [this, &presentationStaging](size_t index) {
+	    const BObolCompactInstanceEntry &entry =
+		this->d->compactIndex->entries[index];
+	    const auto *presentation =
+		presentationStaging.findPresentation(entry.instance);
+	    if (!presentation)
+		return Obol::InstanceUpdate(); /* Rejected by native validation. */
+	    Obol::InstanceUpdate update = this->d->compactIndex->instances[index];
+	    update.record.part = presentation->activePart;
+	    update.record.localToRoot = presentation->meshAssetCoordinates ?
+		compact_mesh_asset_matrix(this, entry) : entry.localToSource;
+	    /* Effective selection/style can be newer than the structural record. */
+	    update.record.style = entry.style;
+	    update.record.lodStructuralProxy = presentation->lodStructuralProxy;
+	    update.record.lodCut = presentation->activeCut >= 0 ?
+		static_cast<uint8_t>(std::min<int>(Obol::ProgressiveCutLimit - 1,
+		    presentation->activeCut)) : Obol::ProgressiveCutUnspecified;
+	    return update;
+	};
+	const size_t instanceCount = this->d->compactIndex->instances.size();
 	if (!bobol_cad_validate_mutation(assembly, geometryMutation,
 		"compact geometry preflight"))
 	    return assembly;
 	if (reset) {
-	    if (!bobol_cad_validate_instances(compactInstances,
-		    "compact reset preflight"))
-		return assembly;
+	    for (size_t index = 0; index < instanceCount; ++index)
+		if (!bobol_cad_validate_instance(instanceAt(index), index,
+			"compact reset preflight"))
+		    return assembly;
 	} else {
 	    for (const size_t instanceIndex : changedInstanceIndices) {
-		if (instanceIndex >= compactInstances.size()) {
+		if (instanceIndex >= instanceCount) {
 		    bu_log("libBObol: rejected compact scene preflight: "
 			"instance index %zu exceeds population %zu\n",
-			instanceIndex, compactInstances.size());
+			instanceIndex, instanceCount);
 		    return assembly;
 		}
+		const Obol::InstanceUpdate update = instanceAt(instanceIndex);
 		if (!bobol_cad_validate_instance(
-			compactInstances[instanceIndex], instanceIndex,
+			update, instanceIndex,
 			"compact incremental preflight")) {
 		    if (presentationDebugEnabled &&
 			instanceIndex < this->d->compactIndex->entries.size()) {
 			const BObolCompactInstanceEntry &entry =
 			    this->d->compactIndex->entries[instanceIndex];
-			const SbMatrix &matrix = compactInstances[instanceIndex].
-			    record.localToRoot;
+			const SbMatrix &matrix = update.record.localToRoot;
 			bu_log("libBObol: invalid compact transform path=%s "
 			       "source=%s asset=%s\n",
 			    entry.semantic.path.getString(),
@@ -2049,7 +2045,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    replacementParts.insert(replacementParts.end(), lodSharedParts.begin(),
 		lodSharedParts.end());
 	    if (!bobol_cad_replace_scene(assembly, replacementParts,
-		    compactInstances, "compact scene replacement"))
+		    instanceCount, instanceAt, "compact scene replacement"))
 		return assembly;
 	    assembly->clearSemanticMap();
 	    for (const BObolCompactInstanceEntry &entry :
@@ -2069,11 +2065,11 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	std::vector<Obol::InstanceUpdate> instanceUpdates;
 	instanceUpdates.reserve(CadInstancePublicationBatchSize);
 	bool instancePublicationValid = true;
-	auto publishInstanceUpdates = [&assembly, &compactInstances, &instanceUpdates,
+	auto publishInstanceUpdates = [&assembly, &instanceAt, &instanceUpdates,
 		&instancePublicationValid](size_t instanceIndex) {
 	    if (!instancePublicationValid)
 		return;
-	    instanceUpdates.push_back(compactInstances[instanceIndex]);
+	    instanceUpdates.push_back(instanceAt(instanceIndex));
 	    if (instanceUpdates.size() == CadInstancePublicationBatchSize) {
 		Obol::CadSceneMutation batch;
 		batch.instances.swap(instanceUpdates);

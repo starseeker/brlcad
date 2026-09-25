@@ -3808,13 +3808,14 @@ ged_obol_lod_status_fill(BObolViewController *controller,
     if (!service)
 	return;
 
-    status->running = service->isRunning() ? 1 : 0;
-    status->in_flight = service->inFlightCount();
-    status->pending_tasks = service->pendingTaskCountForDiagnostics();
-    status->queued_results = service->queuedResultCountForDiagnostics();
-    status->queued_cache_writes =
-	service->queuedCacheWriteCountForDiagnostics();
-    status->delayed_tasks = service->delayedTaskCountForDiagnostics();
+    const BObolLodServiceWorkStatus work =
+	service->workStatus();
+    status->running = work.running ? 1 : 0;
+    status->in_flight = work.inFlightTasks;
+    status->pending_tasks = work.pendingTasks;
+    status->queued_results = work.queuedResults;
+    status->queued_cache_writes = work.queuedCacheWrites;
+    status->delayed_tasks = work.delayedTasks;
 }
 
 extern "C" int
@@ -8605,9 +8606,9 @@ ged_obol_cleanup_retired_jobs(ged_obol_progressive_provider_data *data)
  * a missed selected occurrence and an O(N) catch-up scan. */
 static void
 ged_obol_initialize_deferred_source_selection(struct ged *gedp,
-	SoBRLDatabaseSource *source)
+	BObolSceneController *owner, SoBRLDatabaseSource *source)
 {
-    if (!gedp || !source || !ged_selection_state_available(gedp))
+    if (!gedp || !owner || !source || !ged_selection_state_available(gedp))
 	return;
 
     struct bu_vls listed = BU_VLS_INIT_ZERO;
@@ -8627,7 +8628,10 @@ ged_obol_initialize_deferred_source_selection(struct ged *gedp,
 	    begin = cursor + 1;
 	}
     }
-    (void)source->syncCompactInstanceSelectedPaths(paths);
+    BObolDatabaseSourceSummary summary;
+    if (source->getSummary(summary) && summary.valid)
+	(void)owner->syncDatabaseSourceInstanceCompactSelectedPaths(
+	    summary.instanceKey.getString(), paths);
     bu_vls_free(&listed);
 }
 
@@ -8706,7 +8710,7 @@ ged_obol_start_deferred_realization_targets(
 	    continue;
 	}
 	SbModernUtils::SoNodeRef live_owner(live);
-	ged_obol_initialize_deferred_source_selection(data->gedp, live);
+	ged_obol_initialize_deferred_source_selection(data->gedp, owner, live);
 	live = static_cast<SoBRLDatabaseSource *>(live_owner.get());
 	if (owner->findDatabaseSourceInstance(target.instanceKey.c_str()) != live ||
 	    !ged_obol_deferred_source_matches_target(live, target,
@@ -10109,7 +10113,6 @@ ged_obol_realized_geometry_name(const BObolRealizedShapeSummary &summary)
 static int
 ged_obol_database_source_geometry_summary_for_source(
     SoBRLDatabaseSource *source,
-    const char *fallback_path,
     struct ged_draw_shape_geometry_summary *out)
 {
     if (!out)
@@ -10120,7 +10123,7 @@ ged_obol_database_source_geometry_summary_for_source(
 	return 0;
 
     SoBRLVListShape *annotation_shape =
-	ged_obol_owned_annotation_vlist_shape_for_source(source, fallback_path);
+	ged_obol_owned_annotation_vlist_shape_for_source(source);
     const SoBRLVListShape *annotation_geom = annotation_shape ?
 	annotation_shape->getGeometrySource() : NULL;
     if (ged_obol_vlist_shape_is_annotation(annotation_shape) &&
@@ -10236,8 +10239,8 @@ ged_draw_obol_database_source_geometry_summary_for_path_mode(
 		source_instance_key);
 	struct ged_draw_shape_geometry_summary current_summary;
 	memset(&current_summary, 0, sizeof(current_summary));
-	if (!ged_obol_database_source_geometry_summary_for_source(source,
-		path, &current_summary) || !current_summary.valid)
+	if (!ged_obol_database_source_geometry_summary_for_source(
+		source, &current_summary) || !current_summary.valid)
 	    continue;
 	if ((current_summary.point_count || current_summary.index_count) &&
 	    current_summary.geometry_name) {
@@ -10516,9 +10519,13 @@ ged_obol_redraw_source_paths(struct ged *gedp, struct ged_view_context *view_ctx
 		SoBRLDatabaseSource *source =
 		    scene->findDatabaseSourceInstance(instance_key.c_str());
 		if (source && source->realizationStatus.getValue() ==
-			SoBRLDatabaseSource::FAILED &&
-		    source->realizeDatabaseWireframe())
-		    fallbackRealized++;
+			SoBRLDatabaseSource::FAILED) {
+		    const BObolSourceRealizationStamp stamp =
+			source->captureRealizationStamp();
+		    if (scene->realizeDatabaseSourceInstanceWireframe(
+			    instance_key.c_str(), stamp))
+			fallbackRealized++;
+		}
 	    }
 	    if (fallbackRealized > 0)
 		(void)scene->realizePending();
@@ -11705,8 +11712,6 @@ ged_obol_progressive_autoview_transaction(
 	txn->kind == GED_SCENE_REDUCER_DRAW &&
 	ged_obol_transaction_defer_leaf_expansion(txn);
     const int arm_autoview = deferred && txn->autoview;
-    const int invalidate =
-	ged_obol_transaction_invalidates_view_lod(txn, result, 0);
 
     struct ged_obol_progressive_transaction_context {
 	struct ged *gedp;
@@ -11714,9 +11719,7 @@ ged_obol_progressive_autoview_transaction(
 	const struct ged_scene_reducer_result *result;
 	int deferred;
 	int arm_autoview;
-	int invalidate;
-    } progressive_ctx = {gedp, txn, result, deferred, arm_autoview,
-	invalidate};
+    } progressive_ctx = {gedp, txn, result, deferred, arm_autoview};
 
     const auto update_endpoint = [](struct ged_view_context *view_ctx,
 	BObolViewController *controller, void *userdata) -> int {
@@ -11732,12 +11735,13 @@ ged_obol_progressive_autoview_transaction(
 	if (!data)
 	    return 1;
 
-	if (ctx->invalidate &&
-	    !ged_obol_transaction_preserves_empty_lod_preparation(
-		ctx->txn, controller))
-	    controller->clearViewLodState();
 	if (!ctx->deferred) {
-	    if (ctx->invalidate) {
+	    /* Scene synchronization already invalidates view-local LoD. Source
+	     * preparation has a narrower lifetime: its stream admission rejects
+	     * erased or superseded owners while continuing unaffected siblings.
+	     * Cancelling every job on an erase strands those siblings at previews. */
+	    if (ctx->txn->kind == GED_SCENE_REDUCER_CLEAR ||
+		ctx->txn->kind == GED_SCENE_REDUCER_TEARDOWN) {
 		ged_obol_retire_all_deferred_jobs(data);
 		ged_obol_cleanup_retired_jobs(data);
 		data->pending_autoview = 0;
@@ -11745,6 +11749,8 @@ ged_obol_progressive_autoview_transaction(
 		data->deferred_refine_stage = 0;
 		data->deferred_paths.clear();
 		data->deferred_retarget_targets.clear();
+		if (!data->retired_jobs.empty())
+		    controller->markProgressiveWorkPending();
 	    }
 	    return 1;
 	}

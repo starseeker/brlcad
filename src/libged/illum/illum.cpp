@@ -124,7 +124,7 @@ ged_labelvert_core(struct ged *gedp, int argc, const char *argv[])
     }
     SoBRLExportAction export_action;
     export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
-    export_action.apply(endpoint->getViewport()->getRoot());
+    export_action.applyViewport(*endpoint->getViewport());
     std::vector<SoBRLExportAction::ObjectRecord> records;
     export_action.collectObjectRecords(records,
 	SoBRLExportAction::QUERY_VISIBLE_ONLY |

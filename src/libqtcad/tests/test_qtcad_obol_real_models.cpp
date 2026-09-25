@@ -743,12 +743,7 @@ wait_for_view_lod_idle(QgView &view, BObolViewController *controller,
 
 	BObolLodService *service = controller->getLodService();
 	const bool serviceIdle = !service ||
-	    (service->pendingTaskCountForDiagnostics() == 0 &&
-	     service->delayedTaskCountForDiagnostics() == 0 &&
-	     service->inFlightCount() == 0 &&
-	     service->activeRequestCountForDiagnostics() == 0 &&
-	     service->queuedResultCountForDiagnostics() == 0 &&
-	     service->queuedCacheWriteCountForDiagnostics() == 0);
+	    service->workStatus().isIdle();
 	const bool idle = !controller->hasProgressiveWorkPending() &&
 	    !controller->hasPendingLodResults() &&
 	    !controller->hasPendingLodSubmissions() &&

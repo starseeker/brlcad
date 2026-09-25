@@ -1184,9 +1184,6 @@ public:
 		    void *previewData = NULL);
     BObolPopState(struct BObolMeshLodContext *ctx,
 		    unsigned long long key);
-    BObolPopState(struct BObolMeshLodContext *ctx,
-		    unsigned long long key,
-		    bool retainHeaderSnapshot);
     ~BObolPopState();
 
     bool setCut(int cut, bool materializeSnapped = true);
@@ -1275,7 +1272,7 @@ private:
     bool triPopLoad(int startCut, int cut, bool materializeSnapped);
     void triPopTrim(int cut, bool materializeSnapped);
     void updateSnappedPoints(int cut);
-    bool loadCachedHeader(bool retainHeaderSnapshot);
+    bool loadCachedHeader(void);
     void initializeCacheKeyPrefix(void);
     bool cacheComponentKey(char *buffer, size_t bufferSize,
 	const char *component) const;
@@ -2758,7 +2755,7 @@ BObolPopState::initializeGeneration(
     const size_t cacheSize = cacheGet(&cacheData, CACHE_POP_MAX_CUT);
     const bool cachedMarkerPresent = cacheSize && cacheData;
     cacheDone();
-    if (cachedMarkerPresent && loadCachedHeader(false))
+    if (cachedMarkerPresent && loadCachedHeader())
 	return;
 
     /* A partial same-key cache must not leak metadata into the new producer
@@ -2944,14 +2941,7 @@ BObolPopState::initializeGeneration(
 }
 
 BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
-				 unsigned long long key) :
-    BObolPopState(ctx, key, false)
-{
-}
-
-BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
-				 unsigned long long key,
-				 bool retainHeaderSnapshot)
+				 unsigned long long key)
 {
     context = ctx;
     if (!key)
@@ -2961,11 +2951,11 @@ BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
     hash = key;
     initializeCacheKeyPrefix();
 
-    loadCachedHeader(retainHeaderSnapshot);
+    loadCachedHeader();
 }
 
 bool
-BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
+BObolPopState::loadCachedHeader(void)
 {
     isValid = false;
 
@@ -3419,14 +3409,10 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 	       static_cast<unsigned long long>(minimumFaces),
 	       static_cast<unsigned long long>(minimumPoints));
     }
-    /*
-     * Retained drawing loads its first cumulative prefix immediately.  Let
-     * that explicit path reuse this immutable header snapshot; ordinary
-     * handles close it here so an idle API consumer never pins an LMDB reader
-     * indefinitely.
-     */
-    if (!retainHeaderSnapshot)
-	cacheDone();
+    /* Do not carry the cache access lock beyond metadata validation.  Prefix
+     * realization has its own serialization, and retaining this lock would
+     * make its order depend on whether a handle had already served a read. */
+    cacheDone();
 
     /* Metadata validation must not also read geometry.  The caller supplies
      * the view-selected target immediately after opening the handle, so
@@ -5636,14 +5622,12 @@ mesh_lod_cache_generate(struct BObolMeshLodContext *context,
 
 static struct BObolMeshLod *
 mesh_lod_create(struct BObolMeshLodContext *context,
-		unsigned long long key,
-		bool retainHeaderSnapshot = false)
+		unsigned long long key)
 {
     if (!context || !key)
 	return NULL;
 
-    BObolPopState *state = new (std::nothrow) BObolPopState(
-	context, key, retainHeaderSnapshot);
+    BObolPopState *state = new (std::nothrow) BObolPopState(context, key);
     if (!state)
 	return NULL;
 
@@ -6610,7 +6594,7 @@ bobol_mesh_lod_get_named_cached_prefix(struct db_i *dbip,
 	return NULL;
     }
 
-    struct BObolMeshLod *lod = mesh_lod_create(context, key, true);
+    struct BObolMeshLod *lod = mesh_lod_create(context, key);
     if (!lod) {
 	mesh_lod_context_destroy(context);
 	return NULL;
@@ -6630,8 +6614,7 @@ bobol_mesh_lod_get_cached_prefix(struct db_i *dbip,
     if (!context)
 	return NULL;
 
-    struct BObolMeshLod *lod =
-	mesh_lod_create(context, cacheKey, true);
+    struct BObolMeshLod *lod = mesh_lod_create(context, cacheKey);
     if (!lod) {
 	mesh_lod_context_destroy(context);
 	return NULL;
@@ -6706,8 +6689,7 @@ bobol_mesh_lod_clone_reader(const struct BObolMeshLod *lod)
 	    return NULL;
 	context->refs++;
     }
-    BObolMeshLod *reader = mesh_lod_create(
-	context, lod->state->hash, true);
+    BObolMeshLod *reader = mesh_lod_create(context, lod->state->hash);
     if (!reader)
 	mesh_lod_context_destroy(context);
     return reader;

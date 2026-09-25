@@ -19,6 +19,7 @@
 #include "BObol/BExportAction.h"
 #include "BObol/BInit.h"
 #include "BObol/BLodRealization.h"
+#include "BObol/BLodService.h"
 #include "BObol/BMeshShape.h"
 #include "BObol/BPickDetail.h"
 #include "BObol/BSceneController.h"
@@ -32,6 +33,7 @@
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
+#include "bu/process.h"
 #include "bu/str.h"
 #include "ged.h"
 #include "ged/commands.h"
@@ -52,6 +54,7 @@
 #include "../../ged_draw_private.h"
 #include "../../../libBObol/tests/transaction_fault_test_private.h"
 
+#include <algorithm>
 #include <exception>
 #include <array>
 #include <Inventor/sensors/SoFieldSensor.h>
@@ -2235,11 +2238,56 @@ exercise_progressive_occurrence_and_boolean_identity(struct ged *gedp,
     return 0;
 }
 
+struct record_source_state {
+    int found;
+    ged_draw_shape_ref ref;
+    ged_draw_group_ref group;
+    uint64_t sourceRevision;
+    uint64_t inputsRevision;
+    const char *matchPath;
+    int visible;
+    int highlighted;
+    int drawMode;
+    int lineWidth;
+    fastf_t transparency;
+    unsigned long long pathHash;
+};
+
+static int
+record_source_state_cb(const struct ged_draw_shape_record *record,
+	void *userdata)
+{
+    record_source_state *state =
+	static_cast<record_source_state *>(userdata);
+    if (!state || !record)
+	return 1;
+    const char *target = state->matchPath ? state->matchPath : "box.s";
+    if (!path_equal(record->display_name, target) &&
+	!path_equal(record->leaf_name, target))
+	return 1;
+
+    state->found = 1;
+    state->ref = record->ref;
+    state->group = record->group;
+    state->sourceRevision = record->source_revision;
+    state->inputsRevision = record->inputs_revision;
+    state->visible = record->visible;
+    state->highlighted = record->highlighted;
+    state->drawMode = record->draw_mode;
+    state->lineWidth = record->line_width;
+    state->transparency = record->transparency;
+    state->pathHash = record->path_hash;
+    return 0;
+}
+
 static int
 exercise_deferred_source_replacement(struct ged *gedp,
 	BObolSceneController *scene)
 {
     struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx || !ged_view_context_display_endpoint_ensure(view_ctx))
+	FAIL("source replacement fixture needs a production display endpoint");
+    scene = ged_draw_obol_scene_controller(gedp);
     BObolViewController *controller = ged_bobol_view_controller(view_ctx);
     if (!scene || !controller)
 	FAIL("source replacement fixture needs an attached scene");
@@ -2410,10 +2458,21 @@ exercise_deferred_source_replacement(struct ged *gedp,
 
 static int
 exercise_progressive_autoview_lifecycle(struct ged *gedp,
-	BObolViewController *controller, struct ged_view_context *view_ctx)
+	BObolViewController *controller, struct ged_view_context *view_ctx,
+	int draw_mode, const char *draw_path, const char *renamed_path,
+	size_t expected_authoritative_count, bool measure_worker_retirement)
 {
-    if (!gedp || !controller || !view_ctx)
+    if (!gedp || !controller || !view_ctx || !draw_path || !draw_path[0] ||
+	!renamed_path || !renamed_path[0] || !expected_authoritative_count)
 	FAIL("progressive autoview test needs an attached view");
+
+    constexpr int lifecycle_width = 160;
+    constexpr int lifecycle_height = 120;
+    constexpr size_t lifecycle_pixel_bytes =
+	static_cast<size_t>(lifecycle_width) * lifecycle_height * 3;
+    controller->setViewportSize(lifecycle_width, lifecycle_height);
+    if (!controller->syncCameraFromViewContext(view_ctx))
+	FAIL("progressive lifecycle should establish its initial camera");
 
     struct bv *view = DRAW_TEST_BV(view_ctx);
     const uint64_t initial_revision = bv_frame_revision_get(view);
@@ -2423,11 +2482,12 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 
     struct ged_draw_appearance_settings appearance =
 	GED_DRAW_APPEARANCE_SETTINGS_INIT;
+    appearance.draw_mode = draw_mode;
     appearance.defer_leaf_expansion = 1;
     struct ged_scene_reducer_request txn =
-	ged_scene_reducer_request_make(GED_SCENE_REDUCER_DRAW, "progressive_root.c");
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_DRAW, draw_path);
     txn.view = view_ctx;
-    txn.mode = GED_DRAW_MODE_WIRE;
+    txn.mode = draw_mode;
     txn.appearance = &appearance;
     txn.autoview = 1;
     struct ged_scene_reducer_result result;
@@ -2485,7 +2545,7 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	}
     };
     SoBRLDatabaseSource *initial_source = scene ? source_for_path(scene,
-	"progressive_root.c") : NULL;
+	draw_path) : NULL;
     SbBox3f proxy_bounds;
     proxy_bounds.makeEmpty();
     size_t authoritative_count = 0;
@@ -2497,7 +2557,7 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	const bool proxy_ready =
 	    initial_source &&
 	    initial_source->isCompactOccurrenceRegistry() &&
-	    authoritative_count == 4 &&
+	    authoritative_count == expected_authoritative_count &&
 	    initial_source->getEffectiveSourceBounds(proxy_bounds) &&
 	    !proxy_bounds.isEmpty();
 	if (proxy_ready)
@@ -2505,14 +2565,14 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	(void)controller->advanceProgressiveWork(&options, &status);
 	note_autoview_application();
 	initial_source = scene ? source_for_path(scene,
-	    "progressive_root.c") : NULL;
+	    draw_path) : NULL;
 	proxy_bounds.makeEmpty();
 	std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     compact_counts(initial_source, authoritative_count, overview_count,
 	visible_overview_count);
     if (!initial_source || !initial_source->isCompactOccurrenceRegistry() ||
-	authoritative_count != 4 ||
+	authoritative_count != expected_authoritative_count ||
 	!initial_source->getEffectiveSourceBounds(proxy_bounds) ||
 	proxy_bounds.isEmpty()) {
 	fprintf(stderr,
@@ -2541,7 +2601,7 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
      * realizing.  It must not invalidate an otherwise matching snapshot. */
     const uint64_t revision_before_redraw = ged_draw_scene_revision(gedp);
     struct ged_scene_reducer_request redraw_txn =
-	ged_scene_reducer_request_make(GED_SCENE_REDUCER_REDRAW, "progressive_root.c");
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_REDRAW, draw_path);
     redraw_txn.view = view_ctx;
     if (ged_scene_reduce(gedp, &redraw_txn, NULL) < 0 ||
 	ged_draw_scene_revision(gedp) <= revision_before_redraw)
@@ -2554,11 +2614,12 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	initial_progress = controller->advanceProgressiveWork(&options, &status);
 	note_autoview_application();
 	settled_source = scene ? source_for_path(scene,
-	    "progressive_root.c") : NULL;
+	    draw_path) : NULL;
 	compact_counts(settled_source, authoritative_count, overview_count,
 	    visible_overview_count);
 	if (settled_source && settled_source->isCompactOccurrenceRegistry() &&
-	    authoritative_count == 4 && visible_overview_count == 0 &&
+	    authoritative_count == expected_authoritative_count &&
+	    visible_overview_count == 0 &&
 	    !status.hasMore) {
 	    settled = 1;
 	    break;
@@ -2589,7 +2650,8 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
      * observability of an artificial intermediate tick. */
     if (!settled || !settled_source ||
 	!settled_source->isCompactOccurrenceRegistry() ||
-	authoritative_count != 4 || visible_overview_count != 0 ||
+	authoritative_count != expected_authoritative_count ||
+	visible_overview_count != 0 ||
 	settled_bounds.isEmpty() ||
 	scene->getDatabaseSourceCount() != initial_scene_source_count + 1 ||
 	bv_frame_revision_get(view) <= initial_revision ||
@@ -2653,7 +2715,7 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	FAIL("settled progressive autoview should stop changing the view");
 
     if (apply_path_transaction(gedp, GED_SCENE_REDUCER_ERASE,
-	    "progressive_root.c", view_ctx, -1,
+	    draw_path, view_ctx, -1,
 	    "progressive autoview settle cleanup"))
 	return 1;
 
@@ -2664,25 +2726,21 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	FAIL("progressive autoview cancellation draw should succeed");
     bv_size_set(view, 1234.0);
     const fastf_t user_size = bv_size_get(view);
-    const char *rename_progressive[3] = {
-	"move", "progressive_root.c", "progressive_root_async.c"
-    };
+    const char *rename_progressive[3] = {"move", draw_path, renamed_path};
     if (ged_exec(gedp, 3, rename_progressive) != BRLCAD_OK)
 	FAIL("active background refinement database rename should succeed");
     for (int attempt = 0; attempt < 20; attempt++) {
 	(void)controller->advanceProgressiveWork(&options, &status);
 	std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    if (scene && (source_for_path(scene, "progressive_root.c") ||
-	!source_for_path(scene, "progressive_root_async.c")))
+    if (scene && (source_for_path(scene, draw_path) ||
+	!source_for_path(scene, renamed_path)))
 	FAIL("database rename should cancel stale refinement and retarget only the live proxy");
-    const char *restore_progressive[3] = {
-	"move", "progressive_root_async.c", "progressive_root.c"
-    };
+    const char *restore_progressive[3] = {"move", renamed_path, draw_path};
     if (ged_exec(gedp, 3, restore_progressive) != BRLCAD_OK)
 	FAIL("active background refinement database rename restore should succeed");
     if (apply_path_transaction(gedp, GED_SCENE_REDUCER_ERASE,
-	    "progressive_root.c", view_ctx, -1,
+	    draw_path, view_ctx, -1,
 	    "progressive autoview cancellation cleanup"))
 	return 1;
     for (int attempt = 0; attempt < 20; attempt++) {
@@ -2691,8 +2749,244 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     }
     if (!NEAR_EQUAL(bv_size_get(view), user_size, SMALL_FASTF))
 	FAIL("user view change should cancel pending progressive autoview");
-    if (scene && source_for_path(scene, "progressive_root.c"))
+    if (scene && source_for_path(scene, draw_path))
 	FAIL("cancelled background refinement must not republish an erased root");
+
+    /* Closing a production endpoint owns cancellation and worker retirement.
+     * Recreate the endpoint against the same GED scene, redraw from the cold
+     * fixture, and require the replacement controller to reach an observable
+     * terminal frame with no queued service work. */
+    const size_t closing_worker_count = controller->getManagedLodWorkerCount();
+#if defined(__linux__)
+    const size_t closing_thread_count = measure_worker_retirement ?
+	bu_file_list("/proc/self/task", "[0-9]*", NULL) : 0;
+#endif
+    if (!ged_view_context_obol_endpoint_set(view_ctx, NULL, 0))
+	FAIL("worker-active production endpoint should close cleanly");
+#if defined(__linux__)
+    bool workers_retired = !measure_worker_retirement ||
+	closing_worker_count == 0;
+    const auto worker_deadline = std::chrono::steady_clock::now() +
+	std::chrono::seconds(2);
+    while (!workers_retired &&
+	std::chrono::steady_clock::now() < worker_deadline) {
+	const size_t current_threads =
+	    bu_file_list("/proc/self/task", "[0-9]*", NULL);
+	workers_retired = current_threads + closing_worker_count <=
+	    closing_thread_count;
+	if (!workers_retired)
+	    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (!workers_retired)
+	FAIL("closing a production endpoint should retire its managed LoD workers");
+#endif
+
+    if (!ged_view_context_display_endpoint_ensure(view_ctx))
+	FAIL("closed production view should recreate its display endpoint");
+    controller = ged_bobol_view_controller(view_ctx);
+    scene = ged_draw_obol_scene_controller(gedp);
+    if (!controller || !scene ||
+	scene->getDatabaseSourceCount() != initial_scene_source_count)
+	FAIL("reopened production endpoint should preserve the current GED scene");
+    controller->setViewportSize(lifecycle_width, lifecycle_height);
+    if (!controller->syncCameraFromViewContext(view_ctx))
+	FAIL("reopened production endpoint should accept the retained camera");
+
+    unsigned char *baseline_pixels = NULL;
+    if (controller->renderToImage(&baseline_pixels, 0, 0, NULL,
+	    bobol_headless_context_manager()) != BRLCAD_OK || !baseline_pixels) {
+	if (baseline_pixels)
+	    bu_free(baseline_pixels, "production lifecycle baseline frame");
+	FAIL("reopened production endpoint should render its retained baseline");
+    }
+    std::vector<unsigned char> baseline(
+	baseline_pixels, baseline_pixels + lifecycle_pixel_bytes);
+    bu_free(baseline_pixels, "production lifecycle baseline frame");
+
+    ged_scene_reducer_result_init(&result);
+    const int reopened_draw = ged_scene_reduce(gedp, &txn, &result);
+    ged_scene_reducer_result_free(&result);
+    if (reopened_draw <= 0)
+	FAIL("reopened production endpoint should accept a deferred redraw");
+
+    BObolProgressiveOptions terminal_options;
+    terminal_options.forceTerminalLodRefinement = TRUE;
+    BObolProgressiveStatus terminal_progress;
+    BObolLodConvergenceStatus terminal_status;
+    std::vector<unsigned char> terminal_frame;
+    const auto terminal_deadline = std::chrono::steady_clock::now() +
+	std::chrono::seconds(8);
+    do {
+	(void)controller->advanceProgressiveWork(&terminal_options,
+	    &terminal_progress);
+	unsigned char *pixels = NULL;
+	const int rendered = controller->renderToImage(&pixels, 0, 0, NULL,
+	    bobol_headless_context_manager(), &terminal_progress);
+	if (rendered != BRLCAD_OK || !pixels) {
+	    if (pixels)
+		bu_free(pixels, "production lifecycle terminal frame");
+	    FAIL("reopened production endpoint should render progressive frames");
+	}
+	terminal_frame.assign(pixels, pixels + lifecycle_pixel_bytes);
+	bu_free(pixels, "production lifecycle terminal frame");
+	controller->noteFramePresented();
+	controller->getLodConvergenceStatus(terminal_status);
+	if (terminal_status.terminal)
+	    break;
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < terminal_deadline);
+
+    const bool image_changed = terminal_frame.size() == baseline.size() &&
+	!std::equal(terminal_frame.begin(), terminal_frame.end(),
+	    baseline.begin());
+    SoBRLDatabaseSource *reopened_source =
+	source_for_path(scene, draw_path);
+    BObolLodService *terminal_service = controller->getLodService();
+    const bool service_idle = terminal_service &&
+	terminal_service->workStatus().isIdle();
+    if (!terminal_status.terminal || !terminal_status.viewReady ||
+	terminal_status.terminalError || !image_changed || !reopened_source ||
+	!reopened_source->isCompactOccurrenceRegistry() || !service_idle) {
+	fprintf(stderr,
+	    "production lifecycle terminal=%d ready=%d error=%d image=%d "
+	    "source=%p compact=%d workers=%zu service=%p "
+	    "pending=%zu executing=%zu in_flight=%zu reservations=%zu active=%zu "
+	    "results=%zu cache_writes=%zu delayed=%zu\n",
+	    terminal_status.terminal, terminal_status.viewReady,
+	    terminal_status.terminalError, image_changed,
+	    static_cast<void *>(reopened_source),
+	    reopened_source ? reopened_source->isCompactOccurrenceRegistry() : -1,
+	    closing_worker_count, static_cast<void *>(terminal_service),
+	    terminal_service ? terminal_service->pendingTaskCountForDiagnostics() : 0,
+	    terminal_service ? terminal_service->executingTaskCountForDiagnostics() : 0,
+	    terminal_service ? terminal_service->inFlightCount() : 0,
+	    terminal_service ? terminal_service->resultReservationCountForDiagnostics() : 0,
+	    terminal_service ? terminal_service->activeRequestCountForDiagnostics() : 0,
+	    terminal_service ? terminal_service->queuedResultCountForDiagnostics() : 0,
+	    terminal_service ? terminal_service->queuedCacheWriteCountForDiagnostics() : 0,
+	    terminal_service ? terminal_service->delayedTaskCountForDiagnostics() : 0);
+	FAIL("reopened production endpoint should publish one terminal image and release transient work");
+    }
+
+    if (apply_path_transaction(gedp, GED_SCENE_REDUCER_ERASE,
+	    draw_path, view_ctx, -1,
+	    "production lifecycle terminal cleanup"))
+	return 1;
+    if (scene->getDatabaseSourceCount() != initial_scene_source_count)
+	FAIL("production lifecycle cleanup should restore its starting scene");
+    std::puts("PASS GED production flow lifecycle: cold draw, camera cancellation, close, reopen, terminal image, resource release");
+    return 0;
+}
+
+static int
+exercise_delayed_mesh_camera_close(struct ged *gedp,
+	struct ged_view_context *view_ctx)
+{
+    if (!gedp || !view_ctx ||
+	!ged_view_context_display_endpoint_ensure(view_ctx))
+	FAIL("delayed mesh lifecycle needs a production display endpoint");
+    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
+    BObolSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    if (!controller || !scene)
+	FAIL("delayed mesh lifecycle needs attached production owners");
+
+    constexpr const char *mesh_path = "mesh_owner.bot";
+    constexpr int viewport_width = 160;
+    constexpr int viewport_height = 120;
+    constexpr fastf_t changed_camera_size = 641.0;
+    const int initial_source_count = scene->getDatabaseSourceCount();
+    controller->setViewportSize(viewport_width, viewport_height);
+    if (!controller->syncCameraFromViewContext(view_ctx))
+	FAIL("delayed mesh lifecycle should establish its camera");
+    controller->setLodAutoSubmit(TRUE);
+
+    const char *draw_mesh[2] = {"draw", mesh_path};
+    if (ged_exec_draw(gedp, 2, draw_mesh) != BRLCAD_OK)
+	FAIL("delayed mesh lifecycle cold draw should succeed");
+    record_source_state draw_record = {};
+    draw_record.matchPath = mesh_path;
+    ged_draw_foreach_shape_record(gedp, record_source_state_cb, &draw_record);
+    struct ged_view_context *lod_views[1] = {view_ctx};
+    if (!draw_record.found ||
+	!ged_draw_shape_ref_lod_ensure(gedp, draw_record.ref,
+	    view_ctx, lod_views, 1))
+	FAIL("delayed mesh lifecycle should start its source mesh provider");
+
+    unsigned char *first_pixels = NULL;
+    if (controller->renderToImage(&first_pixels, 0, 0, NULL,
+	    bobol_headless_context_manager()) != BRLCAD_OK || !first_pixels) {
+	if (first_pixels)
+	    bu_free(first_pixels, "delayed mesh first frame");
+	FAIL("delayed mesh lifecycle should present its first frame");
+    }
+    bu_free(first_pixels, "delayed mesh first frame");
+    controller->noteFramePresented();
+
+    BObolProgressiveOptions options;
+    BObolProgressiveStatus progress;
+    BObolLodService *service = controller->getLodService();
+    bool observed_delayed_task = false;
+    const auto delay_deadline = std::chrono::steady_clock::now() +
+	std::chrono::seconds(4);
+    do {
+	(void)controller->advanceProgressiveWork(&options, &progress);
+	service = controller->getLodService();
+	if (service && service->delayedTaskCountForDiagnostics() > 0) {
+	    observed_delayed_task = true;
+	    break;
+	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < delay_deadline);
+    SoBRLDatabaseSource *mesh_source = source_for_path(scene, mesh_path);
+    if (!observed_delayed_task || !service || !mesh_source ||
+	!mesh_source->getMeshLod())
+	FAIL("delayed mesh lifecycle should expose active delayed production work");
+
+    struct bv *view = DRAW_TEST_BV(view_ctx);
+    const uint64_t camera_revision = bv_frame_revision_get(view);
+    bv_size_set(view, changed_camera_size);
+    if (bv_frame_revision_get(view) <= camera_revision ||
+	!controller->syncCameraFromViewContext(view_ctx) ||
+	!NEAR_EQUAL(bv_size_get(view), changed_camera_size, SMALL_FASTF))
+	FAIL("delayed mesh lifecycle should accept camera input during loading");
+
+    const size_t closing_worker_count = controller->getManagedLodWorkerCount();
+#if defined(__linux__)
+    const size_t closing_thread_count =
+	bu_file_list("/proc/self/task", "[0-9]*", NULL);
+#endif
+    if (!ged_view_context_obol_endpoint_set(view_ctx, NULL, 0))
+	FAIL("delayed mesh lifecycle should close its worker-active endpoint");
+#if defined(__linux__)
+    bool workers_retired = closing_worker_count == 0;
+    const auto worker_deadline = std::chrono::steady_clock::now() +
+	std::chrono::seconds(2);
+    while (!workers_retired &&
+	std::chrono::steady_clock::now() < worker_deadline) {
+	const size_t current_threads =
+	    bu_file_list("/proc/self/task", "[0-9]*", NULL);
+	workers_retired = current_threads + closing_worker_count <=
+	    closing_thread_count;
+	if (!workers_retired)
+	    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (!workers_retired)
+	FAIL("delayed mesh endpoint close should retire managed workers");
+#endif
+
+    if (!ged_view_context_display_endpoint_ensure(view_ctx))
+	FAIL("delayed mesh lifecycle should reopen its display endpoint");
+    controller = ged_bobol_view_controller(view_ctx);
+    scene = ged_draw_obol_scene_controller(gedp);
+    if (!controller || !scene || !source_for_path(scene, mesh_path))
+	FAIL("delayed mesh reopen should retain the current GED scene");
+    const char *erase_mesh[2] = {"erase", mesh_path};
+    if (ged_exec_erase(gedp, 2, erase_mesh) != BRLCAD_OK ||
+	scene->getDatabaseSourceCount() != initial_source_count ||
+	source_for_path(scene, mesh_path))
+	FAIL("delayed mesh cancellation should not republish its erased source");
+
+    std::puts("PASS GED delayed mesh lifecycle: camera input and worker-active endpoint close");
     return 0;
 }
 
@@ -2778,48 +3072,6 @@ exercise_typed_pick_result(void)
 
     ged_pick_result_free(first);
     ged_pick_result_free(result);
-    return 0;
-}
-
-struct record_source_state {
-    int found;
-    ged_draw_shape_ref ref;
-    ged_draw_group_ref group;
-    uint64_t sourceRevision;
-    uint64_t inputsRevision;
-    const char *matchPath;
-    int visible;
-    int highlighted;
-    int drawMode;
-    int lineWidth;
-    fastf_t transparency;
-    unsigned long long pathHash;
-};
-
-static int
-record_source_state_cb(const struct ged_draw_shape_record *record,
-	void *userdata)
-{
-    record_source_state *state =
-	static_cast<record_source_state *>(userdata);
-    if (!state || !record)
-	return 1;
-    const char *target = state->matchPath ? state->matchPath : "box.s";
-    if (!path_equal(record->display_name, target) &&
-	    !path_equal(record->leaf_name, target))
-	return 1;
-
-    state->found = 1;
-    state->ref = record->ref;
-    state->group = record->group;
-    state->sourceRevision = record->source_revision;
-    state->inputsRevision = record->inputs_revision;
-    state->visible = record->visible;
-    state->highlighted = record->highlighted;
-    state->drawMode = record->draw_mode;
-    state->lineWidth = record->line_width;
-    state->transparency = record->transparency;
-    state->pathHash = record->path_hash;
     return 0;
 }
 
@@ -6486,8 +6738,10 @@ main(int argc, char **argv)
     /* The first deferred draw exercises failure after starting one worker. */
     bu_setenv("BOBOL_SOURCE_REALIZATION_WORKERS", "2", 1);
     char lcache[MAXPATHLEN] = {0};
-    bu_dir(lcache, MAXPATHLEN, BU_DIR_CURR, "ged_obol_draw_sync_cache",
-	    NULL);
+    char cache_leaf[64] = {0};
+    snprintf(cache_leaf, sizeof(cache_leaf), "ged_obol_draw_sync_cache_%d",
+	bu_pid());
+    bu_dir(lcache, MAXPATHLEN, BU_DIR_CURR, cache_leaf, NULL);
     bu_dirclear(lcache);
     bu_mkdir(lcache);
     bu_setenv("BU_DIR_CACHE", lcache, 1);
@@ -6543,6 +6797,33 @@ main(int argc, char **argv)
 	bu_dirclear(lcache);
 	return result;
     }
+    if (argc > 1 && BU_STR_EQUAL(argv[1],
+	    "production-flow-lifecycle")) {
+	const char *lod_enable[3] = {"view", "lod", "1"};
+	const char *mesh_enable[4] = {"view", "lod", "mesh", "1"};
+	const char *bot_threshold[4] = {
+	    "view", "lod", "bot_threshold", "0"
+	};
+	if (ged_exec_view(gedp, 3, lod_enable) != BRLCAD_OK ||
+	    ged_exec_view(gedp, 4, mesh_enable) != BRLCAD_OK ||
+	    ged_exec_view(gedp, 4, bot_threshold) != BRLCAD_OK)
+	    FAIL("production lifecycle should enable automatic mesh LoD");
+	bu_setenv("BOBOL_LOD_TASK_DELAY_MS", "75", 1);
+	int result = exercise_delayed_mesh_camera_close(gedp, initial_view_ctx);
+	if (!result) {
+	    BObolViewController *reopened_controller =
+		ged_bobol_view_controller(initial_view_ctx);
+	    result = exercise_progressive_autoview_lifecycle(gedp,
+		reopened_controller, initial_view_ctx, GED_DRAW_MODE_WIRE,
+		"progressive_root.c", "progressive_root_async.c", 4, true);
+	}
+	bu_setenv("BOBOL_LOD_TASK_DELAY_MS", "0", 1);
+	(void)ged_view_context_obol_endpoint_set(initial_view_ctx, NULL, 0);
+	ged_close(gedp);
+	bu_file_delete(dbpath);
+	bu_dirclear(lcache);
+	return result;
+    }
     /* This is a broad scene/transaction lifecycle test, not a default-policy
      * performance test.  Leaving AUTO active made hundreds of unrelated draw
      * assertions start background realization and wait for transient states
@@ -6588,6 +6869,26 @@ main(int argc, char **argv)
     if (argc > 1 && BU_STR_EQUAL(argv[1], "subtract-style-publication")) {
 	const int result = exercise_progressive_occurrence_and_boolean_identity(
 	    gedp, owned_scene);
+	ged_close(gedp);
+	bu_file_delete(dbpath);
+	bu_dirclear(lcache);
+	return result;
+    }
+
+    if (argc > 1 && BU_STR_EQUAL(argv[1],
+	    "deferred-result-acceptance")) {
+	const int result = exercise_progressive_occurrence_and_boolean_identity(
+	    gedp, owned_scene);
+	ged_close(gedp);
+	bu_file_delete(dbpath);
+	bu_dirclear(lcache);
+	return result;
+    }
+
+    if (argc > 1 && BU_STR_EQUAL(argv[1],
+	    "deferred-source-replacement")) {
+	const int result = exercise_deferred_source_replacement(gedp,
+	    owned_scene);
 	ged_close(gedp);
 	bu_file_delete(dbpath);
 	bu_dirclear(lcache);
@@ -10554,7 +10855,8 @@ main(int argc, char **argv)
     }
     if (exercise_progressive_autoview_lifecycle(gedp,
 	    &progressive_controller,
-	    progressive_view_ctx))
+	    progressive_view_ctx, GED_DRAW_MODE_WIRE,
+	    "progressive_root.c", "progressive_root_async.c", 4, false))
 	return 1;
     (void)ged_view_context_obol_endpoint_set(progressive_view_ctx,
 	NULL, 0);

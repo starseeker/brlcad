@@ -79,24 +79,6 @@
 
 #include "QgCanvasInput.h"
 
-/* HUD publication observes user-visible convergence stages, not every
- * coordinator subphase.  In particular, refining and capacity calibration
- * are two internal owners of one settling episode.  Treating their handoff as
- * a new visual transaction made the retained faceplate request an OSMesa
- * scene traversal even when geometry and the useful progress contract were
- * unchanged. */
-enum class QgLodProgressPhaseClass : unsigned char {
-    Uninitialized = 0,
-    Idle,
-    Discovering,
-    Preparing,
-    Interactive,
-    Settling,
-    Background,
-    Error,
-    TerminalError
-};
-
 static inline QImage
 qgcanvas_flip_vertical(const QImage &image)
 {
@@ -106,56 +88,6 @@ qgcanvas_flip_vertical(const QImage &image)
     return image.mirrored(false, true);
 #endif
 }
-
-static constexpr QgLodProgressPhaseClass
-qgcanvas_lod_progress_phase_class(int phase)
-{
-    switch (phase) {
-    case BOBOL_LOD_CONVERGENCE_IDLE:
-	return QgLodProgressPhaseClass::Idle;
-    case BOBOL_LOD_CONVERGENCE_DISCOVERING:
-	return QgLodProgressPhaseClass::Discovering;
-    case BOBOL_LOD_CONVERGENCE_PREPARING:
-	return QgLodProgressPhaseClass::Preparing;
-    case BOBOL_LOD_CONVERGENCE_INTERACTIVE:
-	return QgLodProgressPhaseClass::Interactive;
-    case BOBOL_LOD_CONVERGENCE_REFINING:
-    case BOBOL_LOD_CONVERGENCE_CALIBRATING:
-	return QgLodProgressPhaseClass::Settling;
-    case BOBOL_LOD_CONVERGENCE_BACKGROUND:
-	return QgLodProgressPhaseClass::Background;
-    case BOBOL_LOD_CONVERGENCE_ERROR:
-	return QgLodProgressPhaseClass::Error;
-    }
-    return QgLodProgressPhaseClass::Error;
-}
-
-/* A provider/result handoff may briefly make BACKGROUND the controller's
- * internal owner while the foreground view is still unfinished.  That is not
- * a user-visible phase transition: the following owner-thread allocation
- * slice returns to REFINING, and publishing both states makes the retained HUD
- * request a complete scene traversal for every handoff.  A genuinely ready
- * view with optional cache/compaction work remains Background. */
-static inline QgLodProgressPhaseClass
-qgcanvas_lod_progress_publication_phase_class(
-    const BObolLodConvergenceStatus &status)
-{
-    const QgLodProgressPhaseClass phaseClass =
-	qgcanvas_lod_progress_phase_class(status.phase);
-    /* An error can coexist with another producer's foreground work.  Its
-     * terminal transition must publish the final bar even when no periodic
-     * sample or geometry frame remains to carry that update. */
-    if (phaseClass == QgLodProgressPhaseClass::Error && status.terminalError)
-	return QgLodProgressPhaseClass::TerminalError;
-    return phaseClass == QgLodProgressPhaseClass::Background &&
-	!status.viewReady ? QgLodProgressPhaseClass::Settling : phaseClass;
-}
-
-static_assert(qgcanvas_lod_progress_phase_class(
-	BOBOL_LOD_CONVERGENCE_REFINING) ==
-    qgcanvas_lod_progress_phase_class(
-	BOBOL_LOD_CONVERGENCE_CALIBRATING),
-    "refinement and calibration are one HUD publication episode");
 
 /**
  * Plain-data struct that consolidates the private state shared between
@@ -205,10 +137,7 @@ struct QgCanvasState {
     bool   lod_pointer_interaction_active = false;
     bool   lod_progress_idle_tail_pending = false;
     std::atomic<bool> frame_request_dispatch_queued {false};
-    bool   lod_progress_last_visible = false;
-    bool   lod_progress_last_terminal_ready = false;
-    QgLodProgressPhaseClass lod_progress_last_phase_class =
-	QgLodProgressPhaseClass::Uninitialized;
+    BObolLodProgressDisplayStatus lod_progress_last_state;
     bool   software_backend = false;
     QWidget *frame_request_widget = nullptr;
     SoOffscreenRenderer *offscreen_renderer = nullptr;
@@ -560,7 +489,7 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 	 * post-presentation snapshot, not the stale pre-paint work record. */
 	work = s.obol->getHostWorkSnapshot();
 	if (work.flags == BOBOL_HOST_WORK_NONE &&
-	    s.lod_progress_last_visible)
+	    s.lod_progress_last_state.visible)
 	    s.lod_progress_idle_tail_pending = true;
 	/* Do not depend on Qt delivering that paint to keep either the provider
 	 * pump or an explicit frame request alive.  update() may be coalesced with
@@ -1185,33 +1114,16 @@ qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
 	s.obol->isLodInteractionActive();
     BObolLodConvergenceStatus lod_status;
     s.obol->getLodConvergenceStatus(lod_status);
-    const bool terminalReady = lod_status.hasLodState &&
-	lod_status.phase == BOBOL_LOD_CONVERGENCE_IDLE &&
-	lod_status.terminal && lod_status.viewReady &&
-	!lod_status.backgroundPending && lod_status.fraction >= 1.0f;
-    /* Mirror ged_obol_faceplate_sync_lod_progress exactly.  In particular, an
-     * incomplete idle snapshot remains visible as "Finalizing" and a
-     * no-state snapshot removes historical telemetry. */
-    const bool lod_visible = lod_status.hasLodState &&
-	!lod_status.semanticPresentationFramePending &&
-	(lod_status.phase != BOBOL_LOD_CONVERGENCE_IDLE ||
-	 lod_status.backgroundPending || lod_status.performanceLimited ||
-	 lod_status.failedSourceCount > 0 || !terminalReady);
+    const BObolLodProgressDisplayStatus display =
+	lod_status.progressDisplayStatus();
     const bool lod_first =
 	s.lod_progress_last_publish.time_since_epoch().count() == 0;
     /* The host-work latch may clear one coordinator transition before the
-     * convergence state machine publishes IDLE.  Keying the HUD solely on
-     * that latch can therefore retain the settling HUD indefinitely in the
-     * completed framebuffer: when IDLE arrives, pending is already false and
-     * no second transition is observed.  Track the user-facing phase and
-     * visibility contract explicitly so the final HUD removal owns a render
-     * request even when no geometry work remains. */
-    const QgLodProgressPhaseClass phaseClass =
-	qgcanvas_lod_progress_publication_phase_class(lod_status);
+     * convergence state machine publishes IDLE.  The controller-owned display
+     * classification makes that final HUD removal a visible state change even
+     * when no geometry work remains. */
     const bool lod_state_changed = lod_first ||
-	lod_visible != s.lod_progress_last_visible ||
-	terminalReady != s.lod_progress_last_terminal_ready ||
-	phaseClass != s.lod_progress_last_phase_class;
+	display != s.lod_progress_last_state;
     const bool lod_publish = lod_state_changed ||
 	(allowPeriodic && lod_pending && (lod_first ||
 	    std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1219,9 +1131,7 @@ qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
     if (!lod_publish)
 	return false;
 
-    s.lod_progress_last_visible = lod_visible;
-    s.lod_progress_last_terminal_ready = terminalReady;
-    s.lod_progress_last_phase_class = phaseClass;
+    s.lod_progress_last_state = display;
     s.lod_progress_last_publish = now;
     struct ged_view_context *view_ctx = ged_view_context_from_bv(s.v);
     struct ged *gedp = ged_view_context_owner(view_ctx);
