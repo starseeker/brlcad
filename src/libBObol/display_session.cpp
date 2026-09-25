@@ -55,14 +55,9 @@ session_request_present(bobol_display_session_t *session)
     if (!session)
 	return -1;
     bool expected = false;
-    if (!session->present_pending.compare_exchange_strong(expected, true,
-	std::memory_order_acq_rel))
-	return 0;
-    if (bobol_display_endpoint_request_frame(session->endpoint,
-	"framebuffer-dirty"))
-	return 0;
-    session->present_pending.store(false, std::memory_order_release);
-    return -1;
+    (void)session->present_pending.compare_exchange_strong(expected, true,
+	std::memory_order_acq_rel);
+    return 0;
 }
 
 static int

@@ -1,5 +1,11 @@
-if(NOT DEFINED BUILD_DIR OR NOT DEFINED SOURCE_DIR OR NOT DEFINED STAGE_DIR)
-  message(FATAL_ERROR "installed package check requires build, source, and stage directories")
+if(NOT DEFINED BUILD_DIR OR NOT DEFINED SOURCE_DIR OR NOT DEFINED STAGE_DIR OR
+   NOT DEFINED OBOL_PACKAGE_DIR)
+  message(FATAL_ERROR
+    "installed package check requires build, source, stage, and Obol package directories")
+endif()
+if(NOT EXISTS "${OBOL_PACKAGE_DIR}/obol-config.cmake")
+  message(FATAL_ERROR
+    "installed package check cannot find Obol at ${OBOL_PACKAGE_DIR}")
 endif()
 
 file(REMOVE_RECURSE "${STAGE_DIR}")
@@ -28,6 +34,7 @@ execute_process(
   COMMAND "${CMAKE_COMMAND}" -S "${SOURCE_DIR}" -B "${_consumer_build}"
     "-DCMAKE_PREFIX_PATH=${STAGE_DIR}"
     "-DCMAKE_BUILD_TYPE=Release"
+    "-DObol_DIR=${OBOL_PACKAGE_DIR}"
   RESULT_VARIABLE _configure_result
   OUTPUT_VARIABLE _configure_output
   ERROR_VARIABLE _configure_error)

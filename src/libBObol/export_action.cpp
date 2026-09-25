@@ -15,11 +15,13 @@
 #include "BObol/BMeshShape.h"
 #include "BObol/BViewLod.h"
 #include "BObol/BVListShape.h"
+#include "display_plane_view_private.h"
 #include "identity_counter_private.h"
 
 #include "bu/path.h"
 
 #include <Inventor/elements/SoModelMatrixElement.h>
+#include <Inventor/SoViewport.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
 #include <Inventor/nodes/SoTransformation.h>
@@ -31,6 +33,14 @@
 #include <vector>
 
 SO_ACTION_SOURCE(SoBRLExportAction);
+
+static uint16_t
+export_legacy_line_pattern(int lineStyle)
+{
+    constexpr uint16_t solidPattern = 0xffffu;
+    constexpr uint16_t patternedLine = 0xcf33u;
+    return lineStyle ? patternedLine : solidPattern;
+}
 
 static SbBool
 export_source_full_detail_result_valid(const BObolSourceMeshRequest &sourceRequest,
@@ -603,6 +613,18 @@ SoBRLExportAction::~SoBRLExportAction(void)
 }
 
 void
+SoBRLExportAction::applyViewport(const SoViewport &viewport)
+{
+    BObolDisplayPlaneView view;
+    if (!bobol_display_plane_view(viewport, view)) {
+	this->apply(viewport.getRoot());
+	return;
+    }
+    BObolDisplayPlaneViewScope scope(this->displayPlaneView, view);
+    this->apply(viewport.getRoot());
+}
+
+void
 SoBRLExportAction::initClass(void)
 {
     SO_ACTION_INIT_CLASS(SoBRLExportAction, SoAction);
@@ -1156,6 +1178,9 @@ SoBRLExportAction::vlistShapeAction(SoAction *action, SoNode *node)
 					     shape->ghosted.getValue(), shape->hiddenLine.getValue(),
 					     shape->editEmphasis.getValue(),
 					     shape->lineStyle.getValue(),
+					     export_legacy_line_pattern(
+						 shape->lineStyle.getValue()),
+					     1u,
 					     shape->lineWidth.getValue(),
 					     shape->editIntentId.getValue(),
 					     shape->editIntentRole.getValue(),
@@ -1527,7 +1552,8 @@ SoBRLExportAction::appendLine(const SbString &path, const SbString &sourceName,
 			      const SbString &materialShader, int primitiveIndex,
 			      int selected, int highlighted, int ghosted,
 			      int hiddenLine, int editEmphasis,
-			      int lineStyle, int lineWidth,
+			      int lineStyle, uint16_t linePattern,
+			      uint16_t linePatternFactor, float lineWidth,
 			      const SbString &editIntentId,
 			      const SbString &editIntentRole,
 			      uint32_t lodPolicy,
@@ -1561,6 +1587,8 @@ SoBRLExportAction::appendLine(const SbString &path, const SbString &sourceName,
     record.hiddenLine = hiddenLine ? 1 : 0;
     record.editEmphasis = editEmphasis ? 1 : 0;
     record.lineStyle = lineStyle;
+    record.linePattern = linePattern;
+    record.linePatternFactor = linePatternFactor;
     record.lineWidth = lineWidth;
     record.editIntentId = editIntentId;
     record.editIntentRole = editIntentRole;
@@ -1705,6 +1733,7 @@ SoBRLExportAction::appendTriangle(const SbString &path,
     record.lodBoundsMax = lodBoundsMax;
     record.colorOverride = colorOverride ? 1 : 0;
     record.color = color;
+    record.backgroundMask = 0;
     record.a = a;
     record.b = b;
     record.c = c;
@@ -1717,11 +1746,13 @@ SoBRLExportAction::appendTriangle(const SbString &path,
 
 void
 SoBRLExportAction::applyLastLineMetadata(
-    const BObolRealizedShapeSummary &summary)
+    const BObolRealizedShapeSummary &summary, float effectiveTransparency)
 {
     if (!this->recordStorageEnabled || this->lines.empty())
 	return;
     export_apply_realized_summary_metadata(this->lines.back(), summary);
+    this->lines.back().transparency = (std::max)(0.0f,
+	(std::min)(1.0f, effectiveTransparency));
     this->invalidateObjectRecords();
 }
 
@@ -1737,10 +1768,14 @@ SoBRLExportAction::applyLastPointMetadata(
 
 void
 SoBRLExportAction::applyLastTriangleMetadata(
-    const BObolRealizedShapeSummary &summary)
+    const BObolRealizedShapeSummary &summary, float effectiveTransparency,
+    int backgroundMask)
 {
     if (!this->recordStorageEnabled || this->triangles.empty())
 	return;
     export_apply_realized_summary_metadata(this->triangles.back(), summary);
+    this->triangles.back().transparency = (std::max)(0.0f,
+	(std::min)(1.0f, effectiveTransparency));
+    this->triangles.back().backgroundMask = backgroundMask ? 1 : 0;
     this->invalidateObjectRecords();
 }

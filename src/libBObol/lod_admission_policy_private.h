@@ -45,8 +45,9 @@ public:
 };
 
 /*
- * Single owner for availability edges arriving from source providers and the
- * LoD service.  The atomics are the worker-to-owner result notification; all
+ * Single owner for controller-local availability evidence.  The result-ready
+ * timestamp is worker-to-owner notification-age evidence; the LoD service
+ * remains the sole owner of whether a generation has queued results.  All
  * remaining values are presentation-thread state.  Keeping result age,
  * provider terminality, inventory coalescing, and resident-growth obligation
  * together makes the scheduler's progress witness observable in one place.
@@ -58,30 +59,13 @@ public:
  */
 class BObolLodAvailabilityLedger {
 public:
-    void noteResultsReady(int64_t nowMicroseconds)
-    {
-	this->resultsPendingValue.store(true);
-	(void)this->ensureFirstResultReady(nowMicroseconds);
-    }
-
-    void setResultsPending(bool pending)
-    {
-	this->resultsPendingValue.store(pending);
-    }
-
-    bool resultsPending(void) const
-    {
-	return this->resultsPendingValue.load();
-    }
-
-    int64_t ensureFirstResultReady(int64_t nowMicroseconds)
+    void noteResultQueueReady(int64_t nowMicroseconds)
     {
 	const int64_t now = nowMicroseconds > 0 ? nowMicroseconds :
 	    minimumTimestamp();
 	int64_t expected = 0;
 	(void)this->firstResultReadyMicrosecondsValue.
 	    compare_exchange_strong(expected, now);
-	return this->firstResultReadyMicrosecondsValue.load();
     }
 
     int64_t firstResultReadyMicroseconds(void) const
@@ -94,9 +78,8 @@ public:
 	this->firstResultReadyMicrosecondsValue.store(0);
     }
 
-    void resetResultQueue(void)
+    void resetResultQueueObservation(void)
     {
-	this->resultsPendingValue.store(false);
 	this->clearFirstResultReady();
     }
 
@@ -257,7 +240,6 @@ private:
 	return interactive ? 100000 : 250000;
     }
 
-    std::atomic<bool> resultsPendingValue {false};
     std::atomic<int64_t> firstResultReadyMicrosecondsValue {0};
     size_t providerPendingCountValue = 0;
     int64_t inventoryFirstPendingMicrosecondsValue = 0;

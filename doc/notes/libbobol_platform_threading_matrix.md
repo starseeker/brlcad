@@ -66,7 +66,7 @@ env -u DISPLAY -u WAYLAND_DISPLAY ctest --test-dir .build-asan \
 
 cmake -S . -B .build-tsan -G Ninja \
   -DBRLCAD_OPTIMIZED=OFF -DBRLCAD_DEBUGGING=ON \
-  -DBRLCAD_SANITIZE_THREAD=ON
+  -DBRLCAD_ENABLE_THREAD_SANITIZER=ON
 ninja -C .build-tsan
 env -u DISPLAY -u WAYLAND_DISPLAY ctest --test-dir .build-tsan \
   --output-on-failure -L bobol_sanitizer

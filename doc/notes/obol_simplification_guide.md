@@ -1,6 +1,6 @@
 # Obol drawing simplification guide
 
-Reviewed 2026-09-19. This is the roadmap and finish line for the current
+Reviewed 2026-09-20. This is the roadmap and finish line for the current
 BRL-CAD/Obol drawing effort. The system is viable, but is not release-qualified.
 Keep the working geometry, storage, rendering and policy foundations; reduce
 how applications may mutate live state before extending publication machinery.
@@ -91,11 +91,65 @@ Report each gate as open, demonstrated on a named candidate, or qualified.
 | S5: capability qualification | Required drawing, geometry, performance, visual, editing, client and native-host rows | Every required row passes declared thresholds with retained reports and inspected images; no known blocker is hidden by another passing scenario |
 | S6: release candidate | Exact final source/dependency/binary manifest and release decision | All required rows qualify that candidate; changed components trigger the affected checks; no unresolved blocker or unexplained missing evidence |
 
-The viewport/framebuffer transition is a small demonstration of the mutation
-boundary, not completion of S2's asynchronous CAD workflow. The source-evidence
-reducer and earlier counterexample repairs remain useful production assets.
-Do not restart completed work just because the roadmap now requires a complete
-user path as its acceptance unit.
+S1 and S2 are demonstrated on the September 20 checkout. The API contract has
+a finite owner/lifetime/revision/failure table, production source/store callers
+use those owners, and public/installed consumer plus transition checks cover
+the migrated boundary. FLOW-01 exercises cold draw, camera input during real
+delayed mesh work, worker-active close, reopen/redraw, changed terminal pixels,
+compact mesh presentation and empty transient queues through the production GED
+and Qt owners. Treat a newly demonstrated mutation family as an S1
+counterexample and a failure of that workflow as an S2 counterexample;
+otherwise continue with S3 rather than repeating either audit.
+
+S2 evidence is under
+`.build-main/obol-qualification/20260920-flow-01`. Its graphical path uses
+offscreen Qt with software OSMesa and therefore does not qualify native GPU or
+other platform rows. The source-evidence reducer and earlier counterexample
+repairs remain useful production assets. Do not restart completed work merely
+because later gates exercise the same owners at larger scale or on more hosts.
+
+S3 proceeded as bounded seam closures. Its first closure makes the LoD
+service the sole owner of complete transient-work quiescence and coherent
+per-generation work observation. GED and GUI waits consume one lock-consistent
+service snapshot instead of maintaining incomplete counter lists. Controller
+and renderer readiness consumes one generation snapshot, including the
+otherwise invisible interval in which a consumer waits through a shared-
+producer lease. The service queue replaces the controller's former writable
+result-pending mirror; the independent first-ready timestamp remains as
+batch-age evidence. Phase-specific waits retain explicitly narrower
+conditions. Evidence is under
+`.build-main/obol-qualification/20260920-own-01-service-work`.
+
+The second closure gives resident-capacity policy one service contract. Stable
+renderer bytes are published directly instead of reconstructed from separately
+changing total and backing counters. The service returns those stable bytes
+with its reservation and limit, and exact growth publication precedes
+reservation release. Headroom, pressure, convergence and qged consumers no
+longer assemble that policy independently. A concurrent full-hierarchy test
+changes the limit while a real growth reservation is visible and rejects a
+reservation-to-stable gap. Evidence is under
+`.build-main/obol-qualification/20260920-own-01-resident-capacity`.
+
+The third closure makes convergence the sole source of progress-display
+visibility, terminal readiness and stable display classes. Libged renders that
+classification and Qt schedules it; neither rebuilds the other's policy. The
+Qt-local class mappings and three split cache fields and libged's duplicate
+visibility/readiness predicates are removed. Direct classification and
+production faceplate, workflow, progressive, model and package checks are
+retained under
+`.build-main/obol-qualification/20260920-own-01-progress-display`. This is a
+third bounded seam. It did not change pixels, so the existing annotation
+controls remain the correct baseline.
+
+The closing inventory sweep moved the remaining GED command and GUI
+qualification waits to the existing host-work snapshot instead of sampling
+controller flags independently. The apparent mirrors left by the sweep are
+single-writer boundary transfers or diagnostic observations, not independent
+policy owners. The affected build, focused transitions and repeated production
+flows are retained under
+`.build-main/obol-qualification/20260920-own-01-s3-close`. S3 is demonstrated
+for the current inventory. A new duplicate writer or split policy is an S3
+regression; otherwise the active roadmap proceeds through S4--S6.
 
 S1--S3 define the simplification finish line. S4--S6 define production readiness.
 Numerical policy and geometry fixes need not wait for every extraction, but
@@ -113,6 +167,10 @@ injection. Check image pixels and geometry, not just cached pointers and fields.
 Check memory magnitude, input latency, cancellation and stable convergence,
 not just final ownership labels. Use production decision code in deterministic
 tests; a separately implemented simulator cannot qualify the GUI's decisions.
+Attribute image differences to camera, geometry, material or presentation.
+When a control encodes intentionally replaced behavior, retain it and record
+an isolated comparison plus independent assertions of the replacement contract
+before establishing a new control. Updating images alone does not close a row.
 Re-run relevant models for ownership/liveness changes, and renderer/geometry
 checks for numeric changes. TLA+ covers its finite abstract protocol; it does
 not prove the C++ implementation, visual fidelity or wall-clock bounds.

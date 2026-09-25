@@ -13,8 +13,10 @@
 #include "BObol/BMeshShape.h"
 #include "BObol/BViewLod.h"
 #include "BObol/BVListShape.h"
+#include "display_plane_view_private.h"
 
 #include <Inventor/elements/SoModelMatrixElement.h>
+#include <Inventor/SoViewport.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
 #include <Inventor/nodes/SoTransformation.h>
@@ -421,6 +423,18 @@ SoBRLMeasureAction::SoBRLMeasureAction(void) :
 
 SoBRLMeasureAction::~SoBRLMeasureAction(void)
 {
+}
+
+void
+SoBRLMeasureAction::applyViewport(const SoViewport &viewport)
+{
+    BObolDisplayPlaneView view;
+    if (!bobol_display_plane_view(viewport, view)) {
+	this->apply(viewport.getRoot());
+	return;
+    }
+    BObolDisplayPlaneViewScope scope(this->displayPlaneView, view);
+    this->apply(viewport.getRoot());
 }
 
 void

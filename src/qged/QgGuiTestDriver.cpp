@@ -1760,6 +1760,18 @@ qged_test_wait_subprocess_idle(QgEdApp &app, int timeoutMilliseconds,
 static void qged_test_present_controller_frame(QgEdApp &app,
 	BObolViewController *controller);
 
+static bool
+qged_test_progressive_controller_idle(BObolViewController *controller)
+{
+    if (!controller)
+	return true;
+    const BObolHostWorkSnapshot hostWork =
+	controller->getHostWorkSnapshot();
+    BObolLodService *service = controller->getLodService();
+    return hostWork.flags == BOBOL_HOST_WORK_NONE &&
+	(!service || service->workStatus().isIdle());
+}
+
 /* A scripted delay represents time returned to qged's ordinary GUI event
  * loop.  A nested QEventLoop services timers and worker notifications, but
  * QOpenGLWidget may coalesce update() until the outer loop resumes.  That
@@ -1833,21 +1845,7 @@ qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
 		sessionElapsed.elapsed());
 	bool idle = true;
 	for (BObolViewController *controller : controllers) {
-	    BObolLodService *service = controller->getLodService();
-	    const bool serviceIdle =
-		!service ||
-		(service->pendingTaskCountForDiagnostics() == 0 &&
-		 service->delayedTaskCountForDiagnostics() == 0 &&
-		 service->inFlightCount() == 0 &&
-		 service->activeRequestCountForDiagnostics() == 0 &&
-		 service->queuedResultCountForDiagnostics() == 0 &&
-		 service->queuedCacheWriteCountForDiagnostics() == 0);
-	    if (controller->hasProgressiveWorkPending() ||
-		controller->hasPendingLodResults() ||
-		controller->hasPendingLodSubmissions() ||
-		controller->hasPendingLodRefinementFrame() ||
-		controller->isRenderRequested() ||
-		!serviceIdle) {
+	    if (!qged_test_progressive_controller_idle(controller)) {
 		idle = false;
 		break;
 	    }
@@ -1888,24 +1886,14 @@ qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
     if (error) {
 	BObolViewController *controller = controllers.front();
 	for (BObolViewController *candidate : controllers) {
-	    BObolLodService *candidateService = candidate->getLodService();
-	    if (candidate->hasProgressiveWorkPending() ||
-		candidate->hasPendingLodResults() ||
-		candidate->hasPendingLodSubmissions() ||
-		candidate->hasPendingLodRefinementFrame() ||
-		candidate->isRenderRequested() ||
-		(candidateService &&
-		 (candidateService->pendingTaskCountForDiagnostics() != 0 ||
-		  candidateService->delayedTaskCountForDiagnostics() != 0 ||
-		  candidateService->inFlightCount() != 0 ||
-		  candidateService->activeRequestCountForDiagnostics() != 0 ||
-		  candidateService->queuedResultCountForDiagnostics() != 0 ||
-		  candidateService->queuedCacheWriteCountForDiagnostics() != 0))) {
+	    if (!qged_test_progressive_controller_idle(candidate)) {
 		controller = candidate;
 		break;
 	    }
 	}
 	BObolLodService *service = controller->getLodService();
+	const BObolLodServiceWorkStatus work = service ?
+	    service->workStatus() : BObolLodServiceWorkStatus();
 	*error = QStringLiteral(
 	    "progressive pipeline did not become idle within %1 ms "
 	    "across %2 controller(s) "
@@ -1921,23 +1909,12 @@ qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
 	    .arg(controller->hasPendingLodSubmissions() ? 1 : 0)
 	    .arg(controller->hasPendingLodRefinementFrame() ? 1 : 0)
 	    .arg(controller->isRenderRequested() ? 1 : 0)
-	    .arg(service ?
-		static_cast<qulonglong>(
-		    service->pendingTaskCountForDiagnostics()) : 0)
-	    .arg(service ?
-		static_cast<qulonglong>(
-		    service->delayedTaskCountForDiagnostics()) : 0)
-	    .arg(service ?
-		static_cast<qulonglong>(service->inFlightCount()) : 0)
-	    .arg(service ?
-		static_cast<qulonglong>(
-		    service->activeRequestCountForDiagnostics()) : 0)
-	    .arg(service ?
-		static_cast<qulonglong>(
-		    service->queuedResultCountForDiagnostics()) : 0)
-	    .arg(service ?
-		static_cast<qulonglong>(
-		    service->queuedCacheWriteCountForDiagnostics()) : 0)
+	    .arg(static_cast<qulonglong>(work.pendingTasks))
+	    .arg(static_cast<qulonglong>(work.delayedTasks))
+	    .arg(static_cast<qulonglong>(work.inFlightTasks))
+	    .arg(static_cast<qulonglong>(work.activeRequests))
+	    .arg(static_cast<qulonglong>(work.queuedResults))
+	    .arg(static_cast<qulonglong>(work.queuedCacheWrites))
 	    .arg(static_cast<qulonglong>(
 		controller->getRenderRequestSerial()))
 	    .arg(static_cast<qulonglong>(

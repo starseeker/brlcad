@@ -144,6 +144,12 @@ public:
      * reconfigured or same-key replacement target is left untouched. */
     SbBool realizeDatabaseSourceInstance(const char *sourceInstanceKey,
 	const BObolSourceRealizationStamp &stamp);
+    /* Retry an exact failed source with the wireframe provider while retaining
+     * scene/frame ownership. This is the direct-face fallback boundary; the
+     * source and every attached scene commit before observers. */
+    SbBool realizeDatabaseSourceInstanceWireframe(
+	const char *sourceInstanceKey,
+	const BObolSourceRealizationStamp &stamp);
     /* Atomically transfer a prepared mesh-LoD reader and its bounds to the
      * exact source accepted before preparation.  On rejection the caller
      * retains ownership of lod.  This private runtime resource does not
@@ -474,6 +480,31 @@ public:
      * allocation or observer failure leaves a complete prefix. */
     int applyPresentationTransaction(
 	const BObolScenePresentationTransaction &transaction);
+    /* Retained compact-occurrence presentation is live source state.  These
+     * entries publish the source and every attached controller's frame
+     * revision before observers; positive returns are changed-entry counts. */
+    int setDatabaseSourceInstanceCompactDisplayStateForPath(
+	const char *sourceInstanceKey, const char *path,
+	SbBool includeDescendants,
+	int visibleValid, SbBool visible,
+	int selectedValid, SbBool selected,
+	int highlightedValid, SbBool highlighted);
+    int setDatabaseSourceInstanceCompactVisibilityFrontier(
+	const char *sourceInstanceKey,
+	const std::vector<SbString> &paths);
+    int setDatabaseSourceInstanceCompactVisibilityOverrides(
+	const char *sourceInstanceKey,
+	const std::vector<SbString> &paths,
+	const std::vector<SbBool> &states);
+    int clearDatabaseSourceInstanceCompactVisibilityFrontier(
+	const char *sourceInstanceKey);
+    int syncDatabaseSourceInstanceCompactSelectedPaths(
+	const char *sourceInstanceKey,
+	const std::vector<SbString> &paths);
+    int applyDatabaseSourceInstanceCompactSelectionDelta(
+	const char *sourceInstanceKey,
+	const std::vector<SbString> &addedPaths,
+	const std::vector<SbString> &removedPaths);
     int setDatabaseSourceDisplayName(const char *sourcePath,
 	const char *displayName);
     int setDatabaseSourceInstanceDisplayName(const char *sourceInstanceKey,

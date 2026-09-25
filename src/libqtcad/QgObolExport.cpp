@@ -18,6 +18,22 @@
 
 #include <vector>
 
+QgObolExportLineStyle::QgObolExportLineStyle(void) :
+    color(0.0f, 0.0f, 0.0f),
+    transparency(0.0f),
+    lineWidth(1.0f),
+    linePattern(0xffffu),
+    linePatternFactor(1u)
+{
+}
+
+QgObolExportTriangleStyle::QgObolExportTriangleStyle(void) :
+    color(0.0f, 0.0f, 0.0f),
+    transparency(0.0f),
+    backgroundMask(false)
+{
+}
+
 QgObolExportTriangleRecord::QgObolExportTriangleRecord(void) :
     path(),
     sourceName(),
@@ -44,6 +60,7 @@ QgObolExportTriangleRecord::QgObolExportTriangleRecord(void) :
     vertexIndexA(-1),
     vertexIndexB(-1),
     vertexIndexC(-1),
+    style(),
     a(0.0f, 0.0f, 0.0f),
     b(0.0f, 0.0f, 0.0f),
     c(0.0f, 0.0f, 0.0f)
@@ -138,9 +155,11 @@ QgObolExportObjectRecord::QgObolExportObjectRecord(void) :
     surfaceSummary(),
     linePoints(),
     lineCommands(),
+    lineStyles(),
     points(),
     surfacePoints(),
-    surfaceIndices()
+    surfaceIndices(),
+    triangleStyles()
 {
 }
 
@@ -243,6 +262,9 @@ qg_obol_export_record_from_action(const SoBRLExportAction &exportAction,
 	out.vertexIndexA = triangle.vertexIndexA;
 	out.vertexIndexB = triangle.vertexIndexB;
 	out.vertexIndexC = triangle.vertexIndexC;
+	out.style.color = triangle.color;
+	out.style.transparency = triangle.transparency;
+	out.style.backgroundMask = triangle.backgroundMask != 0;
 	out.a = triangle.a;
 	out.b = triangle.b;
 	out.c = triangle.c;
@@ -341,6 +363,29 @@ qg_obol_export_object_detail_from_action(
 	(void)exportAction.getObjectRecordSurfaceDetail(object,
 		&out.surfacePoints, &out.surfaceIndices);
     }
+
+    out.lineStyles.reserve(object.lineIndices.size());
+    for (int index : object.lineIndices) {
+	const SoBRLExportAction::LineRecord &line = exportAction.getLine(index);
+	QgObolExportLineStyle style;
+	style.color = line.color;
+	style.transparency = line.transparency;
+	style.lineWidth = line.lineWidth;
+	style.linePattern = line.linePattern;
+	style.linePatternFactor = line.linePatternFactor;
+	out.lineStyles.push_back(style);
+    }
+
+    out.triangleStyles.reserve(object.triangleIndices.size());
+    for (int index : object.triangleIndices) {
+	const SoBRLExportAction::TriangleRecord &triangle =
+	    exportAction.getTriangle(index);
+	QgObolExportTriangleStyle style;
+	style.color = triangle.color;
+	style.transparency = triangle.transparency;
+	style.backgroundMask = triangle.backgroundMask != 0;
+	out.triangleStyles.push_back(style);
+    }
 }
 
 static void
@@ -422,7 +467,7 @@ qg_obol_export_geometry_full_detail(QgView *display,
 
     SoBRLExportAction exportAction;
     exportAction.setGeometryPolicy(SoBRLExportAction::FULL_DETAIL);
-    exportAction.apply(controller->getViewport()->getRoot());
+    exportAction.applyViewport(*controller->getViewport());
     record.submittedSourceRequestCount =
 	qg_obol_export_consume_source_full_detail(controller, exportAction);
     record.sourceFullDetailPending =
@@ -454,7 +499,7 @@ qg_obol_export_object_records(QgView *display,
     SoBRLExportAction exportAction;
     exportAction.setGeometryPolicy(qg_obol_export_geometry_policy(
 	    query.geometryPolicy));
-    exportAction.apply(controller->getViewport()->getRoot());
+    exportAction.applyViewport(*controller->getViewport());
     record.submittedSourceRequestCount =
 	qg_obol_export_consume_source_full_detail(controller, exportAction);
     record.sourceFullDetailPending =

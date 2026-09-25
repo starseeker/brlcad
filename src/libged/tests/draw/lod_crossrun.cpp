@@ -187,10 +187,7 @@ wait_for_lod_service(struct ged *gedp, int timeout_ms)
 	}
 	BObolLodService *service = controller->getLodService();
 	const int service_idle = !service ||
-	    (service->inFlightCount() == 0 &&
-		service->pendingTaskCountForDiagnostics() == 0 &&
-		service->queuedCacheWriteCountForDiagnostics() == 0 &&
-		service->delayedTaskCountForDiagnostics() == 0);
+	    service->workStatus().isIdle();
 	if (!progressive.hasMore && service_idle &&
 	    !controller->hasPendingLodResults()) {
 	    log_lod_state(gedp, "LoD settled");

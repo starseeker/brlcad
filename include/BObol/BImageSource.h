@@ -74,6 +74,8 @@ public:
     static void initClass(void);
 
     int setImage(const icv_image_t *image);
+    /** Subscribe to a borrowed stream.  Its owner keeps it valid until this
+     * source is cleared, destroyed, or assigned another stream. */
     int setStream(imgstream_t *stream);
     void clearSource(void);
     imgstream_t *getStream(void) const;

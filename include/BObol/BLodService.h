@@ -267,6 +267,98 @@ bobol_lod_spatial_task_working_set_bytes(void);
 
 struct BObolLodServicePrivate;
 
+/** One lock-consistent snapshot of transient service work.  Individual
+ * counters remain available for phase diagnostics; callers deciding whether
+ * a service is quiescent must use this value so new work classes cannot be
+ * omitted from an independently reconstructed idle predicate. */
+struct BOBOL_EXPORT BObolLodServiceWorkStatus {
+    SbBool running = FALSE;
+    SbBool stopping = FALSE;
+    size_t pendingTasks = 0;
+    size_t executingTasks = 0;
+    size_t inFlightTasks = 0;
+    size_t resultReservations = 0;
+    size_t cacheWriteReservations = 0;
+    size_t activeRequests = 0;
+    size_t queuedResults = 0;
+    size_t queuedCacheWrites = 0;
+    size_t delayedTasks = 0;
+    size_t activeWorkingSetBytes = 0;
+    size_t pendingResidentMeshCompactions = 0;
+    size_t queuedResidentMeshCompactionResults = 0;
+    size_t residentMeshCompactionResultReservations = 0;
+
+    SbBool isIdle(void) const
+    {
+	return pendingTasks == 0 && executingTasks == 0 &&
+	    inFlightTasks == 0 && resultReservations == 0 &&
+	    cacheWriteReservations == 0 && activeRequests == 0 &&
+	    queuedResults == 0 && queuedCacheWrites == 0 &&
+	    delayedTasks == 0 && activeWorkingSetBytes == 0 &&
+	    pendingResidentMeshCompactions == 0 &&
+	    queuedResidentMeshCompactionResults == 0 &&
+	    residentMeshCompactionResultReservations == 0;
+    }
+};
+
+/** One lock-consistent snapshot of work owned by a submission generation.
+ * Shared-producer leases are explicit because a consumer generation can be
+ * waiting for an immutable producer whose task belongs to another generation. */
+struct BOBOL_EXPORT BObolLodGenerationWorkStatus {
+    size_t activeTasks = 0;
+    size_t pendingTasks = 0;
+    size_t executingTasks = 0;
+    size_t delayedTasks = 0;
+    size_t queuedResults = 0;
+    size_t queuedCacheWrites = 0;
+    size_t sharedProducerLeases = 0;
+
+    SbBool hasResultWork(void) const
+    {
+	return activeTasks != 0 || queuedResults != 0 ||
+	    sharedProducerLeases != 0;
+    }
+
+    SbBool isIdle(void) const
+    {
+	return activeTasks == 0 && pendingTasks == 0 &&
+	    executingTasks == 0 && delayedTasks == 0 &&
+	    queuedResults == 0 && queuedCacheWrites == 0 &&
+	    sharedProducerLeases == 0;
+    }
+};
+
+/** Admission-safe resident-capacity observation.  Stable bytes are published
+ * as one scalar before a completed growth releases its reservation.  A sample
+ * may therefore conservatively count completed growth in both fields, but it
+ * cannot expose that capacity to another producer twice. */
+struct BOBOL_EXPORT BObolLodResidentCapacityStatus {
+    size_t stableResidentBytes = 0;
+    size_t reservedGrowthBytes = 0;
+    size_t residentLimitBytes = 0;
+
+    size_t occupiedBytes(void) const
+    {
+	return reservedGrowthBytes > SIZE_MAX - stableResidentBytes ?
+	    SIZE_MAX : stableResidentBytes + reservedGrowthBytes;
+    }
+
+    SbBool exceedsLimit(void) const
+    {
+	return residentLimitBytes != SIZE_MAX &&
+	    occupiedBytes() > residentLimitBytes;
+    }
+
+    SbBool fitsWithinLimitFraction(size_t divisor) const
+    {
+	if (divisor == 0)
+	    return FALSE;
+	if (residentLimitBytes == SIZE_MAX)
+	    return TRUE;
+	return occupiedBytes() <= residentLimitBytes / divisor;
+    }
+};
+
 /**
  * Process-local bounded LoD execution and retained-residency service.
  *
@@ -400,12 +492,15 @@ public:
     void unsubscribeResultReady(BObolLodSubscriberId id);
 
     size_t inFlightCount(void) const;
+    BObolLodServiceWorkStatus workStatus(void) const;
     size_t resultReservationCountForDiagnostics(void) const;
     size_t pendingTaskCountForDiagnostics(void) const;
     size_t queuedResultCountForDiagnostics(void) const;
     size_t queuedCacheWriteCountForDiagnostics(void) const;
     size_t delayedTaskCountForDiagnostics(void) const;
     /* O(1) per-generation diagnostics for shared-service consumers. */
+    BObolLodGenerationWorkStatus generationWorkStatus(
+	uint64_t generation) const;
     size_t activeTaskCountForGeneration(uint64_t generation) const;
     size_t pendingTaskCountForGeneration(uint64_t generation) const;
     size_t executingTaskCountForGeneration(uint64_t generation) const;
@@ -425,6 +520,7 @@ public:
     size_t cancelledGenerationCountForDiagnostics(void) const;
     size_t residentMeshAssetCountForDiagnostics(void) const;
     size_t residentMeshBytesForDiagnostics(void) const;
+    BObolLodResidentCapacityStatus residentCapacityStatus(void) const;
     /* Stable retained bytes exclude the reloadable cache-reader prefix which
      * is released after a quiet interval.  Optional suffix admission is
      * governed by this value; transient preparation has its own byte

@@ -885,6 +885,18 @@ struct db_walk_leaf_functions {
     void *client_data;
 };
 
+static void
+db_sync_combination_attributes_for_walk(struct rt_comb_internal *comb,
+	const struct bu_attribute_value_set *attributes,
+	const struct directory *directory_entry)
+{
+    /* db5_sync_attr_to_comb also updates the directory's cached region bit.
+     * A tree walk only needs the imported combination state and may share its
+     * database directory with other readers, so keep that side effect local. */
+    struct directory local_entry = *directory_entry;
+    db5_sync_attr_to_comb(comb, attributes, &local_entry);
+}
+
 static union tree *
 db_recurse2_impl(struct db_tree_state *tsp,
 		 struct db_full_path *pathp,
@@ -1109,7 +1121,7 @@ db_recurse2_impl(struct db_tree_state *tsp,
 	comb = (struct rt_comb_internal *)intern.idb_ptr;
 	RT_CK_COMB(comb);
 
-	db5_sync_attr_to_comb(comb, &intern.idb_avs, dp);
+	db_sync_combination_attributes_for_walk(comb, &intern.idb_avs, dp);
 	if ((is_region = db_apply_state_from_comb(&nts, pathp, comb)) < 0) {
 	    db_free_db_tree_state(&nts);
 	    curtree = TREE_NULL;		/* FAIL */
@@ -3112,7 +3124,7 @@ db_recurse_impl(struct db_tree_state *tsp,
 
 	comb = (struct rt_comb_internal *)intern.idb_ptr;
 	RT_CK_COMB(comb);
-	db5_sync_attr_to_comb(comb, &intern.idb_avs, dp);
+	db_sync_combination_attributes_for_walk(comb, &intern.idb_avs, dp);
 	if ((is_region = db_apply_state_from_comb(&nts, pathp, comb)) < 0) {
 	    db_free_db_tree_state(&nts);
 	    curtree = TREE_NULL;		/* FAIL */
