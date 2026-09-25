@@ -341,9 +341,11 @@ main(int argc, char *argv[])
 	QPointer<QgToolBase> oldTool = before.isEmpty() ? nullptr : before.first();
 	int unloadBarriers = 0;
 	int catalogChanges = 0;
-	QObject::connect(&mgr, &QgPluginManager::pluginsAboutToUnload,
+	const QMetaObject::Connection unloadConnection = QObject::connect(
+	    &mgr, &QgPluginManager::pluginsAboutToUnload,
 	    [&unloadBarriers]() { unloadBarriers++; });
-	QObject::connect(&mgr, &QgPluginManager::catalogChanged,
+	const QMetaObject::Connection catalogConnection = QObject::connect(
+	    &mgr, &QgPluginManager::catalogChanged,
 	    [&catalogChanges]() { catalogChanges++; });
 	QStringList unloadErrors;
 	const bool reloaded = mgr.reload(&unloadErrors);
@@ -369,6 +371,8 @@ main(int argc, char *argv[])
 	    "palette restores a valid active tool after reload");
 	TCHECK(mgr.descriptors().size() == all_descs.size(),
 	    "reload preserves the discovered plugin catalog");
+	QObject::disconnect(unloadConnection);
+	QObject::disconnect(catalogConnection);
     }
 
     /* A host may destroy its palette before the separately owned controller.

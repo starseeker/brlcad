@@ -3274,7 +3274,7 @@ dl_bitwise_and_fullpath(struct ged *gedp, int flag_val)
 
     SoBRLExportAction export_action;
     export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
-    export_action.apply(controller->getViewport()->getRoot());
+    export_action.applyViewport(*controller->getViewport());
     std::vector<SoBRLExportAction::ObjectRecord> records;
     export_action.collectObjectRecords(records,
 	SoBRLExportAction::QUERY_VISIBLE_ONLY |
@@ -3306,7 +3306,7 @@ dl_write_animate(struct ged *gedp, FILE *fp)
 
     SoBRLExportAction export_action;
     export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
-    export_action.apply(controller->getViewport()->getRoot());
+    export_action.applyViewport(*controller->getViewport());
     std::vector<SoBRLExportAction::ObjectRecord> records;
     export_action.collectObjectRecords(records,
 	SoBRLExportAction::QUERY_VISIBLE_ONLY |

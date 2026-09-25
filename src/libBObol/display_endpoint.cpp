@@ -114,8 +114,18 @@ struct bobol_display_endpoint {
     bool render_request_clear_pending;
     bool frame_notification_pending;
     unsigned int operation_depth;
-    bool destroying;
+    std::atomic<bool> destroying;
     EndpointRtState *rt;
+
+    bool destructionStarted(void) const noexcept
+    {
+	return this->destroying.load(std::memory_order_acquire);
+    }
+
+    bool beginDestruction(void) noexcept
+    {
+	return !this->destroying.exchange(true, std::memory_order_acq_rel);
+    }
 
     void graphicalRenderingCommit(bool enabled, std::exception_ptr &failure)
     {
@@ -318,7 +328,7 @@ public:
 	if (!this->endpoint)
 	    return;
 	if (--this->endpoint->operation_depth == 0 &&
-	    this->endpoint->destroying)
+	    this->endpoint->destructionStarted())
 	    endpoint_destroy_final(this->endpoint);
     }
 
@@ -465,7 +475,7 @@ endpoint_frame_requested(void *user_data, const char *reason)
 {
     bobol_display_endpoint_t *endpoint =
 	static_cast<bobol_display_endpoint_t *>(user_data);
-    if (!endpoint || endpoint->destroying || !endpoint->factory ||
+    if (!endpoint || endpoint->destructionStarted() || !endpoint->factory ||
 	!endpoint->factory_instance)
 	return;
     (void)bobol_host_factory_instance_request_frame(endpoint->factory,
@@ -801,7 +811,7 @@ endpoint_rt_publish_pixels(bobol_display_endpoint_t *endpoint,
     viewportPublication.notify(failure);
     if (roots)
 	roots->notify(failure);
-    if (requestReason && !endpoint->destroying) {
+    if (requestReason && !endpoint->destructionStarted()) {
 	if (endpoint->graphicalRenderingSyncPending()) {
 	    endpoint->deferFrameNotification();
 	} else {
@@ -935,7 +945,7 @@ endpoint_rt_presentation_sync(void *userData)
 {
     bobol_display_endpoint_t *endpoint =
 	static_cast<bobol_display_endpoint_t *>(userData);
-    if (!endpoint || endpoint->destroying ||
+    if (!endpoint || endpoint->destructionStarted() ||
 	endpoint->engine != BOBOL_RENDER_ENGINE_RT ||
 	!endpoint->rt)
 	return;
@@ -981,7 +991,7 @@ endpoint_rt_presentation_sync(void *userData)
 	}
 	throw;
     }
-    if (!endpoint->destroying && endpoint->rt == state &&
+    if (!endpoint->destructionStarted() && endpoint->rt == state &&
 	endpoint->engine == BOBOL_RENDER_ENGINE_RT)
 	endpoint_rt_record_presented(*state, std::move(planes), width, height);
 }
@@ -1116,7 +1126,7 @@ static int
 endpoint_rt_start(bobol_display_endpoint_t *endpoint,
     EndpointRtPrecommit precommit, void *precommitData)
 {
-    if (!endpoint || endpoint->destroying || !endpoint->controller ||
+    if (!endpoint || endpoint->destructionStarted() || !endpoint->controller ||
 	(endpoint->engine != BOBOL_RENDER_ENGINE_RT && !precommit))
 	return 0;
     if (!endpoint->rt)
@@ -1152,7 +1162,7 @@ endpoint_rt_start(bobol_display_endpoint_t *endpoint,
 	    return 0;
 	notificationFailure = std::current_exception();
     }
-    if (endpoint->destroying || endpoint->rt != state ||
+    if (endpoint->destructionStarted() || endpoint->rt != state ||
 	endpoint->engine != BOBOL_RENDER_ENGINE_RT ||
 	state->generation.load(std::memory_order_acquire) != generation) {
 	if (notificationFailure)
@@ -1167,7 +1177,7 @@ endpoint_rt_start(bobol_display_endpoint_t *endpoint,
 	    std::rethrow_exception(notificationFailure);
 	return 1;
     }
-    if (endpoint->destroying || endpoint->rt != state ||
+    if (endpoint->destructionStarted() || endpoint->rt != state ||
 	endpoint->engine != BOBOL_RENDER_ENGINE_RT ||
 	state->generation.load(std::memory_order_acquire) != generation) {
 	if (notificationFailure)
@@ -1824,7 +1834,7 @@ endpoint_supported_engines(const bobol_display_endpoint_t *endpoint)
 static int
 endpoint_diagnostic_refresh(bobol_display_endpoint_t *endpoint)
 {
-    if (!endpoint || endpoint->destroying || !endpoint->controller ||
+    if (!endpoint || endpoint->destructionStarted() || !endpoint->controller ||
 	endpoint->engine != BOBOL_RENDER_ENGINE_DIAGNOSTIC)
 	return 0;
 
@@ -1880,7 +1890,7 @@ extern "C" int
 bobol_display_endpoint_diagnostic_refresh(
 	bobol_display_endpoint_t *endpoint)
 {
-    if (!endpoint || endpoint->destroying)
+    if (!endpoint || endpoint->destructionStarted())
 	return 0;
     EndpointOperationScope endpointScope(endpoint);
     return endpoint_diagnostic_refresh(endpoint);
@@ -1986,7 +1996,7 @@ endpoint_host_destroy_noexcept(bobol_display_endpoint_t *endpoint) noexcept
 extern "C" void
 bobol_display_endpoint_host_detach(bobol_display_endpoint_t *endpoint)
 {
-    if (!endpoint || endpoint->destroying)
+    if (!endpoint || endpoint->destructionStarted())
 	return;
     EndpointOperationScope endpointScope(endpoint);
 
@@ -2052,9 +2062,8 @@ endpoint_destroy_final(bobol_display_endpoint_t *endpoint) noexcept
 extern "C" void
 bobol_display_endpoint_destroy(bobol_display_endpoint_t *endpoint)
 {
-    if (!endpoint || endpoint->destroying)
+    if (!endpoint || !endpoint->beginDestruction())
 	return;
-    endpoint->destroying = true;
     if (!endpoint->operation_depth)
 	endpoint_destroy_final(endpoint);
 }
@@ -2069,7 +2078,7 @@ extern "C" int
 bobol_display_endpoint_view_sync(bobol_display_endpoint_t *endpoint,
 	const void *view_ctx)
 {
-    if (!endpoint || endpoint->destroying || !endpoint->controller ||
+    if (!endpoint || endpoint->destructionStarted() || !endpoint->controller ||
 	!view_ctx)
 	return 0;
     EndpointOperationScope endpointScope(endpoint);
@@ -2096,7 +2105,7 @@ bobol_display_endpoint_host_bind(bobol_display_endpoint_t *endpoint,
 	void *host_ptr, unsigned int flags)
 {
     BObolWindowHost *host = static_cast<BObolWindowHost *>(host_ptr);
-    if (!endpoint || endpoint->destroying || !endpoint->controller || !host) {
+    if (!endpoint || endpoint->destructionStarted() || !endpoint->controller || !host) {
 	return 0;
     }
     EndpointOperationScope endpointScope(endpoint);
@@ -2148,7 +2157,7 @@ extern "C" int
 bobol_display_endpoint_host_open(bobol_display_endpoint_t *endpoint,
 	const char *factory_name, const struct bobol_host_desc *desc)
 {
-    if (!endpoint || endpoint->destroying || !endpoint->controller)
+    if (!endpoint || endpoint->destructionStarted() || !endpoint->controller)
 	return 0;
     EndpointOperationScope endpointScope(endpoint);
 
@@ -2281,7 +2290,7 @@ static int
 endpoint_request_frame(bobol_display_endpoint_t *endpoint,
 	const char *reason, bool capacity_relevant)
 {
-    if (!endpoint || endpoint->destroying || !endpoint->controller)
+    if (!endpoint || endpoint->destructionStarted() || !endpoint->controller)
 	return 0;
     EndpointOperationScope endpointScope(endpoint);
     if (endpoint->engine == BOBOL_RENDER_ENGINE_NONE) {
@@ -2333,7 +2342,7 @@ extern "C" int
 bobol_display_endpoint_resize(bobol_display_endpoint_t *endpoint,
 	unsigned int width, unsigned int height, double device_pixel_ratio)
 {
-    if (!endpoint || endpoint->destroying || !endpoint->controller ||
+    if (!endpoint || endpoint->destructionStarted() || !endpoint->controller ||
 	!width || !height ||
 	device_pixel_ratio <= 0.0)
 	return 0;
@@ -2366,7 +2375,7 @@ bobol_display_endpoint_input_profile_set(
 	bobol_display_endpoint_t *endpoint,
 	const BObolInputProfile *profile)
 {
-    if (!endpoint || endpoint->destroying)
+    if (!endpoint || endpoint->destructionStarted())
 	return 0;
     endpoint->input.setProfile(profile ? profile :
 	bobol_input_default_view_profile());
@@ -2378,7 +2387,7 @@ bobol_display_endpoint_input_action_handler_set(
 	bobol_display_endpoint_t *endpoint, BObolInputActionHandler handler,
 	void *user_data)
 {
-    if (!endpoint || endpoint->destroying)
+    if (!endpoint || endpoint->destructionStarted())
 	return 0;
     endpoint->input.setActionHandler(handler, user_data);
     return 1;
@@ -2389,7 +2398,7 @@ bobol_display_endpoint_input_action_handler_clear_if(
 	bobol_display_endpoint_t *endpoint, BObolInputActionHandler handler,
 	void *user_data)
 {
-    return endpoint && !endpoint->destroying ?
+    return endpoint && !endpoint->destructionStarted() ?
 	endpoint->input.clearActionHandlerIf(handler,
 	user_data) : 0;
 }
@@ -2399,7 +2408,7 @@ bobol_display_endpoint_input_action_layer_set(
 	bobol_display_endpoint_t *endpoint,
 	const BObolInputActionLayer *layer, void *owner, void *user_data)
 {
-    return endpoint && !endpoint->destroying ?
+    return endpoint && !endpoint->destructionStarted() ?
 	endpoint->input.setActionLayer(layer, owner, user_data) : 0;
 }
 
@@ -2407,7 +2416,7 @@ extern "C" int
 bobol_display_endpoint_input_action_layer_clear_if(
 	bobol_display_endpoint_t *endpoint, void *owner)
 {
-    return endpoint && !endpoint->destroying ?
+    return endpoint && !endpoint->destructionStarted() ?
 	endpoint->input.clearActionLayerIf(owner) : 0;
 }
 
@@ -2415,7 +2424,7 @@ extern "C" int
 bobol_display_endpoint_input_dispatch(bobol_display_endpoint_t *endpoint,
 	const BObolInputEvent *event)
 {
-    if (!endpoint || endpoint->destroying)
+    if (!endpoint || endpoint->destructionStarted())
 	return -1;
     EndpointOperationScope endpointScope(endpoint);
     return endpoint->input.dispatch(event);
@@ -2445,7 +2454,7 @@ bobol_display_endpoint_capture_plane(bobol_display_endpoint_t *endpoint,
 	*height = 0;
     if (components)
 	*components = 0;
-    if (!endpoint || endpoint->destroying || !endpoint->controller ||
+    if (!endpoint || endpoint->destructionStarted() || !endpoint->controller ||
 	!pixels || !size || !width || !height || !components)
 	return 0;
     EndpointOperationScope endpointScope(endpoint);
@@ -2502,7 +2511,7 @@ bobol_display_endpoint_rt_plane_capture(bobol_display_endpoint_t *endpoint,
 	*width = 0;
     if (height)
 	*height = 0;
-    if (!endpoint || endpoint->destroying ||
+    if (!endpoint || endpoint->destructionStarted() ||
 	endpoint->engine != BOBOL_RENDER_ENGINE_RT || !endpoint->rt ||
 	!samples || !size || !width || !height)
 	return 0;
@@ -2585,7 +2594,7 @@ bobol_display_endpoint_framebuffer_capture_provider_set(
 	bobol_endpoint_framebuffer_capture_callback callback,
 	void *user_data)
 {
-    if (!endpoint || endpoint->destroying || (callback && !user_data))
+    if (!endpoint || endpoint->destructionStarted() || (callback && !user_data))
 	return 0;
     if (!callback && endpoint->framebuffer_capture_user_data != user_data)
 	return 0;
@@ -2624,7 +2633,7 @@ bobol_display_endpoint_render_engine_set(
 	bobol_display_endpoint_t *endpoint,
 	enum bobol_render_engine engine)
 {
-    if (!endpoint || endpoint->destroying || !valid_engine(engine)) {
+    if (!endpoint || endpoint->destructionStarted() || !valid_engine(engine)) {
 	return 0;
     }
     if (!bobol_display_endpoint_render_engine_supported(endpoint, engine))
@@ -2717,7 +2726,7 @@ bobol_display_endpoint_render_engine_set(
     }
     if (roots)
 	roots->notify(failure);
-    if (endpoint->destroying) {
+    if (endpoint->destructionStarted()) {
 	if (failure)
 	    std::rethrow_exception(failure);
 	return 1;
@@ -2797,7 +2806,7 @@ bobol_display_endpoint_property_get(
 	const bobol_display_endpoint_t *endpoint, const char *name,
 	struct bv_display_property_value *out)
 {
-    if (!endpoint || endpoint->destroying || !endpoint->controller || !out ||
+    if (!endpoint || endpoint->destructionStarted() || !endpoint->controller || !out ||
 	out->struct_size < sizeof(*out))
 	return BV_DISPLAY_PROPERTY_INVALID;
     EndpointOperationScope endpointScope(
@@ -2959,7 +2968,7 @@ bobol_display_endpoint_property_set(
 	bobol_display_endpoint_t *endpoint, const char *name,
 	const struct bv_display_property_value *value)
 {
-    if (!endpoint || endpoint->destroying || !endpoint->controller || !value ||
+    if (!endpoint || endpoint->destructionStarted() || !endpoint->controller || !value ||
 	value->struct_size < sizeof(*value))
 	return BV_DISPLAY_PROPERTY_INVALID;
     EndpointOperationScope endpointScope(endpoint);
@@ -3220,7 +3229,7 @@ bobol_display_endpoint_property_provider_set(
 	bv_display_property_set_callback set_callback,
 	void *user_data)
 {
-    if (!endpoint || endpoint->destroying ||
+    if (!endpoint || endpoint->destructionStarted() ||
 	((get_callback || set_callback) && !user_data))
 	return 0;
     endpoint->property_get_callback = get_callback;

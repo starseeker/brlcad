@@ -88,12 +88,8 @@
 #include <utility>
 #include <vector>
 
-static const char *ged_obol_leaf_name_from_path(const char *path);
-
 static SoBRLVListShape *
-ged_obol_owned_vlist_shape_for_source(SoBRLDatabaseSource *source,
-				      const char *fallback_path,
-				      int create)
+ged_obol_owned_vlist_shape_for_source(SoBRLDatabaseSource *source)
 {
     if (!source)
 	return NULL;
@@ -110,60 +106,14 @@ ged_obol_owned_vlist_shape_for_source(SoBRLDatabaseSource *source,
 	if (geom->point.getNum() > 0 || geom->command.getNum() > 0)
 	    return shape;
     }
-
-    if (fallback || !create)
-	return fallback;
-
-    const char *source_path = source->path.getValue().getString();
-    if (!source_path || !source_path[0])
-	source_path = fallback_path ? fallback_path : "";
-    const char *source_name = ged_obol_leaf_name_from_path(source_path);
-
-    SoBRLVListShape *shape = new SoBRLVListShape;
-    shape->sourcePath = source_path;
-    shape->sourceName = source_name;
-    shape->sourceType = "line-set";
-    shape->sourceId = source->realizedRevision.getValue();
-    shape->displayName = source_name;
-    shape->geometryName = source_name;
-    shape->sourceIdentity = source_path;
-    shape->cacheIdentity = source_path;
-    shape->databaseIntent = TRUE;
-    shape->overlayIntent = FALSE;
-    shape->hudIntent = FALSE;
-    shape->localSource = FALSE;
-    shape->sharedSource = FALSE;
-    shape->nonDatabaseSource = FALSE;
-    shape->drawMode = ged_obol_lod_draw_mode_from_database_source(source);
-    shape->recordRole = "database";
-    shape->geometryKind = "line-set";
-    shape->visible = source->visible.getValue();
-    shape->highlighted = source->highlighted.getValue();
-    shape->lineStyle = source->lineStyle.getValue();
-    shape->lineWidth = source->lineWidth.getValue();
-    shape->transparency = source->transparency.getValue();
-    shape->hiddenLine = shape->drawMode.getValue() ==
-			BOBOL_LOD_DRAW_HIDDEN_LINE ? TRUE : FALSE;
-    shape->colorOverride = source->colorOverride.getValue();
-    shape->color = source->color.getValue();
-    shape->materialColorValid = source->materialColorValid.getValue();
-    shape->materialColor = source->materialColor.getValue();
-    shape->materialRevision = source->materialRevision.getValue();
-    shape->drawMatrixValid = source->drawMatrixValid.getValue();
-    shape->drawMatrix = source->drawMatrix.getValue();
-    shape->drawCenterValid = source->drawCenterValid.getValue();
-    shape->drawCenter = source->drawCenter.getValue();
-    shape->drawSizeValid = source->drawSizeValid.getValue();
-    shape->drawSize = source->drawSize.getValue();
-    source->addChild(shape);
-    return shape;
+    return fallback;
 }
 
 static SoBRLVListShape *
 ged_obol_owned_vlist_shape_for_path(struct ged *gedp, const char *path)
 {
     return ged_obol_owned_vlist_shape_for_source(
-	       ged_obol_owned_database_source_for_path(gedp, path), path, 0);
+	       ged_obol_owned_database_source_for_path(gedp, path));
 }
 
 
@@ -195,8 +145,7 @@ ged_obol_vlist_shape_has_annotation_record(SoBRLVListShape *shape)
 
 SoBRLVListShape *
 ged_obol_owned_annotation_vlist_shape_for_source(
-    SoBRLDatabaseSource *source,
-    const char *fallback_path)
+    SoBRLDatabaseSource *source)
 {
     if (!source)
 	return NULL;
@@ -214,7 +163,7 @@ ged_obol_owned_annotation_vlist_shape_for_source(
     }
 
     return annotation_shape ? annotation_shape :
-	   ged_obol_owned_vlist_shape_for_source(source, fallback_path, 0);
+	   ged_obol_owned_vlist_shape_for_source(source);
 }
 
 
@@ -223,82 +172,24 @@ ged_obol_owned_annotation_vlist_shape_for_path(struct ged *gedp,
 	const char *path)
 {
     return ged_obol_owned_annotation_vlist_shape_for_source(
-	       ged_obol_owned_database_source_for_path(gedp, path), path);
-}
-
-static const char *
-ged_obol_leaf_name_from_path(const char *path)
-{
-    if (!path || !path[0])
-	return "";
-    const char *leaf = strrchr(path, '/');
-    return (leaf && leaf[1]) ? leaf + 1 : path;
+	       ged_obol_owned_database_source_for_path(gedp, path));
 }
 
 static SoBRLMeshShape *
-ged_obol_owned_mesh_shape_for_source(SoBRLDatabaseSource *source,
-				     const char *fallback_path,
-				     int create)
+ged_obol_owned_mesh_shape_for_source(SoBRLDatabaseSource *source)
 {
     if (!source)
 	return NULL;
 
-    SoBRLMeshShape *shape = source->getRealizedMesh();
-    if (shape || !create)
-	return shape;
-
-    const char *source_path = source->path.getValue().getString();
-    if (!source_path || !source_path[0])
-	source_path = fallback_path ? fallback_path : "";
-    const char *source_name = ged_obol_leaf_name_from_path(source_path);
-
-    shape = new SoBRLMeshShape;
-    shape->sourcePath = source_path;
-    shape->sourceName = source_name;
-    shape->sourceType = "indexed-face-set";
-    shape->sourceId = source->realizedRevision.getValue();
-    shape->displayName = source_name;
-    shape->geometryName = source_name;
-    shape->sourceIdentity = source_path;
-    shape->cacheIdentity = source_path;
-    shape->databaseIntent = TRUE;
-    shape->overlayIntent = FALSE;
-    shape->hudIntent = FALSE;
-    shape->localSource = FALSE;
-    shape->sharedSource = FALSE;
-    shape->nonDatabaseSource = FALSE;
-    shape->drawMode = ged_obol_lod_draw_mode_from_database_source(source);
-    shape->recordRole = "database";
-    shape->geometryKind = "surface";
-    shape->visible = source->visible.getValue();
-    shape->highlighted = source->highlighted.getValue();
-    shape->lineStyle = source->lineStyle.getValue();
-    shape->lineWidth = source->lineWidth.getValue();
-    shape->transparency = source->transparency.getValue();
-    shape->hiddenLine = shape->drawMode.getValue() ==
-			BOBOL_LOD_DRAW_HIDDEN_LINE ? TRUE : FALSE;
-    shape->colorOverride = source->colorOverride.getValue();
-    shape->color = source->color.getValue();
-    shape->materialColorValid = source->materialColorValid.getValue();
-    shape->materialColor = source->materialColor.getValue();
-    shape->materialRevision = source->materialRevision.getValue();
-    shape->drawMatrixValid = source->drawMatrixValid.getValue();
-    shape->drawMatrix = source->drawMatrix.getValue();
-    shape->drawCenterValid = source->drawCenterValid.getValue();
-    shape->drawCenter = source->drawCenter.getValue();
-    shape->drawSizeValid = source->drawSizeValid.getValue();
-    shape->drawSize = source->drawSize.getValue();
-    source->addChild(shape);
-    return shape;
+    return source->getRealizedMesh();
 }
 
 static SoBRLMeshShape *
-ged_obol_owned_mesh_shape_for_path(struct ged *gedp, const char *path,
-				   int create)
+ged_obol_owned_mesh_shape_for_path(struct ged *gedp, const char *path)
 {
     SoBRLDatabaseSource *source =
 	ged_obol_owned_database_source_for_path(gedp, path);
-    return ged_obol_owned_mesh_shape_for_source(source, path, create);
+    return ged_obol_owned_mesh_shape_for_source(source);
 }
 
 static uint64_t
@@ -725,7 +616,7 @@ ged_draw_obol_database_source_line_summary_for_path(
 	return 0;
 
     SoBRLVListShape *shape =
-	ged_obol_owned_annotation_vlist_shape_for_source(source, path);
+	ged_obol_owned_annotation_vlist_shape_for_source(source);
 
     out->valid = 1;
     if (!shape)
@@ -852,8 +743,7 @@ ged_draw_obol_database_source_surface_summary_for_path(
     if (!source)
 	return 0;
 
-    SoBRLMeshShape *shape = ged_obol_owned_mesh_shape_for_source(source,
-			    path, 0);
+    SoBRLMeshShape *shape = ged_obol_owned_mesh_shape_for_source(source);
     if (!shape) {
 	out->valid = 1;
 	return 1;
@@ -902,7 +792,7 @@ ged_draw_obol_database_source_surface_point_at_for_path(
     if (!out)
 	return 0;
 
-    SoBRLMeshShape *shape = ged_obol_owned_mesh_shape_for_path(gedp, path, 0);
+    SoBRLMeshShape *shape = ged_obol_owned_mesh_shape_for_path(gedp, path);
     const SoBRLMeshShape *geom = shape ? shape->getGeometrySource() : NULL;
     if (!geom || index >= static_cast<size_t>(geom->point.getNum()))
 	return 0;
@@ -924,7 +814,7 @@ ged_draw_obol_database_source_surface_index_at_for_path(
     if (!out)
 	return 0;
 
-    SoBRLMeshShape *shape = ged_obol_owned_mesh_shape_for_path(gedp, path, 0);
+    SoBRLMeshShape *shape = ged_obol_owned_mesh_shape_for_path(gedp, path);
     if (!shape)
 	return 0;
 
@@ -1932,7 +1822,7 @@ ged_draw_obol_database_source_update_vlist_bounds_for_path(
 	    return 0;
 
 	SoBRLVListShape *shape =
-	    ged_obol_owned_vlist_shape_for_source(source, path, 0);
+	    ged_obol_owned_vlist_shape_for_source(source);
 	if (!shape)
 	    return 0;
 

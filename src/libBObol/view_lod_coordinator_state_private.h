@@ -791,6 +791,54 @@ struct BObolLodCoordinator {
 	lodRetainedAllocationCertificate = BObolRetainedAllocationResult();
     }
 
+    void requireExactPresentationFrameAfter(uint64_t mutationNanoseconds)
+    {
+	std::lock_guard<std::mutex> lock(lodExactPresentationFrameMutex);
+	lodExactPresentationFrame.require(mutationNanoseconds);
+    }
+
+    void noteExactPresentationFrameRequested(void)
+    {
+	std::lock_guard<std::mutex> lock(lodExactPresentationFrameMutex);
+	lodExactPresentationFrame.noteFrameRequested();
+    }
+
+    void noteExactPresentationRequestRetired(void)
+    {
+	std::lock_guard<std::mutex> lock(lodExactPresentationFrameMutex);
+	lodExactPresentationFrame.noteRequestRetired();
+    }
+
+    bool confirmExactPresentationFrame(uint64_t frameStartedNanoseconds)
+    {
+	std::lock_guard<std::mutex> lock(lodExactPresentationFrameMutex);
+	return lodExactPresentationFrame.confirm(frameStartedNanoseconds);
+    }
+
+    void resetExactPresentationFrame(void)
+    {
+	std::lock_guard<std::mutex> lock(lodExactPresentationFrameMutex);
+	lodExactPresentationFrame.reset();
+    }
+
+    bool exactPresentationFramePending(void) const
+    {
+	std::lock_guard<std::mutex> lock(lodExactPresentationFrameMutex);
+	return lodExactPresentationFrame.pending();
+    }
+
+    bool exactPresentationFrameRequestPending(void) const
+    {
+	std::lock_guard<std::mutex> lock(lodExactPresentationFrameMutex);
+	return lodExactPresentationFrame.requestPending();
+    }
+
+    bool exactPresentationFrameAwaiting(void) const
+    {
+	std::lock_guard<std::mutex> lock(lodExactPresentationFrameMutex);
+	return lodExactPresentationFrame.framePending();
+    }
+
     void resetLodViewQualityHistory(void)
     {
 	lodViewQualityHistory.reset();
@@ -856,7 +904,7 @@ struct BObolLodCoordinator {
 	lodDiscretePopulationTrialPermit.revoke();
 	lodInteractionSession.resetCeilingFeedback();
 	lodPresentationTransaction.reset();
-	lodExactPresentationFrame.reset();
+	resetExactPresentationFrame();
 	lodRefinementNotBeforeMicroseconds = 0;
 
 	/* Delivery-rate telemetry is also renderer-specific.  It is protected
@@ -875,7 +923,7 @@ struct BObolLodCoordinator {
     bool lodPresentationFramePending(void) const
     {
 	return lodPresentationTransaction.barrierPending() ||
-	    lodExactPresentationFrame.pending() ||
+	    exactPresentationFramePending() ||
 	    lodAdmissionEvidence.capacity().presentationFramePending() ||
 	    lodPresentationPolicy.handoffPresentationPending() ||
 	    lodPointAdmissionFrame.pending() ||
@@ -892,14 +940,15 @@ struct BObolLodCoordinator {
      * its next effect.  lodControllerPumpPending() performs the latter
      * projection because a requested presentation transfers ownership from
      * PUMP to RENDER without retiring the underlying obligation. */
-    BObolLodControlRefinement::Inputs lodControllerControlInputs(void) const
+    BObolLodControlRefinement::Inputs lodControllerControlInputs(
+	bool resultPending) const
     {
 	BObolLodControlRefinement::Inputs inputs;
 	inputs.interaction = lodInteractionSession.active();
 	inputs.inventory = lodCoveragePolicy.effectiveActive() ||
 	    lodRetainedViewContinuity.visibilityCensusDeferred() ||
 	    lodAvailabilityLedger.inventoryFirstPendingMicroseconds() > 0;
-	inputs.result = lodAvailabilityLedger.resultsPending();
+	inputs.result = resultPending;
 	inputs.publication = lodPresentationTransaction.publicationPending();
 	inputs.submission = lodSubmissionPass.active();
 	inputs.demandRefresh = lodViewDemandPolicy.demandRefreshActive();
@@ -924,7 +973,7 @@ struct BObolLodCoordinator {
 	inputs.structuralFrontier = lodStructuralRepair.active() ||
 	    lodStructuralRepair.pointRelaxationPending();
 	inputs.presentationReplay = lodInterruptedPresentationReplay.pending();
-	inputs.exactPresentation = lodExactPresentationFrame.pending();
+	inputs.exactPresentation = exactPresentationFramePending();
 	inputs.presentationBarrier = lodPresentationTransaction.barrierPending();
 	inputs.capacityCalibration =
 	    lodAdmissionEvidence.capacity().presentationFramePending();
@@ -942,7 +991,7 @@ struct BObolLodCoordinator {
      * host wakeup actually belongs to the presentation owner. */
     bool lodControllerPresentationPumpPending(bool renderPending) const
     {
-	return lodExactPresentationFrame.requestPending() ||
+	return exactPresentationFrameRequestPending() ||
 	    (lodPresentationTransaction.publicationAwaitingFrameRequest() &&
 	     !renderPending) ||
 	    (!renderPending &&
@@ -964,10 +1013,11 @@ struct BObolLodCoordinator {
      * Presentation debt transfers to the render level once a request is
      * standing.  Retaining both owners makes the host poll an action which
      * cannot advance until that frame completes. */
-    bool lodControllerPumpPending(bool renderPending) const
+    bool lodControllerPumpPending(bool renderPending,
+	bool resultPending) const
     {
 	const BObolLodControlRefinement::Inputs inputs =
-	    this->lodControllerControlInputs();
+	    this->lodControllerControlInputs(resultPending);
 	const BObolLodControlRefinement::Snapshot work =
 	    BObolLodControlRefinement::evaluate(inputs);
 	const bool capacityPumpPending =
@@ -995,7 +1045,7 @@ struct BObolLodCoordinator {
 	    handoffPumpPending ||
 	    pointQualityPumpPending ||
 	    pointRelaxationPumpPending ||
-	    lodAvailabilityLedger.resultsPending() ||
+	    resultPending ||
 	    work.has(BObolLodControlRefinement::Work::COMPACTION) ||
 	    presentationPumpPending;
     }
@@ -1015,7 +1065,7 @@ struct BObolLodCoordinator {
 	    lodService->cancelGeneration(lodActiveGeneration);
 	lodActiveGeneration = 0;
 	invalidateResidentMeshCompactionSnapshot();
-	lodAvailabilityLedger.resetResultQueue();
+	lodAvailabilityLedger.resetResultQueueObservation();
 	lodAvailabilityLedger.resetResidentGrowth();
 	lodAvailabilityLedger.commitInventoryDelta();
 	rewindLodSubmissionCursor();
@@ -1034,7 +1084,7 @@ struct BObolLodCoordinator {
 	lodPresentationPolicy.reset();
 	lodPresentationTransaction.reset();
 	lodInterruptedPresentationReplay.retire();
-	lodExactPresentationFrame.reset();
+	resetExactPresentationFrame();
 	lodPointAdmissionFrame.retire();
 	lodPointQualityPhase.reset();
 	lodStaticQualityTrial.reset();
@@ -1083,7 +1133,7 @@ struct BObolLodCoordinator {
     {
 	const bool serviceRetired = lodActiveGeneration == 0;
 	const bool availabilityRetired =
-	    !lodAvailabilityLedger.resultsPending() &&
+	    lodAvailabilityLedger.firstResultReadyMicroseconds() == 0 &&
 	    !lodAvailabilityLedger.residentGrowthPending() &&
 	    lodAvailabilityLedger.inventoryFirstPendingMicroseconds() == 0;
 	const bool submissionRetired =
@@ -1117,7 +1167,7 @@ struct BObolLodCoordinator {
 	    !lodPresentationTransaction.barrierPending() &&
 	    !lodPresentationTransaction.publicationPending() &&
 	    !lodInterruptedPresentationReplay.pending() &&
-	    !lodExactPresentationFrame.pending() &&
+	    !exactPresentationFramePending() &&
 	    !lodPointAdmissionFrame.pending();
 	const bool pointQualityRetired = !lodPointQualityPhase.pending();
 	const bool staticQualityRetired = !lodStaticQualityTrial.blocksNewTrial();
@@ -1222,6 +1272,11 @@ struct BObolLodCoordinator {
      * work between deadline slices.  Workers remain free to fill their
      * bounded queues while the presentation transaction is closed. */
     BObolLodInterruptedPresentationReplay lodInterruptedPresentationReplay;
+    /* RT completion may request a host frame from its worker while the owner
+     * thread confirms the preceding traversal. Keep this compact latch behind
+     * one coordinator boundary rather than extending worker ownership into
+     * the rest of the progressive-display state. */
+    mutable std::mutex lodExactPresentationFrameMutex;
     BObolLodExactPresentationFrame lodExactPresentationFrame;
     uint64_t renderCompletionSerial = 0;
     mutable std::mutex presentationTimingMutex;

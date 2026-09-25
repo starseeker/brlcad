@@ -14,9 +14,11 @@
 #include "BObol/BSnapAction.h"
 #include "BObol/BViewLod.h"
 #include "BObol/BVListShape.h"
+#include "display_plane_view_private.h"
 
 #include <Inventor/SbBox.h>
 #include <Inventor/elements/SoModelMatrixElement.h>
+#include <Inventor/SoViewport.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
 #include <Inventor/nodes/SoTransformation.h>
@@ -255,6 +257,18 @@ SoBRLSnapAction::SoBRLSnapAction(void) :
 
 SoBRLSnapAction::~SoBRLSnapAction(void)
 {
+}
+
+void
+SoBRLSnapAction::applyViewport(const SoViewport &viewport)
+{
+    BObolDisplayPlaneView view;
+    if (!bobol_display_plane_view(viewport, view)) {
+	this->apply(viewport.getRoot());
+	return;
+    }
+    BObolDisplayPlaneViewScope scope(this->displayPlaneView, view);
+    this->apply(viewport.getRoot());
 }
 
 void

@@ -321,7 +321,7 @@ who_solids_print_view(struct ged *gedp, struct ged_view_context *v,
 	controller->getViewport()->getRoot()) {
 	(void)controller->realizePending();
 	export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
-	export_action.apply(controller->getViewport()->getRoot());
+	export_action.applyViewport(*controller->getViewport());
 	export_action.collectObjectRecords(objects,
 	    SoBRLExportAction::QUERY_VISIBLE_ONLY, nullptr, mode);
     }

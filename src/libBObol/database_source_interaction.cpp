@@ -17,6 +17,7 @@
 #include "BObol/BSnapAction.h"
 #include "cad_assembly_private.h"
 #include "database_source_private.h"
+#include "display_plane_view_private.h"
 
 #include <algorithm>
 #include <map>
@@ -28,9 +29,30 @@ static SbMatrix
 compact_entry_local_to_world(const BObolCompactInstanceEntry &entry,
 			     const SbMatrix &parentToWorld)
 {
-    SbMatrix matrix = entry.localToSource;
+    SbMatrix matrix = SbMatrix::identity();
+    /* Viewless consumers preserve the stored XY annotation layout. Screen
+     * offsets are relative to the anchor, which is separate from geometry. */
+    if (entry.geometry && entry.geometry->displayPlane)
+	matrix.setTranslate(entry.geometry->displayPlane->anchor);
+    matrix.multRight(entry.localToSource);
     matrix.multRight(parentToWorld);
     return matrix;
+}
+
+static bool
+compact_entry_local_to_world(const BObolCompactInstanceEntry &entry,
+	const SbMatrix &parentToWorld, const SbMatrix *worldToClip,
+	const SbVec2s *viewportSize, SbMatrix &localToWorld)
+{
+    localToWorld = compact_entry_local_to_world(entry, parentToWorld);
+    if (!entry.geometry || !entry.geometry->displayPlane || !worldToClip ||
+	!viewportSize)
+	return true;
+
+    SbMatrix placement = entry.localToSource;
+    placement.multRight(parentToWorld);
+    return Obol::cadDisplayPlaneTransform(*entry.geometry->displayPlane,
+	placement, *worldToClip, *viewportSize, localToWorld);
 }
 
 template <typename Callback>
@@ -419,8 +441,12 @@ SoBRLDatabaseSource::exportCompactInstances(SoBRLExportAction *action,
 	if (!entry.visible)
 	    continue;
 
-	const SbMatrix localToWorld =
-	    compact_entry_local_to_world(entry, parentToWorld);
+	SbMatrix localToWorld;
+	const auto *view = action->displayPlaneView;
+	if (!compact_entry_local_to_world(entry, parentToWorld,
+		view ? &view->worldToClip : NULL,
+		view ? &view->viewportSize : NULL, localToWorld))
+	    continue;
 	const BObolRealizedShapeSummary &summary = entry.shapeSummary;
 	if (entry.lodBacked &&
 	    action->getGeometryPolicy() == SoBRLExportAction::FULL_DETAIL &&
@@ -470,20 +496,49 @@ SoBRLDatabaseSource::exportCompactInstances(SoBRLExportAction *action,
 		SbVec3f worldB;
 		localToWorld.multVecMatrix(localA, worldA);
 		localToWorld.multVecMatrix(localB, worldB);
+		float width = summary.lineWidth;
+		int effectiveLineStyle = summary.lineStyle;
+		uint16_t effectiveLinePattern = entry.style.linePattern;
+		uint16_t effectiveLinePatternFactor =
+		    entry.style.linePatternFactor;
+		float effectiveAlpha = entry.style.color[3];
+		SbBool effectiveColorOverride = entry.style.hasColorOverride;
+		SbColor effectiveColor(entry.style.color[0], entry.style.color[1],
+		    entry.style.color[2]);
+		if (entry.geometry->wire && !entry.geometry->wire->styleRuns.empty()) {
+		    const Obol::WireStyle authored =
+			entry.geometry->wire->styleAtSegment(segmentIndex);
+		    width = Obol::cadWirePixelWidth(std::max(1.0f, width),
+			authored.widthScale);
+		    if (authored.patternValid) {
+			effectiveLineStyle =
+			    authored.linePattern == 0xffffu ? 0 : 1;
+			effectiveLinePattern = authored.linePattern;
+			effectiveLinePatternFactor = authored.linePatternFactor;
+		    }
+		    if (authored.colorValid && entry.style.useGeometryColor) {
+			effectiveColorOverride = TRUE;
+			effectiveColor.setValue(authored.color[0], authored.color[1],
+			    authored.color[2]);
+			effectiveAlpha *= authored.color[3];
+		    }
+		}
 		action->appendLine(summary.path, summary.sourceName,
 		    summary.sourceType, summary.sourceId, summary.regionId,
 		    summary.airCode, summary.materialId, summary.los,
 		    summary.materialColorValid, summary.materialColor,
 		    summary.materialShader, segmentIndex, entry.selected,
 		    entry.highlighted, summary.ghosted, summary.hiddenLine,
-		    summary.editEmphasis, summary.lineStyle,
-		    summary.lineWidth, summary.editIntentId,
+		    summary.editEmphasis, effectiveLineStyle,
+		    effectiveLinePattern, effectiveLinePatternFactor,
+		    width, summary.editIntentId,
 		    summary.editIntentRole, summary.lodPolicy,
-		    summary.colorOverride, summary.color,
+		    effectiveColorOverride, effectiveColor,
 		    worldA, worldB);
-		action->applyLastLineMetadata(summary);
+		action->applyLastLineMetadata(summary, 1.0f - effectiveAlpha);
 	    });
-	    continue;
+	    if (!entry.geometry->shadedIsFill)
+		continue;
 	}
 
 	if (entry.meshGeometry) {
@@ -496,6 +551,24 @@ SoBRLDatabaseSource::exportCompactInstances(SoBRLExportAction *action,
 		localToWorld.multVecMatrix(a, worldA);
 		localToWorld.multVecMatrix(b, worldB);
 		localToWorld.multVecMatrix(c, worldC);
+		SbBool effectiveColorOverride = entry.style.hasColorOverride;
+		SbColor effectiveColor(entry.style.color[0], entry.style.color[1],
+		    entry.style.color[2]);
+		float effectiveAlpha = entry.style.color[3];
+		SbBool backgroundMask = FALSE;
+		if (entry.geometry->shaded &&
+			!entry.geometry->shaded->styleRuns.empty()) {
+		    const Obol::FillStyle authored =
+			entry.geometry->shaded->styleAtTriangle(triangleIndex);
+		    backgroundMask = authored.backgroundMask ? TRUE : FALSE;
+		    if (!backgroundMask && authored.colorValid &&
+			    entry.style.useGeometryColor) {
+			effectiveColorOverride = TRUE;
+			effectiveColor.setValue(authored.color[0], authored.color[1],
+			    authored.color[2]);
+			effectiveAlpha *= authored.color[3];
+		    }
+		}
 		action->appendTriangle(summary.path, summary.sourceName,
 		    summary.sourceType, summary.sourceId, summary.regionId,
 		    summary.airCode, summary.materialId, summary.los,
@@ -509,9 +582,11 @@ SoBRLDatabaseSource::exportCompactInstances(SoBRLExportAction *action,
 		    summary.lodPointCount, summary.lodOriginalPointCount,
 		    summary.lodNormalCount, summary.lodHasSnappedPoints,
 		    summary.lodHasNormals, summary.lodBoundsMin,
-		    summary.lodBoundsMax, summary.colorOverride, summary.color,
+		    summary.lodBoundsMax, effectiveColorOverride, effectiveColor,
 		    worldA, worldB, worldC);
-		action->applyLastTriangleMetadata(summary);
+		action->applyLastTriangleMetadata(summary,
+		    backgroundMask ? 0.0f : 1.0f - effectiveAlpha,
+		    backgroundMask);
 	    });
 	}
     }
@@ -535,8 +610,13 @@ SoBRLDatabaseSource::measureCompactInstances(SoBRLMeasureAction *action,
 	    !action->highlightAllows(entry.highlighted))
 	    continue;
 
-	const SbMatrix localToWorld =
-	    compact_entry_local_to_world(entry, parentToWorld);
+	SbMatrix localToWorld;
+	const auto *view = action->coordinateSpace ==
+	    SoBRLMeasureAction::WORLD_SPACE ? action->displayPlaneView : NULL;
+	if (!compact_entry_local_to_world(entry, parentToWorld,
+		view ? &view->worldToClip : NULL,
+		view ? &view->viewportSize : NULL, localToWorld))
+	    continue;
 	SbBool measuredShape = FALSE;
 	if (entry.wireGeometry) {
 	    std::vector<compact_measure_segment_record> measuredSegments;
@@ -619,8 +699,13 @@ SoBRLDatabaseSource::snapCompactInstances(SoBRLSnapAction *action,
 	    !action->selectionAllows(entry.selected))
 	    continue;
 
-	const SbMatrix localToWorld =
-	    compact_entry_local_to_world(entry, parentToWorld);
+	SbMatrix localToWorld;
+	const auto *view = action->coordinateSpace ==
+	    SoBRLSnapAction::WORLD_SPACE ? action->displayPlaneView : NULL;
+	if (!compact_entry_local_to_world(entry, parentToWorld,
+		view ? &view->worldToClip : NULL,
+		view ? &view->viewportSize : NULL, localToWorld))
+	    continue;
 	SbBox3f centerBox;
 	centerBox.makeEmpty();
 	if (entry.pointGeometry) {

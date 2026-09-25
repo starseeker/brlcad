@@ -764,8 +764,8 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	bot->faces[0] = 0; bot->faces[1] = 1; bot->faces[2] = 2;
 	bot->faces[3] = 3; bot->faces[4] = 4; bot->faces[5] = 5;
 
-	MAT_IDN(v->gv_view2model);
-	MAT_IDN(v->gv_model2view);
+	MAT_IDN(v.gv_view2model);
+	MAT_IDN(v.gv_model2view);
 	if (rt_edit_map_clbk_set(s->m, ECMD_BOT_PICKT, BU_CLBK_DURING,
 			 capture_bot_pick, &capture) != BRLCAD_OK)
 	    bu_exit(1, "ERROR: Unable to register BOT pick callback\n");

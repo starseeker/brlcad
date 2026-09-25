@@ -286,6 +286,42 @@ enum BObolLodCapacitySearchGoal {
     BOBOL_LOD_CAPACITY_SEARCH_STATIC
 };
 
+/** Stable user-facing progress classes.  Several internal convergence phases
+ * intentionally share one class so a host does not schedule an unchanged HUD
+ * merely because control moved between equivalent finite owners. */
+enum BObolLodProgressDisplayClass {
+    BOBOL_LOD_PROGRESS_DISPLAY_IDLE = 0,
+    BOBOL_LOD_PROGRESS_DISPLAY_DISCOVERING,
+    BOBOL_LOD_PROGRESS_DISPLAY_PREPARING,
+    BOBOL_LOD_PROGRESS_DISPLAY_INTERACTIVE,
+    BOBOL_LOD_PROGRESS_DISPLAY_SETTLING,
+    BOBOL_LOD_PROGRESS_DISPLAY_BACKGROUND,
+    BOBOL_LOD_PROGRESS_DISPLAY_ERROR,
+    BOBOL_LOD_PROGRESS_DISPLAY_TERMINAL_ERROR
+};
+
+/** Immutable presentation classification derived from one convergence
+ * snapshot.  Renderers and hosts use this value instead of independently
+ * reconstructing progress visibility and completion policy. */
+struct BOBOL_EXPORT BObolLodProgressDisplayStatus {
+    SbBool visible = FALSE;
+    SbBool terminalReady = FALSE;
+    BObolLodProgressDisplayClass publicationClass =
+	BOBOL_LOD_PROGRESS_DISPLAY_IDLE;
+
+    bool operator==(const BObolLodProgressDisplayStatus &other) const
+    {
+	return visible == other.visible &&
+	    terminalReady == other.terminalReady &&
+	    publicationClass == other.publicationClass;
+    }
+
+    bool operator!=(const BObolLodProgressDisplayStatus &other) const
+    {
+	return !(*this == other);
+    }
+};
+
 /** User-facing progress for one view epoch.
  *
  * The fraction is a cost-weighted estimate of progress toward the current
@@ -298,6 +334,7 @@ enum BObolLodCapacitySearchGoal {
 struct BOBOL_EXPORT BObolLodConvergenceStatus {
     BObolLodConvergenceStatus(void);
     void clear(void);
+    BObolLodProgressDisplayStatus progressDisplayStatus(void) const;
 
     int phase;
     int outcome;
@@ -368,6 +405,10 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     size_t inFlight;
     size_t queuedResults;
     size_t queuedCacheWrites;
+    /** Interest in a shared producer whose task may belong to a sibling
+     * generation.  Such a lease remains a result-delivery witness even when
+     * this generation has no task counter of its own. */
+    size_t sharedProducerLeases;
     /** Aggregate exact-target retained-renderer preparation rank.  A stable
      * nonzero signature identifies one immutable work denominator. */
     uint64_t rendererPreparationTargetSignature;
@@ -637,7 +678,9 @@ struct BOBOL_EXPORT BObolProgressiveProviderRecord {
 class BOBOL_EXPORT BObolViewController
 {
 public:
-    enum SoftwareWireMode {
+    /** Renderer wire fallback policy.  The fixed representation keeps
+     * validation of integer values received at command/API boundaries defined. */
+    enum SoftwareWireMode : int {
 	SOFTWARE_WIRE_AUTO = 0,
 	SOFTWARE_WIRE_QUALITY = 1,
 	SOFTWARE_WIRE_FAST = 2
@@ -645,8 +688,9 @@ public:
 
     /** Named, renderer-independent camera-lighting policies.  Values match
      * enum bv_lighting_profile so GED can synchronize without translation
-     * tables or client-specific defaults. */
-    enum LightingProfile {
+     * tables or client-specific defaults.  The fixed representation keeps
+     * validation of integer values received at command/API boundaries defined. */
+    enum LightingProfile : int {
 	LIGHTING_STUDIO = 0,
 	LIGHTING_MGED = 1
     };
@@ -1037,6 +1081,8 @@ public:
     unsigned int getLastMeshBudgetVisitedMeshCount(void) const;
     unsigned int getLastMeshBudgetEvictedFullDetailMeshCount(void) const;
     unsigned int getLastMeshBudgetEvictedDisplayMeshCount(void) const;
+    /** True when the active generation has service-owned results available
+     * for this controller to drain. */
     SbBool hasPendingLodResults(void) const;
     SbBool hasPendingLodSubmissions(void) const;
     /** True only while a retained PoP cut, presentation-stage handoff, or

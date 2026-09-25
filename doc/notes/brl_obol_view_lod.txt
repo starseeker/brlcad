@@ -654,6 +654,25 @@ progressive view LoD:
   an explicit view-realization policy enabling mesh LoD;
 * command polygon lookup for names containing `::`.
 
+The FLOW-01 qualification splits the production lifecycle into named rows:
+
+* `ged_test_obol_production_flow_lifecycle` uses a fresh cache and actual mesh
+  provider delay, accepts camera input, closes a worker-active endpoint,
+  reopens/redraws and requires changed terminal pixels plus empty service
+  queues;
+* `ged_test_obol_deferred_result_acceptance` checks current deferred coverage
+  and terminal callbacks;
+* `ged_test_obol_deferred_source_replacement` rejects a stale result before it
+  can mutate a replacement source;
+* `test_qtcad_obol_production_flow_lifecycle` repeats close/reopen through a
+  real software `QgView`, uses a bounded service delay to isolate widget
+  ownership from planner timing, and requires a terminal active mesh and
+  changed visible `QImage`.
+
+Both production lifecycle rows pass ten consecutive runs on the September 20
+Linux software OSMesa candidate. This qualifies the ownership workflow, not
+native GPU, sanitizer, large-model or cross-platform behavior.
+
 Full-stack progressive image tests cover delayed service population,
 controller notification, result draining, active view-local payload state, and
 visible image refinement:

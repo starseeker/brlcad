@@ -74,6 +74,7 @@ create_fixture(const char *path, ExpectedColors &expected)
 	bool colored_parent;
 	int inherit;
 	Color expected;
+	const char *rgb_alias = NULL;
     } cases[] = {
 	{"default", NULL, false, 0, {{255, 0, 0}}},
 	{"primitive", "126/137/141", false, 0, {{126, 137, 141}}},
@@ -82,7 +83,9 @@ create_fixture(const char *path, ExpectedColors &expected)
 	{"primitive_inherit", "126/137/141", true, 1, {{126, 137, 141}}},
 	{"invalid", "invalid", true, 0, parent_color},
 	{"negative", "-1/20/30", true, 0, parent_color},
-	{"clamped", "999/10/20", false, 0, {{255, 10, 20}}}
+	{"clamped", "999/10/20", false, 0, {{255, 10, 20}}},
+	{"alias", NULL, true, 1, {{80, 120, 160}}, "80/120/160"},
+	{"canonical_alias", "126/137/141", true, 1, {{126, 137, 141}}, "80/120/160"}
     };
 
     std::vector<std::string> groups;
@@ -99,6 +102,9 @@ create_fixture(const char *path, ExpectedColors &expected)
 	    if (test.attribute && db5_update_attribute(child.c_str(), db5_standard_attribute(ATTR_COLOR),
 		test.attribute, database->dbip) < 0)
 		return false;
+	    if (test.rgb_alias && db5_update_attribute(child.c_str(), "rgb",
+		test.rgb_alias, database->dbip) < 0)
+		return false;
 	}
 	if (!write_group(database.get(), test.name, children,
 	    test.colored_parent ? parent_color.data() : NULL, test.inherit))
@@ -109,15 +115,16 @@ create_fixture(const char *path, ExpectedColors &expected)
 }
 
 static bool
-check_drawing(struct ged *gedp, const char *mode, const ExpectedColors &expected, bool override_color)
+check_drawing(struct ged *gedp, const char *path, const char *mode,
+    const ExpectedColors &expected, bool override_color)
 {
     const char *zap[] = {"zap", NULL};
     if (ged_exec_zap(gedp, 1, zap) != BRLCAD_OK)
 	return false;
 
     const Color override_rgb = {{9, 80, 150}};
-    const char *draw[] = {"draw", "-m", mode, "all", NULL};
-    const char *draw_override[] = {"draw", "-m", mode, "-C", "9/80/150", "all", NULL};
+    const char *draw[] = {"draw", "-m", mode, path, NULL};
+    const char *draw_override[] = {"draw", "-m", mode, "-C", "9/80/150", path, NULL};
     if ((override_color ? ged_exec_draw(gedp, 6, draw_override) : ged_exec_draw(gedp, 4, draw)) != BRLCAD_OK) {
 	bu_log("draw mode %s failed: %s\n", mode, bu_vls_cstr(gedp->ged_result_str));
 	return false;
@@ -146,10 +153,12 @@ check_drawing(struct ged *gedp, const char *mode, const ExpectedColors &expected
 	    return false;
 	if (object.recordRole == "lod-overview")
 	    continue;
-	const char *name = object.sourceName.getString();
+	const std::string object_path = object.path.getString();
+	const size_t separator = object_path.find_last_of('/');
+	const std::string name = object_path.substr(separator == std::string::npos ? 0 : separator + 1);
 	const auto found = remaining.find(name);
 	if (found == remaining.end()) {
-	    bu_log("unexpected or duplicate drawn object: %s, path %s, kind %s, role %s\n", name, object.path.getString(), object.geometryKind.getString(), object.recordRole.getString());
+	    bu_log("unexpected or duplicate drawn object: %s, path %s, kind %s, role %s\n", name.c_str(), object.path.getString(), object.geometryKind.getString(), object.recordRole.getString());
 	    return false;
 	}
 	const Color &color = override_color ? override_rgb : found->second;
@@ -159,14 +168,18 @@ check_drawing(struct ged *gedp, const char *mode, const ExpectedColors &expected
 	    object.geometryKind.getLength() == 0 ||
 	    !actual.equals(expected_color, SMALL_FASTF)) {
 	    bu_log("%s, mode %s, override %d: expected %d/%d/%d, got %.0f/%.0f/%.0f\n",
-		name, mode, override_color, color[0], color[1], color[2],
+		name.c_str(), mode, override_color, color[0], color[1], color[2],
 		actual[0] * 255.0f, actual[1] * 255.0f, actual[2] * 255.0f);
 	    passed = false;
 	}
 	remaining.erase(found);
     }
-    if (!remaining.empty())
-	bu_log("draw mode %s omitted %zu fixture objects\n", mode, remaining.size());
+    if (!remaining.empty()) {
+	for (const auto &missing : remaining)
+	    bu_log("draw %s, mode %s, override %d: omitted %s\n",
+		path, mode, override_color, missing.first.c_str());
+	draw_test_obol_debug_scene(gedp, 0, view);
+    }
     return passed && remaining.empty();
 }
 
@@ -197,7 +210,12 @@ main(int argc, char **argv)
 	    return EXIT_FAILURE;
 	for (const char *mode : {"0", "1", "2"})
 	    for (bool override_color : {false, true})
-		passed = check_drawing(context.get(), mode, expected, override_color) && passed;
+		passed = check_drawing(context.get(), "all", mode, expected, override_color) && passed;
+	for (const char *primitive_path : {"alias.bot", "alias.brep"}) {
+	    const ExpectedColors primitive = {{primitive_path, expected.at(primitive_path)}};
+	    for (const char *mode : {"0", "1", "2"})
+		passed = check_drawing(context.get(), primitive_path, mode, primitive, false) && passed;
+	}
     } else {
 	bu_log("could not create or open drawing color fixture\n");
 	passed = false;

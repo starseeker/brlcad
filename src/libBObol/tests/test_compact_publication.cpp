@@ -105,6 +105,7 @@
 #include <map>
 #include <memory>
 #include <new>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -140,10 +141,34 @@ void *operator new(size_t bytes)
     return result;
 }
 void *operator new[](size_t bytes) { return ::operator new(bytes); }
+void *operator new(size_t bytes, const std::nothrow_t &) noexcept
+{
+    try {
+	return ::operator new(bytes);
+    } catch (...) {
+	return nullptr;
+    }
+}
+void *operator new[](size_t bytes, const std::nothrow_t &) noexcept
+{
+    try {
+	return ::operator new[](bytes);
+    } catch (...) {
+	return nullptr;
+    }
+}
 void operator delete(void *p) noexcept { std::free(p); }
 void operator delete[](void *p) noexcept { std::free(p); }
 void operator delete(void *p, size_t) noexcept { std::free(p); }
 void operator delete[](void *p, size_t) noexcept { std::free(p); }
+void operator delete(void *p, const std::nothrow_t &) noexcept
+{
+    ::operator delete(p);
+}
+void operator delete[](void *p, const std::nothrow_t &) noexcept
+{
+    ::operator delete[](p);
+}
 
 static void
 require(bool condition, const char *message)
@@ -2509,14 +2534,19 @@ check_compact_edit(CompactEditKind kind)
 	    const ExternalSceneSnapshot before(fixture.source);
 	    const Snapshot beforeEntries = compact_snapshot(fixture.source);
 	    auto nested = fixture.nested ? std::make_unique<ExternalSceneSnapshot>(*fixture.nested) : nullptr;
-	    Observer observer(fixture, complete, providerFailure);
+	    /* Failed providers must preserve this source's preceding drawing.
+	     * Independent realizations may choose different valid asset paths
+	     * when the shared mesh cache supplies an existing prototype. */
+	    const ExternalSceneSnapshot &expected = providerFailure ? before : complete;
+	    const Snapshot &expectedEntries = providerFailure ? beforeEntries : completeEntries;
+	    Observer observer(fixture, expected, providerFailure);
 	    bool failed = false;
 	    const size_t count = invoke_with_failure([&] { fixture.publish(requested); },
 		iteration ? iteration - 1 : std::numeric_limits<size_t>::max(), failed);
 	    if (!iteration) attempts = count;
 	    const Snapshot actualEntries = compact_snapshot(fixture.source);
 	    const bool old = before.matches(fixture.source) && same_snapshot(beforeEntries, actualEntries);
-	    require(!observer.incoherent && (old || (complete.matches(fixture.source) && same_snapshot(actualEntries, completeEntries))) && (!nested || nested->matches(*fixture.nested)),
+	    require(!observer.incoherent && (old || (expected.matches(fixture.source) && same_snapshot(actualEntries, expectedEntries))) && (!nested || nested->matches(*fixture.nested)),
 		"compact edit exposed partial revision/geometry or changed nested owner");
 	    if (old) {
 		if (iteration) ++preserved;
@@ -2525,7 +2555,7 @@ check_compact_edit(CompactEditKind kind)
 	    } else if (iteration) ++committed;
 	    if (failed && old) fixture.publish(requested);
 	    fixture.verify(providerFailure, revision);
-	    require(complete.matches(fixture.source) && same_snapshot(compact_snapshot(fixture.source), completeEntries),
+	    require(expected.matches(fixture.source) && same_snapshot(compact_snapshot(fixture.source), expectedEntries),
 		"compact edit retry differs");
 	    observer.detach();
 	    fixture.source.sourceRevision.enableNotify(TRUE);
@@ -2556,6 +2586,36 @@ check_compact_edit(CompactEditKind kind)
 static void
 check_leaf_edit_path_and_bounds()
 {
+    /* An edit can arrive while a bare primitive still owns only its cold
+     * coverage overview. Its refresh must publish a complete occurrence,
+     * including the leaf's interaction baseline and database identity. */
+    {
+	ExternalPrimitiveInputs primitives;
+	auto owner = retain_node(new SoBRLDatabaseSource);
+	auto &source = *static_cast<SoBRLDatabaseSource *>(owner.get());
+	source.setDatabase(primitives.database.get());
+	source.path = "box.s";
+	BObolCompactOccurrence overview;
+	overview.geometry = wire_geometry(4.0f, true);
+	overview.summary.valid = TRUE;
+	overview.summary.visible = TRUE;
+	overview.summary.path = "box.s";
+	overview.summary.sourceName = "box.s";
+	overview.summary.sourceType = "proxy";
+	overview.summary.recordRole = "lod-overview";
+	overview.summary.geometryKind = "overview-aabb";
+	overview.summary.selectable = FALSE;
+	require(source.setCompactOccurrenceRegistry({overview}) == 1,
+	    "leaf edit overview fixture");
+	require(source.refreshCompactObjectGeometry("box.s", 19) == 1,
+	    "leaf edit overview realization fallback");
+	BObolCompactOccurrence realized;
+	require(source.getCompactOccurrence(0, realized) && realized.summary.selectable &&
+	    BU_STR_EQUAL(realized.summary.recordRole.getString(), "database") &&
+	    BU_STR_EQUAL(realized.summary.sourceName.getString(), "box.s") &&
+	    BU_STR_EQUAL(realized.summary.sourceType.getString(), "arb8"),
+	    "leaf edit fallback retained overview interaction or identity");
+    }
     CompactEditFixture fixture(false, true, false, CompactEditKind::Leaf);
     BObolCompactInstanceSummary occurrence;
     require(fixture.source.getCompactInstanceSummary(fixture.handles[1], occurrence), "indexed leaf edit fixture");
@@ -13799,6 +13859,11 @@ check_scene_lights_input_publication()
     std::vector<BObolSceneLightRealization> replacementInitial{
 	test_scene_light(BOBOL_SCENE_LIGHT_POINT, SbVec3f(1.0f, 2.0f, 3.0f),
 	    SbVec3f(), 0.20f, "reentry-initial")};
+    /* Direction has no meaning for a point light.  An unused payload must not
+     * turn an enablement-only update into a child replacement. */
+    const float unusedNaN = std::numeric_limits<float>::quiet_NaN();
+    replacementInitial.front().direction.setValue(
+	unusedNaN, unusedNaN, unusedNaN);
     std::vector<BObolSceneLightRealization> replacementOuter{
 	test_scene_light(BOBOL_SCENE_LIGHT_DIRECTIONAL, SbVec3f(),
 	    SbVec3f(1.0f, 0.0f, 0.0f), 0.40f, "reentry-outer")};
@@ -17964,8 +18029,10 @@ struct FramebufferOpenFixture {
 	    paths[OverlayExtensionPath]->getIndex(1) == 0;
     }
 
-    BObolWindowHost host;
+    /* The host borrows the framebuffer stream for an open attachment.  Keep
+     * the framebuffer alive until the host has retired that attachment. */
     std::unique_ptr<imgstream_fb_t, TestFramebufferCloser> framebuffer;
+    BObolWindowHost host;
     TestNodeRef underlayExtensionOwner;
     TestNodeRef interlayExtensionOwner;
     TestNodeRef overlayExtensionOwner;
@@ -33626,25 +33693,42 @@ int main(int argc, char **argv)
 	    {"graph-destruction", check_graph_destruction}
 	};
 	const std::string_view requested = argc > 1 ? argv[1] : "";
-	const auto selected = [&](const char *name, Group group) {
+	constexpr size_t instrumentedSuiteShardCount = 8;
+	std::optional<size_t> sourceSuiteShard;
+	std::optional<size_t> stateSuiteShard;
+	for (size_t shard = 0; shard < instrumentedSuiteShardCount; ++shard) {
+	    if (requested == "source-suite-" + std::to_string(shard))
+		sourceSuiteShard = shard;
+	    if (requested == "state-suite-" + std::to_string(shard))
+		stateSuiteShard = shard;
+	}
+	const auto selected = [&](const char *name, Group group, size_t ordinal) {
 	    return argc == 1 || requested == name ||
 		(requested == "source-suite" && group == Group::Source) ||
-		(requested == "state-suite" && group == Group::State);
+		(requested == "state-suite" && group == Group::State) ||
+		(sourceSuiteShard && group == Group::Source &&
+		 ordinal % instrumentedSuiteShardCount == *sourceSuiteShard) ||
+		(stateSuiteShard && group == Group::State &&
+		 ordinal % instrumentedSuiteShardCount == *stateSuiteShard);
 	};
 	bool matched = false;
 	if (argc > 1 && std::string(argv[1]).find("cached-") == 0 && std::string(argv[1]) != "cached-publication" && std::string(argv[1]) != "cached-compiled") {
 	    check_cached_publication(argv[1]);
 	    matched = true;
 	}
+	size_t sourceOrdinal = 0;
+	size_t stateOrdinal = 0;
 	for (const DirectCheck &check : checks) {
-	    if (selected(check.name, check.group)) {
+	    const size_t ordinal = check.group == Group::Source ?
+		sourceOrdinal++ : stateOrdinal++;
+	    if (selected(check.name, check.group, ordinal)) {
 		std::printf("RUN publication-check %s\n", check.name);
 		check.run();
 		matched = true;
 	    }
 	}
 	for (const Scenario &scenario : scenarios) {
-	    if (!selected(scenario.name, Group::Source))
+	    if (!selected(scenario.name, Group::Source, sourceOrdinal++))
 		continue;
 	    std::printf("RUN publication-scenario %s\n", scenario.name);
 	    matched = true;

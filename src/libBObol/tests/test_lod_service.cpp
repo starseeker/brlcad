@@ -1437,15 +1437,23 @@ test_debug_delay_cancellation(void)
     if (wait_for_debug_delay(service))
 	return 1;
 
+    const BObolLodServiceWorkStatus delayed =
+	service.workStatus();
+    if (delayed.isIdle() || delayed.delayedTasks != 1 ||
+	delayed.inFlightTasks == 0 || delayed.activeRequests == 0) {
+	printf("FAIL: LoD service work snapshot omitted delayed work\n");
+	return 1;
+    }
+
     service.cancelGeneration(generation);
 
 
     for (int i = 0; i < 400 && service.inFlightCount() != 0; i++)
 	std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    if (service.inFlightCount() != 0 ||
-	service.queuedResultCountForDiagnostics() != 0 ||
-	service.discardedStaleResultCountForDiagnostics() == 0 ||
-	service.delayedTaskCountForDiagnostics() != 0) {
+    const BObolLodServiceWorkStatus cancelled =
+	service.workStatus();
+    if (!cancelled.isIdle() ||
+	service.discardedStaleResultCountForDiagnostics() == 0) {
 	printf("FAIL: LoD service did not cancel delayed task cleanly\n");
 	return 1;
     }
@@ -2191,6 +2199,18 @@ test_shared_producer_two_generation_delivery(void)
 	fixture.service.sharedProducerLeaseCountForGeneration(
 	    secondGeneration) != 1) {
 	printf("FAIL: two-generation shared producer lease acquisition\n");
+	return 1;
+    }
+    const BObolLodGenerationWorkStatus producerWork =
+	fixture.service.generationWorkStatus(firstGeneration);
+    const BObolLodGenerationWorkStatus consumerWork =
+	fixture.service.generationWorkStatus(secondGeneration);
+    if (!producerWork.hasResultWork() || !consumerWork.hasResultWork() ||
+	consumerWork.activeTasks != 0 ||
+	consumerWork.sharedProducerLeases != 1 ||
+	!fixture.service.generationWorkStatus(0).isIdle() ||
+	fixture.service.queuedResultCountForGeneration(0) != 0) {
+	printf("FAIL: generation work snapshot omitted shared producer lease\n");
 	return 1;
     }
     release_shared_producer(fixture);
@@ -3287,6 +3307,79 @@ test_rt_mesh_provider_task(void)
     task.realize = bobol_mesh_lod_provider_task;
     task.realizeData = &provider;
 
+    /* Observe a real retained publication while its estimated growth is
+     * reserved.  Once a reservation has been visible, every later sample
+     * must retain either that reservation or the published stable bytes.  A
+     * zero/zero gap would let a peer admit against the same capacity twice. */
+    BObolLodService capacityService;
+    capacityService.setResidentMeshLimit(SIZE_MAX);
+    BObolMeshLodProvider capacityProvider;
+    capacityProvider.service = &capacityService;
+    capacityProvider.setDatabase(dbip);
+    capacityProvider.refreshMissing = FALSE;
+    capacityProvider.progressiveDelivery = FALSE;
+    BObolLodRequest capacityRequest = task.request;
+    /* Ask for the complete cached hierarchy so the real cache-load and
+     * renderer-preparation interval is long enough to observe without a
+     * test-only pause in production code. */
+    capacityRequest.requestedCut = std::numeric_limits<int>::max();
+    BObolLodResult capacityResult;
+    std::atomic<bool> capacityFinished(false);
+    std::thread capacityWorker([&]() {
+	capacityResult = capacityService.realizeResidentMeshLod(
+	    capacityRequest, capacityProvider);
+	capacityFinished.store(true, std::memory_order_release);
+    });
+    SbBool observedGrowthReservation = FALSE;
+    SbBool observedCapacityGap = FALSE;
+    size_t concurrentResidentLimit = SIZE_MAX;
+    while (!capacityFinished.load(std::memory_order_acquire)) {
+	const BObolLodResidentCapacityStatus capacity =
+	    capacityService.residentCapacityStatus();
+	if (capacity.reservedGrowthBytes != 0) {
+	    observedGrowthReservation = TRUE;
+	    if (concurrentResidentLimit == SIZE_MAX) {
+		concurrentResidentLimit = capacity.occupiedBytes();
+		capacityService.setResidentMeshLimit(concurrentResidentLimit);
+	    }
+	}
+	if (observedGrowthReservation && capacity.reservedGrowthBytes == 0 &&
+	    capacity.stableResidentBytes == 0)
+	    observedCapacityGap = TRUE;
+	std::this_thread::yield();
+    }
+    capacityWorker.join();
+    const BObolLodResidentCapacityStatus finalCapacity =
+	capacityService.residentCapacityStatus();
+    if (!observedGrowthReservation || observedCapacityGap ||
+	concurrentResidentLimit == SIZE_MAX ||
+	capacityResult.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	!capacityResult.progressiveMesh ||
+	finalCapacity.stableResidentBytes == 0 ||
+	finalCapacity.reservedGrowthBytes != 0 ||
+	finalCapacity.residentLimitBytes != concurrentResidentLimit ||
+	finalCapacity.stableResidentBytes >
+	    capacityService.residentMeshBytesForDiagnostics()) {
+	printf("FAIL: resident capacity publication exposed an unsafe "
+	       "growth transition (reservation=%d gap=%d limit=%zu "
+	       "status=%d stable=%zu reserved=%zu final_limit=%zu "
+	       "resident=%zu)\n",
+	       observedGrowthReservation ? 1 : 0,
+	       observedCapacityGap ? 1 : 0,
+	       concurrentResidentLimit, capacityResult.providerStatus,
+	       finalCapacity.stableResidentBytes,
+	       finalCapacity.reservedGrowthBytes,
+	       finalCapacity.residentLimitBytes,
+	       capacityService.residentMeshBytesForDiagnostics());
+	capacityService.stop();
+	bobol_mesh_lod_cache_clear_database(dbip);
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	bu_dirclear(cache_dir);
+	return 1;
+    }
+    capacityService.stop();
+
     BObolLodService service;
     if (!service.start(1, TRUE)) {
 	printf("FAIL: LoD Obol mesh provider service did not start\n");
@@ -3421,6 +3514,8 @@ test_rt_mesh_provider_task(void)
 	firstStage.geometry.activeCut;
     BObolLodResult prefetchedStage =
 	service.realizeResidentMeshLod(stagedRequest, prefetchedProvider);
+    const BObolLodResidentCapacityStatus publishedCapacity =
+	service.residentCapacityStatus();
     if (firstStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 	firstStage.geometry.activeCut < 0 ||
 	firstStage.geometry.activeCut >= stagedRequest.requestedCut ||
@@ -3456,7 +3551,13 @@ test_rt_mesh_provider_task(void)
 	firstStage.progressiveMesh != residentAheadStage.progressiveMesh ||
 	firstStage.progressiveMesh != directStage.progressiveMesh ||
 	firstStage.counts.faceCount > secondStage.counts.faceCount ||
-	secondStage.counts.faceCount > terminalStage.counts.faceCount) {
+	secondStage.counts.faceCount > terminalStage.counts.faceCount ||
+	publishedCapacity.stableResidentBytes == 0 ||
+	publishedCapacity.stableResidentBytes !=
+	    service.stableResidentMeshBytesForDiagnostics() ||
+	publishedCapacity.reservedGrowthBytes != 0 ||
+	publishedCapacity.residentLimitBytes !=
+	    service.getResidentMeshLimit()) {
 	printf("FAIL: retained LoD provider did not stage large growth or "
 	    "collapse a cheap target (levels=%d/%d/%d resident-ahead=%d "
 	    "direct=%d prefetched=%d/%d terminal=%d/%d/%d/%d/%d/%d "
@@ -4150,6 +4251,8 @@ test_rt_mesh_provider_task(void)
 		    0x1234, 3, compactDemands);
 	    const int waitResult =
 		wait_for_resident_compaction(service);
+	    const BObolLodResidentCapacityStatus compactedCapacity =
+		service.residentCapacityStatus();
 	    std::vector<BObolLodResidentCompaction> completions;
 	    service.drainResidentMeshCompactions(
 		0x1234, completions);
@@ -4164,7 +4267,12 @@ test_rt_mesh_provider_task(void)
 		rendererFloorPages != compactDemand.chunkIds ||
 		completions[0].channelMask != 2 ||
 		completions[0].preparedCadGeometry ||
-		!completions[0].presentationLayers.empty()) {
+		!completions[0].presentationLayers.empty() ||
+		compactedCapacity.reservedGrowthBytes != 0 ||
+		compactedCapacity.stableResidentBytes !=
+		    service.stableResidentMeshBytesForDiagnostics() ||
+		compactedCapacity.occupiedBytes() !=
+		    compactedCapacity.stableResidentBytes) {
 		printf("FAIL: spatial resident compaction published "
 		       "view-specific presentation geometry\n");
 		ret = 1;
@@ -4196,12 +4304,20 @@ test_rt_mesh_provider_task(void)
 	    service.residentMeshBytesForDiagnostics();
 	const size_t assetsAfterEviction =
 	    service.residentMeshAssetCountForDiagnostics();
+	const BObolLodResidentCapacityStatus evictedCapacity =
+	    service.residentCapacityStatus();
 	BObolLodResult restoredAfterEviction =
 	    service.realizeResidentMeshLod(stagedRequest, reloadProvider);
+	const BObolLodResidentCapacityStatus restoredCapacity =
+	    service.residentCapacityStatus();
 	if (!evictionQueued || evictionWait ||
-	    service.getResidentMeshLimit() != 1 ||
+	    evictedCapacity.residentLimitBytes != 1 ||
 	    bytesAfterEviction >= bytesBeforeEviction ||
 	    assetsAfterEviction >= assetsBeforeEviction ||
+	    evictedCapacity.reservedGrowthBytes != 0 ||
+	    evictedCapacity.stableResidentBytes > bytesAfterEviction ||
+	    evictedCapacity.occupiedBytes() !=
+		evictedCapacity.stableResidentBytes ||
 	    service.residentMeshEvictionCountForDiagnostics() <=
 		evictionsBefore ||
 	    restoredAfterEviction.providerStatus !=
@@ -4213,7 +4329,11 @@ test_rt_mesh_provider_task(void)
 	    restoredAfterEviction.terminal ||
 	    restoredAfterEviction.geometry.activeCut !=
 		restoredAfterEviction.progressiveMesh->minimumCut() ||
-	    service.reservedResidentMeshGrowthBytesForDiagnostics() != 0) {
+	    restoredCapacity.reservedGrowthBytes != 0 ||
+	    restoredCapacity.stableResidentBytes <=
+		evictedCapacity.stableResidentBytes ||
+	    restoredCapacity.stableResidentBytes >
+		service.residentMeshBytesForDiagnostics()) {
 	    printf("FAIL: retained-memory pressure did not evict and "
 		   "restore an undemanded PoP asset "
 		   "(queued=%zu wait=%d bytes=%zu/%zu assets=%zu/%zu "
@@ -4236,8 +4356,7 @@ test_rt_mesh_provider_task(void)
 		       -1,
 		   static_cast<unsigned long long>(
 		       restoredAfterEviction.residentAdmissionRevision),
-		   service.
-		       reservedResidentMeshGrowthBytesForDiagnostics());
+		   restoredCapacity.reservedGrowthBytes);
 	    ret = 1;
 	}
 
@@ -4352,6 +4471,13 @@ test_rt_mesh_provider_task(void)
     }
 
     service.stop();
+    const BObolLodResidentCapacityStatus stoppedCapacity =
+	service.residentCapacityStatus();
+    if (stoppedCapacity.stableResidentBytes != 0 ||
+	stoppedCapacity.reservedGrowthBytes != 0) {
+	printf("FAIL: LoD service retained capacity accounting after stop\n");
+	ret = 1;
+    }
 
     /* Analytic and BREP producers hand the service owned triangle arrays,
      * rather than a database BoT or a callback into a temporary internal.
@@ -5007,13 +5133,17 @@ test_generation_scoped_consumers(void)
     second.generation = secondGeneration;
     second.request = make_request("/generation-second.bot");
     second.realize = generation_ready_task;
-    if (!service.submit(second) ||
-	service.activeTaskCountForGeneration(firstGeneration) != 1 ||
-	service.executingTaskCountForGeneration(firstGeneration) != 1 ||
-	service.pendingTaskCountForGeneration(firstGeneration) != 0 ||
-	service.activeTaskCountForGeneration(secondGeneration) != 1 ||
-	service.executingTaskCountForGeneration(secondGeneration) != 0 ||
-	service.pendingTaskCountForGeneration(secondGeneration) != 1) {
+    if (!service.submit(second)) {
+	printf("FAIL: second generation submission\n");
+	return 1;
+    }
+    const BObolLodGenerationWorkStatus firstWork =
+	service.generationWorkStatus(firstGeneration);
+    const BObolLodGenerationWorkStatus secondWork =
+	service.generationWorkStatus(secondGeneration);
+    if (firstWork.activeTasks != 1 || firstWork.executingTasks != 1 ||
+	firstWork.pendingTasks != 0 || secondWork.activeTasks != 1 ||
+	secondWork.executingTasks != 0 || secondWork.pendingTasks != 1) {
 	printf("FAIL: per-generation active/pending/executing counters\n");
 	{
 	    std::lock_guard<std::mutex> lock(state.mutex);
@@ -5033,10 +5163,14 @@ test_generation_scoped_consumers(void)
     for (int i = 0; i < 200 && state.notifications.load() < 2; ++i)
 	std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
-    if (service.activeTaskCountForGeneration(firstGeneration) != 0 ||
-	service.activeTaskCountForGeneration(secondGeneration) != 0 ||
-	service.queuedResultCountForGeneration(firstGeneration) != 1 ||
-	service.queuedResultCountForGeneration(secondGeneration) != 1 ||
+    const BObolLodGenerationWorkStatus firstCompleted =
+	service.generationWorkStatus(firstGeneration);
+    const BObolLodGenerationWorkStatus secondCompleted =
+	service.generationWorkStatus(secondGeneration);
+    if (firstCompleted.activeTasks != 0 ||
+	secondCompleted.activeTasks != 0 ||
+	firstCompleted.queuedResults != 1 ||
+	secondCompleted.queuedResults != 1 ||
 	state.notifications.load() != 2) {
 	printf("FAIL: per-generation completion/result notification state "
 	       "(notifications=%u)\n", state.notifications.load());
@@ -5186,6 +5320,146 @@ test_intermediate_result_lifecycle(void)
     }
 
     service.stop();
+    return 0;
+}
+
+static int
+test_progress_display_status(void)
+{
+    BObolLodConvergenceStatus status;
+    BObolLodProgressDisplayStatus display = status.progressDisplayStatus();
+    if (display.visible || display.terminalReady ||
+	display.publicationClass != BOBOL_LOD_PROGRESS_DISPLAY_IDLE) {
+	printf("FAIL: empty convergence status displayed progress\n");
+	return 1;
+    }
+
+    status.hasLodState = TRUE;
+    status.terminal = TRUE;
+    status.viewReady = TRUE;
+    status.fraction = 1.0f;
+    display = status.progressDisplayStatus();
+    if (display.visible || !display.terminalReady) {
+	printf("FAIL: terminal convergence did not retire progress\n");
+	return 1;
+    }
+
+    status.fraction = 0.99f;
+    display = status.progressDisplayStatus();
+    if (!display.visible || display.terminalReady) {
+	printf("FAIL: incomplete idle convergence claimed completion\n");
+	return 1;
+    }
+    status.semanticPresentationFramePending = TRUE;
+    if (status.progressDisplayStatus().visible) {
+	printf("FAIL: semantic-only frame displayed LoD progress\n");
+	return 1;
+    }
+    status.semanticPresentationFramePending = FALSE;
+    status.fraction = 1.0f;
+    status.performanceLimited = TRUE;
+    if (!status.progressDisplayStatus().visible) {
+	printf("FAIL: constrained terminal convergence hid progress status\n");
+	return 1;
+    }
+    status.performanceLimited = FALSE;
+    status.failedSourceCount = 1;
+    if (!status.progressDisplayStatus().visible) {
+	printf("FAIL: terminal source failure hid progress status\n");
+	return 1;
+    }
+    status.failedSourceCount = 0;
+
+    struct PhaseCase {
+	int phase;
+	BObolLodProgressDisplayClass publicationClass;
+    };
+    const PhaseCase phaseCases[] = {
+	{BOBOL_LOD_CONVERGENCE_DISCOVERING,
+	 BOBOL_LOD_PROGRESS_DISPLAY_DISCOVERING},
+	{BOBOL_LOD_CONVERGENCE_PREPARING,
+	 BOBOL_LOD_PROGRESS_DISPLAY_PREPARING},
+	{BOBOL_LOD_CONVERGENCE_INTERACTIVE,
+	 BOBOL_LOD_PROGRESS_DISPLAY_INTERACTIVE},
+	{BOBOL_LOD_CONVERGENCE_REFINING,
+	 BOBOL_LOD_PROGRESS_DISPLAY_SETTLING},
+	{BOBOL_LOD_CONVERGENCE_CALIBRATING,
+	 BOBOL_LOD_PROGRESS_DISPLAY_SETTLING}
+    };
+    for (const PhaseCase &phaseCase : phaseCases) {
+	status.phase = phaseCase.phase;
+	display = status.progressDisplayStatus();
+	if (!display.visible || display.terminalReady ||
+	    display.publicationClass != phaseCase.publicationClass) {
+	    printf("FAIL: convergence phase %d has display class %d\n",
+		phaseCase.phase, display.publicationClass);
+	    return 1;
+	}
+    }
+
+    status.phase = BOBOL_LOD_CONVERGENCE_BACKGROUND;
+    status.viewReady = FALSE;
+    if (status.progressDisplayStatus().publicationClass !=
+	BOBOL_LOD_PROGRESS_DISPLAY_SETTLING) {
+	printf("FAIL: unfinished background handoff changed progress class\n");
+	return 1;
+    }
+    status.viewReady = TRUE;
+    if (status.progressDisplayStatus().publicationClass !=
+	BOBOL_LOD_PROGRESS_DISPLAY_BACKGROUND) {
+	printf("FAIL: ready background work did not publish its progress class\n");
+	return 1;
+    }
+
+    status.phase = BOBOL_LOD_CONVERGENCE_ERROR;
+    status.terminalError = FALSE;
+    if (status.progressDisplayStatus().publicationClass !=
+	BOBOL_LOD_PROGRESS_DISPLAY_ERROR) {
+	printf("FAIL: active error has the wrong progress class\n");
+	return 1;
+    }
+    status.terminalError = TRUE;
+    if (status.progressDisplayStatus().publicationClass !=
+	BOBOL_LOD_PROGRESS_DISPLAY_TERMINAL_ERROR) {
+	printf("FAIL: terminal error did not advance its progress class\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_resident_capacity_status_arithmetic(void)
+{
+    BObolLodResidentCapacityStatus status;
+    status.stableResidentBytes = 70;
+    status.reservedGrowthBytes = 30;
+    status.residentLimitBytes = 100;
+    if (status.occupiedBytes() != 100 || status.exceedsLimit() ||
+	!status.fitsWithinLimitFraction(1) ||
+	status.fitsWithinLimitFraction(0)) {
+	printf("FAIL: resident capacity status mishandled an exact limit\n");
+	return 1;
+    }
+
+    status.reservedGrowthBytes = 31;
+    if (status.occupiedBytes() != 101 || !status.exceedsLimit()) {
+	printf("FAIL: resident capacity status did not report pressure\n");
+	return 1;
+    }
+
+    status.stableResidentBytes = SIZE_MAX - 4;
+    status.reservedGrowthBytes = 10;
+    if (status.occupiedBytes() != SIZE_MAX || !status.exceedsLimit()) {
+	printf("FAIL: resident capacity status did not saturate overflow\n");
+	return 1;
+    }
+
+    status.residentLimitBytes = SIZE_MAX;
+    if (status.exceedsLimit() || !status.fitsWithinLimitFraction(4) ||
+	status.fitsWithinLimitFraction(0)) {
+	printf("FAIL: resident capacity status mishandled an unlimited policy\n");
+	return 1;
+    }
     return 0;
 }
 
@@ -5416,6 +5690,10 @@ main(int argc, char **argv)
     if (runIsolated(test_generation_scoped_consumers))
 	return 1;
     if (runIsolated(test_intermediate_result_lifecycle))
+	return 1;
+    if (runIsolated(test_progress_display_status))
+	return 1;
+    if (runIsolated(test_resident_capacity_status_arithmetic))
 	return 1;
     if (runIsolated(test_resident_memory_percentage_limit))
 	return 1;

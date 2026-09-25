@@ -93,6 +93,7 @@ static const uint64_t controller_structural_repair_deadline_multiplier = 2;
  * even at the minimum mesh cut.  Bound the one-shot census to 2.5 FPS rather
  * than restarting it forever at the normal 10 FPS hard limit. */
 static const uint64_t controller_point_census_deadline_multiplier = 4;
+static const size_t controller_quiet_resident_headroom_divisor = 4;
 
 struct ControllerStructuralFrontierIdentity {
     struct SourcePlan {
@@ -351,6 +352,9 @@ BObolViewController::renderPending(SbBool clearWindow,
 	renderAction->setAbortCallback(
 	    controller_render_deadline_cb, &deadlineContext);
     }
+    if (renderAction)
+	renderAction->setBackgroundColors(this->d->backgroundBottom,
+	    this->d->backgroundTop);
     if (clearWindow)
 	this->renderBackground();
     else if (clearZBuffer)
@@ -840,13 +844,13 @@ BObolViewController::notePresentationRenderInterrupted(
      * Static quality is likewise one-shot for this camera/policy epoch after
      * such a miss; occurrence-local recovery remains free to redistribute
      * the demonstrated safe allowance. */
+    const BObolLodGenerationWorkStatus deadlineGenerationWork =
+	this->d->lodService ?
+	    this->d->lodService->generationWorkStatus(
+		this->d->lodActiveGeneration) :
+	    BObolLodGenerationWorkStatus();
     const bool deadlineServiceProducer =
-	this->d->lodAvailabilityLedger.resultsPending() != 0 ||
-	(this->d->lodService &&
-	 (this->d->lodService->activeTaskCountForGeneration(
-	      this->d->lodActiveGeneration) > 0 ||
-	  this->d->lodService->queuedResultCountForGeneration(
-	      this->d->lodActiveGeneration) > 0));
+	deadlineGenerationWork.hasResultWork();
     const bool deadlineSubmissionPaused =
 	BObolLodAdmissionPlanner::presentationPausesSubmission(
 	    this->d->lodPointAdmissionFrame.pending(),
@@ -1405,12 +1409,13 @@ BObolViewController::advanceStableLodReducerIfReady(void)
     const uint64_t currentCadSampleNanoseconds =
 	reusableCadSampleNanoseconds ? reusableCadSampleNanoseconds :
 	structuralSampleNanoseconds;
-    const size_t activeTasks = this->d->lodService ?
-	this->d->lodService->activeTaskCountForGeneration(
-	    this->d->lodActiveGeneration) : 0;
-    const size_t queuedResults = this->d->lodService ?
-	this->d->lodService->queuedResultCountForGeneration(
-	    this->d->lodActiveGeneration) : 0;
+    const BObolLodGenerationWorkStatus generationWork =
+	this->d->lodService ?
+	    this->d->lodService->generationWorkStatus(
+		this->d->lodActiveGeneration) :
+	    BObolLodGenerationWorkStatus();
+    const size_t activeTasks = generationWork.activeTasks;
+    const size_t queuedResults = generationWork.queuedResults;
     size_t activePayloads = 0;
     size_t satisfiedPayloads = 0;
     size_t memoryLimitedPayloads = 0;
@@ -1433,8 +1438,8 @@ BObolViewController::advanceStableLodReducerIfReady(void)
     const bool terminalAllocationPopulationSettled =
 	BObolLodAvailabilityScheduler::allocationPopulationSettled(
 	    externalProducersSettled,
-	    activeTasks == 0 && queuedResults == 0,
-	    this->d->lodAvailabilityLedger.resultsPending() == 0 &&
+	    !generationWork.hasResultWork(),
+	    generationWork.queuedResults == 0 &&
 		!this->d->lodPresentationTransaction.publicationPending(),
 	    this->d->lodAvailabilityLedger.residentGrowthPending(),
 	    this->d->lodAvailabilityLedger.residencyDrainActive());
@@ -1455,8 +1460,7 @@ BObolViewController::advanceStableLodReducerIfReady(void)
 	presentedStructuralBoxes <= terminalOccurrenceFailures &&
 	externalProducersSettled &&
 	!this->d->lodPresentationTransaction.barrierPending() &&
-	this->d->lodAvailabilityLedger.resultsPending() == 0 &&
-	activeTasks == 0 && queuedResults == 0;
+	!generationWork.hasResultWork();
     if (rendererCoverageProofReady)
 	(void)this->d->lodCoveragePolicy.confirmPresentedCoverage(
 	    usefulPresentationCount);
@@ -1636,8 +1640,7 @@ BObolViewController::advanceStableLodReducerIfReady(void)
 	    this->d->lodAvailabilityLedger.residentGrowthPending(),
 	    this->d->lodAvailabilityLedger.residencyDrainActive()) &&
 	externalProducersSettled &&
-	this->d->lodAvailabilityLedger.resultsPending() == 0 &&
-	activeTasks == 0 && queuedResults == 0;
+	!generationWork.hasResultWork();
     const bool pointCalibrationBlocksStructuralRepair =
 	this->d->lodPointQualityPhase.presentationPending() &&
 	!pointPolicyExhausted;
@@ -1740,7 +1743,7 @@ BObolViewController::advanceStableLodReducerIfReady(void)
 	       this->d->lodPointQualityPhase.presentationPending() ? 1 : 0,
 	       pointPolicyExhausted ? 1 : 0,
 	       this->d->lodPointQualityPhase.triangleRecoveryPending() ? 1 : 0,
-	       this->d->lodAvailabilityLedger.resultsPending(), activeTasks, queuedResults);
+	       queuedResults > 0 ? 1 : 0, activeTasks, queuedResults);
 
     /* Once point aggregation has no useful successor, every remaining
      * uncollapsed box is a structural coverage obligation.  Transfer the
@@ -1970,16 +1973,10 @@ BObolViewController::advanceStableLodReducerIfReady(void)
 	std::fabs(viewPolicy.scale - 1.0) <= 1.0e-6;
     bool residentMemoryHeadroom = false;
     if (this->d->lodService) {
-	const size_t residentLimit =
-	    this->d->lodService->getResidentMeshLimit();
-	const size_t residentBytes = this->d->lodService->
-	    stableResidentMeshBytesForDiagnostics();
-	const size_t reservedGrowth = this->d->lodService->
-	    reservedResidentMeshGrowthBytesForDiagnostics();
-	residentMemoryHeadroom = residentLimit == SIZE_MAX ||
-	    (residentBytes <= residentLimit / 4 &&
-	     reservedGrowth <= residentLimit / 4 -
-		std::min(residentBytes, residentLimit / 4));
+	const BObolLodResidentCapacityStatus capacity =
+	    this->d->lodService->residentCapacityStatus();
+	residentMemoryHeadroom = capacity.fitsWithinLimitFraction(
+	    controller_quiet_resident_headroom_divisor);
     }
     const bool quietTerminalBoundaryContext = this->d->lodAutoSubmit &&
 	this->d->lodService && !this->d->lodInteractionSession.active() &&
@@ -2032,8 +2029,7 @@ BObolViewController::advanceStableLodReducerIfReady(void)
 	    !this->d->lodRetainedPass.refinementPending() &&
 	    !this->d->lodPresentationPolicy.handoffPending() &&
 	    externalProducersSettled &&
-	    this->d->lodAvailabilityLedger.resultsPending() == 0 &&
-	    activeTasks == 0 && queuedResults == 0;
+	    !generationWork.hasResultWork();
 	if (this->d->lodStructuralRepair.
 		pointRelaxationPresentationPending() ||
 	    !pointRelaxationFinalizeReady || !exactOccurrenceCoverage ||
@@ -2451,7 +2447,7 @@ BObolViewController::advanceStableLodReducerIfReady(void)
 	       this->d->lodPointQualityPhase.presentationPending() ? 1 : 0,
 	       this->d->lodPointQualityPhase.triangleRecoveryPending() ? 1 : 0,
 	       this->d->lodInteractiveProgressiveCeiling,
-	       this->d->lodAvailabilityLedger.resultsPending(), activeTasks, queuedResults,
+	       queuedResults > 0 ? 1 : 0, activeTasks, queuedResults,
 	       activePopulationCost, this->d->lodAdmissionEvidence.capacity().currentBudget(),
 	       activePayloads, satisfiedPayloads, memoryLimitedPayloads,
 	       residentMemoryHeadroom ? 1 : 0,
@@ -2865,8 +2861,7 @@ BObolViewController::advanceStableLodReducerIfReady(void)
 	this->d->lodInteractiveProgressiveCeiling < 0 &&
 	this->d->lodAdmissionEvidence.capacity().currentBudget() != SIZE_MAX &&
 	actionableQualityDebt &&
-	this->d->lodAvailabilityLedger.resultsPending() == 0 && activeTasks == 0 &&
-	queuedResults == 0;
+	!generationWork.hasResultWork();
     if (controller_lod_trace_enabled("BOBOL_LOD_TRACE_HEADROOM",
 	    this->d->lodViewRevision.value()))
 	bu_log("BObol LoD headroom arm eligible=%d interactive=%d gesture=%d "
@@ -2886,7 +2881,7 @@ BObolViewController::advanceStableLodReducerIfReady(void)
 	       this->d->lodPointQualityPhase.presentationPending() ? 1 : 0,
 	       this->d->lodPointQualityPhase.triangleRecoveryPending() ? 1 : 0,
 	       this->d->lodInteractiveProgressiveCeiling,
-	       this->d->lodAvailabilityLedger.resultsPending(), activeTasks, queuedResults,
+	       queuedResults > 0 ? 1 : 0, activeTasks, queuedResults,
 	       activePopulationCost, this->d->lodAdmissionEvidence.capacity().currentBudget(),
 	       actionableQualityDebt ? 1 : 0, activePayloads,
 	       satisfiedPayloads, memoryLimitedPayloads,
@@ -3062,7 +3057,7 @@ BObolViewController::recordCompletedRenderTiming(uint64_t startedNanoseconds,
 
     if (context.cadPresentationCompleteness ==
 	    BObolCadPresentationCompleteness::EXACT)
-	(void)this->d->lodExactPresentationFrame.confirm(startedNanoseconds);
+	(void)this->d->confirmExactPresentationFrame(startedNanoseconds);
 
     this->d->lastRenderTimeNanoseconds = elapsed;
 
@@ -3210,16 +3205,9 @@ BObolViewController::recordCompletedRenderTiming(uint64_t startedNanoseconds,
 	frameGpuResources.memoryPressure ? TRUE : FALSE;
     SbBool cpuPressure = FALSE;
     if (this->d->lodService) {
-	const size_t residentLimit =
-	    this->d->lodService->getResidentMeshLimit();
-	const size_t stableResident = this->d->lodService->
-	    stableResidentMeshBytesForDiagnostics();
-	const size_t reservedGrowth = this->d->lodService->
-	    reservedResidentMeshGrowthBytesForDiagnostics();
-	cpuPressure = residentLimit != SIZE_MAX &&
-	    (stableResident > residentLimit ||
-	     reservedGrowth > residentLimit -
-		std::min(stableResident, residentLimit)) ? TRUE : FALSE;
+	const BObolLodResidentCapacityStatus capacity =
+	    this->d->lodService->residentCapacityStatus();
+	cpuPressure = capacity.exceedsLimit();
     }
     const BObolLodAdmissionPlan resourcePlan =
 	BObolLodAdmissionPlanner::planResourceObservation(
@@ -3900,13 +3888,13 @@ BObolViewController::recordCompletedRenderTiming(uint64_t startedNanoseconds,
 	 * remains live independently.  Repainting the unchanged many-leaf scene on
 	 * every pump starves that producer work on software renderers and makes
 	 * post-rotation restoration look like a long refinement replay. */
+	const BObolLodGenerationWorkStatus pointCalibrationGenerationWork =
+	    this->d->lodService ?
+		this->d->lodService->generationWorkStatus(
+		    this->d->lodActiveGeneration) :
+		BObolLodGenerationWorkStatus();
 	const bool pointCalibrationServiceWork =
-	    this->hasPendingLodResults() ||
-	    (this->d->lodService &&
-	     (this->d->lodService->activeTaskCountForGeneration(
-		 this->d->lodActiveGeneration) > 0 ||
-	      this->d->lodService->queuedResultCountForGeneration(
-		 this->d->lodActiveGeneration) > 0));
+	    pointCalibrationGenerationWork.hasResultWork();
 	/* The completed frame does not make an active submission cursor an
 	 * independent producer.  This callback has just released the current
 	 * point-calibration phase, but any successor calibration requested below
@@ -4215,15 +4203,16 @@ BObolViewController::recordCompletedRenderTiming(uint64_t startedNanoseconds,
 	    1000000000.0L /
 		static_cast<long double>(
 		    this->d->quietAllocationTargetFps()) : 0.0L;
-    const bool ongoingServiceWork = this->d->lodService &&
-	(this->d->lodService->activeTaskCountForGeneration(
-	     this->d->lodActiveGeneration) > 0 ||
-	 this->d->lodService->queuedResultCountForGeneration(
-	     this->d->lodActiveGeneration) > 0);
+    const BObolLodGenerationWorkStatus ongoingGenerationWork =
+	this->d->lodService ?
+	    this->d->lodService->generationWorkStatus(
+		this->d->lodActiveGeneration) :
+	    BObolLodGenerationWorkStatus();
+    const bool ongoingServiceWork = ongoingGenerationWork.hasResultWork();
     const SbBool ongoingStableWork =
 	BObolLodAdmissionPlanner::pointStreamingPopulationWorkPending(
 		this->d->lodSubmissionPass.active() != FALSE,
-		this->hasPendingLodResults(), ongoingServiceWork,
+		ongoingGenerationWork.queuedResults != 0, ongoingServiceWork,
 		this->d->lodAvailabilityLedger.providerPendingCount()) ? TRUE : FALSE;
 	if (!admissionPointProxyFrameWasPending &&
 	    !this->d->lodPointAdmissionFrame.pending() &&
@@ -4979,12 +4968,13 @@ BObolViewController::schedulePendingLodHandoffAllocationIfReady(void)
      * release the service stream after that frame.  Keep the readiness test
      * and transition in one place so neither edge can strand allocation debt
      * behind an unchanged framebuffer. */
+    const BObolLodGenerationWorkStatus handoffGenerationWork =
+	this->d->lodService ?
+	    this->d->lodService->generationWorkStatus(
+		this->d->lodActiveGeneration) :
+	    BObolLodGenerationWorkStatus();
     const bool handoffServiceQuiescent = !this->d->lodService ||
-	(this->d->lodService->activeTaskCountForGeneration(
-	     this->d->lodActiveGeneration) == 0 &&
-	 this->d->lodService->queuedResultCountForGeneration(
-	     this->d->lodActiveGeneration) == 0 &&
-	 this->d->lodAvailabilityLedger.resultsPending() == 0);
+	!handoffGenerationWork.hasResultWork();
     const bool handoffPlanningReady =
 	this->d->lodPresentationPolicy.handoffPending() &&
 	!this->d->lodPresentationPolicy.handoffPresentationPending() &&
@@ -5061,11 +5051,10 @@ BObolViewController::scheduleResidentGrowthReallocationIfReady(void)
 	!this->d->lodAvailabilityLedger.residentGrowthPending())
 	return;
 
-    const bool streamIdle =
-	this->d->lodService->activeTaskCountForGeneration(
-	    this->d->lodActiveGeneration) == 0 &&
-	this->d->lodService->queuedResultCountForGeneration(
-	    this->d->lodActiveGeneration) == 0;
+    const BObolLodGenerationWorkStatus generationWork =
+	this->d->lodService->generationWorkStatus(
+	    this->d->lodActiveGeneration);
+    const bool streamIdle = !generationWork.hasResultWork();
     /* Do not interrupt a structural/occurrence census or consume this edge
      * behind a presentation barrier.  The next progressive pump retries it
      * after the complete result wave and its coherent frame are visible. */

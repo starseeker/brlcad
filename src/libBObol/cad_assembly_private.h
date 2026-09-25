@@ -109,6 +109,7 @@ private:
 	uint8_t channels = 0;
 	int activeCut = -1;
 	bool lodStructuralProxy = false;
+	bool meshAssetCoordinates = false;
 	uint64_t geometryRevision = 0;
 	uint64_t appearanceRevision = 0;
 	uint64_t placementRevision = 0;
@@ -179,7 +180,7 @@ struct BObolCadBatchBuildState {
     int shadedCount = 0;
 };
 
-class SoBRLCadRenderBatch : public SoSeparator {
+class BOBOL_EXPORT SoBRLCadRenderBatch : public SoSeparator {
     typedef SoSeparator inherited;
 
     SO_NODE_HEADER(SoBRLCadRenderBatch);
