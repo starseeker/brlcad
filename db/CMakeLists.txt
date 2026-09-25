@@ -254,6 +254,11 @@ foreach(g_input ${G_SAMPLE_MODELS})
 endforeach(g_input ${G_SAMPLE_MODELS})
 
 # These test targets are declared before the sample geometry generators.
+foreach(model pinewood.g havoc.g)
+  if(TARGET test_bobol_prototype AND TARGET ${model})
+    add_dependencies(test_bobol_prototype ${model})
+  endif()
+endforeach()
 if(TARGET m35.g)
   foreach(test_target ged_test_annotate tclcad_check_multi_interp)
     if(TARGET ${test_target})

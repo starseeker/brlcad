@@ -42,6 +42,7 @@
 
 #include "../ged_private.h"
 #include "../ged_bobol_private.hpp"
+#include "../ged_obol_output_private.hpp"
 
 static void
 ps_draw_header(FILE *fp, char *font, char *title, char *creator, int linewidth, fastf_t scale, int xoffset, int yoffset)
@@ -170,27 +171,101 @@ ps_draw_segment_cb(const point_t a, const point_t b, void *data)
 }
 
 static void
-ps_draw_visible_lines(struct ged_view_context *view_ctx, FILE *fp,
-	matp_t psmat, fastf_t perspective, int zclip)
+ps_set_line_style(FILE *fp, const SoBRLExportAction::LineRecord &line,
+	int baseLineWidth)
 {
-    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
-    if (!controller || !controller->getViewport() ||
-	!controller->getViewport()->getRoot())
+    const double width = (std::max)(1.0,
+	static_cast<double>(line.lineWidth) * baseLineWidth);
+    const ged_obol_dash_pattern dash = ged_obol_output_dash_pattern(
+	line.linePattern, line.linePatternFactor,
+	static_cast<double>(baseLineWidth));
+    fprintf(fp, "%g setlinewidth\n", width);
+    if (dash.lengths.empty()) {
+	fputs("[] 0 setdash\n", fp);
+    } else {
+	fputc('[', fp);
+	for (size_t i = 0; i < dash.lengths.size(); ++i)
+	    fprintf(fp, "%s%g", i ? " " : "", dash.lengths[i]);
+	fprintf(fp, "] %g setdash\n", dash.phase);
+    }
+    fprintf(fp, "%f %f %f setrgbcolor\n",
+	ged_obol_output_composite_channel(line.color[0], 1.0f,
+	    line.transparency),
+	ged_obol_output_composite_channel(line.color[1], 1.0f,
+	    line.transparency),
+	ged_obol_output_composite_channel(line.color[2], 1.0f,
+	    line.transparency));
+}
+
+static bool
+ps_project_point(const SbVec3f &point, matp_t psmat, fastf_t perspective,
+	vect_t projected)
+{
+    point_t source = {point[0], point[1], point[2]};
+    if (perspective > 0.0 &&
+	    VDOT(source, &psmat[12]) + psmat[15] <= 0.0)
+	return false;
+    MAT4X3PNT(projected, psmat, source);
+    return true;
+}
+
+static void
+ps_draw_annotation_triangle(FILE *fp,
+	const SoBRLExportAction::TriangleRecord &triangle, matp_t psmat,
+	fastf_t perspective, int zclip)
+{
+    vect_t projected[3];
+    if (!ps_project_point(triangle.a, psmat, perspective, projected[0]) ||
+	!ps_project_point(triangle.b, psmat, perspective, projected[1]) ||
+	!ps_project_point(triangle.c, psmat, perspective, projected[2]))
 	return;
+    if (zclip) {
+	for (int side : {-1, 1}) {
+	    if (side * projected[0][Z] > 1.0 &&
+		    side * projected[1][Z] > 1.0 &&
+		    side * projected[2][Z] > 1.0)
+		return;
+	}
+    }
 
-    SoBRLExportAction export_action;
-    export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
-    export_action.apply(controller->getViewport()->getRoot());
+    const float red = triangle.backgroundMask ? 1.0f :
+	ged_obol_output_composite_channel(triangle.color[0], 1.0f,
+	    triangle.transparency);
+    const float green = triangle.backgroundMask ? 1.0f :
+	ged_obol_output_composite_channel(triangle.color[1], 1.0f,
+	    triangle.transparency);
+    const float blue = triangle.backgroundMask ? 1.0f :
+	ged_obol_output_composite_channel(triangle.color[2], 1.0f,
+	    triangle.transparency);
+    fprintf(fp, "%f %f %f setrgbcolor\n", red, green, blue);
+    fprintf(fp,
+	"newpath %d %d moveto %d %d lineto %d %d lineto closepath fill\n",
+	PS_COORD(projected[0][X] * 2047),
+	PS_COORD(projected[0][Y] * 2047),
+	PS_COORD(projected[1][X] * 2047),
+	PS_COORD(projected[1][Y] * 2047),
+	PS_COORD(projected[2][X] * 2047),
+	PS_COORD(projected[2][Y] * 2047));
+}
 
-    std::vector<SoBRLExportAction::ObjectRecord> records;
-    export_action.collectObjectRecords(records,
-	SoBRLExportAction::QUERY_VISIBLE_ONLY);
+static void
+ps_draw_lines(const SoBRLExportAction &exportAction,
+	const std::vector<SoBRLExportAction::ObjectRecord> &records, FILE *fp,
+	matp_t psmat, fastf_t perspective, int zclip, int baseLineWidth,
+	bool annotations)
+{
     for (const SoBRLExportAction::ObjectRecord &record : records) {
-	for (int line_index : record.lineIndices) {
+	for (int lineIndex : record.lineIndices) {
 	    const SoBRLExportAction::LineRecord &line =
-		export_action.getLine(line_index);
-	    fprintf(fp, "%f %f %f setrgbcolor\n",
-		line.color[0], line.color[1], line.color[2]);
+		exportAction.getLine(lineIndex);
+	    if (ged_obol_output_is_annotation(line.geometryKind) != annotations)
+		continue;
+	    const ged_obol_dash_pattern dash = ged_obol_output_dash_pattern(
+		line.linePattern, line.linePatternFactor,
+		static_cast<double>(baseLineWidth));
+	    if (!dash.visible)
+		continue;
+	    ps_set_line_style(fp, line, baseLineWidth);
 
 	    struct ps_segment_data psd;
 	    psd.delta = psmat[15] * 0.0001;
@@ -211,8 +286,39 @@ ps_draw_visible_lines(struct ged_view_context *view_ctx, FILE *fp,
 }
 
 static void
-ps_draw_body(struct ged_view_context *view_ctx, FILE *fp, mat_t model2view, fastf_t perspective,
-	    vect_t eye_pos, int zclip)
+ps_draw_visible_geometry(struct ged_view_context *view_ctx, FILE *fp,
+	matp_t psmat, fastf_t perspective, int zclip, int baseLineWidth)
+{
+    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
+    if (!controller || !controller->getViewport() ||
+	!controller->getViewport()->getRoot())
+	return;
+
+    SoBRLExportAction export_action;
+    export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
+    export_action.applyViewport(*controller->getViewport());
+
+    std::vector<SoBRLExportAction::ObjectRecord> records;
+    export_action.collectObjectRecords(records,
+	SoBRLExportAction::QUERY_VISIBLE_ONLY);
+    ps_draw_lines(export_action, records, fp, psmat, perspective, zclip,
+	baseLineWidth, false);
+    for (const SoBRLExportAction::ObjectRecord &record : records) {
+	for (int triangleIndex : record.triangleIndices) {
+	    const SoBRLExportAction::TriangleRecord &triangle =
+		export_action.getTriangle(triangleIndex);
+	    if (ged_obol_output_is_annotation(triangle.geometryKind))
+		ps_draw_annotation_triangle(fp, triangle, psmat, perspective,
+		    zclip);
+	}
+    }
+    ps_draw_lines(export_action, records, fp, psmat, perspective, zclip,
+	baseLineWidth, true);
+}
+
+static void
+ps_draw_body(struct ged_view_context *view_ctx, FILE *fp, mat_t model2view,
+	fastf_t perspective, vect_t eye_pos, int zclip, int baseLineWidth)
 {
     mat_t newmat;
     matp_t mat;
@@ -241,7 +347,8 @@ ps_draw_body(struct ged_view_context *view_ctx, FILE *fp, mat_t model2view, fast
 	mat = newmat;
     }
 
-    ps_draw_visible_lines(view_ctx, fp, mat, perspective, zclip);
+    ps_draw_visible_geometry(view_ctx, fp, mat, perspective, zclip,
+	baseLineWidth);
 }
 
 
@@ -273,7 +380,8 @@ dl_ps(struct ged_view_context *view_ctx, FILE *fp, int border, char *font, char 
     ps_draw_header(fp, font, title, creator, linewidth, scale, xoffset, yoffset);
     if (border)
 	ps_draw_border(fp, red, green, blue);
-    ps_draw_body(view_ctx, fp, model2view, perspective, eye_pos, zclip);
+    ps_draw_body(view_ctx, fp, model2view, perspective, eye_pos, zclip,
+	linewidth);
     ps_draw_footer(fp);
 
 }

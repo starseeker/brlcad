@@ -18,6 +18,7 @@
 #include <Inventor/SbBox.h>
 #include <Inventor/SbColor.h>
 #include <Inventor/SbMatrix.h>
+#include <Inventor/SbVec2s.h>
 #include <Inventor/SbVec3f.h>
 #include <Inventor/fields/SoSFBool.h>
 #include <Inventor/fields/SoSFColor.h>
@@ -550,6 +551,8 @@ struct BOBOL_EXPORT BObolExternalAnnotationSegment {
 struct BOBOL_EXPORT BObolExternalAnnotation {
     BObolExternalAnnotation(void);
 
+    /** Source-local model coordinates. Screen-space database annotations use
+     * native compact realization and its CadDisplayPlane instead. */
     SbVec3f basePoint;
     const SbVec3f *linePoints;
     const int32_t *lineCommands;
@@ -1370,6 +1373,9 @@ public:
 	const BObolExternalTriangleMesh &triangleMesh);
     int publishExternalAnnotation(
 	const BObolExternalAnnotation &annotation);
+    /** Publish the legacy model-coordinate primitive fallback. Screen-space
+     * annotations return -1; realizeDatabaseWireframe retains their native
+     * display-plane representation. */
     int publishPrimitiveWireframe(
 	struct rt_db_internal *intern,
 	const struct bg_tess_tol *ttol = NULL,
@@ -1519,10 +1525,11 @@ public:
      *
      * Returns -1 when this source has no compact occurrence registry;
      * otherwise returns the number of appended records.  Rectangle
-     * coordinates use OpenGL NDC (-1..1, lower-left origin).
+     * coordinates use OpenGL NDC (-1..1, lower-left origin). The physical
+     * viewport size is required for display-plane annotation bounds.
      */
     int queryCompactRectangle(const SbMatrix &parentToWorld,
-	const SbMatrix &viewProjection,
+	const SbMatrix &viewProjection, const SbVec2s &viewportSize,
 	float minimumX, float minimumY,
 	float maximumX, float maximumY,
 	std::vector<BObolViewPickRecord> &records) const;
@@ -1867,6 +1874,36 @@ private:
     int setPlacementState(SbBool matrixValid, const SbMatrix &matrix,
 	SbBool centerValid, const SbVec3f &center, SbBool sizeValid, float size,
 	PublicationCommit committed, void *context);
+    int publishStaleState(uint32_t reason, uint32_t revision,
+	PublicationCommit committed, void *context);
+    int setCompactInstanceDisplayStateForPath(const char *path,
+	SbBool includeDescendants,
+	int visibleValid, SbBool visible,
+	int selectedValid, SbBool selected,
+	int highlightedValid, SbBool highlighted,
+	PublicationCommit committed, void *context);
+    int setCompactInstanceDisplayStateForPathMatch(const char *path,
+	BObolCompactPathMatch match,
+	int visibleValid, SbBool visible,
+	int selectedValid, SbBool selected,
+	int highlightedValid, SbBool highlighted,
+	PublicationCommit committed, void *context);
+    int setCompactInstanceVisibilityFrontier(const std::vector<SbString> &paths,
+	PublicationCommit committed, void *context);
+    int setCompactInstanceVisibilityOverrides(const std::vector<SbString> &paths,
+	const std::vector<SbBool> &states,
+	PublicationCommit committed, void *context);
+    int clearCompactInstanceVisibilityFrontier(
+	PublicationCommit committed, void *context);
+    int syncCompactInstanceSelectedPaths(const std::vector<SbString> &paths,
+	PublicationCommit committed, void *context);
+    int applyCompactInstanceSelectionDelta(
+	const std::vector<SbString> &addedPaths,
+	const std::vector<SbString> &removedPaths,
+	PublicationCommit committed, void *context);
+    SbBool realizeDatabaseWireframe(
+	BObolCompactOccurrenceStream *stream,
+	BObolSourceRealizationEffects *effects);
     enum class MetadataIntent { DisplayName, Hierarchy, MaterialPolicy };
 
     enum class FieldObservation { Observe, Detached };

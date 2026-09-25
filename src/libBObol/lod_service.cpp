@@ -1861,6 +1861,7 @@ struct BObolLodServicePrivate {
 	residentMeshEvictions(0),
 	residentMeshBytes(0),
 	residentMeshBackingBytes(0),
+	residentMeshStableBytes(0),
 	residentMeshGrowthReservationBytes(0),
 	residentMeshRevision(1),
 	residentMeshAdmissionRevision(1),
@@ -1925,6 +1926,10 @@ struct BObolLodServicePrivate {
      * not the quiet-state residency target.  The transient working-set
      * governor already bounds their concurrent construction. */
     std::atomic<size_t> residentMeshBackingBytes;
+    /* Stable immutable renderer bytes are published as one scalar.  Deriving
+     * this value from separate total/backing loads allowed a policy reader to
+     * observe half of a concurrent accounting replacement. */
+    std::atomic<size_t> residentMeshStableBytes;
     /* Protected by mutex.  Workers reserve optional stable-prefix growth
      * before loading so independent assets cannot all observe the same free
      * capacity.  Minimum useful prefixes are permitted to exceed the soft
@@ -2017,6 +2022,30 @@ lod_resident_mesh_bytes_replace(std::atomic<size_t> &total,
     }
 }
 
+static size_t
+lod_resident_asset_stable_bytes(size_t total, size_t backing)
+{
+    return backing >= total ? 0 : total - backing;
+}
+
+static void
+lod_resident_mesh_accounting_replace(BObolLodServicePrivate *service,
+    size_t priorBytes, size_t currentBytes,
+    size_t priorBackingBytes, size_t currentBackingBytes)
+{
+    if (!service)
+	return;
+    lod_resident_mesh_bytes_replace(
+	service->residentMeshBytes, priorBytes, currentBytes);
+    lod_resident_mesh_bytes_replace(
+	service->residentMeshBackingBytes,
+	priorBackingBytes, currentBackingBytes);
+    lod_resident_mesh_bytes_replace(
+	service->residentMeshStableBytes,
+	lod_resident_asset_stable_bytes(priorBytes, priorBackingBytes),
+	lod_resident_asset_stable_bytes(currentBytes, currentBackingBytes));
+}
+
 static void
 lod_resident_mesh_revision_advance(std::atomic<uint64_t> &revision)
 {
@@ -2060,11 +2089,7 @@ lod_resident_stable_bytes(const BObolLodServicePrivate *p)
 {
     if (!p)
 	return 0;
-    const size_t total =
-	p->residentMeshBytes.load(std::memory_order_relaxed);
-    const size_t backing =
-	p->residentMeshBackingBytes.load(std::memory_order_relaxed);
-    return backing >= total ? 0 : total - backing;
+    return p->residentMeshStableBytes.load(std::memory_order_relaxed);
 }
 
 static size_t
@@ -3452,9 +3477,8 @@ lod_execute_resident_compaction(
 	if (resident->lod)
 	    bobol_mesh_lod_destroy(resident->lod);
 	resident->lod = NULL;
-	lod_resident_mesh_bytes_replace(p->residentMeshBytes, priorBytes, 0);
-	lod_resident_mesh_bytes_replace(
-	    p->residentMeshBackingBytes, priorBackingBytes, 0);
+	lod_resident_mesh_accounting_replace(
+	    p, priorBytes, 0, priorBackingBytes, 0);
 	lod_resident_mesh_revision_advance(p->residentMeshRevision);
 	if (priorBytes > priorBackingBytes)
 	    lod_resident_mesh_revision_advance(
@@ -3562,14 +3586,10 @@ lod_execute_resident_compaction(
 	    result.residentBytes, std::memory_order_relaxed);
 	resident->publishedBackingPrefixBytes.store(
 	    0, std::memory_order_relaxed);
-	if (result.residentBytes != priorBytes) {
-	    lod_resident_mesh_bytes_replace(
-		p->residentMeshBytes, priorBytes, result.residentBytes);
+	if (result.residentBytes != priorBytes)
 	    lod_resident_mesh_revision_advance(p->residentMeshRevision);
-	}
-	if (priorBackingBytes)
-	    lod_resident_mesh_bytes_replace(
-		p->residentMeshBackingBytes, priorBackingBytes, 0);
+	lod_resident_mesh_accounting_replace(
+	    p, priorBytes, result.residentBytes, priorBackingBytes, 0);
 	return result;
     }
 
@@ -3594,14 +3614,11 @@ lod_execute_resident_compaction(
 	result.residentBytes, std::memory_order_relaxed);
     resident->publishedBackingPrefixBytes.store(
 	0, std::memory_order_relaxed);
-    lod_resident_mesh_bytes_replace(
-	p->residentMeshBytes, priorBytes, result.residentBytes);
-    if (priorBackingBytes)
-	lod_resident_mesh_bytes_replace(
-	    p->residentMeshBackingBytes, priorBackingBytes, 0);
+    lod_resident_mesh_accounting_replace(
+	p, priorBytes, result.residentBytes, priorBackingBytes, 0);
     lod_resident_mesh_revision_advance(p->residentMeshRevision);
-    const size_t priorStableBytes = priorBackingBytes >= priorBytes ?
-	0 : priorBytes - priorBackingBytes;
+    const size_t priorStableBytes =
+	lod_resident_asset_stable_bytes(priorBytes, priorBackingBytes);
     if (result.residentBytes < priorStableBytes)
 	lod_resident_mesh_revision_advance(p->residentMeshAdmissionRevision);
     residentLock.unlock();
@@ -4055,6 +4072,8 @@ BObolLodService::stop(void)
 	residentMeshes.swap(this->p->residentMeshes);
 	this->p->residentMeshBytes.store(0, std::memory_order_relaxed);
 	this->p->residentMeshBackingBytes.store(
+	    0, std::memory_order_relaxed);
+	this->p->residentMeshStableBytes.store(
 	    0, std::memory_order_relaxed);
 	this->p->residentMeshGrowthReservationBytes = 0;
 	lod_resident_mesh_revision_advance(
@@ -5022,8 +5041,7 @@ BObolLodService::realizeResidentMeshLod(
     if (!resident->lod) {
 	/*
 	 * Compact requests captured the validated immutable content key while
-	 * their source records were streamed.  Open that payload directly and
-	 * keep its hierarchy-header snapshot through the first prefix read.
+	 * their source records were streamed.  Open that payload directly.
 	 * Falling back to the named API preserves the non-compact/legacy path.
 	 * At distinct-asset scale this avoids one database lookup, one name-cache
 	 * lookup, and one LMDB read transaction per successful warm task.
@@ -5313,9 +5331,8 @@ BObolLodService::realizeResidentMeshLod(
     const size_t priorBackingBytes =
 	resident->publishedBackingPrefixBytes.load(
 	    std::memory_order_relaxed);
-    const size_t priorStableBytes =
-	priorBackingBytes >= priorResidentBytes ?
-	    0 : priorResidentBytes - priorBackingBytes;
+    const size_t priorStableBytes = lod_resident_asset_stable_bytes(
+	priorResidentBytes, priorBackingBytes);
     int currentCut = bobol_mesh_lod_current_cut(resident->lod);
     const int publishedCut =
 	resident->mesh && resident->mesh->isValid() ?
@@ -5709,18 +5726,14 @@ BObolLodService::realizeResidentMeshLod(
     resident->publishedBackingPrefixBytes.store(
 	backingBytes,
 	std::memory_order_relaxed);
-    if (residentBytes != priorResidentBytes) {
-	lod_resident_mesh_bytes_replace(this->p->residentMeshBytes,
-	    priorResidentBytes, residentBytes);
+    if (residentBytes != priorResidentBytes)
 	lod_resident_mesh_revision_advance(
 	    this->p->residentMeshRevision);
-    }
-    if (backingBytes != priorBackingBytes)
-	lod_resident_mesh_bytes_replace(
-	    this->p->residentMeshBackingBytes,
-	    priorBackingBytes, backingBytes);
-    const size_t stableBytes = backingBytes >= residentBytes ?
-	0 : residentBytes - backingBytes;
+    lod_resident_mesh_accounting_replace(this->p,
+	priorResidentBytes, residentBytes,
+	priorBackingBytes, backingBytes);
+    const size_t stableBytes =
+	lod_resident_asset_stable_bytes(residentBytes, backingBytes);
     if (stableBytes < priorStableBytes)
 	lod_resident_mesh_revision_advance(
 	    this->p->residentMeshAdmissionRevision);
@@ -7128,11 +7141,108 @@ BObolLodService::unsubscribeResultReady(BObolLodSubscriberId id)
     }
 }
 
+static size_t
+lod_service_queued_result_count_unlocked(const BObolLodServicePrivate *service)
+{
+    size_t count = service->results.size();
+    for (const auto &producer : service->sharedProducers) {
+	const size_t pending = lod_shared_pending_replay_count_unlocked(
+	    producer.second);
+	count = pending > SIZE_MAX - count ? SIZE_MAX : count + pending;
+    }
+    return count;
+}
+
+static size_t
+lod_service_active_request_count_unlocked(
+    const BObolLodServicePrivate *service)
+{
+    size_t count = service->activeRequestKeyCounts.size();
+    for (const auto &producer : service->sharedProducers) {
+	if (!producer.second.leases.empty() &&
+	    service->activeRequestKeyCounts.find(producer.first) ==
+		service->activeRequestKeyCounts.end())
+	    ++count;
+    }
+    return count;
+}
+
+static size_t
+lod_service_pending_compaction_count_unlocked(
+    const BObolLodServicePrivate *service)
+{
+    size_t planning = 0;
+    for (const auto &consumer : service->residentMeshConsumerDemands)
+	if (consumer.second.planning)
+	    ++planning;
+    return service->residentMeshCompactionWork.size() +
+	service->residentMeshCompactionsInFlight + planning;
+}
+
+static size_t
+lod_service_generation_queued_result_count_unlocked(
+    const BObolLodServicePrivate *service, uint64_t generation)
+{
+    if (!generation)
+	return 0;
+    size_t count = lod_generation_count_unlocked(
+	service->generationResultCounts, generation);
+    for (const auto &producer : service->sharedProducers) {
+	const size_t pending = lod_shared_pending_replay_count_unlocked(
+	    producer.second, generation);
+	count = pending > SIZE_MAX - count ? SIZE_MAX : count + pending;
+    }
+    return count;
+}
+
+static size_t
+lod_service_generation_lease_count_unlocked(
+    const BObolLodServicePrivate *service, uint64_t generation)
+{
+    if (!generation)
+	return 0;
+    size_t count = 0;
+    for (const auto &producer : service->sharedProducers)
+	if (producer.second.leases.find(generation) !=
+	    producer.second.leases.end())
+	    ++count;
+    return count;
+}
+
 size_t
 BObolLodService::inFlightCount(void) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
     return this->p->inFlight;
+}
+
+BObolLodServiceWorkStatus
+BObolLodService::workStatus(void) const
+{
+    BObolLodServiceWorkStatus status;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    status.running = this->p->running;
+    status.stopping = this->p->stopping;
+    status.pendingTasks = this->p->pending.size();
+    status.executingTasks = this->p->executingTasks;
+    status.inFlightTasks = this->p->inFlight;
+    status.resultReservations = this->p->resultReservations;
+    status.cacheWriteReservations = this->p->cacheWriteReservations;
+    status.activeRequests =
+	lod_service_active_request_count_unlocked(this->p);
+    status.queuedResults =
+	lod_service_queued_result_count_unlocked(this->p);
+    status.queuedCacheWrites =
+	this->p->cacheWrites.size() + this->p->cacheWriteInFlight;
+    status.delayedTasks = this->p->delayedTasks;
+    status.activeWorkingSetBytes = this->p->activeWorkingSetBytes;
+    status.pendingResidentMeshCompactions =
+	lod_service_pending_compaction_count_unlocked(this->p);
+    status.queuedResidentMeshCompactionResults =
+	this->p->residentMeshCompactionResultCount;
+    status.residentMeshCompactionResultReservations =
+	this->p->residentMeshCompactionResultReservations;
+    return status;
 }
 
 size_t
@@ -7153,13 +7263,7 @@ size_t
 BObolLodService::queuedResultCountForDiagnostics(void) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
-    size_t count = this->p->results.size();
-    for (const auto &producer : this->p->sharedProducers) {
-	const size_t pending = lod_shared_pending_replay_count_unlocked(
-	    producer.second);
-	count = pending > SIZE_MAX - count ? SIZE_MAX : count + pending;
-    }
-    return count;
+    return lod_service_queued_result_count_unlocked(this->p);
 }
 
 size_t
@@ -7174,6 +7278,31 @@ BObolLodService::delayedTaskCountForDiagnostics(void) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
     return this->p->delayedTasks;
+}
+
+BObolLodGenerationWorkStatus
+BObolLodService::generationWorkStatus(uint64_t generation) const
+{
+    BObolLodGenerationWorkStatus status;
+    if (!generation)
+	return status;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    status.activeTasks = lod_generation_count_unlocked(
+	this->p->generationTaskCounts, generation);
+    status.pendingTasks = lod_generation_count_unlocked(
+	this->p->generationPendingTaskCounts, generation);
+    status.executingTasks = lod_generation_count_unlocked(
+	this->p->generationExecutingTaskCounts, generation);
+    status.delayedTasks = lod_generation_count_unlocked(
+	this->p->generationDelayedTaskCounts, generation);
+    status.queuedResults =
+	lod_service_generation_queued_result_count_unlocked(
+	    this->p, generation);
+    status.queuedCacheWrites = lod_generation_count_unlocked(
+	this->p->generationCacheWriteCounts, generation);
+    status.sharedProducerLeases =
+	lod_service_generation_lease_count_unlocked(this->p, generation);
+    return status;
 }
 
 size_t
@@ -7204,14 +7333,8 @@ size_t
 BObolLodService::queuedResultCountForGeneration(uint64_t generation) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
-    size_t count = lod_generation_count_unlocked(
-	this->p->generationResultCounts, generation);
-    for (const auto &producer : this->p->sharedProducers) {
-	const size_t pending = lod_shared_pending_replay_count_unlocked(
-	    producer.second, generation);
-	count = pending > SIZE_MAX - count ? SIZE_MAX : count + pending;
-    }
-    return count;
+    return lod_service_generation_queued_result_count_unlocked(
+	this->p, generation);
 }
 
 size_t
@@ -7263,14 +7386,7 @@ size_t
 BObolLodService::activeRequestCountForDiagnostics(void) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
-    size_t count = this->p->activeRequestKeyCounts.size();
-    for (const auto &producer : this->p->sharedProducers) {
-	if (!producer.second.leases.empty() &&
-	    this->p->activeRequestKeyCounts.find(producer.first) ==
-		this->p->activeRequestKeyCounts.end())
-	    ++count;
-    }
-    return count;
+    return lod_service_active_request_count_unlocked(this->p);
 }
 
 size_t
@@ -7296,15 +7412,9 @@ size_t
 BObolLodService::sharedProducerLeaseCountForGeneration(
     uint64_t generation) const
 {
-    if (!generation)
-	return 0;
     std::lock_guard<std::mutex> lock(this->p->mutex);
-    size_t count = 0;
-    for (const auto &producer : this->p->sharedProducers)
-	if (producer.second.leases.find(generation) !=
-	    producer.second.leases.end())
-	    ++count;
-    return count;
+    return lod_service_generation_lease_count_unlocked(
+	this->p, generation);
 }
 
 size_t
@@ -7332,6 +7442,19 @@ size_t
 BObolLodService::residentMeshBytesForDiagnostics(void) const
 {
     return this->p->residentMeshBytes.load(std::memory_order_relaxed);
+}
+
+BObolLodResidentCapacityStatus
+BObolLodService::residentCapacityStatus(void) const
+{
+    BObolLodResidentCapacityStatus status;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    status.stableResidentBytes =
+	this->p->residentMeshStableBytes.load(std::memory_order_relaxed);
+    status.reservedGrowthBytes =
+	this->p->residentMeshGrowthReservationBytes;
+    status.residentLimitBytes = this->p->maxResidentMeshBytes;
+    return status;
 }
 
 size_t
@@ -7386,13 +7509,7 @@ size_t
 BObolLodService::pendingResidentMeshCompactionCountForDiagnostics(void) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
-    size_t planning = 0;
-    for (const auto &consumer :
-	    this->p->residentMeshConsumerDemands)
-	if (consumer.second.planning)
-	    planning++;
-    return this->p->residentMeshCompactionWork.size() +
-	this->p->residentMeshCompactionsInFlight + planning;
+    return lod_service_pending_compaction_count_unlocked(this->p);
 }
 
 SbBool

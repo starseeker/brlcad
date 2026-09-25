@@ -42,6 +42,7 @@
 
 #include "../ged_private.h"
 #include "../ged_bobol_private.hpp"
+#include "../ged_obol_output_private.hpp"
 
 #if defined(HAVE_POPEN) && !defined(HAVE_DECL_POPEN) && !defined(popen)
 extern FILE *popen(const char *command, const char *type);
@@ -59,7 +60,7 @@ struct plot_data {
     fastf_t scale;
     int Three_D;
     int Z_clip;
-    int Dashing;
+    const char *lineMode;
     vect_t clipmin;
     vect_t clipmax;
 };
@@ -82,13 +83,19 @@ plot_line(const SoBRLExportAction::LineRecord &line, struct plot_data *pd)
 
     point_t a = {line.a[0], line.a[1], line.a[2]};
     point_t b = {line.b[0], line.b[1], line.b[2]};
-    const int red = plot_color_component(line.color[0]);
-    const int green = plot_color_component(line.color[1]);
-    const int blue = plot_color_component(line.color[2]);
+    const int red = plot_color_component(ged_obol_output_composite_channel(
+	line.color[0], 1.0f, line.transparency));
+    const int green = plot_color_component(ged_obol_output_composite_channel(
+	line.color[1], 1.0f, line.transparency));
+    const int blue = plot_color_component(ged_obol_output_composite_channel(
+	line.color[2], 1.0f, line.transparency));
+    const char *lineMode = ged_obol_plot_line_mode(line.linePattern);
 
-    if (pd->Dashing != line.lineStyle) {
-	pl_linmod(pd->fp, line.lineStyle ? "dotdashed" : "solid");
-	pd->Dashing = line.lineStyle;
+    if (BU_STR_EQUAL(lineMode, "invisible"))
+	return;
+    if (!BU_STR_EQUAL(pd->lineMode, lineMode)) {
+	pl_linmod(pd->fp, lineMode);
+	pd->lineMode = lineMode;
     }
 
     if (pd->floating) {
@@ -133,7 +140,7 @@ plot_visible_lines(struct ged_view_context *view_ctx, struct plot_data *pd)
 
     SoBRLExportAction export_action;
     export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
-    export_action.apply(controller->getViewport()->getRoot());
+    export_action.applyViewport(*controller->getViewport());
 
     std::vector<SoBRLExportAction::ObjectRecord> records;
     export_action.collectObjectRecords(records,
@@ -156,7 +163,7 @@ dl_plot(struct ged_view_context *view_ctx, FILE *fp, mat_t model2view, int float
     pd.scale = scale;
     pd.Three_D = Three_D;
     pd.Z_clip = Z_clip;
-    pd.Dashing = 0;
+    pd.lineMode = "solid";
 
     if (floating) {
 	pd_3space(fp,

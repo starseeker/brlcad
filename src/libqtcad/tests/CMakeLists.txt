@@ -229,12 +229,20 @@ endif(NOT TARGET test_qtcad_obol_draw_sync AND TARGET Qt5::Widgets)
 if(TARGET test_qtcad_obol_draw_sync)
   target_compile_definitions(test_qtcad_obol_draw_sync PRIVATE BRLCADBUILD HAVE_CONFIG_H)
   brlcad_add_test(NAME test_qtcad_obol_draw_sync COMMAND test_qtcad_obol_draw_sync)
-  set_property(TEST test_qtcad_obol_draw_sync
-    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
-  set_property(TEST test_qtcad_obol_draw_sync
-    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+  brlcad_add_test(
+    NAME test_qtcad_obol_production_flow_lifecycle
+    COMMAND test_qtcad_obol_draw_sync production-flow-lifecycle)
+  set_tests_properties(
+    test_qtcad_obol_draw_sync
+    test_qtcad_obol_production_flow_lifecycle
+    PROPERTIES
+      ENVIRONMENT "BRLCAD_ROOT=${CMAKE_BINARY_DIR};QT_QPA_PLATFORM=offscreen"
+      RESOURCE_LOCK qtcad_obol_draw_sync_fixture)
   set_property(TEST test_qtcad_obol_draw_sync
     APPEND PROPERTY LABELS drawing_baseline)
+  set_tests_properties(test_qtcad_obol_production_flow_lifecycle PROPERTIES
+    LABELS "bobol_flow;bobol_graphical"
+    TIMEOUT 30)
   distclean(${CMAKE_CURRENT_BINARY_DIR}/qtcad_obol_draw_sync_tmp.g)
 endif(TARGET test_qtcad_obol_draw_sync)
 
@@ -619,6 +627,7 @@ foreach(_qtcad_obol_offscreen_test
     test_qtcad_obol_controller
     test_qtcad_obol_window_host
     test_qtcad_obol_draw_sync
+    test_qtcad_obol_production_flow_lifecycle
     test_qtcad_obol_edit_preview
     test_qtcad_obol_faceplate_sync
     test_qtcad_obol_selection_sync

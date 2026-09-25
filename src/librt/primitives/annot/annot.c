@@ -1630,9 +1630,40 @@ annot_is_fill_compatibility_outline(const struct rt_ant *ant, size_t seg_no)
 
 
 static int
-ant_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess_tol *ttol, fastf_t *V, struct rt_annot_internal *annot_ip, struct rt_ant *ant)
+ant_vlist_count_since(struct bu_list *vhead, rt_vlist *tail, size_t tail_used,
+	size_t *line_count, size_t *triangle_count)
+{
+    rt_vlist *vp;
+    size_t first;
+
+    if (!line_count || !triangle_count)
+	return 1;
+    *line_count = 0;
+    *triangle_count = 0;
+    vp = tail ? tail : BU_LIST_FIRST(bg_vlist, vhead);
+    first = tail ? tail_used : 0;
+    while (vp && BU_LIST_NOT_HEAD(vp, vhead)) {
+	size_t i;
+	for (i = first; i < vp->nused; ++i) {
+	    if (vp->cmd[i] == RT_VLIST_LINE_DRAW)
+		(*line_count)++;
+	    else if (vp->cmd[i] == RT_VLIST_POLY_END ||
+		    vp->cmd[i] == RT_VLIST_TRI_END)
+		(*triangle_count)++;
+	}
+	vp = BU_LIST_PNEXT(bg_vlist, vp);
+	first = 0;
+    }
+    return 0;
+}
+
+
+static int
+ant_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess_tol *ttol, fastf_t *V, struct rt_annot_internal *annot_ip, struct rt_ant *ant, rt_annot_plot_range_callback callback, void *callback_data)
 {
     size_t seg_no;
+    size_t line_count = 0;
+    size_t triangle_count = 0;
     int ret=0;
     point_t base = VINIT_ZERO;
 
@@ -1649,6 +1680,12 @@ ant_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
      * regardless of their storage position. */
     for (int fill_pass = 1; fill_pass >= 0; --fill_pass) {
 	for (seg_no=0; seg_no < ant->count; seg_no++) {
+	    struct rt_annot_plot_range range = {0};
+	    rt_vlist *tail = BU_LIST_IS_EMPTY(vhead) ? NULL :
+		BU_LIST_LAST(bg_vlist, vhead);
+	    const size_t tail_used = tail ? tail->nused : 0;
+	    size_t emitted_lines = 0;
+	    size_t emitted_triangles = 0;
 	    const int is_fill = ant->segments[seg_no] &&
 		*(uint32_t *)ant->segments[seg_no] == ANN_FSEG_MAGIC;
 	    int custom_width = 0;
@@ -1679,6 +1716,19 @@ ant_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 	    ret += seg_to_vlist(vlfree, vhead, ttol, base, annot_ip,
 		ant->segments[seg_no], annot_ip->styles ?
 		&annot_ip->styles[seg_no] : NULL);
+	    if (callback && !ant_vlist_count_since(vhead, tail, tail_used,
+		    &emitted_lines, &emitted_triangles)) {
+		range.segment = seg_no;
+		range.first_line = line_count;
+		range.line_count = emitted_lines;
+		range.first_triangle = triangle_count;
+		range.triangle_count = emitted_triangles;
+		range.style = annot_ip->styles ?
+		    &annot_ip->styles[seg_no] : NULL;
+		callback(&range, callback_data);
+	    }
+	    line_count += emitted_lines;
+	    triangle_count += emitted_triangles;
 	    if (custom_width)
 		RT_VLIST_SET_LINE_WIDTH(vlfree, vhead, 1.0);
 	}
@@ -2177,7 +2227,9 @@ rt_annot_tess(struct nmgregion **r, struct model *m,
 
 
 C_DECL int
-rt_annot_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
+rt_annot_plot_with_styles(struct bu_list *vhead, struct rt_db_internal *ip,
+	const struct bg_tess_tol *ttol,
+	rt_annot_plot_range_callback callback, void *data)
 {
     struct rt_annot_internal *annot_ip;
     int ret;
@@ -2189,7 +2241,8 @@ rt_annot_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_
     annot_ip = (struct rt_annot_internal *)ip->idb_ptr;
     RT_ANNOT_CK_MAGIC(annot_ip);
 
-    ret=ant_to_vlist(vlfree, vhead, ttol, annot_ip->V, annot_ip, &annot_ip->ant);
+    ret=ant_to_vlist(vlfree, vhead, ttol, annot_ip->V, annot_ip,
+	&annot_ip->ant, callback, data);
     if (ret) {
 	myret--;
 	bu_log("WARNING: Errors in annotation (%d segments reference non-existent vertices)\n",
@@ -2197,6 +2250,13 @@ rt_annot_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_
     }
 
     return myret;
+}
+
+
+C_DECL int
+rt_annot_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
+{
+    return rt_annot_plot_with_styles(vhead, ip, ttol, NULL, NULL);
 }
 
 int

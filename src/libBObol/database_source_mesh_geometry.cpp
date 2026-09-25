@@ -260,6 +260,8 @@ cad_part_geometry_estimate_bytes(const Geometry &geometry)
 	bytes = cad_geometry_saturating_add(bytes,
 	    mesh.indices.capacity(), sizeof(uint32_t));
 	bytes = cad_geometry_saturating_add(bytes,
+	    mesh.styleRuns.capacity(), sizeof(Obol::FillStyleRun));
+	bytes = cad_geometry_saturating_add(bytes,
 	    mesh.progressiveCuts.capacity(),
 	    sizeof(Obol::ProgressiveTriangleCut));
 	bytes = cad_geometry_saturating_add(bytes,
@@ -299,6 +301,8 @@ cad_part_geometry_estimate_bytes(const Geometry &geometry)
 	    wire.segmentPoints.capacity(), sizeof(SbVec3f));
 	bytes = cad_geometry_saturating_add(bytes,
 	    wire.segmentIds.capacity(), sizeof(uint32_t));
+	bytes = cad_geometry_saturating_add(bytes,
+	    wire.styleRuns.capacity(), sizeof(Obol::WireStyleRun));
 	bytes = cad_geometry_saturating_add(bytes,
 	    wire.polylines.capacity(), sizeof(Obol::WirePolyline));
 	for (const Obol::WirePolyline &polyline : wire.polylines)

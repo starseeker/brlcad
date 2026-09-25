@@ -78,6 +78,9 @@
 #include <Inventor/actions/SoGetBoundingBoxAction.h>
 #include <Inventor/actions/SoGLRenderAction.h>
 #include <Inventor/actions/SoRayPickAction.h>
+#include <Inventor/elements/SoModelMatrixElement.h>
+#include <Inventor/elements/SoViewVolumeElement.h>
+#include <Inventor/elements/SoViewportRegionElement.h>
 #include <Inventor/nodes/SoGroup.h>
 
 #include <Inventor/nodes/SoMatrixTransform.h>
@@ -204,20 +207,7 @@ SbBox3f
 compact_part_geometry_bounds(
     const std::shared_ptr<const Obol::PartGeometry> &geometry)
 {
-    SbBox3f bounds;
-    bounds.makeEmpty();
-    if (!geometry)
-	return bounds;
-    if (geometry->conservativeBounds &&
-	!geometry->conservativeBounds->isEmpty())
-	bounds.extendBy(*geometry->conservativeBounds);
-    if (geometry->points)
-	bounds.extendBy(geometry->points->bounds);
-    if (geometry->wire)
-	bounds.extendBy(geometry->wire->bounds);
-    if (geometry->shaded)
-	bounds.extendBy(geometry->shaded->bounds);
-    return bounds;
+    return geometry ? Obol::cadPartModelBounds(*geometry) : SbBox3f();
 }
 
 SO_NODE_SOURCE(SoBRLDatabaseSource);
@@ -565,6 +555,9 @@ private:
 		dp->d_minor_type == DB5_MINORTYPE_BRLCAD_ANNOT;
 	    struct bu_attribute_value_set attributes = BU_AVS_INIT_ZERO;
 	    if (db5_get_attributes(this->dbip, &attributes, dp) == 0) {
+		/* Primitive writers may use aliases such as rgb. Match combination
+		 * imports, including canonical-name precedence over conflicting aliases. */
+		(void)db5_standardize_avs(&attributes);
 		const char *attribute = bu_avs_get(&attributes,
 		    db5_standard_attribute(ATTR_COLOR));
 		int components[3];
@@ -939,15 +932,121 @@ source_realization_identity(const SoBRLDatabaseSource *source)
     return source_realization_identity(source, source ? source->sourceRevision.getValue() : 0);
 }
 
+struct BObolAnnotationPlotRange {
+    size_t firstLine = 0;
+    size_t lineCount = 0;
+    size_t firstTriangle = 0;
+    size_t triangleCount = 0;
+    Obol::WireStyle wireStyle;
+    Obol::FillStyle fillStyle;
+};
+
+static uint16_t
+annotation_line_pattern(uint32_t pattern)
+{
+    /* GL stipple has a 16-bit repeating domain.  Preserve the exact dotted
+     * and center periods; use stable nearest 16-bit forms for the 12-unit
+     * dashed and 21-unit phantom periods. */
+    constexpr uint16_t dashedPattern = 0x00ffu;
+    constexpr uint16_t dottedPattern = 0x1111u;
+    constexpr uint16_t centerPattern = 0x18ffu;
+    constexpr uint16_t phantomPattern = 0x28ffu;
+    switch (pattern) {
+	case RT_ANNOT_LINE_DASHED: return dashedPattern;
+	case RT_ANNOT_LINE_DOTTED: return dottedPattern;
+	case RT_ANNOT_LINE_CENTER: return centerPattern;
+	case RT_ANNOT_LINE_PHANTOM: return phantomPattern;
+	default: return 0xffffu;
+    }
+}
+
 static void
-convert_vlist(std::vector<SbVec3f> &points, std::vector<int32_t> &commands, const struct bu_list *vhead)
+capture_annotation_plot_range(const struct rt_annot_plot_range *source,
+	void *data)
+{
+    auto *ranges = static_cast<std::vector<BObolAnnotationPlotRange> *>(data);
+    if (!source || !ranges || (!source->line_count && !source->triangle_count))
+	return;
+
+    BObolAnnotationPlotRange range;
+    range.firstLine = source->first_line;
+    range.lineCount = source->line_count;
+    range.firstTriangle = source->first_triangle;
+    range.triangleCount = source->triangle_count;
+    if (source->style) {
+	const bool backgroundMask =
+	    source->style->role == RT_ANNOT_ROLE_MASK;
+	range.wireStyle.patternValid = true;
+	range.wireStyle.linePattern =
+	    annotation_line_pattern(source->style->line_pattern);
+	range.fillStyle.backgroundMask = backgroundMask;
+	if (source->style->flags & RT_ANNOT_STYLE_COLOR) {
+	    constexpr float byteToUnit = 1.0f / 255.0f;
+	    range.wireStyle.colorValid = true;
+	    range.wireStyle.color = SbColor4f(
+		source->style->color[0] * byteToUnit,
+		source->style->color[1] * byteToUnit,
+		source->style->color[2] * byteToUnit,
+		source->style->color[3] * byteToUnit);
+	    if (!backgroundMask) {
+		range.fillStyle.colorValid = true;
+		range.fillStyle.color = range.wireStyle.color;
+	    }
+	}
+    }
+    ranges->push_back(range);
+}
+
+static bool
+convert_vlist(std::vector<SbVec3f> &points, std::vector<int32_t> &commands, const struct bu_list *vhead,
+	std::vector<float> *widths = NULL, Obol::TriMesh *fills = NULL)
 {
     rt_vlist *vp = NULL;
+    float width = 1.0f;
+    bool inFill = false;
+    std::array<SbVec3f, 3> fillPoints;
+    size_t fillPointCount = 0;
 
     BU_LIST_EACH(vhead, vp, rt_vlist) {
 	for (size_t i = 0; i < vp->nused; i++) {
+	    if (fills) {
+		const int command = vp->cmd[i];
+		if (command == RT_VLIST_POLY_START || command == RT_VLIST_TRI_START) {
+		    if (inFill) return false;
+		    inFill = true;
+		    fillPointCount = 0;
+		    continue;
+		}
+		if (command == RT_VLIST_POLY_MOVE || command == RT_VLIST_POLY_DRAW ||
+		    command == RT_VLIST_TRI_MOVE || command == RT_VLIST_TRI_DRAW ||
+		    command == RT_VLIST_POLY_END || command == RT_VLIST_TRI_END) {
+		    if (!inFill) return false;
+		    const SbVec3f point(float(vp->pt[i][0]), float(vp->pt[i][1]), float(vp->pt[i][2]));
+		    if (command == RT_VLIST_POLY_END || command == RT_VLIST_TRI_END) {
+			/* librt triangulates annotation loops and repeats the first
+			 * vertex at END. Never turn its internal edges into strokes. */
+			if (fillPointCount != fillPoints.size() ||
+			    !point.equals(fillPoints[0], SMALL_FASTF) ||
+			    fills->positions.size() > UINT32_MAX - fillPoints.size())
+			    return false;
+			for (const SbVec3f &vertex : fillPoints) {
+			    fills->indices.push_back(static_cast<uint32_t>(fills->positions.size()));
+			    fills->positions.push_back(vertex);
+			    fills->bounds.extendBy(vertex);
+			}
+			inFill = false;
+		    } else {
+			if (fillPointCount == fillPoints.size()) return false;
+			fillPoints[fillPointCount++] = point;
+		    }
+		    continue;
+		}
+	    }
 	    int cmd = -1;
 	    switch (vp->cmd[i]) {
+		case RT_VLIST_LINE_WIDTH:
+		    width = static_cast<float>(vp->pt[i][0]);
+		    break;
 		case RT_VLIST_LINE_MOVE:
 		case RT_VLIST_POLY_MOVE:
 		case RT_VLIST_TRI_MOVE:
@@ -971,9 +1070,15 @@ convert_vlist(std::vector<SbVec3f> &points, std::vector<int32_t> &commands, cons
 					 static_cast<float>(vp->pt[i][1]),
 					 static_cast<float>(vp->pt[i][2])));
 		commands.push_back(cmd);
+		if (widths && (!widths->empty() || !EQUAL(width, 1.0f))) {
+		    if (widths->empty())
+			widths->resize(points.size() - 1, 1.0f);
+		    widths->push_back(width);
+		}
 	    }
 	}
     }
+    return !inFill;
 }
 
 /* rt_obj_plot allocates from the process-global rt_vlfree list, whose macros
@@ -987,10 +1092,23 @@ plot_internal_to_vlist_geometry(
 	std::vector<int32_t> &commands,
 	struct rt_db_internal *intern,
 	const struct bg_tess_tol *ttol,
-	const struct bn_tol *tol)
+	const struct bn_tol *tol,
+	std::optional<Obol::CadDisplayPlane> *displayPlane = NULL,
+	std::vector<float> *widths = NULL, Obol::TriMesh *fills = NULL,
+	std::vector<BObolAnnotationPlotRange> *annotationRanges = NULL)
 {
     if (!intern)
 	return -1;
+
+    const rt_annot_internal *annotation = NULL;
+    if (intern->idb_type == ID_ANNOT) {
+	annotation = static_cast<const rt_annot_internal *>(intern->idb_ptr);
+	RT_ANNOT_CK_MAGIC(annotation);
+	/* SoBRLVListShape has no display-plane contract.  Rejecting this legacy
+	 * path prevents display offsets from being mistaken for model units. */
+	if (!(annotation->flags & RT_ANNOT_MODEL_SPACE) && !displayPlane)
+	    return -1;
+    }
 
     std::lock_guard<std::mutex> guard(database_source_rt_vlist_mutex);
     struct bu_list vhead;
@@ -1002,24 +1120,30 @@ plot_internal_to_vlist_geometry(
 	BObolPerformanceTimer timer(BOBOL_PERF_PLOT_US);
 	if (timer.active())
 	    bobol_performance_counter_add(BOBOL_PERF_PLOT_CALLS, 1);
-	ret = rt_obj_plot(&vhead, intern, ttol, tol);
+	if (intern->idb_type == ID_ANNOT && annotationRanges) {
+	    annotationRanges->clear();
+	    ret = rt_annot_plot_with_styles(&vhead, intern, ttol,
+		capture_annotation_plot_range, annotationRanges);
+	} else {
+	    ret = rt_obj_plot(&vhead, intern, ttol, tol);
+	}
     }
     if (ret >= 0) {
 	BObolPerformanceTimer timer(BOBOL_PERF_VLIST_CONVERT_US);
 	if (timer.active())
 	    bobol_performance_counter_add(BOBOL_PERF_VLIST_CONVERT_CALLS, 1);
-	convert_vlist(points, commands, &vhead);
-	if (intern->idb_type == ID_ANNOT) {
-	    const auto *annotation = static_cast<const rt_annot_internal *>(intern->idb_ptr);
-	    RT_ANNOT_CK_MAGIC(annotation);
-	    /* Model-space plots already include their anchor and plane basis.
-	     * The legacy screen-space fallback needs its display anchor restored
-	     * after conversion discards the display-matrix commands. */
+	if (!convert_vlist(points, commands, &vhead, widths, fills))
+	    return -1;
+	if (annotation) {
+	    /* Keep screen offsets independent of model placement in retained CAD.
+	     * The legacy vlist path was rejected before plotting. */
 	    if (!(annotation->flags & RT_ANNOT_MODEL_SPACE)) {
 		const SbVec3f anchor(float(annotation->V[X]), float(annotation->V[Y]),
 		    float(annotation->V[Z]));
-		for (SbVec3f &point : points)
-		    point += anchor;
+		Obol::CadDisplayPlane plane;
+		plane.anchor = anchor;
+		plane.pixelsPerUnit = RT_ANNOT_DISPLAY_PIXELS_PER_MM;
+		*displayPlane = plane;
 	    }
 	}
 	if (!points.empty())
@@ -1087,10 +1211,12 @@ vlist_from_bot_wireframe(const struct rt_bot_internal *bot)
 
 static int
 cad_wire_part_geometry_from_line_set(const std::vector<SbVec3f> &points,
-	const std::vector<int32_t> &commands, Obol::PartGeometryBuilder &geometry)
+	const std::vector<int32_t> &commands, Obol::PartGeometryBuilder &geometry,
+	const std::vector<float> *widths = NULL,
+	const std::vector<BObolAnnotationPlotRange> *annotationRanges = NULL)
 {
     const size_t count = std::min(points.size(), commands.size());
-    if (!count)
+    if (!count || (widths && widths->size() != count))
 	return 0;
 
     Obol::WireRep wire;
@@ -1104,6 +1230,18 @@ cad_wire_part_geometry_from_line_set(const std::vector<SbVec3f> &points,
     bool haveLast = false;
     size_t lastIndex = 0;
     uint32_t segmentIndex = 0;
+    size_t annotationRange = 0;
+    Obol::WireStyle previousStyle;
+    const auto sameStyle = [](const Obol::WireStyle &left,
+	    const Obol::WireStyle &right) {
+	return EQUAL(left.widthScale, right.widthScale) &&
+	    left.colorValid == right.colorValid &&
+	    (!left.colorValid || left.color == right.color) &&
+	    left.patternValid == right.patternValid &&
+	    (!left.patternValid ||
+	     (left.linePattern == right.linePattern &&
+	      left.linePatternFactor == right.linePatternFactor));
+    };
     for (size_t i = 0; i < count; i++) {
 	if (!std::isfinite(points[i][0]) || !std::isfinite(points[i][1]) ||
 	    !std::isfinite(points[i][2])) {
@@ -1140,6 +1278,33 @@ cad_wire_part_geometry_from_line_set(const std::vector<SbVec3f> &points,
 	const SbVec3f &b = points[i];
 	wire.segmentPoints.push_back(a);
 	wire.segmentPoints.push_back(b);
+	Obol::WireStyle style;
+	style.widthScale = widths ? (*widths)[i] : 1.0f;
+	if (!std::isfinite(style.widthScale) || style.widthScale <= 0.0f)
+	    return 0;
+	if (annotationRanges) {
+	    while (annotationRange < annotationRanges->size() &&
+		    segmentIndex >= (*annotationRanges)[annotationRange].firstLine +
+			(*annotationRanges)[annotationRange].lineCount)
+		annotationRange++;
+	    if (annotationRange < annotationRanges->size()) {
+		const BObolAnnotationPlotRange &range =
+		    (*annotationRanges)[annotationRange];
+		if (segmentIndex >= range.firstLine &&
+			segmentIndex < range.firstLine + range.lineCount) {
+		    style.colorValid = range.wireStyle.colorValid;
+		    style.color = range.wireStyle.color;
+		    style.patternValid = range.wireStyle.patternValid;
+		    style.linePattern = range.wireStyle.linePattern;
+		    style.linePatternFactor =
+			range.wireStyle.linePatternFactor;
+		}
+	    }
+	}
+	if (!sameStyle(style, previousStyle)) {
+	    wire.styleRuns.push_back({segmentIndex, style});
+	    previousStyle = style;
+	}
 	wire.segmentIds.push_back(segmentIndex++);
 	wire.bounds.extendBy(a);
 	wire.bounds.extendBy(b);
@@ -1152,6 +1317,44 @@ cad_wire_part_geometry_from_line_set(const std::vector<SbVec3f> &points,
     if (!pointRep.positions.empty())
 	geometry.points = std::move(pointRep);
     return 1;
+}
+
+static void
+apply_annotation_fill_styles(Obol::TriMesh &fills,
+	const std::vector<BObolAnnotationPlotRange> &ranges)
+{
+    const auto sameStyle = [](const Obol::FillStyle &left,
+	    const Obol::FillStyle &right) {
+	return left.backgroundMask == right.backgroundMask &&
+	    left.colorValid == right.colorValid &&
+	    (!left.colorValid || left.color == right.color);
+    };
+    const auto appendStyle = [&](size_t firstTriangle,
+	    const Obol::FillStyle &style, Obol::FillStyle &previous) {
+	if (firstTriangle < fills.triangleCount() && !sameStyle(style, previous)) {
+	    fills.styleRuns.push_back({firstTriangle, style});
+	    previous = style;
+	}
+    };
+
+    Obol::FillStyle previous;
+    size_t coveredEnd = 0;
+    for (const BObolAnnotationPlotRange &range : ranges) {
+	if (!range.triangleCount || range.firstTriangle >= fills.triangleCount())
+	    continue;
+	if (range.firstTriangle > coveredEnd) {
+	    const Obol::FillStyle defaultStyle;
+	    appendStyle(coveredEnd, defaultStyle, previous);
+	}
+	appendStyle(range.firstTriangle, range.fillStyle, previous);
+	const size_t available = fills.triangleCount() - range.firstTriangle;
+	coveredEnd = std::max(coveredEnd, range.firstTriangle +
+	    std::min(available, range.triangleCount));
+    }
+    if (coveredEnd < fills.triangleCount()) {
+	const Obol::FillStyle defaultStyle;
+	appendStyle(coveredEnd, defaultStyle, previous);
+    }
 }
 
 static int
@@ -1672,6 +1875,9 @@ SoBRLDatabaseSource::seedCompactRealizationCache(
 
     for (const BObolCompactInstanceEntry &entry :
 	 this->d->compactIndex->entries) {
+	/* Whole-target coverage is not the primitive's reusable geometry. */
+	if (BU_STR_EQUAL(entry.shapeSummary.recordRole.getString(), "lod-overview"))
+	    continue;
 	/* This entry was produced for the source's realized camera policy.  The
 	 * detached successor builds cache keys from its new policy, so inserting
 	 * the old payload under that key would falsely certify stale CSG geometry
@@ -1684,6 +1890,8 @@ SoBRLDatabaseSource::seedCompactRealizationCache(
 	    continue;
 
 	const SbBox3f localBounds = compact_part_geometry_bounds(entry.geometry);
+	const bool plottedGeometry = entry.wireGeometry || entry.pointGeometry ||
+	    (entry.geometry && entry.geometry->shadedIsFill);
 	std::string cacheKey(name);
 	/* Realization lookup keys are formed before an internal is fetched, so
 	 * their LoD size fallback intentionally starts with empty bounds. */
@@ -1705,15 +1913,15 @@ SoBRLDatabaseSource::seedCompactRealizationCache(
 	    cached.sourceMeshRequestValid = entry.sourceMeshRequestValid;
 	    if (cached.sourceMeshRequestValid)
 		cached.sourceMeshRequest = entry.sourceMeshRequest;
-	    if (entry.meshGeometry)
+	    if (entry.meshGeometry && !entry.geometry->shadedIsFill)
 		cache->sharedMeshCadGeometry[cacheKey] = cached;
-	    else if ((entry.wireGeometry || entry.pointGeometry) && meshRealization)
+	    else if (plottedGeometry && meshRealization)
 		cache->sharedMeshVListCadGeometry[cacheKey] = cached;
-	    else if (entry.wireGeometry || entry.pointGeometry)
+	    else if (plottedGeometry)
 		cache->sharedWireCadGeometry[cacheKey] = cached;
 	}
 	if (!localBounds.isEmpty() &&
-	    (entry.wireGeometry || entry.pointGeometry) && !meshRealization)
+	    plottedGeometry && !meshRealization)
 	    cache->storeWireBounds(cacheKey, localBounds);
     }
 }
@@ -2592,7 +2800,7 @@ compact_occurrence_summary(const SoBRLDatabaseSource *source,
 }
 
 static BObolRealizedShapeSummary
-compact_occurrence_tree_summary(const SoBRLDatabaseSource *source,
+compact_occurrence_database_summary(const SoBRLDatabaseSource *source,
 	const struct db_tree_state *tsp, const struct db_full_path *fullPath,
 	const char *path,
 	const char *sourceName, const char *sourceType,
@@ -2601,24 +2809,26 @@ compact_occurrence_tree_summary(const SoBRLDatabaseSource *source,
 {
     BObolRealizedShapeSummary summary = compact_occurrence_summary(source,
 	path, sourceName, sourceType, geometryKind, sourceId, shapeKind);
-    if (!tsp)
-	return summary;
-    summary.regionId = tsp->ts_regionid;
-    summary.airCode = tsp->ts_aircode;
-    summary.materialId = tsp->ts_gmater;
-    summary.los = tsp->ts_los;
-    summary.materialColorValid = tsp->ts_mater.ma_color_valid ? TRUE : FALSE;
-    summary.materialColor = SbColor(
-	static_cast<float>(tsp->ts_mater.ma_color[0]),
-	static_cast<float>(tsp->ts_mater.ma_color[1]),
-	static_cast<float>(tsp->ts_mater.ma_color[2]));
-    summary.materialShader = tsp->ts_mater.ma_shader ?
-	tsp->ts_mater.ma_shader : "";
+    if (tsp) {
+	summary.regionId = tsp->ts_regionid;
+	summary.airCode = tsp->ts_aircode;
+	summary.materialId = tsp->ts_gmater;
+	summary.los = tsp->ts_los;
+	summary.materialColorValid = tsp->ts_mater.ma_color_valid ? TRUE : FALSE;
+	summary.materialColor = SbColor(
+	    static_cast<float>(tsp->ts_mater.ma_color[0]),
+	    static_cast<float>(tsp->ts_mater.ma_color[1]),
+	    static_cast<float>(tsp->ts_mater.ma_color[2]));
+	summary.materialShader = tsp->ts_mater.ma_shader ?
+	    tsp->ts_mater.ma_shader : "";
+    }
     /* db_tree_state does not always contain the same effective color as
      * db_full_path_color (region-table fallback and some inherited BREP
      * colors are notable cases).  The prefix-cached sweep implements those
      * full-path rules without re-importing every combination for every leaf,
-     * and retains the database color even while a display policy overrides it. */
+     * and retains the database color even while a display policy overrides it.
+     * Direct primitive realization has no tree state but needs the same
+     * full-path material semantics as a leaf reached through a combination. */
     if (source) {
 	BObolMaterialPathState resolved;
 	SbColor databaseColor;
@@ -2631,7 +2841,9 @@ compact_occurrence_tree_summary(const SoBRLDatabaseSource *source,
 	    summary.materialColorValid = TRUE;
 	    summary.materialColor = materialSweep ? resolved.color :
 		databaseColor;
-	    if (materialSweep) {
+	    if (materialSweep && resolved.inRegion) {
+		/* The sweep's absent-region sentinel is private to color lookup;
+		 * it must not replace an ordinary primitive's region metadata. */
 		summary.regionId = resolved.regionId;
 		summary.airCode = resolved.airCode;
 		summary.materialId = resolved.materialId;
@@ -2956,10 +3168,24 @@ cad_wire_part_geometry_from_plot_internal(struct rt_db_internal *intern,
     struct bn_tol tol = BN_TOL_INIT_TOL;
     std::vector<SbVec3f> points;
     std::vector<int32_t> commands;
+    std::vector<float> widths;
+    std::vector<BObolAnnotationPlotRange> annotationRanges;
+    Obol::TriMesh fills;
     if (plot_internal_to_vlist_geometry(points, commands, intern,
-	    &ttol, &tol) < 0)
+	    &ttol, &tol, &geometry.displayPlane, &widths,
+	    intern->idb_type == ID_ANNOT ? &fills : NULL,
+	    intern->idb_type == ID_ANNOT ? &annotationRanges : NULL) < 0)
 	return 0;
-    return cad_wire_part_geometry_from_line_set(points, commands, geometry);
+    if (!points.empty() && !cad_wire_part_geometry_from_line_set(points, commands, geometry,
+	    widths.empty() ? NULL : &widths,
+	    annotationRanges.empty() ? NULL : &annotationRanges))
+	return 0;
+    if (!fills.indices.empty()) {
+	apply_annotation_fill_styles(fills, annotationRanges);
+	geometry.shaded = std::move(fills);
+	geometry.shadedIsFill = true;
+    }
+    return geometry.wire || geometry.points || geometry.shaded;
 }
 
 static double
@@ -3477,7 +3703,7 @@ static union tree *
 	input.occurrence.viewDependentCsgGeometry =
 	    viewDependentCsgGeometry ? TRUE : FALSE;
 	input.occurrence.localTransform = mat_to_sbmatrix(tsp->ts_mat);
-	input.occurrence.summary = compact_occurrence_tree_summary(
+	input.occurrence.summary = compact_occurrence_database_summary(
 	    data->source, tsp, pathp, path, dp->d_namep,
 	    geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
 	    "annotation" : typeLabel,
@@ -3619,7 +3845,7 @@ static union tree *
 	    compact_occurrence_build input;
 	    input.occurrence.geometry = cadGeometry;
 	    input.occurrence.localTransform = mat_to_sbmatrix(tsp->ts_mat);
-	    input.occurrence.summary = compact_occurrence_tree_summary(
+	    input.occurrence.summary = compact_occurrence_database_summary(
 		data->source, tsp, pathp, path, dp->d_namep,
 		geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
 		"annotation" : typeLabel,
@@ -4306,8 +4532,14 @@ realize_direct_leaf_wireframe_compact(
 	}
     }
 
+    BObolMaterialColorSweep materialSweep(dbip);
     BObolCompactOccurrence occurrence;
     occurrence.geometry = cadGeometry;
+    occurrence.summary = compact_occurrence_database_summary(source, NULL, NULL,
+	fullPath.c_str(), dp->d_namep,
+	geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
+	"annotation" : typeLabel,
+	geometryKind, revision, BObolRealizedShapeSummary::SHAPE_VLIST, &materialSweep);
     occurrence.viewDependentCsgGeometry =
 	viewDependentCsgGeometry ? TRUE : FALSE;
     occurrence.lodBacked = lodBacked ? TRUE : FALSE;
@@ -4319,11 +4551,6 @@ realize_direct_leaf_wireframe_compact(
 	compact_summary_lod_from_source_mesh_request(occurrence.summary,
 	    occurrence.sourceMeshRequest);
     }
-    occurrence.summary = compact_occurrence_summary(source,
-	fullPath.c_str(), dp->d_namep,
-	geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
-	"annotation" : typeLabel,
-	geometryKind, revision, BObolRealizedShapeSummary::SHAPE_VLIST);
     occurrence.occurrenceIndex = source->occurrenceIndex.getValue();
     occurrence.booleanOperation = source->booleanOperation.getValue();
     occurrence.localTransform = pathMatrix;
@@ -6315,7 +6542,8 @@ vlist_from_evaluated_wire_path(SoBRLDatabaseSource *source)
 
     std::vector<SbVec3f> points;
     std::vector<int32_t> commands;
-    convert_vlist(points, commands, &vhead);
+    if (!convert_vlist(points, commands, &vhead))
+	return NULL;
     if (points.empty() || points.size() != commands.size() ||
 	points.size() > static_cast<size_t>(INT_MAX))
 	return NULL;
@@ -6948,6 +7176,7 @@ realize_direct_leaf_mesh_compact(
 	}
     }
 
+    BObolMaterialColorSweep materialSweep(dbip);
     BObolCompactOccurrence occurrence;
     if (sharedVListShape || cachedWire) {
 	const char *geometryKind = sharedVListShape ?
@@ -6965,11 +7194,11 @@ realize_direct_leaf_mesh_compact(
 		occurrence.geometry = cache->storeMeshVListCadGeometry(cacheKey,
 		    std::move(generated), typeLabel, geometryKind);
 	}
-	occurrence.summary = compact_occurrence_summary(source,
+	occurrence.summary = compact_occurrence_database_summary(source, NULL, NULL,
 	    fullPath.c_str(), dp->d_namep,
 	    geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
 	    "annotation" : typeLabel,
-	    geometryKind, revision, BObolRealizedShapeSummary::SHAPE_VLIST);
+	    geometryKind, revision, BObolRealizedShapeSummary::SHAPE_VLIST, &materialSweep);
     } else {
 	const char *geometryKind = sharedMeshShape ?
 	    sharedMeshShape->geometryKind.getValue().getString() :
@@ -7005,9 +7234,9 @@ realize_direct_leaf_mesh_compact(
 	    occurrence.sourceMeshRequestValid = TRUE;
 	    occurrence.sourceMeshRequest = cachedMesh->sourceMeshRequest;
 	}
-	occurrence.summary = compact_occurrence_summary(source,
+	occurrence.summary = compact_occurrence_database_summary(source, NULL, NULL,
 	    fullPath.c_str(), dp->d_namep, typeLabel, geometryKind, revision,
-	    BObolRealizedShapeSummary::SHAPE_MESH);
+	    BObolRealizedShapeSummary::SHAPE_MESH, &materialSweep);
 	if (sharedMeshShape) {
 	    BObolRealizedShapeSummary meshSummary;
 	    realized_mesh_shape_summary(sharedMeshShape, meshSummary);
@@ -7607,7 +7836,7 @@ static union tree *
 				provisionalPath += suffix;
 			    }
 			    provisional.summary =
-				compact_occurrence_tree_summary(
+				compact_occurrence_database_summary(
 				    data->source, tsp, pathp,
 				    provisionalPath.c_str(),
 				    dp->d_namep,
@@ -7670,7 +7899,7 @@ static union tree *
 	    input.occurrence.viewDependentCsgGeometry =
 		cachedWire->viewDependentCsgGeometry ? TRUE : FALSE;
 	    input.occurrence.localTransform = mat_to_sbmatrix(tsp->ts_mat);
-	    input.occurrence.summary = compact_occurrence_tree_summary(
+	    input.occurrence.summary = compact_occurrence_database_summary(
 		data->source, tsp, pathp, path, dp->d_namep,
 		geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
 		"annotation" : typeLabel,
@@ -7881,7 +8110,7 @@ static union tree *
 			data->cache->storeMeshVListCadGeometry(cacheKey,
 			    std::move(generated), typeLabel, geometryKind);
 	    }
-	    input.occurrence.summary = compact_occurrence_tree_summary(
+	    input.occurrence.summary = compact_occurrence_database_summary(
 		data->source, tsp, pathp, path, dp->d_namep,
 		geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
 		"annotation" : typeLabel,
@@ -7928,7 +8157,7 @@ static union tree *
 		input.occurrence.sourceMeshRequest =
 		    cachedMesh->sourceMeshRequest;
 	    }
-	    input.occurrence.summary = compact_occurrence_tree_summary(
+	    input.occurrence.summary = compact_occurrence_database_summary(
 		data->source, tsp, pathp, path, dp->d_namep, typeLabel,
 		geometryKind,
 		data->revision, BObolRealizedShapeSummary::SHAPE_MESH,
@@ -8193,6 +8422,7 @@ compact_style_equal(const Obol::InstanceStyle &a,
 	const Obol::InstanceStyle &b)
 {
     return a.hasColorOverride == b.hasColorOverride &&
+	a.useGeometryColor == b.useGeometryColor &&
 	!database_source_float_different(a.color[0], b.color[0]) &&
 	!database_source_float_different(a.color[1], b.color[1]) &&
 	!database_source_float_different(a.color[2], b.color[2]) &&
@@ -8278,7 +8508,8 @@ compact_sync_shape_summary_state(BObolCompactInstanceEntry &entry)
      * geometry flags describe the channels that can be drawn right now.  A
      * progressive mesh initially owns only a wire proxy, but it must remain a
      * mesh for LoD submission, picking identity, and exact export. */
-    summary.shapeKind = (entry.meshGeometry ||
+    summary.shapeKind = ((entry.meshGeometry &&
+	!(entry.geometry && entry.geometry->shadedIsFill)) ||
 	(entry.lodBacked && entry.sourceMeshRequestValid)) ?
 	BObolRealizedShapeSummary::SHAPE_MESH :
 	BObolRealizedShapeSummary::SHAPE_VLIST;
@@ -8355,6 +8586,8 @@ cad_vlist_style_state(const SoBRLVListShape *shape, SbBool selected,
 	return style;
 
     style.hasColorOverride = true;
+    style.useGeometryColor = !(selected || highlighted ||
+	shape->ghosted.getValue() || shape->colorOverride.getValue());
     cad_shape_color(selected, shape->selectedColor.getValue(), highlighted,
 		    shape->highlightedColor.getValue(),
 		    shape->ghosted.getValue(), shape->ghostedColor.getValue(),
@@ -8386,6 +8619,8 @@ cad_mesh_style_state(const SoBRLMeshShape *shape, SbBool selected,
 	return style;
 
     style.hasColorOverride = true;
+    style.useGeometryColor = !(selected || highlighted ||
+	shape->ghosted.getValue() || shape->colorOverride.getValue());
     cad_shape_color(selected, shape->selectedColor.getValue(), highlighted,
 		    shape->highlightedColor.getValue(),
 		    shape->ghosted.getValue(), shape->ghostedColor.getValue(),
@@ -8528,6 +8763,13 @@ cad_part_key_for_geometry(const char *kind,
     hash.appendByte(geometry.shadedCullBackfaces ? 1 : 0);
     hash.appendByte(geometry.subpixelProxyEligible ? 1 : 0);
     hash.appendByte(geometry.structuralProxy ? 1 : 0);
+    if (geometry.displayPlane) {
+	/* Preserve ordinary part identities; display placement is additional
+	 * immutable geometry data, independent of a particular camera. */
+	hash.appendString("display-plane");
+	hash.appendVec3(geometry.displayPlane->anchor);
+	hash.appendFloat(geometry.displayPlane->pixelsPerUnit);
+    }
     hash.appendByte(geometry.conservativeBounds ? 1 : 0);
     if (geometry.conservativeBounds)
 	hash.appendBox(*geometry.conservativeBounds);
@@ -8568,6 +8810,8 @@ cad_part_key_for_geometry(const char *kind,
 	    hash.appendVec3(normal);
 	hash.appendBox(points.bounds);
     }
+    if (geometry.shadedIsFill)
+	hash.appendString("filled-areas");
     hash.appendByte(geometry.wire ? 1 : 0);
     if (geometry.wire) {
 	const Obol::WireRep &wire = *geometry.wire;
@@ -8579,6 +8823,20 @@ cad_part_key_for_geometry(const char *kind,
 	    static_cast<uint32_t>(wire.segmentIds.size()));
 	for (uint32_t id : wire.segmentIds)
 	    hash.appendU32(id);
+	if (!wire.styleRuns.empty()) {
+	    hash.appendString("wire-style-runs");
+	    hash.appendU64(wire.styleRuns.size());
+	    for (const auto &run : wire.styleRuns) {
+		hash.appendU64(run.firstSegment);
+		hash.appendFloat(run.style.widthScale);
+		hash.appendU32(run.style.colorValid ? 1u : 0u);
+		for (int channel = 0; channel < 4; ++channel)
+		    hash.appendFloat(run.style.color[channel]);
+		hash.appendU32(run.style.patternValid ? 1u : 0u);
+		hash.appendU32(run.style.linePattern);
+		hash.appendU32(run.style.linePatternFactor);
+	    }
+	}
 	hash.appendU32(
 	    static_cast<uint32_t>(wire.polylines.size()));
 	for (const Obol::WirePolyline &polyline : wire.polylines) {
@@ -8636,6 +8894,18 @@ cad_part_key_for_geometry(const char *kind,
 	    static_cast<uint32_t>(mesh.indices.size()));
 	for (uint32_t index : mesh.indices)
 	    hash.appendU32(index);
+	hash.appendU32(static_cast<uint32_t>(mesh.styleRuns.size()));
+	for (const Obol::FillStyleRun &run : mesh.styleRuns) {
+	    hash.appendU64(run.firstTriangle);
+	    hash.appendByte(run.style.backgroundMask ? 1 : 0);
+	    hash.appendByte(run.style.colorValid ? 1 : 0);
+	    if (run.style.colorValid) {
+		hash.appendFloat(run.style.color[0]);
+		hash.appendFloat(run.style.color[1]);
+		hash.appendFloat(run.style.color[2]);
+		hash.appendFloat(run.style.color[3]);
+	    }
+	}
 	hash.appendBox(mesh.bounds);
 	const bool progressiveMesh = mesh.isProgressive();
 	hash.appendByte(progressiveMesh ? 1 : 0);
@@ -8998,6 +9268,8 @@ cad_source_style(const SoBRLDatabaseSource *source)
 	 source->color.getValue());
 
     style.hasColorOverride = true;
+    style.useGeometryColor = !(source->selected.getValue() ||
+	source->highlighted.getValue() || source->colorOverride.getValue());
     cad_shape_color(source->selected.getValue(),
 		    source->selectedColor.getValue(),
 		    source->highlighted.getValue(),
@@ -10285,13 +10557,16 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
 	    if (found != index.entryIndexByPath.end()) {
 		const BObolCompactInstanceEntry &existing =
 		    index.entries[found->second];
+		/* A bare root leaf shares its path with the whole-target overview.
+		 * The priority lane can deliver a newer extent after that leaf;
+		 * it must not erase the leaf's source contract at the same tier. */
+		const bool wasOverview = BU_STR_EQUAL(
+		    existing.shapeSummary.recordRole.getString(), "lod-overview");
+		if (isOverview && !wasOverview)
+		    continue;
 		const int oldTier = compact_geometry_tier(
 		    existing.shapeSummary.geometryKind.getString());
-		const bool evolvingOverview =
-		BU_STR_EQUAL(occurrence.summary.recordRole.getString(),
-		    "lod-overview") &&
-		BU_STR_EQUAL(existing.shapeSummary.recordRole.getString(),
-		    "lod-overview");
+		const bool evolvingOverview = isOverview && wasOverview;
 		const bool richerDataContract =
 		newTier == oldTier &&
 		((occurrence.sourceMeshRequestValid &&
@@ -11395,6 +11670,9 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(FieldObservation observation) :
     SO_NODE_ADD_FIELD(realizationPointScale, (0.0f));
     SO_NODE_ADD_FIELD(stale, (TRUE));
     SO_NODE_ADD_FIELD(staleReason, (STALE_SOURCE));
+    /* Field metadata is complete.  Do not carry Obol's class metadata lock
+     * into auditor attachment, whose notification lock has its own order. */
+    obol_node_constructor_lock.release();
 
     if (observation == FieldObservation::Observe) {
 	this->d->observeFields = true;
@@ -13314,6 +13592,21 @@ SoBRLDatabaseSource::getBoundingBox(SoGetBoundingBoxAction *action)
 		 this->d->compactIndex->entries) {
 		if (!entry.visible || !entry.geometry)
 		    continue;
+		if (entry.geometry->displayPlane) {
+		    SoState *state = action->getState();
+		    SbMatrix rootToClip = SoModelMatrixElement::get(state);
+		    rootToClip.multRight(SoViewVolumeElement::get(state).getMatrix());
+		    SbMatrix projected;
+		    if (Obol::cadDisplayPlaneTransform(*entry.geometry->displayPlane,
+			    entry.localToSource, rootToClip,
+			    SoViewportRegionElement::get(state).getViewportSizePixels(),
+			    projected)) {
+			SbBox3f projectedBounds = Obol::cadPartGeometryBounds(*entry.geometry);
+			projectedBounds.transform(projected);
+			bounds.extendBy(projectedBounds);
+		    }
+		    continue;
+		}
 		bounds.extendBy(database_source_transform_bounds(
 		    compact_part_geometry_bounds(entry.geometry),
 		    entry.localToSource));
@@ -13356,11 +13649,20 @@ SbBool
 SoBRLDatabaseSource::realizeDatabaseWireframe(
     BObolCompactOccurrenceStream *stream)
 {
+    return this->realizeDatabaseWireframe(stream, nullptr);
+}
+
+SbBool
+SoBRLDatabaseSource::realizeDatabaseWireframe(
+    BObolCompactOccurrenceStream *stream,
+    BObolSourceRealizationEffects *effects)
+{
     BObolDatabaseSourceRealizationCache cache;
     if (source_uses_evaluated_wire_realization(this))
-	return bobol_database_source_realize_wireframe_with_cache(this, &cache);
+	return bobol_database_source_realize_wireframe_with_cache(
+	    this, &cache, effects);
     return bobol_database_source_realize_wireframe_compact_with_cache(
-	this, &cache, stream) > 0 ? TRUE : FALSE;
+	this, &cache, stream, effects) > 0 ? TRUE : FALSE;
 }
 
 static void
@@ -14513,7 +14815,7 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
 	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP ? "brep" :
 	(dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT ? "bot" :
 	 "primitive");
-    occurrence.summary = compact_occurrence_tree_summary(
+    occurrence.summary = compact_occurrence_database_summary(
 	collect->source, tsp, pathp, semanticPath.c_str(), dp->d_namep,
 	sourceType,
 	"aabb", collect->revision,
@@ -17370,6 +17672,27 @@ public:
     struct db_i *database;
 };
 
+int
+SoBRLDatabaseSource::publishStaleState(uint32_t reason, uint32_t revision,
+    PublicationCommit committed, void *context)
+{
+    if (!reason)
+	return 0;
+
+    const uint32_t nextReason = this->staleReason.getValue() | reason;
+    const bool changed = this->sourceRevision.getValue() != revision ||
+	!this->stale.getValue() || this->staleReason.getValue() != nextReason ||
+	this->realizationStatus.getValue() != UNREALIZED ||
+	this->realizationDiagnostic.getValue().getLength() > 0;
+    if (!changed)
+	return 0;
+
+    ConfigurationPublication publication(*this);
+    publication.next.sourceRevision = revision;
+    publication.publish(reason, false, committed, context);
+    return 1;
+}
+
 void
 SoBRLDatabaseSource::failSafeObservedFieldChange(uint32_t reason) noexcept
 {
@@ -18298,14 +18621,16 @@ public:
 	return result;
     }
 
-    static int refreshCombination(SoBRLDatabaseSource &target, uint32_t revision)
+    static int refreshWholeSource(SoBRLDatabaseSource &target, uint32_t requestedRevision)
     {
+	const uint32_t revision = requestedRevision ? requestedRevision :
+	    bobol_identity_successor_or_terminate(target.sourceRevision.getValue());
 	BObolDatabaseSourceRealizationCache cache;
 	target.seedCompactRealizationCache(&cache);
 	auto owner = prepareCandidate(target);
 	auto &detached = *static_cast<SoBRLDatabaseSource *>(owner.get());
 	detached.sourceRevision = revision;
-	/* The old exact bound describes the preceding combination placement. */
+	/* The old exact bound describes the preceding source contents. */
 	detached.clearSourceBounds();
 	const int result = target.usesMeshRealization() ?
 	    bobol_database_source_construct_mesh_compact_with_cache(&detached, &cache, nullptr) :
@@ -19290,6 +19615,8 @@ compact_entry_style_from_source(const SoBRLDatabaseSource *source,
 	(source->materialPolicy.getValue() != SoBRLDatabaseSource::MATERIAL_DATABASE ||
 	 !entry.semantic.materialColorValid);
     style.hasColorOverride = true;
+    style.useGeometryColor = !(selected || highlighted || summary.ghosted ||
+	source->colorOverride.getValue());
     cad_shape_color(selected, source->selectedColor.getValue(), highlighted,
 	source->highlightedColor.getValue(), summary.ghosted,
 	source->ghostedColor.getValue(), source->colorOverride.getValue(),
@@ -20123,11 +20450,8 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
     struct directory *dp = db_lookup(this->d->dbip, objectName, LOOKUP_QUIET);
     if (!dp)
 	return -1;
-    if (dp->d_flags & RT_DIR_COMB) {
-	const uint32_t revision = nextSourceRevision ? nextSourceRevision :
-	    bobol_identity_successor_or_terminate(this->sourceRevision.getValue());
-	return BObolPreparedSourcePublication::refreshCombination(*this, revision);
-    }
+    if (dp->d_flags & RT_DIR_COMB)
+	return BObolPreparedSourcePublication::refreshWholeSource(*this, nextSourceRevision);
 
     std::vector<size_t> matching;
     const std::unordered_map<std::string, std::vector<size_t>>::const_iterator
@@ -20144,6 +20468,15 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	matching.end());
     if (matching.empty())
 	return 0;
+
+    /* A root overview has coverage identity and an unselectable baseline.
+     * Refresh its complete occurrence through the existing source publication
+     * owner; a geometry-only edit would retain provisional interaction state. */
+    for (size_t index : matching) {
+	if (BU_STR_EQUAL(this->d->compactIndex->entries[index].shapeSummary.
+		recordRole.getString(), "lod-overview"))
+	    return BObolPreparedSourcePublication::refreshWholeSource(*this, nextSourceRevision);
+    }
 
     owned_leaf_internal validInternal;
     if (rt_db_get_internal(&validInternal.local, dp, this->d->dbip, NULL) < 0 ||

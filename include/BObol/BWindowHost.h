@@ -87,6 +87,8 @@ public:
     virtual int poll(const BObolInputProfile *profile = NULL);
     virtual long pollRate(void) const;
 
+    /** Attach a borrowed framebuffer.  The caller keeps it valid until
+     * closeFramebuffer() returns or this host is destroyed. */
     virtual int openFramebuffer(imgstream_fb_t *fb,
 	const imgstream_fb_spec_info_t *info);
     virtual void closeFramebuffer(imgstream_fb_t *fb);

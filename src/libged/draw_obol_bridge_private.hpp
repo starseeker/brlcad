@@ -132,7 +132,7 @@ int ged_obol_database_source_exact_draw_mode_to_ged(
     struct ged *gedp, const BObolDatabaseSourceSummary &summary,
     SoBRLDatabaseSource *source);
 SoBRLVListShape *ged_obol_owned_annotation_vlist_shape_for_source(
-    SoBRLDatabaseSource *source, const char *fallback_path);
+    SoBRLDatabaseSource *source);
 int32_t ged_obol_vlist_command_from_ged(int command, size_t index);
 int ged_obol_vlist_shape_is_annotation(SoBRLVListShape *shape);
 int ged_obol_vlist_shape_has_annotation_record(SoBRLVListShape *shape);
