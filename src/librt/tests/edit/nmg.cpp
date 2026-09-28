@@ -459,7 +459,9 @@ nmg_operation_matrix_unit(fastf_t local2base, const char *unit)
 	++failures;
     } else {
 	selection->es_v->vg_p->coord[X] += 1.0;
-	if (rt_edit_revert(edit) != BRLCAD_OK || selection->es_eu ||
+	int revert_result = rt_edit_revert(edit);
+	selection = (struct rt_nmg_edit *)edit->ipe_ptr;
+	if (revert_result != BRLCAD_OK || !selection || selection->es_eu ||
 	    selection->es_v || selection->es_fu ||
 	    !edit->es_int.idb_ptr) {
 	    bu_log("nmg\trevert clears selected topology\t%s\tfail\n", unit);

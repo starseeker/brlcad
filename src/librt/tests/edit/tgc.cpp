@@ -802,6 +802,7 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
     EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_TGC_MV_HH);
     MAT_IDN(v.gv_model2view);
     MAT_IDN(v.gv_view2model);
+    rt_edit_set_view(s, &v);
     MAT_IDN(s->e_invmat);
     VADD2(s->curr_e_axes_pos, orig_tgc->v, orig_tgc->h);
     vect_t expected_h, hh_knob_state;

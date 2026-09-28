@@ -4611,10 +4611,13 @@ test_unit_sensitive_edits(struct ged *gedp)
           NEAR_EQUAL(MAGNITUDE(ell.a), 4.0 * inch, NEAR_ENOUGH),
           "inch edit scale reference remains a factor");
 
-    const char *set_a[] = { "edit", "sph.s", "set_a", "2", NULL };
-    CHECK(ged_exec(gedp, 4, set_a) == BRLCAD_OK, "inch descriptor set_a returns OK");
+    const char *set_abc[] = { "edit", "sph.s", "set_a_b_c", "2", NULL };
+    CHECK(ged_exec(gedp, 4, set_abc) == BRLCAD_OK,
+	  "inch descriptor set_a_b_c returns OK");
     CHECK(read_ell(gedp, "sph.s", &ell) == BRLCAD_OK &&
-          NEAR_EQUAL(MAGNITUDE(ell.a), 2.0 * inch, NEAR_ENOUGH),
+          NEAR_EQUAL(MAGNITUDE(ell.a), 2.0 * inch, NEAR_ENOUGH) &&
+          NEAR_EQUAL(MAGNITUDE(ell.b), 2.0 * inch, NEAR_ENOUGH) &&
+          NEAR_EQUAL(MAGNITUDE(ell.c), 2.0 * inch, NEAR_ENOUGH),
           "inch descriptor length input uses local coordinates");
 }
 
@@ -4633,41 +4636,61 @@ test_unit_sketch_descriptor_edits(struct ged *gedp)
 	  NEAR_EQUAL(skt.last_vertex[1], 3.0 * inch, NEAR_ENOUGH),
 	  "inch sketch vertex coordinates are converted once");
 
-    const char *orient[] = { "edit", "sketch.s", "toggle_arc_orient", "1", NULL };
-    CHECK(ged_exec(gedp, 4, orient) == BRLCAD_OK,
-	  "sketch arc orientation accepts an explicit segment index");
+    const char *select_arc[] = {
+	"edit", "-i", "sketch.s", "pick_segment", "1", NULL
+    };
+    CHECK(ged_exec(gedp, 5, select_arc) == BRLCAD_OK,
+	  "sketch arc can be selected for orientation editing");
+    const char *orient[] = { "edit", "sketch.s", "toggle_arc_orient", NULL };
+    CHECK(ged_exec(gedp, 3, orient) == BRLCAD_OK,
+	  "sketch arc orientation uses the selected segment");
     CHECK(read_unit_sketch(gedp, &skt) == BRLCAD_OK &&
 	  skt.arc_center_is_left == 0,
-	  "sketch arc orientation persists without session selection");
+	  "sketch arc orientation persists");
 
-    const char *radius[] = { "edit", "sketch.s", "set_arc_radius", "1", "2", NULL };
-    CHECK(ged_exec(gedp, 5, radius) == BRLCAD_OK,
-	  "inch sketch set_arc_radius accepts segment and radius");
+    const char *select_arc_radius[] = {
+	"edit", "-i", "sketch.s", "pick_segment", "1", NULL
+    };
+    CHECK(ged_exec(gedp, 5, select_arc_radius) == BRLCAD_OK,
+	  "sketch arc can be selected for radius editing");
+    const char *radius[] = { "edit", "sketch.s", "set_arc_radius", "2", NULL };
+    CHECK(ged_exec(gedp, 4, radius) == BRLCAD_OK,
+	  "inch sketch set_arc_radius accepts a radius");
     CHECK(read_unit_sketch(gedp, &skt) == BRLCAD_OK &&
 	  NEAR_EQUAL(skt.arc_radius, 2.0 * inch, NEAR_ENOUGH),
 	  "inch sketch arc radius is converted once");
 
-    const char *reverse[] = { "edit", "sketch.s", "toggle_seg_reverse", "1", NULL };
-    CHECK(ged_exec(gedp, 4, reverse) == BRLCAD_OK,
-	  "sketch segment reversal accepts an explicit index");
+    const char *select_arc_reverse[] = {
+	"edit", "-i", "sketch.s", "pick_segment", "1", NULL
+    };
+    CHECK(ged_exec(gedp, 5, select_arc_reverse) == BRLCAD_OK,
+	  "sketch arc can be selected for reversal");
+    const char *reverse[] = { "edit", "sketch.s", "toggle_seg_reverse", NULL };
+    CHECK(ged_exec(gedp, 3, reverse) == BRLCAD_OK,
+	  "sketch segment reversal uses the selected segment");
     CHECK(read_unit_sketch(gedp, &skt) == BRLCAD_OK &&
 	  skt.arc_reverse == 1,
 	  "sketch segment reversal persists");
 
-    const char *tangent[] = {
-	"edit", "sketch.s", "set_arc_tangency", "1", "0", "0", NULL
+    const char *select_arc_tangent[] = {
+	"edit", "-i", "sketch.s", "pick_segment", "1", NULL
     };
-    CHECK(ged_exec(gedp, 6, tangent) == BRLCAD_OK,
-	  "sketch arc tangency accepts arc, adjacent segment and angle");
+    CHECK(ged_exec(gedp, 5, select_arc_tangent) == BRLCAD_OK,
+	  "sketch arc can be selected for tangency editing");
+    const char *tangent[] = {
+	"edit", "sketch.s", "set_arc_tangency", "0", "0", NULL
+    };
+    CHECK(ged_exec(gedp, 5, tangent) == BRLCAD_OK,
+	  "sketch arc tangency accepts an adjacent segment and angle");
     CHECK(read_unit_sketch(gedp, &skt) == BRLCAD_OK &&
 	  NEAR_EQUAL(skt.arc_radius, 0.5 * inch, NEAR_ENOUGH),
 	  "sketch arc tangency computes a base-unit radius");
 
-    const char *bad_radius[] = {
-	"edit", "sketch.s", "set_arc_radius", "999", "1", NULL
+    const char *bad_selection[] = {
+	"edit", "sketch.s", "pick_segment", "999", NULL
     };
-    CHECK(ged_exec(gedp, 5, bad_radius) == BRLCAD_ERROR,
-	  "sketch arc radius rejects an invalid segment index");
+    CHECK(ged_exec(gedp, 4, bad_selection) == BRLCAD_ERROR,
+	  "sketch selection rejects an invalid segment index");
     CHECK(read_unit_sketch(gedp, &skt) == BRLCAD_OK &&
 	  NEAR_EQUAL(skt.arc_radius, 0.5 * inch, NEAR_ENOUGH),
 	  "invalid sketch edit leaves the persisted arc unchanged");
@@ -4758,13 +4781,17 @@ test_unit_sketch_topology_edits(struct ged *gedp)
 	sketch_ops_match(gedp, expected),
 	"inch sketch split_segment persists the midpoint and both halves");
 
+    const char *select_line[] = {
+	"edit", "-i", "sketch_ops.s", "pick_segment", "3", NULL
+    };
     const char *remove_line[] = {
-	"edit", "sketch_ops.s", "delete_segment", "3", NULL
+	"edit", "sketch_ops.s", "delete_segment", NULL
     };
     expected.segments.pop_back();
-    CHECK(ged_exec(gedp, 4, remove_line) == BRLCAD_OK &&
+    CHECK(ged_exec(gedp, 5, select_line) == BRLCAD_OK &&
+	ged_exec(gedp, 3, remove_line) == BRLCAD_OK &&
 	sketch_ops_match(gedp, expected),
-	"inch sketch delete_segment removes the requested line");
+	"inch sketch delete_segment removes the selected line");
 
     const char *add[] = {
 	"edit", "sketch_ops.s", "add_vertex", "2", "3", NULL
@@ -4774,13 +4801,17 @@ test_unit_sketch_topology_edits(struct ged *gedp)
 	sketch_ops_match(gedp, expected),
 	"inch sketch add_vertex persists local UV coordinates");
 
+    const char *select_vertex[] = {
+	"edit", "-i", "sketch_ops.s", "pick_vertex", "4", NULL
+    };
     const char *remove_vertex[] = {
-	"edit", "sketch_ops.s", "delete_vertex", "4", NULL
+	"edit", "sketch_ops.s", "delete_vertex", NULL
     };
     expected.uv.resize(expected.uv.size() - 2);
-    CHECK(ged_exec(gedp, 4, remove_vertex) == BRLCAD_OK &&
+    CHECK(ged_exec(gedp, 5, select_vertex) == BRLCAD_OK &&
+	ged_exec(gedp, 3, remove_vertex) == BRLCAD_OK &&
 	sketch_ops_match(gedp, expected),
-	"inch sketch delete_vertex removes the unused index");
+	"inch sketch delete_vertex removes the selected unused vertex");
 }
 
 static int
@@ -5258,7 +5289,9 @@ main(int ac, char *av[])
         const fastf_t inch = 25.4;
         CHECK(read_ell(gedp, "sph.s", &ell) == BRLCAD_OK &&
               NEAR_EQUAL(ell.v[Y], 3.0 * inch, NEAR_ENOUGH) &&
-              NEAR_EQUAL(MAGNITUDE(ell.a), 2.0 * inch, NEAR_ENOUGH),
+              NEAR_EQUAL(MAGNITUDE(ell.a), 2.0 * inch, NEAR_ENOUGH) &&
+              NEAR_EQUAL(MAGNITUDE(ell.b), 2.0 * inch, NEAR_ENOUGH) &&
+              NEAR_EQUAL(MAGNITUDE(ell.c), 2.0 * inch, NEAR_ENOUGH),
               "inch edits survive closing and reopening the database");
 	struct unit_sketch_state skt = {};
 	CHECK(read_unit_sketch(gedp, &skt) == BRLCAD_OK &&
