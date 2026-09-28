@@ -674,7 +674,7 @@ bobol_lod_select_prepared_layers(
     constexpr unsigned int maximumLayerTraceCalls = 64;
     static std::atomic<unsigned int> layerTraceCount(0);
     const auto traceLayerFailure =
-	[traceLayers, activeCut, drawMode](const char *reason,
+	[traceLayers, activeCut, drawMode, maximumLayerTraceCalls](const char *reason,
 	    uint32_t chunkId, size_t availableCount,
 	    const std::shared_ptr<const Obol::PartGeometry> &geometry) {
 	    if (!traceLayers ||

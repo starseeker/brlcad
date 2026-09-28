@@ -374,7 +374,7 @@ test_brep_stale_selection(struct rt_edit *s)
     /* Model a topology change that invalidates the selected face. */
     selection->face_index = bip->brep->m_F.Count();
     fastf_t vals[3] = {0.0, 0.0, 0.0};
-    if (EDOBJ[ID_BREP].ft_edit_get_params(s, ECMD_BREP_SRF_CV_SET, vals) != 0)
+    if (rt_edit_test_get_params(s, ECMD_BREP_SRF_CV_SET, vals) != 0)
 	bu_exit(1, "ERROR: stale BREP selection returned CV parameters\n");
 
     const int modes[] = {ECMD_BREP_SRF_CV_MOVE, ECMD_BREP_SRF_CV_SET};
@@ -526,7 +526,7 @@ test_brep_rational_cv_local_units(struct rt_edit *s)
     double x, y, z;
     get_cv_pos(s, face_index, cv_i, cv_j, &x, &y, &z);
     fastf_t vals[3] = {0.0, 0.0, 0.0};
-    if (EDOBJ[ID_BREP].ft_edit_get_params(s, ECMD_BREP_SRF_CV_SET, vals) != 3 ||
+    if (rt_edit_test_get_params(s, ECMD_BREP_SRF_CV_SET, vals) != 3 ||
 	!NEAR_EQUAL(vals[0], x / local2base, VUNITIZE_TOL) ||
 	!NEAR_EQUAL(vals[1], y / local2base, VUNITIZE_TOL) ||
 	!NEAR_EQUAL(vals[2], z / local2base, VUNITIZE_TOL))

@@ -5183,8 +5183,8 @@ test_unit_sensitive_knob_translation(struct ged *gedp)
     db_full_path_init(&dfp);
     db_add_node_to_full_path(&dfp, db_lookup(gedp->dbip, "knob.s", LOOKUP_QUIET));
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    struct bview view;
-    bv_init(&view, NULL);
+    struct rt_edit_view view;
+    rt_edit_view_init(&view);
     struct rt_edit *edit = rt_edit_create(&dfp, gedp->dbip, &tol, &view);
     vect_t delta = {1.0, 0.0, 0.0};
 

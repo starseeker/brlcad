@@ -122,8 +122,6 @@ rt_edit_hrt_edit(struct rt_edit *s)
 {
     struct rt_hrt_internal *h = (struct rt_hrt_internal *)s->es_int.idb_ptr;
     RT_HRT_CK_MAGIC(h);
-    struct rt_hrt_internal candidate = *h;
-
     /* Handler rejection is transactional.  Validate a proposed value in a
      * stack copy, then publish it in one assignment.  rt_edit_process_result
      * intentionally does not clone the whole primitive on every mouse event. */

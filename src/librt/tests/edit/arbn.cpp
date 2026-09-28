@@ -171,7 +171,7 @@ arbn_unit_matrix(struct db_i *dbip, struct db_full_path *path,
 	    same_planes(arbn, expected, ARBN_CUBE_PLANE_COUNT) &&
 	    NEAR_EQUAL(edit->e_para[0], inch_to_mm / scale, VUNITIZE_TOL);
 	fastf_t values[4] = {0};
-	passed = EDOBJ[ID_ARBN].ft_edit_get_params(edit,
+	passed = rt_edit_test_get_params(edit,
 	    ECMD_ARBN_PLANE_SET_DIST, values) == 1 &&
 	    NEAR_EQUAL(values[0], inch_to_mm / scale, VUNITIZE_TOL) &&
 	    passed;
@@ -298,7 +298,7 @@ arbn_unit_matrix(struct db_i *dbip, struct db_full_path *path,
 
 static int
 arbn_transform_matrix(struct db_i *dbip, struct db_full_path *path,
-		      struct bn_tol *tol, struct bview *view)
+		      struct bn_tol *tol, struct rt_edit_view *view)
 {
     const fastf_t inch_to_mm = 25.4;
     const fastf_t scales[] = {1.0, inch_to_mm};
@@ -541,7 +541,7 @@ rt_edit_test_arbn(void)
 
     rt_edit_destroy(s);
     int failures = arbn_unit_matrix(dbip, &fp, &tol);
-    failures += arbn_transform_matrix(dbip, &fp, &tol, v);
+    failures += arbn_transform_matrix(dbip, &fp, &tol, &v);
     db_close(dbip);
     if (!failures)
 	bu_log("All ARBN edit tests PASSED\n");

@@ -67,7 +67,7 @@ struct bobol_display_endpoint;
 struct BObolDrawMetadataRecord;
 struct ged_draw_obol_database_source_record;
 
-extern void ged_view_feature_info_get(struct bv_view_info *view_info,
+GED_EXPORT extern void ged_view_feature_info_get(struct bv_view_info *view_info,
 	const struct ged_view_context *view_ctx);
 
 extern uint64_t ged_draw_material_revision(const struct ged *gedp);

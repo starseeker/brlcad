@@ -128,4 +128,26 @@ rt_edit_test_point_value(struct rt_edit *s, int command_id,
     return 1;
 }
 
+/* Compatibility helper for tests migrated from the former functab getter. */
+static inline int
+rt_edit_test_get_params(struct rt_edit *s, int command_id, fastf_t *result)
+{
+    if (!result)
+	return -1;
+
+    struct rt_edit_cmd_values values;
+    enum rt_edit_value_status status =
+	rt_edit_cmd_values_get(s, command_id, &values);
+    if (status == RT_EDIT_VALUE_ERROR)
+	return -1;
+    if (status != RT_EDIT_VALUE_OK)
+	return 0;
+
+    for (size_t i = 0; i < values.value_count; ++i) {
+	if (values.value_valid[i])
+	    result[i] = values.values[i];
+    }
+    return (int)values.value_count;
+}
+
 #endif /* LIBRT_TESTS_EDIT_TEST_VIEW_H */

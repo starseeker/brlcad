@@ -214,7 +214,7 @@ rt_edit_test_datum(void)
     rt_edit_process(s);
 
     fastf_t w_vals[RT_EDIT_MAXPARA] = {0};
-    int w_nvals = (*EDOBJ[dir->d_minor_type].ft_edit_get_params)(s, ECMD_DATUM_SET_W, w_vals);
+    int w_nvals = rt_edit_test_get_params(s, ECMD_DATUM_SET_W, w_vals);
     if (!NEAR_EQUAL(dp->w, 7.5, SMALL_FASTF) ||
 	w_nvals != 1 || !NEAR_EQUAL(w_vals[0], 7.5, SMALL_FASTF))
 	bu_exit(1, "ERROR: non-mm set/get w: stored=%g returned=%g\n",

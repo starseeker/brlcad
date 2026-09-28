@@ -2359,19 +2359,7 @@ _parse_desc_cmd_input(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    s->e_inpara = _desc_cmd_inpara(cmd_desc);
-    rt_edit_set_edflag(s, cmd_desc->cmd_id);
-    int edit_ret = rt_edit_process(s);
-
-    /* Forward any error message logged by the edit handler */
-    if (s->log_str && bu_vls_strlen(s->log_str) > 0) {
-	if (gedp)
-	    bu_vls_printf(gedp->ged_result_str, "%s", bu_vls_cstr(s->log_str));
-	bu_vls_trunc(s->log_str, 0);
-	return BRLCAD_ERROR;
-    }
-
-    return edit_ret;
+    return BRLCAD_OK;
 }
 
 

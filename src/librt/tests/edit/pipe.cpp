@@ -232,7 +232,7 @@ pipe_matches(struct rt_edit *edit, const struct pipe_point_expected *expected,
 
 static int
 pipe_transform_matrix(struct db_i *dbip, struct db_full_path *path,
-		      struct bn_tol *tol, struct bview *view)
+		      struct bn_tol *tol, struct rt_edit_view *view)
 {
     const fastf_t inch_to_mm = 25.4;
     const fastf_t scales[] = {1.0, inch_to_mm};
@@ -1307,7 +1307,7 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	!VNEAR_ZERO(s->e_keypoint, VUNITIZE_TOL))
 	bu_exit(1, "ERROR: pipe revert retained stale geometry or selection\n");
 
-    int matrix_failures = pipe_transform_matrix(dbip, &fp, &tol, v);
+    int matrix_failures = pipe_transform_matrix(dbip, &fp, &tol, &v);
     matrix_failures += pipe_dimension_matrix(dbip, &fp, &tol);
     matrix_failures += pipe_point_matrix(dbip, &fp, &tol);
     rt_edit_destroy(s);

@@ -282,9 +282,11 @@ rt_edit_test_annot(void)
     s->e_para[0] = 3.5;
     rt_edit_process(s);
     struct txt_seg *tsg = (struct txt_seg *)aip->ant.segments[0];
-    nv = (*EDOBJ[dp->d_minor_type].ft_edit_get_params)(s, ECMD_ANNOT_SET_TSEG_TXT_SIZE, vals);
-    if (!NEAR_EQUAL(tsg->txt_size, 3.5, SMALL_FASTF) || nv != 1 ||
-	!NEAR_EQUAL(vals[0], 3.5, SMALL_FASTF))
+    status = rt_edit_cmd_values_get(s, ECMD_ANNOT_SET_TSEG_TXT_SIZE, &vals);
+    if (!NEAR_EQUAL(tsg->txt_size, 3.5, SMALL_FASTF) ||
+	status != RT_EDIT_VALUE_OK || vals.value_count != 1 ||
+	!vals.value_valid[0] ||
+	!NEAR_EQUAL(vals.values[0], 3.5, SMALL_FASTF))
 	bu_exit(1, "ERROR: non-mm text size: got %g\n", tsg->txt_size);
     bu_log("TEST 8 PASS: non-mm text size is independent of database units\n");
 

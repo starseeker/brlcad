@@ -17,7 +17,7 @@
 #include <vector>
 
 namespace Obol {
-struct PartGeometry;
+class PartGeometry;
 struct PartGeometryBuilder;
 }
 

@@ -3650,7 +3650,7 @@ test_convergence_policy(void)
     decision = policy.evaluate(input);
     if (decision.viewReady || !decision.terminal ||
 	!decision.terminalError || decision.visualPending ||
-	decision.outcome != Policy::Outcome::ERROR ||
+	decision.outcome != Policy::Outcome::FAILED ||
 	decision.phase != Policy::Phase::CONVERROR) {
 	std::fprintf(stderr,
 	    "FAIL: terminal structural presentation error convergence\n");
@@ -3691,7 +3691,7 @@ test_convergence_policy(void)
     input.failedSourceCount = 1;
     decision = policy.evaluate(input);
     if (decision.phase != Policy::Phase::CONVERROR ||
-	decision.outcome != Policy::Outcome::ERROR || decision.viewReady ||
+	decision.outcome != Policy::Outcome::FAILED || decision.viewReady ||
 	!decision.terminal || !decision.terminalError) {
 	std::fprintf(stderr, "FAIL: convergence error phase\n");
 	return 1;
@@ -3704,7 +3704,7 @@ test_convergence_policy(void)
     input.failedSourceCount = 1;
     decision = policy.evaluate(input);
     if (decision.phase != Policy::Phase::CONVERROR ||
-	decision.outcome != Policy::Outcome::ERROR || decision.viewReady ||
+	decision.outcome != Policy::Outcome::FAILED || decision.viewReady ||
 	!decision.terminal || !decision.terminalError ||
 	decision.visualPending) {
 	std::fprintf(stderr,
@@ -3715,7 +3715,7 @@ test_convergence_policy(void)
     input.sourcePreparationPending = true;
     decision = policy.evaluate(input);
     if (decision.phase != Policy::Phase::CONVERROR ||
-	decision.outcome != Policy::Outcome::ERROR || decision.viewReady ||
+	decision.outcome != Policy::Outcome::FAILED || decision.viewReady ||
 	decision.terminal || decision.terminalError ||
 	!decision.visualPending) {
 	std::fprintf(stderr,
@@ -3725,7 +3725,7 @@ test_convergence_policy(void)
 
     input.enabled = false;
     decision = policy.evaluate(input);
-    if (decision.outcome != Policy::Outcome::ERROR || decision.viewReady ||
+    if (decision.outcome != Policy::Outcome::FAILED || decision.viewReady ||
 	decision.terminal || !decision.visualPending) {
 	std::fprintf(stderr, "FAIL: policy-off source failure hid active preparation\n");
 	return 1;
@@ -3733,7 +3733,7 @@ test_convergence_policy(void)
     input.sourcePreparationPending = false;
     decision = policy.evaluate(input);
     if (decision.phase != Policy::Phase::CONVERROR ||
-	decision.outcome != Policy::Outcome::ERROR || decision.viewReady ||
+	decision.outcome != Policy::Outcome::FAILED || decision.viewReady ||
 	!decision.terminal || !decision.terminalError) {
 	std::fprintf(stderr, "FAIL: policy-off source failure reported ready\n");
 	return 1;
@@ -8501,7 +8501,7 @@ test_completed_pass_composed_lifecycle(void)
 
     for (uint64_t trace = 1; trace <= TraceCount; ++trace) {
 	uint64_t randomState = trace;
-	auto random = [&randomState]() {
+	auto random = [&randomState, RandomMultiplier, RandomIncrement]() {
 	    randomState = randomState * RandomMultiplier + RandomIncrement;
 	    return randomState;
 	};
@@ -9820,7 +9820,7 @@ public:
 	    return false;
 	if (decision.terminalError !=
 	    (decision.terminal && decision.outcome ==
-		BObolLodConvergencePolicy::Outcome::ERROR))
+		BObolLodConvergencePolicy::Outcome::FAILED))
 	    return false;
 	return true;
     }
@@ -9833,7 +9833,7 @@ public:
     bool error(void)
     {
 	return this->convergenceDecision().outcome ==
-	    BObolLodConvergencePolicy::Outcome::ERROR;
+	    BObolLodConvergencePolicy::Outcome::FAILED;
     }
     uint32_t invariantMask(void) const { return 0; }
 

@@ -891,7 +891,7 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	vect_t expected, actual;
 	VSET(expected, local2base, 2.0 * local2base, 3.0 * local2base);
 	if (!VNEAR_EQUAL(&bot->vertices[6], expected, VUNITIZE_TOL) ||
-	    EDOBJ[ID_BOT].ft_edit_get_params(s, ECMD_BOT_MOVEV, actual) != 3)
+	    rt_edit_test_get_params(s, ECMD_BOT_MOVEV, actual) != 3)
 	    bu_exit(1, "ERROR: BOT vertex move did not use local units\n");
 	VSET(expected, 1.0, 2.0, 3.0);
 	if (!VNEAR_EQUAL(actual, expected, VUNITIZE_TOL))
@@ -959,7 +959,7 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	fastf_t value[3] = {0};
 	if (!NEAR_EQUAL(bot->thickness[0], 3.0 * inch, VUNITIZE_TOL) ||
 	    !NEAR_EQUAL(bot->thickness[1], 2.0 * inch, VUNITIZE_TOL) ||
-	    EDOBJ[ID_BOT].ft_edit_get_params(s, ECMD_BOT_THICK, value) != 1 ||
+	    rt_edit_test_get_params(s, ECMD_BOT_THICK, value) != 1 ||
 	    !NEAR_EQUAL(value[0], 3.0, VUNITIZE_TOL))
 	    bu_exit(1, "ERROR: BOT selected-face thickness or units failed\n");
 

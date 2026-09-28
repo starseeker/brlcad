@@ -238,7 +238,7 @@ rt_edit_test_extrude(void)
     extr_reset(s, edit_extr, orig, cmp);
     VMOVE(s->curr_e_axes_pos, orig->V);
     point_t rejected_view_target;
-    MAT4X3PNT(rejected_view_target, v->gv_model2view, orig->V);
+    MAT4X3PNT(rejected_view_target, v.gv_model2view, orig->V);
     VMOVE(mousevec, rejected_view_target);
     if (EDOBJ[dp->d_minor_type].ft_edit_xy(s, mousevec) != BRLCAD_ERROR ||
 	extr_diff("rejected mouse zero-height move", cmp, edit_extr))
@@ -616,8 +616,8 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
     /* Endpoint dragging uses base-unit cursor coordinates. */
     extr_reset(s, edit_extr, orig, cmp);
     EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_EXTR_MOV_H);
-    MAT_IDN(v->gv_model2view);
-    MAT_IDN(v->gv_view2model);
+    MAT_IDN(v.gv_model2view);
+    MAT_IDN(v.gv_view2model);
     MAT_IDN(s->e_invmat);
     VADD2(s->curr_e_axes_pos, orig->V, orig->h);
     vect_t knob_state;
