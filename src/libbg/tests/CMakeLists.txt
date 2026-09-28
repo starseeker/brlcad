@@ -322,12 +322,6 @@ brlcad_addexec(bg_plane_coordinates plane_coordinates.c "${BG_TEST_LIBS}" TEST)
 
 brlcad_add_test(NAME bg_plane_coordinates COMMAND bg_plane_coordinates)
 
-#  ************ pca.c tests ***********
-
-brlcad_addexec(bg_pca pca.c "${BG_TEST_LIBS}" TEST)
-
-brlcad_add_test(NAME bg_pca COMMAND bg_pca)
-
 #  ************ polygon.c tests ***********
 
 brlcad_addexec(bg_polygon polygon.c "${BG_TEST_LIBS}" TEST)
