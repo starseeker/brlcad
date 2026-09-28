@@ -166,7 +166,7 @@ check_unit(fastf_t local2base, const char *unit)
 	    failures ? "fail" : "pass");
 
 	rt_edit_set_edflag(edit, RT_PARAMS_EDIT_SCALE);
-	edit->update_views = 0;
+	edit->view_update_requested = 0;
 	edit->e_inpara = 2;
 	edit->e_mvalid = 1;
 	edit->es_scale = 2.0;
@@ -174,14 +174,15 @@ check_unit(fastf_t local2base, const char *unit)
 	edit->e_para[1] = 3.0;
 	if (rt_edit_process(edit) != BRLCAD_ERROR ||
 	    edit->e_inpara || edit->e_mvalid || !ZERO(edit->es_scale) ||
-	    edit->update_views || !EQUAL(edit->e_para[0], 2.0) ||
+	    edit->view_update_requested || !EQUAL(edit->e_para[0], 2.0) ||
 	    !same_ell(edit, 4))
 	    ++failures;
 	rt_edit_set_edflag(edit, ECMD_ELL_SCALE_A);
 	if (rt_edit_process(edit) != BRLCAD_OK || !same_ell(edit, 4) ||
-	    edit->update_views != 1)
+	    edit->view_update_requested != 1)
 	    ++failures;
-	if (rt_edit_process(edit) != BRLCAD_OK || edit->update_views != 1)
+	if (rt_edit_process(edit) != BRLCAD_OK ||
+	    edit->view_update_requested != 1)
 	    ++failures;
 	bu_log("failed edit consumes input\t%s\t%s\n", unit,
 	    failures ? "fail" : "pass");
@@ -253,7 +254,7 @@ rt_edit_test_lifecycle_matrix(void)
     if (rt_edit_process(NULL) != BRLCAD_ERROR ||
 	rt_edit_process(idle) != BRLCAD_ERROR ||
 	idle->e_inpara || idle->e_mvalid || !ZERO(idle->es_scale) ||
-	idle->update_views)
+	idle->view_update_requested)
 	++failures;
     rt_edit_destroy(idle);
     failures += check_unit(1.0, "mm");

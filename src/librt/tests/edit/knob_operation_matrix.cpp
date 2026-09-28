@@ -29,6 +29,8 @@
 #include "raytrace.h"
 #include "rt/rt_ecmds.h"
 
+#include "edit_test_view.h"
+
 struct directory *make_ell(struct rt_wdb *);
 
 static const fastf_t inch_to_mm = 25.4;
@@ -56,7 +58,7 @@ same_ell(const struct rt_edit *edit, fastf_t a, fastf_t b, fastf_t c)
 }
 
 static bool
-set_absolute_scale(struct rt_edit *edit, struct bview *view, fastf_t value)
+set_absolute_scale(struct rt_edit *edit, struct rt_edit_view *view, fastf_t value)
 {
     vect_t rotation = VINIT_ZERO;
     vect_t translation = VINIT_ZERO;
@@ -71,7 +73,7 @@ set_absolute_scale(struct rt_edit *edit, struct bview *view, fastf_t value)
 
 static int
 check_solid(struct db_full_path *path, struct db_i *dbip,
-	    struct bn_tol *tol, struct bview *view, int specific,
+	    struct bn_tol *tol, struct rt_edit_view *view, int specific,
 	    const char *unit)
 {
     struct rt_edit *edit = rt_edit_create(path, dbip, tol, view);
@@ -122,7 +124,7 @@ check_solid(struct db_full_path *path, struct db_i *dbip,
 
 static int
 check_matrix(struct db_full_path *path, struct db_i *dbip,
-	     struct bn_tol *tol, struct bview *view, int command,
+	     struct bn_tol *tol, struct rt_edit_view *view, int command,
 	     const char *unit)
 {
     struct rt_edit *edit = rt_edit_create(path, dbip, tol, view);
@@ -166,7 +168,7 @@ check_matrix(struct db_full_path *path, struct db_i *dbip,
 
 static int
 check_translation(struct db_full_path *path, struct db_i *dbip,
-		  struct bn_tol *tol, struct bview *view,
+		  struct bn_tol *tol, struct rt_edit_view *view,
 		  fastf_t local2base, const char *unit)
 {
     struct rt_edit *edit = rt_edit_create(path, dbip, tol, view);
@@ -231,16 +233,12 @@ check_unit(fastf_t local2base, const char *unit)
     db_full_path_init(&path);
     db_add_node_to_full_path(&path, dp);
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    struct bview *view;
-    BU_GET(view, struct bview);
-    bv_init(view, NULL);
+    struct rt_edit_view view_storage;
+    rt_edit_test_view_init_identity_size(&view_storage, view_size);
+    struct rt_edit_view *view = &view_storage;
     view->gv_local2base = local2base;
     view->gv_base2local = 1.0 / local2base;
     view->gv_coord = 'm';
-    view->gv_size = view_size;
-    view->gv_isize = 1.0 / view->gv_size;
-    view->gv_scale = 0.5 * view->gv_size;
-    bv_update(view);
 
     int failures = check_solid(&path, dbip, &tol, view, 0, unit);
     failures += check_solid(&path, dbip, &tol, view, 1, unit);
@@ -253,7 +251,6 @@ check_unit(fastf_t local2base, const char *unit)
     failures += check_translation(&path, dbip, &tol, view,
 	local2base, unit);
 
-    bv_free(view);
     db_free_full_path(&path);
     db_close(dbip);
     bu_log("knob operation matrix %s: %s\n", unit,

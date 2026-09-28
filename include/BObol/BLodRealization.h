@@ -22,7 +22,7 @@
 #include <vector>
 
 namespace Obol {
-struct PartGeometry;
+class PartGeometry;
 }
 
 enum BObolLodDrawMode {

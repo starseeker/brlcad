@@ -322,10 +322,12 @@ rt_edit_test_revolve(void)
 	!NEAR_EQUAL(rip->r[X], 3.0 * inch, SMALL_FASTF))
 	bu_exit(1, "ERROR: set_r did not convert local length\n");
 
-    nv = (*EDOBJ[dp->d_minor_type].ft_edit_get_params)(s, ECMD_REVOLVE_SET_R, vals);
-    if (nv != 3 || !NEAR_EQUAL(vals[X], 3.0, VUNITIZE_TOL))
+    status = rt_edit_cmd_values_get(s, ECMD_REVOLVE_SET_R, &vals);
+    if (status != RT_EDIT_VALUE_OK || vals.value_count != 3 ||
+	!vals.value_valid[X] ||
+	!NEAR_EQUAL(vals.values[X], 3.0, VUNITIZE_TOL))
 	bu_exit(1, "ERROR: get_params(SET_R) returned count %d, x %g, base x %g, factor %g\n",
-		nv, vals[X], rip->r[X], s->base2local);
+		(int)vals.value_count, vals.values[X], rip->r[X], s->base2local);
 
     rt_edit_set_edflag(s, ECMD_REVOLVE_SET_AXIS);
     s->e_inpara = 2;

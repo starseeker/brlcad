@@ -31,6 +31,8 @@
 #include <cstdint>
 #include <cstdlib>
 
+#include "edit_test_view.h"
+
 #include "bu/exit.h"
 #include "vmath.h"
 #include "bu/log.h"
@@ -238,15 +240,9 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     struct db_full_path path;
     db_full_path_init(&path);
     db_add_node_to_full_path(&path, dp);
-    struct bview *view;
-    BU_GET(view, struct bview);
-    bv_init(view, NULL);
-    VSET(view->gv_aet, 45, 35, 0);
-    bv_mat_aet(view);
-    view->gv_size = 73.3197;
-    view->gv_isize = 1.0 / view->gv_size;
-    view->gv_scale = 0.5 * view->gv_size;
-    bv_update(view);
+    struct rt_edit_view view_storage;
+    rt_edit_test_view_init(&view_storage);
+    struct rt_edit_view *view = &view_storage;
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
     struct rt_edit *s = rt_edit_create(&path, dbip, &tol, view);
@@ -269,7 +265,6 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
     rt_edit_destroy(s);
     db_free_full_path(&path);
-    bv_free(view);
     db_close(dbip);
     return 0;
 }

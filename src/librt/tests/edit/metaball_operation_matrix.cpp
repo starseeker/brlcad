@@ -27,6 +27,8 @@
 
 #include <math.h>
 
+#include "edit_test_view.h"
+
 #include "bu/log.h"
 #include "bu/str.h"
 #include "bu/vls.h"
@@ -135,18 +137,13 @@ static bool
 param_queries_match(struct rt_edit *edit, const struct expected_state *expected,
 		    fastf_t base2local)
 {
-    int (*get_params)(struct rt_edit *, int, fastf_t *) =
-	EDOBJ[ID_METABALL].ft_edit_get_params;
-    if (!get_params)
-	return false;
-
     fastf_t values[3] = VINIT_ZERO;
-    if (get_params(edit, METABALL_THRESHOLD, values) != 1 ||
+    if (rt_edit_test_get_params(edit, METABALL_THRESHOLD, values) != 1 ||
 	!NEAR_EQUAL(values[0], expected->threshold, VUNITIZE_TOL) ||
-	get_params(edit, METABALL_METHOD, values) != 1 ||
+	rt_edit_test_get_params(edit, METABALL_METHOD, values) != 1 ||
 	!NEAR_EQUAL(values[0], (fastf_t)expected->method, VUNITIZE_TOL) ||
-	get_params(edit, METABALL_FIELD, values) != 0 ||
-	get_params(edit, METABALL_MOVE, values) != 0)
+	rt_edit_test_get_params(edit, METABALL_FIELD, values) != 0 ||
+	rt_edit_test_get_params(edit, METABALL_MOVE, values) != 0)
 	return false;
 
     struct metaball_edit_state *selection =
@@ -154,25 +151,25 @@ param_queries_match(struct rt_edit *edit, const struct expected_state *expected,
     selection->selected = point_at(
 	(struct rt_metaball_internal *)edit->es_int.idb_ptr, 0);
     if (!selection->selected ||
-	get_params(edit, METABALL_FIELD, values) != 1 ||
+	rt_edit_test_get_params(edit, METABALL_FIELD, values) != 1 ||
 	!NEAR_EQUAL(values[0], expected->points[0].strength * base2local,
 	    VUNITIZE_TOL) ||
-	get_params(edit, METABALL_SCALE_BLOB, values) != 1 ||
+	rt_edit_test_get_params(edit, METABALL_SCALE_BLOB, values) != 1 ||
 	!NEAR_EQUAL(values[0], expected->points[0].blob, VUNITIZE_TOL) ||
-	get_params(edit, METABALL_SET_BLOB, values) != 1 ||
+	rt_edit_test_get_params(edit, METABALL_SET_BLOB, values) != 1 ||
 	!NEAR_EQUAL(values[0], expected->points[0].blob, VUNITIZE_TOL))
 	return false;
 
     const int point_queries[] = {METABALL_PICK, METABALL_MOVE, METABALL_ADD};
     for (int command : point_queries) {
-	if (get_params(edit, command, values) != 3 ||
+	if (rt_edit_test_get_params(edit, command, values) != 3 ||
 	    !NEAR_EQUAL(values[X], expected->points[0].coord[X] * base2local,
 		VUNITIZE_TOL) ||
 	    !ZERO(values[Y]) || !ZERO(values[Z]))
 	    return false;
     }
-    return get_params(edit, METABALL_DEL, values) == 0 &&
-	get_params(edit, METABALL_FIELD, NULL) == -1;
+    return rt_edit_test_get_params(edit, METABALL_DEL, values) == 0 &&
+	rt_edit_test_get_params(edit, METABALL_FIELD, NULL) == -1;
 }
 
 static int
@@ -295,7 +292,7 @@ commands_match(void)
 
 static int
 run_case(struct db_i *dbip, struct db_full_path *path, struct bn_tol *tol,
-	 struct bview *view, const char *unit, const char *name, int command,
+	 struct rt_edit_view *view, const char *unit, const char *name, int command,
 	 const fastf_t *parameters, size_t parameter_count, int selected_before,
 	 int selected_after, const struct expected_state *expected,
 	 bool expect_error = false)
@@ -354,8 +351,8 @@ run_unit(fastf_t local2base, const char *unit)
     db_full_path_init(&path);
     db_add_node_to_full_path(&path, dp);
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    struct bview view = {};
-    MAT_IDN(view.gv_view2model);
+    struct rt_edit_view view;
+    rt_edit_view_init(&view);
     struct expected_state base = initial_state();
     struct expected_state expected;
     int failures = run_param_case(dbip, &path, &tol, local2base, unit);
