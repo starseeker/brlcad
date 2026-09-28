@@ -673,8 +673,8 @@ rt_edit_test_arb8(void)
     select_arb_point_edit(s, a, &captured_menu, "Move Point 5");
     s->local2base = 25.4;
     s->base2local = 1.0 / s->local2base;
-    MAT_IDN(v->gv_model2view);
-    MAT_IDN(v->gv_view2model);
+    MAT_IDN(v.gv_model2view);
+    MAT_IDN(v.gv_view2model);
     MAT_IDN(s->e_invmat);
     VMOVE(s->curr_e_axes_pos, arb->pt[4]);
     vect_t knob_state;
@@ -876,8 +876,8 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
     arb8_reset(s, arb, a);
     a->edit_menu = 0;
     rt_edit_set_edflag(s, EARB);
-    MAT_IDN(v->gv_model2view);
-    MAT_IDN(v->gv_view2model);
+    MAT_IDN(v.gv_model2view);
+    MAT_IDN(v.gv_view2model);
     MAT_IDN(s->e_invmat);
     VMOVE(s->curr_e_axes_pos, arb->pt[0]);
     VMOVE(s->k.tra_m_abs, mouse_knob_state);
@@ -1116,8 +1116,8 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
     arb8_reset(s, arb, a);
     a->edit_menu = ARB8_EDIT_COUNT;
     rt_edit_set_edflag(s, EARB);
-    MAT_IDN(v->gv_model2view);
-    MAT_IDN(v->gv_view2model);
+    MAT_IDN(v.gv_model2view);
+    MAT_IDN(v.gv_view2model);
     MAT_IDN(s->e_invmat);
     VMOVE(s->curr_e_axes_pos, arb->pt[0]);
     VSET(mousevec, 0.25, 0.25, 0.0);

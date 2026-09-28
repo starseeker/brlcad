@@ -7788,7 +7788,7 @@ BObolViewController::getLodConvergenceStatus(
 	    BOBOL_LOD_PRESENTATION_READY &&
 	static_cast<int>(BObolLodConvergencePolicy::Outcome::CONSTRAINED) ==
 	    BOBOL_LOD_PRESENTATION_CONSTRAINED &&
-	static_cast<int>(BObolLodConvergencePolicy::Outcome::ERROR) ==
+	static_cast<int>(BObolLodConvergencePolicy::Outcome::FAILED) ==
 	    BOBOL_LOD_PRESENTATION_ERROR,
 	"public and private LoD presentation outcomes must agree");
     static_assert(

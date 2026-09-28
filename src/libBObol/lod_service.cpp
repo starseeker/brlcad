@@ -4395,7 +4395,7 @@ lod_cold_coverage_voxel_geometry(const struct BObolMeshLodData &data,
 	sourceExtent[2] <= 0.0f)
 	return std::shared_ptr<const Obol::PartGeometry>();
 
-    const auto cellCoordinate = [&sourceMinimum, &sourceExtent](
+    const auto cellCoordinate = [&sourceMinimum, &sourceExtent, cellAxis](
 	const SbVec3f &point, size_t axis) {
 	const float normalized = (point[axis] - sourceMinimum[axis]) /
 	    sourceExtent[axis];

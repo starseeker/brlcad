@@ -29,6 +29,8 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "edit_test_view.h"
+
 #include "bu/log.h"
 #include "bu/malloc.h"
 #include "bu/vls.h"
@@ -339,7 +341,7 @@ run_arbn_step(struct rt_edit *edit, int command_id, const fastf_t *params,
         same_arbn(edit, expected, expected_count);
     if (ok && command_id == ECMD_ARBN_PLANE_SELECT) {
         fastf_t selected[4] = {};
-        ok = EDOBJ[ID_ARBN].ft_edit_get_params(edit, command_id, selected) == 1 &&
+        ok = rt_edit_test_get_params(edit, command_id, selected) == 1 &&
             NEAR_EQUAL(selected[0], ARBN_EDITED_PLANE, VUNITIZE_TOL);
     }
     if (!ok)

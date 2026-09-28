@@ -926,7 +926,7 @@ public:
 	ACTIVE = 0,
 	READY,
 	CONSTRAINED,
-	ERROR
+	FAILED
     };
 
     struct Inputs {
@@ -1041,7 +1041,7 @@ public:
 	    }
 	    if (hasTerminalError) {
 		decision.phase = Phase::CONVERROR;
-		decision.outcome = Outcome::ERROR;
+		decision.outcome = Outcome::FAILED;
 		decision.terminalError = decision.terminal;
 		decision.hasLodState = true;
 	    }
@@ -1142,7 +1142,7 @@ public:
 	decision.performanceLimited = decision.viewReady &&
 	    (inputs.stableBudgetLimited || inputs.presentationLimited ||
 	     decision.memoryLimited);
-	decision.outcome = hasTerminalError ? Outcome::ERROR :
+	decision.outcome = hasTerminalError ? Outcome::FAILED :
 	    !decision.terminal ? Outcome::ACTIVE :
 	    decision.performanceLimited ? Outcome::CONSTRAINED : Outcome::READY;
 	decision.hasLodState =

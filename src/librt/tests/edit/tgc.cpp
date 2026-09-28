@@ -414,7 +414,7 @@ rt_edit_test_tgc(void)
     EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_TGC_MV_H);
     VMOVE(s->curr_e_axes_pos, orig_tgc->v);
     point_t rejected_view_target;
-    MAT4X3PNT(rejected_view_target, v->gv_model2view, orig_tgc->v);
+    MAT4X3PNT(rejected_view_target, v.gv_model2view, orig_tgc->v);
     VMOVE(mousevec, rejected_view_target);
     if (EDOBJ[dp->d_minor_type].ft_edit_xy(s, mousevec) != BRLCAD_ERROR ||
 	tgc_diff("rejected mouse zero-height move", cmp_tgc, edit_tgc))
@@ -605,7 +605,7 @@ rt_edit_test_tgc(void)
     if ((*EDOBJ[dp->d_minor_type].ft_edit_xy)(s, mousevec) == BRLCAD_ERROR)
 	bu_exit(1, "ERROR: ECMD_TGC_MV_H(xy) failed ft_edit_xy: %s\n", bu_vls_cstr(s->log_str));
     point_t view_target;
-    MAT4X3PNT(view_target, v->gv_model2view, s->curr_e_axes_pos);
+    MAT4X3PNT(view_target, v.gv_model2view, s->curr_e_axes_pos);
     view_target[X] = mousevec[X];
     view_target[Y] = mousevec[Y];
     if (!edit_test_mouse_knobs_match(s, view_target))
@@ -800,8 +800,8 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 
     tgc_reset(s, edit_tgc, orig_tgc, cmp_tgc);
     EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_TGC_MV_HH);
-    MAT_IDN(v->gv_model2view);
-    MAT_IDN(v->gv_view2model);
+    MAT_IDN(v.gv_model2view);
+    MAT_IDN(v.gv_view2model);
     MAT_IDN(s->e_invmat);
     VADD2(s->curr_e_axes_pos, orig_tgc->v, orig_tgc->h);
     vect_t expected_h, hh_knob_state;

@@ -150,6 +150,18 @@ brlcad_addlib(libBObol "${LIBBOBOL_SRCS}" "" "${BOBOL_LOCAL_INCLUDE_DIRS}"
   ALL_CXX
 )
 
+# Windows SDK headers otherwise define min and max macros which corrupt the
+# standard-library calls used throughout libBObol.
+if(WIN32)
+  target_compile_definitions(libBObol PUBLIC NOMINMAX)
+  if(TARGET libBObol-static)
+    target_compile_definitions(libBObol-static PUBLIC NOMINMAX)
+  endif(TARGET libBObol-static)
+  if(TARGET libBObol-obj)
+    target_compile_definitions(libBObol-obj PRIVATE NOMINMAX)
+  endif(TARGET libBObol-obj)
+endif(WIN32)
+
 # libBObol's public headers mark the supported ABI explicitly with
 # BOBOL_EXPORT.  Keep implementation-only C++ entities (in particular PImpl
 # constructors, destructors, and inline helpers) out of the ELF/Mach-O export

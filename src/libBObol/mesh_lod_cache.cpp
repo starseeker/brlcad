@@ -2453,9 +2453,9 @@ BObolPopState::publishSerializedCoveragePreview(void)
 	BOBOL_MESH_LOD_COVERAGE_PREVIEW_POINTS_PER_CELL;
     static_assert(cellCount == cellAxis * cellAxis * cellAxis,
 	"coverage preview grid must be cubic");
-    const point_t &previewMinimum = sourceBoundsScanned ?
+    const fastf_t *previewMinimum = sourceBoundsScanned ?
 	bbmin : coveragePreviewMinimum;
-    const point_t &previewMaximum = sourceBoundsScanned ?
+    const fastf_t *previewMaximum = sourceBoundsScanned ?
 	bbmax : coveragePreviewMaximum;
     const fastf_t extent[3] = {
 	previewMaximum[X] - previewMinimum[X],
@@ -2488,8 +2488,8 @@ BObolPopState::publishSerializedCoveragePreview(void)
 	return false;
     }
 
-    const auto sampleRange = [this, &previewMinimum, &previewMaximum,
-	&extent, &workers, valuesPerCell, cellAxis,
+    const auto sampleRange = [this, previewMinimum, previewMaximum,
+	&extent, &workers, valuesPerCell, cellAxis, pointsPerCell,
 	boundRelativeTolerance](size_t workerIndex, size_t begin, size_t end) {
 	CoverageWorkerSamples &worker = workers[workerIndex];
 	BObolPopSourceReader reader(*this, BObolPopPointAccess::Sequential);

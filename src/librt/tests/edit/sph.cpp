@@ -148,18 +148,18 @@ rt_edit_test_sph(void)
         s->local2base = inch;
         s->base2local = 1.0 / inch;
         fastf_t values[3] = {0.0, 0.0, 0.0};
-        if (EDOBJ[ID_SPH].ft_edit_get_params(s, desc->cmds[0].cmd_id,
+        if (rt_edit_test_get_params(s, desc->cmds[0].cmd_id,
                                              values) != 3 ||
             !NEAR_EQUAL(values[0], 1.0, VUNITIZE_TOL) ||
             !NEAR_EQUAL(values[1], 2.0, VUNITIZE_TOL) ||
             !NEAR_EQUAL(values[2], 3.0, VUNITIZE_TOL))
             bu_exit(1, "SPH center getter did not return local units\n");
-        if (EDOBJ[ID_SPH].ft_edit_get_params(s, desc->cmds[1].cmd_id,
+        if (rt_edit_test_get_params(s, desc->cmds[1].cmd_id,
                                              values) != 1 ||
             !NEAR_EQUAL(values[0], 1.0, VUNITIZE_TOL))
             bu_exit(1, "SPH radius getter did not return local units\n");
-        if (EDOBJ[ID_SPH].ft_edit_get_params(s, -1, values) != 0 ||
-            EDOBJ[ID_SPH].ft_edit_get_params(s, desc->cmds[0].cmd_id,
+        if (rt_edit_test_get_params(s, -1, values) != 0 ||
+            rt_edit_test_get_params(s, desc->cmds[0].cmd_id,
                                              NULL) >= 0)
             bu_exit(1, "SPH getter accepted invalid arguments\n");
         sph_reset(s, ell);
