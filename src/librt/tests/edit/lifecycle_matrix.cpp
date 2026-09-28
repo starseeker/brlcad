@@ -226,7 +226,12 @@ check_unit(fastf_t local2base, const char *unit)
 	}
 
 	if (rt_edit_reinit(edit, &path, dbip, &tol, NULL) != BRLCAD_OK ||
-	    edit->dbip != dbip || edit->tol != &tol ||
+	    edit->dbip != dbip || edit->tol != &edit->tol_storage ||
+	    edit->tol->magic != tol.magic ||
+	    !EQUAL(edit->tol->dist, tol.dist) ||
+	    !EQUAL(edit->tol->dist_sq, tol.dist_sq) ||
+	    !EQUAL(edit->tol->perp, tol.perp) ||
+	    !EQUAL(edit->tol->para, tol.para) ||
 	    !NEAR_EQUAL(edit->local2base, local2base, VUNITIZE_TOL) ||
 	    !same_ell(edit, 4)) {
 	    bu_log("lifecycle reinit\t%s\tfail\n", unit);

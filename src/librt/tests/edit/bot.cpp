@@ -787,6 +787,7 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 
 	MAT_IDN(v.gv_view2model);
 	MAT_IDN(v.gv_model2view);
+	rt_edit_set_view(s, &v);
 	vect_t knob_state;
 	VSET(knob_state, 7.0, 8.0, 9.0);
 	VMOVE(s->k.tra_m_abs, knob_state);
@@ -822,6 +823,7 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	s->base2local = 1.0 / s->local2base;
 	MAT_IDN(v.gv_model2view);
 	MAT_IDN(v.gv_view2model);
+	rt_edit_set_view(s, &v);
 	VSETALL(s->curr_e_axes_pos, 0.0);
 	vect_t knob_state;
 	VSET(knob_state, 7.0, 8.0, 9.0);
@@ -986,8 +988,9 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	s->e_inpara = 3;
 	VSET(s->e_para, 1.0, 0, 0);
 	rt_edit_process(s);
-	point_t edge0 = {inch, 0, 0};
-	point_t edge1 = {inch + 1, 0, 0};
+	const fastf_t edge_delta = inch - 0.5;
+	point_t edge0 = {edge_delta, 0, 0};
+	point_t edge1 = {edge_delta + 1, 0, 0};
 	point_t unchanged = {0, 1, 0};
 	if (!VNEAR_EQUAL(&bot->vertices[0], edge0, VUNITIZE_TOL) ||
 	    !VNEAR_EQUAL(&bot->vertices[3], edge1, VUNITIZE_TOL) ||
@@ -1010,9 +1013,10 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	s->e_inpara = 3;
 	VSET(s->e_para, 0, 1.0, 0);
 	rt_edit_process(s);
-	point_t face0 = {0, inch, 0};
-	point_t face1 = {1, inch, 0};
-	point_t face2 = {0, inch + 1, 0};
+	const fastf_t one_third = 1.0 / 3.0;
+	point_t face0 = {-one_third, inch - one_third, 0};
+	point_t face1 = {1.0 - one_third, inch - one_third, 0};
+	point_t face2 = {-one_third, inch + 1.0 - one_third, 0};
 	point_t face3 = {0, 0, 1};
 	if (!VNEAR_EQUAL(&bot->vertices[0], face0, VUNITIZE_TOL) ||
 	    !VNEAR_EQUAL(&bot->vertices[3], face1, VUNITIZE_TOL) ||

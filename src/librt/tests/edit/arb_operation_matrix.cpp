@@ -42,7 +42,10 @@ enum {
     ARB_MOVE_VERTEX = 4010,
     ARB_MOVE_FACE = 4013,
     ARB_ROTATE_FACE = 4015,
-    ARB_DESCRIPTOR_COMMAND_COUNT = 4,
+    ARB_SELECT_VERTEX = 4037,
+    ARB_SELECT_EDGE = 4038,
+    ARB_SELECT_FACE = 4039,
+    ARB_DESCRIPTOR_COMMAND_COUNT = 7,
     ARB_EDGE_POINT_COUNT = 2,
     ARB5_BASE_EDGE_COUNT = 4,
     ARB_FACE_COUNT = 6,
@@ -695,7 +698,9 @@ rt_edit_test_arb_operation_matrix(void)
     const struct rt_edit_cmd_desc *vertex = find_command(ARB_MOVE_VERTEX);
     if (!desc || desc->ncmd != ARB_DESCRIPTOR_COMMAND_COUNT ||
 	!find_command(ARB_MOVE_FACE) || !find_command(ARB_MOVE_EDGE) ||
-	!find_command(ARB_ROTATE_FACE) || !vertex || !vertex->req_types ||
+	!find_command(ARB_ROTATE_FACE) || !find_command(ARB_SELECT_VERTEX) ||
+	!find_command(ARB_SELECT_EDGE) || !find_command(ARB_SELECT_FACE) ||
+	!vertex || !vertex->req_types ||
 	strstr(vertex->req_types, "arb8") || !strstr(vertex->req_types, "arb5")) {
 	bu_log("ARB vertex descriptor lists unsupported primitive types\n");
 	return BRLCAD_ERROR;

@@ -1302,7 +1302,9 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
     pe->es_pipe_pnt = pipe_second(s);
     pipe_first(s)->pp_coord[X] = inch;
     VSET(s->e_keypoint, -1, -1, -1);
-    if (rt_edit_revert(s) != BRLCAD_OK || pe->es_pipe_pnt ||
+    int revert_result = rt_edit_revert(s);
+    pe = (struct rt_pipe_edit_local *)s->ipe_ptr;
+    if (revert_result != BRLCAD_OK || !pe || pe->es_pipe_pnt ||
 	!ZERO(pipe_first(s)->pp_coord[X]) ||
 	!VNEAR_ZERO(s->e_keypoint, VUNITIZE_TOL))
 	bu_exit(1, "ERROR: pipe revert retained stale geometry or selection\n");

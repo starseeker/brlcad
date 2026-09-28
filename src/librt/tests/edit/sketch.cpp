@@ -412,14 +412,12 @@ sketch_check_descriptors(void)
 	int count;
 	int types[2];
     } expected[] = {
-	{ECMD_SKETCH_MOVE_VERTEX, 2,
-	    {RT_EDIT_PARAM_SCALAR, RT_EDIT_PARAM_SCALAR}},
-	{ECMD_SKETCH_MOVE_SEGMENT, 2,
-	    {RT_EDIT_PARAM_SCALAR, RT_EDIT_PARAM_SCALAR}},
+	{ECMD_SKETCH_MOVE_VERTEX, 1, {RT_EDIT_PARAM_POINT2, 0}},
+	{ECMD_SKETCH_MOVE_SEGMENT, 1, {RT_EDIT_PARAM_VECTOR2, 0}},
 	{ECMD_SKETCH_APPEND_LINE, 2,
 	    {RT_EDIT_PARAM_INTEGER, RT_EDIT_PARAM_INTEGER}},
-	{ECMD_SKETCH_DELETE_VERTEX, 1, {RT_EDIT_PARAM_INTEGER, 0}},
-	{ECMD_SKETCH_DELETE_SEGMENT, 1, {RT_EDIT_PARAM_INTEGER, 0}},
+	{ECMD_SKETCH_DELETE_VERTEX, 0, {0, 0}},
+	{ECMD_SKETCH_DELETE_SEGMENT, 0, {0, 0}},
 	{ECMD_SKETCH_SPLIT_SEGMENT, 2,
 	    {RT_EDIT_PARAM_INTEGER, RT_EDIT_PARAM_SCALAR}}
     };
@@ -433,7 +431,8 @@ sketch_check_descriptors(void)
 		break;
 	    }
 	}
-	if (!command || command->nparam != entry.count || !command->params) {
+	if (!command || command->nparam != entry.count ||
+	    (entry.count && !command->params)) {
 	    bu_log("sketch descriptor %d has wrong arity\n", entry.command);
 	    return 1;
 	}
