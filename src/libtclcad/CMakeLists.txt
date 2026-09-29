@@ -42,6 +42,7 @@ set(
   global.c
   init.c
   mouse.c
+  namespace.c
   polygons.c
   rt.c
   tkImgFmtPIX.c
