@@ -525,23 +525,16 @@ mged_ged_exec_async(struct mged_state *s, int argc, const char *argv[])
 /* All remaining MGED command functions require C linkage because they are
  * called through Tcl command dispatch (function pointers stored with
  * Tcl_CreateCommand) and directly by name from other .c translation units. */
-/* Tcl command "_mged_ged_exec" registered inside the search interpreter.
- * Bridges Tcl scripts running in the search interpreter to the GED command
- * system so that GED commands (draw, ls, attr, ...) are reachable from
- * within Tcl scripts executed by search -exec. */
 static int
-mged_search_ged_exec(ClientData cd, Tcl_Interp *interp, int argc, const char **argv)
+mged_search_exec_ged(struct mged_state *s, Tcl_Interp *interp, int argc,
+	const char **argv)
 {
-    struct mged_state *s = (struct mged_state *)cd;
+    int ret;
+
     MGED_CK_STATE(s);
 
-    if (argc < 2) {
-	Tcl_AppendResult(interp, "Usage: _mged_ged_exec cmd [args...]", (char *)NULL);
-	return TCL_ERROR;
-    }
-
     s->gedp->ged_skip_clbks++;
-    int ret = ged_exec(s->gedp, argc - 1, argv + 1);
+    ret = ged_exec(s->gedp, argc, argv);
     s->gedp->ged_skip_clbks--;
 
     const char *result = bu_vls_cstr(s->gedp->ged_result_str);
@@ -552,6 +545,32 @@ mged_search_ged_exec(ClientData cd, Tcl_Interp *interp, int argc, const char **a
     if (ret & GED_UNKNOWN)
 	return TCL_ERROR;
     return (ret == BRLCAD_OK) ? TCL_OK : TCL_ERROR;
+}
+
+
+/* Tcl command "_mged_ged_exec" registered inside the search interpreter.
+ * Bridges unqualified commands handled by unknown to the GED command system. */
+static int
+mged_search_ged_exec(ClientData cd, Tcl_Interp *interp, int argc, const char **argv)
+{
+    struct mged_state *s = (struct mged_state *)cd;
+
+    if (argc < 2) {
+	Tcl_AppendResult(interp, "Usage: _mged_ged_exec cmd [args...]", (char *)NULL);
+	return TCL_ERROR;
+    }
+
+    return mged_search_exec_ged(s, interp, argc - 1, argv + 1);
+}
+
+
+static int
+mged_search_ged_cmd(ClientData clientData, Tcl_Interp *interp, int argc,
+	const char **argv)
+{
+    struct mged_state *s = (struct mged_state *)clientData;
+
+    return mged_search_exec_ged(s, interp, argc, argv);
 }
 
 
@@ -573,7 +592,8 @@ _create_search_interp(struct mged_state *s)
      *     any init call
      *   - the package/auto-load infrastructure so that 'proc' bodies replayed
      *     from the main interp can call package commands if needed
-     *   - the _mged_ged_exec bridge and unknown forwarder (installed below)
+     *   - the canonical GED dispatcher, _mged_ged_exec bridge, and unknown
+     *     forwarder (installed below)
      *
      * tclcad_init would additionally load Itcl, Ged_Init, Bu_Init, etc.  In
      * Tcl 8.6 that causes global side-effects (shared literal tables, Itcl
@@ -590,9 +610,14 @@ _create_search_interp(struct mged_state *s)
     }
 
     /* Register the GED bridge command. */
-    (void)Tcl_CreateCommand(search_interp, "_mged_ged_exec",
+    if (!Tcl_CreateCommand(search_interp, "_mged_ged_exec",
 	    mged_search_ged_exec, (ClientData)s,
-	    (Tcl_CmdDeleteProc *)NULL);
+	    (Tcl_CmdDeleteProc *)NULL)) {
+	bu_log("search interp: failed to register GED bridge: %s\n",
+	       Tcl_GetStringResult(search_interp));
+	Tcl_DeleteInterp(search_interp);
+	return NULL;
+    }
 
     /* Sync the main interp state (procs, variables, namespaces, aliases).
      * This must happen BEFORE installing the custom 'unknown' proc below,
@@ -615,6 +640,16 @@ _create_search_interp(struct mged_state *s)
 	    bu_log("search interp: snapshot replay error: %s\n",
 		   Tcl_GetStringResult(search_interp));
 	Tcl_DecrRefCount(snap);
+    }
+
+    /* Native commands are not part of the interpreter snapshot.  Register
+     * the canonical raw GED dispatcher explicitly on the worker thread. */
+    if (mged_register_ged_cmd_namespace(search_interp, mged_search_ged_cmd,
+	    (ClientData)s) != TCL_OK) {
+	bu_log("search interp: failed to register GED namespace: %s\n",
+	       Tcl_GetStringResult(search_interp));
+	Tcl_DeleteInterp(search_interp);
+	return NULL;
     }
 
     /* Override the Tcl 'unknown' handler AFTER snapshot replay so that any
