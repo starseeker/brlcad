@@ -37,7 +37,7 @@ package require Itcl
 package require hv3
 package require cadwidgets::Accordion 1.0
 
-if {[llength [info commands manpage_search_terms]] == 0} {
+if {[llength [info commands ::brlcad::help::manpage_search_terms]] == 0} {
     set helpcomm_path [file join [bu_dir data] "tclscripts" "helpcomm.tcl"]
     if {[file exists $helpcomm_path]} {
 	source $helpcomm_path
@@ -180,12 +180,12 @@ if {[llength [info commands manpage_search_terms]] == 0} {
     set ranked {}
     foreach pg $pages($current_section) {
 	set pagepath [file join $path $current_section $pg.html]
-	set section_label [manpage_search_section_label $current_section]
-	set record [manpage_search_index_file $pg $section_label $pagepath html]
+	set section_label [::brlcad::help::manpage_search_section_label $current_section]
+	set record [::brlcad::help::manpage_search_index_file $pg $section_label $pagepath html]
 	if {$record == ""} {
 	    continue
 	}
-	set score [manpage_search_rank_record $query $search_mode $record]
+	set score [::brlcad::help::manpage_search_rank_record $query $search_mode $record]
 	if {$score >= 0} {
 	    lappend ranked [list $score $pg]
 	}
