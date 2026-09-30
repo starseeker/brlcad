@@ -119,8 +119,23 @@ foreach command {
 	fail "Itcl command was imported globally: ::$command"
     }
 }
-interp alias {} Hierarchy {} ::iwidgets::Hierarchy
-interp alias {} scrolledlistbox {} ::iwidgets::scrolledlistbox
+foreach command {
+    ::itk::Archetype ::itk::Toplevel ::itk::Widget ::itk::usual
+    ::iwidgets::Hierarchy ::iwidgets::dialog ::iwidgets::scrolledlistbox
+    ::iwidgets::tabnotebook
+} {
+    if {![llength [info commands $command]] && ![auto_load $command]} {
+	fail "$command is not autoloadable"
+    }
+}
+foreach command {
+    Archetype Hierarchy Toplevel Widget dialog remove_destroy_hook
+    scrolledlistbox tabnotebook usual
+} {
+    if {[llength [info commands ::$command]]} {
+	fail "Itk/Iwidgets command was imported globally: ::$command"
+    }
+}
 
 wm geometry . 900x700+0+0
 wm title . "Itcl 4 GUI compatibility baseline"
