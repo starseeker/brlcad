@@ -306,25 +306,6 @@ tclcad_init(Tcl_Interp *interp, int init_gui, struct bu_vls *tlog)
 
     Tcl_PkgProvide(interp, "Tclcad", brlcad_version());
 
-    /* Import Itcl into the global namespace
-     *
-     * TODO - this is probably a bad idea - figure out why we're doing it and
-     * whether we really need to... */
-
-    if (Tcl_Import(interp, Tcl_GetGlobalNamespace(interp),
-		"::itcl::*", /* allowOverwrite */ 1) != TCL_OK) {
-	if (tlog)
-	    bu_vls_printf(tlog, "Tcl_Import ERROR:\n%s\n", Tcl_GetStringResult(interp));
-	return TCL_ERROR;
-    }
-
-    if (Tcl_Eval(interp,
-	    "auto_mkindex_parser::slavehook { _%@namespace import -force ::itcl::* }") != TCL_OK) {
-	if (tlog)
-	    bu_vls_printf(tlog, "Tcl_Eval ERROR:\n%s\n", Tcl_GetStringResult(interp));
-	return TCL_ERROR;
-    }
-
     state->initialized |= TCLCAD_CORE_INITIALIZED;
     if (init_gui && tclcad_init_gui(interp, tlog) != TCL_OK)
 	return TCL_ERROR;
