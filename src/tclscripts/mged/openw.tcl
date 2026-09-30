@@ -157,7 +157,7 @@ if {![info exists mged_gui(loadScriptDir)]} {
 }
 
 if {![info exists mged_default(font_init)]} {
-    font_init
+    ::brlcad::mged::font::font_init
 }
 
 if {![info exists mged_default(status_bar)]} {
@@ -624,7 +624,7 @@ proc gui { args } {
 	{ { summary "Tool for setting colors." }
 	    { see_also "rset" } }
     .$id.menubar.file.pref add command -label "Fonts" -underline 0 \
-	-command "font_scheme_init $id"
+	-command [list ::brlcad::mged::font::font_scheme_init $id]
     hoc_register_menu_data "Preferences" "Fonts" "Fonts" \
 	{ { summary "Tool for creating/configuring named fonts." }
 	    { see_also "font" } }
