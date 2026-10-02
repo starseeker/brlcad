@@ -20,6 +20,7 @@ set(
   procedural_geometry.adoc
   projection_shader.adoc
   renderer_showcase.adoc
+  solid_geometry_comparison.adoc
   taxonomy.adoc
   tire.adoc
 )
@@ -227,6 +228,17 @@ set(
   images/renderer_gallery_rthide.png
   images/renderer_gallery_rtdepth.png
   images/renderer_gallery_rtxray.png
+  images/solid_rep_csg.png
+  images/solid_rep_brep_boolean.png
+  images/solid_rep_brep_evaluated.png
+  images/solid_rep_polygonal_boolean.png
+  images/solid_rep_nmg.png
+  images/solid_rep_bot.png
+  images/solid_rep_revolve.png
+  images/solid_rep_voxel_cells.png
+  images/solid_rep_volume.png
+  images/solid_rep_point_cloud.png
+  images/solid_rep_wireframe.png
   images/adrt_castle_path.png
   images/adrt_castle_rt.png
   images/adrt_castle_rt_ao.png
@@ -409,6 +421,54 @@ if(
   set_target_properties(renderer-gallery-snapshot PROPERTIES EXCLUDE_FROM_DEFAULT_BUILD 1)
 endif()
 
+# Solid geometry comparison -- opt-in regeneration of committed snapshots.
+#
+# The article and solid_rep_*.png images are normal committed documentation.
+# This target rebuilds the common pawn, derives each representation with the
+# built tools, and refreshes the images for review.
+option(
+  BRLCAD_GENERATE_SOLID_REPRESENTATION_COMPARISON
+  "Regenerate the solid geometry representation comparison snapshots"
+  OFF
+)
+if(
+  BRLCAD_GENERATE_SOLID_REPRESENTATION_COMPARISON
+  AND TARGET mged
+  AND TARGET rt
+  AND TARGET g-voxel
+  AND TARGET asc2pix
+  AND TARGET fbclear
+  AND TARGET plot3-fb
+  AND TARGET fb-png
+)
+  add_custom_target(
+    solid-representation-comparison-snapshot
+    COMMAND
+      ${CMAKE_COMMAND}
+      -DMGED=$<TARGET_FILE:mged>
+      -DRT=$<TARGET_FILE:rt>
+      -DGVOXEL=$<TARGET_FILE:g-voxel>
+      -DASC2PIX=$<TARGET_FILE:asc2pix>
+      -DFBCLEAR=$<TARGET_FILE:fbclear>
+      -DPLOT3FB=$<TARGET_FILE:plot3-fb>
+      -DFBPNG=$<TARGET_FILE:fb-png>
+      -DMODEL_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/solid_geometry_comparison/create_pawn.tcl
+      -DIMGDIR=${CMAKE_CURRENT_SOURCE_DIR}/images
+      -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/solid_representation_comparison_work
+      -DSIZE=512
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/solid_geometry_comparison/generate_comparison.cmake
+    DEPENDS mged rt g-voxel asc2pix fbclear plot3-fb fb-png
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    COMMENT "Regenerating solid geometry representation comparison snapshots"
+    VERBATIM
+    USES_TERMINAL
+  )
+  set_target_properties(
+    solid-representation-comparison-snapshot
+    PROPERTIES EXCLUDE_FROM_DEFAULT_BUILD 1
+  )
+endif()
+
 # ADRT path-tracing gallery -- opt-in regeneration of the committed snapshot.
 #
 # Like the galleries above, the adrt_pathtrace.adoc article is hand-written and
@@ -464,6 +524,8 @@ cmakefiles(
   gallery/generate_gallery.cmake
   renderer_gallery/renderer_gallery_manifest.cmake
   renderer_gallery/generate_renderer_gallery.cmake
+  solid_geometry_comparison/create_pawn.tcl
+  solid_geometry_comparison/generate_comparison.cmake
   adrt_gallery/generate_adrt_gallery.cmake
   gallery/inputs/pipe.stdin
   gallery/inputs/wire.stdin

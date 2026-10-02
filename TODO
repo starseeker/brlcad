@@ -2668,15 +2668,6 @@ DOCUMENTATION
 	Comparison of how BRL-CAD overlaps feature-wise with various
 	major commercial CAD systems.
 
-* Solid Geometry Representation Comparisons
-	Describe the implications, tradeoffs, and conversion issues
-	involved when converting between different geometry
-	representations.  Includes describing implicit geometry,
-	explicit polygonal boundary representations, explicit spline
-	surface representations, volumetric models, wireframes,
-	boolean operations, feature edit operations, and parametric
-	modeling.
-
 * BRL-CAD Open Source
 	An overview of how BRL-CAD is organized as an open source
 	project and community describing the developer meritocracy,

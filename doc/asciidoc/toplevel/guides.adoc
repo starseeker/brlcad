@@ -22,4 +22,5 @@ Task-focused guides and how-to articles.
 * link:articles/procedural_geometry.html[BRL-CAD Procedural Geometry Gallery]
 * link:articles/projection_shader.html[Using the Projection Shader]
 * link:articles/renderer_showcase.html[BRL-CAD Renderer Showcase]
+* link:articles/solid_geometry_comparison.html[Solid Geometry Representation Comparisons]
 * link:articles/tire.html[Vehicle Tire and Wheel Creation in BRL-CAD]
