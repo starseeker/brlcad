@@ -37,14 +37,17 @@
 #include "common.h"
 
 #include <algorithm>
+#include <array>
 #include <vector>
 #include <set>
 #include <map>
+#include <unordered_map>
 #include "../../libbg/RTree.h"
 #include "bu/color.h"
 #include "bg/polygon.h"
 #include "bg/tri_tri.h"
 #include "brep/defines.h"
+#include "./chart.h"
 
 extern "C" {
     struct ctriangle_t {
@@ -396,8 +399,8 @@ class bedge_seg_t {
 	    edge_end = DBL_MAX;
 	    e_start = NULL;
 	    e_end = NULL;
-	    e_root_start = NULL;
-	    e_root_end = NULL;
+	    e_root_start = other->e_root_start;
+	    e_root_end = other->e_root_end;
 	    tan_start = ON_3dVector::UnsetVector;
 	    tan_end = ON_3dVector::UnsetVector;
 	};
@@ -441,7 +444,15 @@ class cpolyedge_t
 	    polygon = NULL;
 	    prev = NULL;
 	    next = NULL;
+	    trim_ind = -1;
+	    loop_type = 0;
 	    defines_spnt = false;
+	    spnt = ON_2dPoint::UnsetPoint;
+	    trim_start = 0.0;
+	    trim_end = 0.0;
+	    split_status = 0;
+	    v1_dist = 0.0;
+	    v2_dist = 0.0;
 	    eseg = NULL;
 	};
 
@@ -453,7 +464,15 @@ class cpolyedge_t
 	    polygon = NULL;
 	    prev = NULL;
 	    next = NULL;
+	    trim_ind = -1;
+	    loop_type = 0;
 	    defines_spnt = false;
+	    spnt = ON_2dPoint::UnsetPoint;
+	    trim_start = 0.0;
+	    trim_end = 0.0;
+	    split_status = 0;
+	    v1_dist = 0.0;
+	    v2_dist = 0.0;
 	    eseg = NULL;
 	};
 
@@ -494,10 +513,10 @@ class cpolygon_t
 	 * are added directly without using add_point, the caller must manually ensure
 	 * that this map has the correct information to go from indexing in the parent's
 	 * original point array to the polygon pnts_2d point array.*/
-	std::map<long, long> p2o;
+	std::unordered_map<long, long> p2o;
 
 	/* Map from points in the source date to the same points in the polygon.*/
-	std::map<long, long> o2p;
+	std::unordered_map<long, long> o2p;
 
 	/* Polygon edge manipulation */
 	cpolyedge_t *add_ordered_edge(const struct edge2d_t &e);
@@ -506,6 +525,7 @@ class cpolygon_t
 	cpolyedge_t *add_edge(const struct uedge2d_t &e);
 	void remove_edge(const struct uedge2d_t &e);
 	std::set<cpolyedge_t *> replace_edges(std::set<uedge_t> &new_edges, std::set<uedge_t> &old_edges);
+	cpolyedge_t *first_edge() const;
 
 	/* Means to update the point array if we're incrementally building. orig_index should
 	 * identify the same point in the parent's index, so cdt() knows what triangles to
@@ -515,7 +535,6 @@ class cpolygon_t
 	/* Storage container for polygon data */
 	std::set<cpolyedge_t *> poly;
 	std::vector<std::pair<double, double> > pnts_2d;
-	std::map<std::pair<double, double>, long> p2ind;
 
 	/* Validity tests (closed also checks self_intersecting) */
 	bool closed();
@@ -529,8 +548,11 @@ class cpolygon_t
 	 * TODO - document what it does if it's ON the polygon...*/
 	bool point_in_polygon(long v, bool flip);
 
-	/* Process a set of points and filter out those in (or out, if flip is set) of the polygon */
-	void rm_points_in_polygon(std::set<ON_2dPoint *> *pnts, bool flip);
+	/* Process a set of points and filter out those in (or out, if flip is
+	 * set) of the polygon.  delete_removed transfers ownership of rejected
+	 * heap points to this operation. */
+	void rm_points_in_polygon(std::set<ON_2dPoint *> *pnts, bool flip,
+	    bool delete_removed = false);
 
 	// Debugging routines
 	void polygon_plot_in_plane(const char *filename);
@@ -549,7 +571,7 @@ class cpolygon_t
 	double ucv_angle(triangle_t &t);
 	long shared_edge_cnt(triangle_t &t);
 	long unshared_vertex(triangle_t &t);
-	std::map<long, std::set<cpolyedge_t *>> v2pe;
+	std::unordered_map<long, std::set<cpolyedge_t *>> v2pe;
 	std::pair<long,long> shared_vertices(triangle_t &t);
 	std::set<long> brep_edge_pnts;
 	std::set<long> flipped_face;
@@ -561,6 +583,7 @@ class cpolygon_t
 	std::set<triangle_t> visited_triangles;
 	std::set<uedge2d_t> active_edges;
 	std::set<uedge2d_t> self_isect_edges;
+	long last_cdt_start_vertex = -1;
 	ON_Plane tplane;
 	ON_Plane fit_plane;
 	ON_3dVector pdir;
@@ -572,6 +595,8 @@ class cdt_mesh_t
 public:
 
     cdt_mesh_t() {
+	f_id = -1;
+	has_singularities = false;
 	pnts.clear();
 	p2ind.clear();
 	normals.clear();
@@ -587,6 +612,10 @@ public:
 	v2tris.clear();
 	edges2tris.clear();
 
+	m_bRev = false;
+	brep = NULL;
+	name = NULL;
+	p_cdt = NULL;
 	omesh = NULL;
     };
 
@@ -602,27 +631,43 @@ public:
     RTree<size_t, double, 3> tris_tree;
     std::vector<ON_3dPoint *> pnts;
 
+    void record_chart_triangle(const triangle_t &triangle,
+	const triangle_t &native_triangle, const cdt_face_chart &chart);
+
     /* Setup / Repair */
     long add_point(ON_2dPoint &on_2dp);
     long add_point(ON_3dPoint *on_3dp);
     long add_normal(ON_3dPoint *on_3dn);
     bool repair();
+    size_t refine_problem_triangles(const std::vector<triangle_t> &triangles,
+	size_t max_points);
+    size_t split_problem_triangle_edges(
+	const std::vector<triangle_t> &triangles, size_t max_points,
+	const ON_3dPoint *near_point = NULL,
+	const uedge_t *required_edge = NULL);
+    size_t refine_incorrect_normals(size_t max_points);
+    size_t refine_self_intersections(size_t max_points);
+    BREP_EXPORT size_t refine_collapsed_chart_triangles(size_t max_points);
+    size_t self_intersections(std::vector<triangle_t> *problematic = NULL,
+	size_t max_pairs = 1);
     bool optimize(double deg = 10);
     bool optimize(std::set<triangle_t> &seeds);
     bool optimize(std::set<triangle_t> &seeds, ON_Plane &pplane);
     void reset();
-    bool valid(int verbose);
+    bool valid(int verbose, bool check_intersections = true);
     bool serialize(const char *fname);
     bool deserialize(const char *fname);
 
     /* Triangulation related functions and data. */
-    bool cdt();
+    bool cdt(bool allow_general_boundary_cleanup = false);
     std::vector<triangle_t> tris_2d;
     std::vector<std::pair<double, double> > m_pnts_2d;
+    std::vector<cdt_face_chart> m_face_charts;
     std::map<long, long> p2d3d;
     cpolygon_t outer_loop;
     std::map<int, cpolygon_t*> inner_loops;
     std::set<long> m_interior_pnts;
+    std::set<long> m_chart_refinement_pnts;
     bool initialize_interior_pnts(std::set<ON_2dPoint *>);
 
     /* Mesh data set accessors */
@@ -635,11 +680,17 @@ public:
     /* Tests */
     bool self_intersecting_mesh();
     bool brep_edge_pnt(long v);
+    size_t geometric_degenerate_count();
+    size_t incorrect_normal_count();
+    bool repair_incorrect_normal_edges();
+    bool repair_toleranced_nonmanifold_edges();
+    bool toleranced_boundary_triangle(const triangle_t &t);
 
     // Triangle geometry information
     ON_3dPoint tcenter(const triangle_t &t);
     ON_3dVector bnorm(const triangle_t &t);
     ON_3dVector tnorm(const triangle_t &t);
+    bool surface_triangle_deviation(const triangle_t &t, double *distance);
     ON_Plane tplane(const triangle_t &t);
     ON_Plane bplane(const triangle_t &t);
     std::set<uedge_t> uedges(const triangle_t &t);
@@ -719,9 +770,9 @@ public:
     bool has_singularities;
 
     /* Data containers */
-    std::map<ON_3dPoint *, long> p2ind;
+    std::unordered_map<ON_3dPoint *, long> p2ind;
     std::vector<ON_3dPoint *> normals;
-    std::map<ON_3dPoint *, long> n2ind;
+    std::unordered_map<ON_3dPoint *, long> n2ind;
     std::map<long, long> nmap;
     std::map<uedge_t, std::set<size_t>> uedges2tris;
     std::map<long, std::set<edge_t>> v2edges;
@@ -729,6 +780,10 @@ public:
 
     // cdt_mesh index versions of Brep data
     std::set<uedge_t> brep_edges;
+    /* Boundary edges after topology-chart seam and pole collapse.  These may
+     * span several native trim segments and therefore need not have a single
+     * corresponding bedge_seg_t. */
+    std::set<uedge_t> chart_boundary_edges;
     std::map<uedge_t, bedge_seg_t *> ue2b_map;
     std::set<long> ep; // Brep edge point vertex indices
     std::set<long> sv; // Singularity vertex indices
@@ -760,9 +815,18 @@ public:
     ON_Plane best_fit_plane(std::set<triangle_t> &ts);
     double max_tri_angle(ON_Plane &plane, std::set<triangle_t> &ts);
 
+    friend int cdt_test_local_defects(void);
+
 private:
     /* Data containers */
     std::map<edge_t, size_t> edges2tris;
+    std::map<long, long> p3d2d;
+    std::set<long> ambiguous_p3d2d;
+    std::set<long> periodic_ambiguous_p3d2d;
+    /* Only triangles spanning more than half a periodic domain need
+     * explicit chart samples; a nearest-copy reconstruction can choose their
+     * complementary region after seam vertices have been welded. */
+    std::map<std::array<long, 3>, std::array<ON_2dPoint, 4>> periodic_triangle_samples;
 
     // For situations where we need to process using Brep data
     std::set<ON_3dPoint *> *edge_pnts;

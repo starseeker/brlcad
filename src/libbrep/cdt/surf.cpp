@@ -26,8 +26,11 @@
  */
 
 #include "common.h"
-#include "bn/rand.h"
 #include "./cdt.h"
+#include "./chart.h"
+#include "surface.h"
+
+#define MAX_INITIAL_SURFACE_PATCHES 65536
 
 struct cdt_surf_info {
     std::set<ON_2dPoint *> on_surf_points;
@@ -56,6 +59,19 @@ struct cdt_surf_info {
     double surface_width;
     double surface_height;
     std::set<ON_BoundingBox *> leaf_bboxes;
+
+    ~cdt_surf_info()
+    {
+	for (std::set<ON_2dPoint *>::iterator point = on_surf_points.begin();
+		point != on_surf_points.end(); ++point)
+	    delete *point;
+	for (std::set<ON_2dPoint *>::iterator point = on_trim_points.begin();
+		point != on_trim_points.end(); ++point)
+	    delete *point;
+	for (std::set<ON_BoundingBox *>::iterator box = leaf_bboxes.begin();
+		box != leaf_bboxes.end(); ++box)
+	    delete *box;
+    }
 };
 
 void
@@ -73,8 +89,9 @@ cpolyedge_fdists(struct cdt_surf_info *s, cdt_mesh_t *fmesh, cpolyedge_t *pe)
     s->min_edge = (s->min_edge > dist) ? dist : s->min_edge;
     s->max_edge = (s->max_edge < dist) ? dist : s->max_edge;
 
-    // Only want the next bit if we're dealing with non-linear edges
-    if (pe->eseg->edge_type != 1 || !pe->next->eseg || pe->next->eseg->edge_type != 1) return;
+    /* Pole welding can leave a broken polygon walk for chart recovery.
+     * Skip neighbor-based refinement when that link is absent. */
+    if (pe->eseg->edge_type != 1 || !pe->next || !pe->next->eseg || pe->next->eseg->edge_type != 1) return;
 
     ON_Line line3d(*p3d1, *p3d2);
     fastf_t emid = (pe->eseg->edge_start + pe->eseg->edge_end) / 2.0;
@@ -161,36 +178,63 @@ void SPatch::plot(const char *filename)
 }
 
 static double
-uline_len_est(struct cdt_surf_info *sinfo, double u1, double u2, double v)
+surface_length_at(double parameter, const ON_Interval &domain,
+	double lower, double middle, double upper)
 {
-    double t, lenfact, lenest;
-    int active_half = (fabs(sinfo->v1 - v) < fabs(sinfo->v2 - v)) ? 0 : 1;
-    t = (active_half == 0) ? 1 - fabs(sinfo->v1 - v)/fabs((sinfo->v2 - sinfo->v1)*0.5) : 1 - fabs(sinfo->v2 - v)/fabs((sinfo->v2 - sinfo->v1)*0.5);
-    if (active_half == 0) {
-	lenfact = sinfo->u_lower_3dlen * (1 - (t)) + sinfo->u_mid_3dlen * (t);
-	lenest = (u2 - u1)/sinfo->ulen * lenfact;
-    } else {
-	lenfact = sinfo->u_mid_3dlen * (1 - (t)) + sinfo->u_upper_3dlen * (t);
-	lenest = (u2 - u1)/sinfo->ulen * lenfact;
-    }
-    return lenest;
+    /* Interpolate between adjacent measurements.  Reversing the lower
+     * weights creates a discontinuity at the middle of a tapered surface. */
+    const double position = domain.NormalizedParameterAt(parameter);
+    if (position < 0.5)
+	return lower + 2.0 * position * (middle - lower);
+    return middle + (2.0 * position - 1.0) * (upper - middle);
 }
 
+static double
+uline_len_est(struct cdt_surf_info *sinfo, double u1, double u2, double v)
+{
+    if (sinfo->s->IsClosed(1))
+	v = cdt_surface_parameter(v, sinfo->s->Domain(1));
+    return (u2 - u1) / sinfo->ulen * surface_length_at(v,
+	ON_Interval(sinfo->v1, sinfo->v2), sinfo->u_lower_3dlen,
+	sinfo->u_mid_3dlen, sinfo->u_upper_3dlen);
+}
 
 static double
 vline_len_est(struct cdt_surf_info *sinfo, double u, double v1, double v2)
 {
-    double t, lenfact, lenest;
-    int active_half = (fabs(sinfo->u1 - u) < fabs(sinfo->u2 - u)) ? 0 : 1;
-    t = (active_half == 0) ? 1 - fabs(sinfo->u1 - u)/fabs((sinfo->u2 - sinfo->u1)*0.5) : 1 - fabs(sinfo->u2 - u)/fabs((sinfo->u2 - sinfo->u1)*0.5);
-    if (active_half == 0) {
-	lenfact = sinfo->v_lower_3dlen * (1 - (t)) + sinfo->v_mid_3dlen * (t);
-	lenest = (v2 - v1)/sinfo->vlen * lenfact;
-    } else {
-	lenfact = sinfo->v_mid_3dlen * (1 - (t)) + sinfo->v_upper_3dlen * (t);
-	lenest = (v2 - v1)/sinfo->vlen * lenfact;
+    if (sinfo->s->IsClosed(0))
+	u = cdt_surface_parameter(u, sinfo->s->Domain(0));
+    return (v2 - v1) / sinfo->vlen * surface_length_at(u,
+	ON_Interval(sinfo->u1, sinfo->u2), sinfo->v_lower_3dlen,
+	sinfo->v_mid_3dlen, sinfo->v_upper_3dlen);
+}
+
+int
+cdt_test_surface_length_estimates(void)
+{
+    const double lengths[2][3] = {{2.0, 6.0, 10.0}, {10.0, 6.0, 2.0}};
+    for (const ON_Interval &domain : {ON_Interval(0.0, 1.0),
+	    ON_Interval(-5.0, 12.0)}) {
+	for (const auto &values : lengths) {
+	    for (int quarter = 0; quarter <= 4; ++quarter) {
+		const double fraction = (double)quarter / 4.0;
+		const double expected = values[0] + fraction *
+		    (values[2] - values[0]);
+		const double measured = surface_length_at(
+		    domain.ParameterAt(fraction), domain,
+		    values[0], values[1], values[2]);
+		if (!NEAR_EQUAL(measured, expected, ON_ZERO_TOLERANCE))
+		    return 1;
+	    }
+	}
+	/* An interior maximum must retain both independently measured halves. */
+	if (!NEAR_EQUAL(surface_length_at(domain.ParameterAt(0.25),
+		domain, 2.0, 10.0, 6.0), 6.0, ON_ZERO_TOLERANCE) ||
+	    !NEAR_EQUAL(surface_length_at(domain.ParameterAt(0.75),
+		domain, 2.0, 10.0, 6.0), 8.0, ON_ZERO_TOLERANCE))
+	    return 2;
     }
-    return lenest;
+    return 0;
 }
 
 static bool EdgeSegCallback(void *data, void *a_context) {
@@ -268,8 +312,10 @@ static bool involves_trims(double *min_edge, struct cdt_surf_info *sinfo, ON_3dP
     // from the edge we're willing to have point to a single interior point. Too
     // many and we'll end up with a lot of long, thin triangles.
     if (nhits > 5) {
-	// Lot of edges, probably a high level box we need to split - just return the overall min_edge
-	(*min_edge) = sinfo->min_edge;
+	/* Boundary density is not a surface-error tolerance.  Do not force
+	 * the whole patch down to the shortest shared-edge segment; adaptive
+	 * geometry checks can add local points after triangulation. */
+	(*min_edge) = std::max(sinfo->min_edge, sinfo->within_dist);
 	return true;
     }
 
@@ -286,7 +332,7 @@ static bool involves_trims(double *min_edge, struct cdt_surf_info *sinfo, ON_3dP
 	    }
 	}
     }
-    (*min_edge) = min_edge_dist;
+    (*min_edge) = std::max(min_edge_dist, sinfo->within_dist);
 
     return true;
 }
@@ -319,6 +365,10 @@ _cdt_get_uv_edge_3d_len(struct cdt_surf_info *sinfo, int c1, int c2)
     double wv2 = 0.0;
     double umid = 0.0;
     double vmid = 0.0;
+    const double domain_umid = sinfo->u1 +
+	(sinfo->u2 - sinfo->u1) / 2.0;
+    const double domain_vmid = sinfo->v1 +
+	(sinfo->v2 - sinfo->v1) / 2.0;
 
     /* u_lower */
     if (c1 == 0 && c2 == 0) {
@@ -326,7 +376,7 @@ _cdt_get_uv_edge_3d_len(struct cdt_surf_info *sinfo, int c1, int c2)
 	wu2 = sinfo->u2;
 	wv1 = sinfo->v1;
 	wv2 = sinfo->v1;
-	umid = (sinfo->u2 - sinfo->u1)/2.0;
+	umid = domain_umid;
 	vmid = sinfo->v1;
 	line_set = 1;
     }
@@ -335,10 +385,10 @@ _cdt_get_uv_edge_3d_len(struct cdt_surf_info *sinfo, int c1, int c2)
     if (c1 == 1 && c2 == 0) {
 	wu1 = sinfo->u1;
 	wu2 = sinfo->u2;
-	wv1 = (sinfo->v2 - sinfo->v1)/2.0;
-	wv2 = (sinfo->v2 - sinfo->v1)/2.0;
-	umid = (sinfo->u2 - sinfo->u1)/2.0;
-	vmid = (sinfo->v2 - sinfo->v1)/2.0;
+	wv1 = domain_vmid;
+	wv2 = domain_vmid;
+	umid = domain_umid;
+	vmid = domain_vmid;
 	line_set = 1;
     }
 
@@ -348,7 +398,7 @@ _cdt_get_uv_edge_3d_len(struct cdt_surf_info *sinfo, int c1, int c2)
 	wu2 = sinfo->u2;
 	wv1 = sinfo->v2;
 	wv2 = sinfo->v2;
-	umid = (sinfo->u2 - sinfo->u1)/2.0;
+	umid = domain_umid;
 	vmid = sinfo->v2;
 	line_set = 1;
     }
@@ -360,18 +410,18 @@ _cdt_get_uv_edge_3d_len(struct cdt_surf_info *sinfo, int c1, int c2)
 	wv1 = sinfo->v1;
 	wv2 = sinfo->v2;
 	umid = sinfo->u1;
-	vmid = (sinfo->v2 - sinfo->v1)/2.0;
+	vmid = domain_vmid;
 	line_set = 1;
     }
 
     /* v_lmid */
     if (c1 == 1 && c2 == 1) {
-	wu1 = (sinfo->u2 - sinfo->u1)/2.0;
-	wu2 = (sinfo->u2 - sinfo->u1)/2.0;
+	wu1 = domain_umid;
+	wu2 = domain_umid;
 	wv1 = sinfo->v1;
 	wv2 = sinfo->v2;
-	umid = (sinfo->u2 - sinfo->u1)/2.0;
-	vmid = (sinfo->v2 - sinfo->v1)/2.0;
+	umid = domain_umid;
+	vmid = domain_vmid;
 	line_set = 1;
     }
 
@@ -382,7 +432,7 @@ _cdt_get_uv_edge_3d_len(struct cdt_surf_info *sinfo, int c1, int c2)
 	wv1 = sinfo->v1;
 	wv2 = sinfo->v2;
 	umid = sinfo->u2;
-	vmid = (sinfo->v2 - sinfo->v1)/2.0;
+	vmid = domain_vmid;
 	line_set = 1;
     }
 
@@ -471,10 +521,11 @@ sinfo_init(struct cdt_surf_info *sinfo, struct ON_Brep_CDT_State *s_cdt, int fac
     // and assemble an rtree for them.  We can't insert points from the general
     // build too close to them or we run the risk of duplicate points and very small
     // triangles.
+    const bool topology_chart = cdt_face_uses_topology_chart(face);
+    const bool polar_seam_chart = cdt_face_uses_polar_chart(face) &&
+	cdt_face_has_seam(face);
     std::vector<cpolyedge_t *> ws = cdt_face_polyedges(s_cdt, face.m_face_index);
     std::vector<cpolyedge_t *>::iterator w_it;
-    float *prand;
-    bn_rand_init(prand, 0);
     for (w_it = ws.begin(); w_it != ws.end(); w_it++) {
 	cpolyedge_t *tseg = *w_it;
 	if (!tseg->defines_spnt) continue;
@@ -485,10 +536,24 @@ sinfo_init(struct cdt_surf_info *sinfo, struct ON_Brep_CDT_State *s_cdt, int fac
 	a_context.cseg = tseg;
 	a_context.use = &include_pnt;
 
-	double dlen = tseg->bb.Diagonal().Length();
-	dlen = 0.01 * dlen;
-	double px = tseg->spnt.x + (bn_rand_half(prand) * dlen);
-	double py = tseg->spnt.y + (bn_rand_half(prand) * dlen);
+	double px = tseg->spnt.x;
+	double py = tseg->spnt.y;
+	if (topology_chart) {
+	    const double parameter[2] = {px, py};
+	    for (int direction = 0; direction < 2; ++direction) {
+		if (s->IsClosed(direction))
+		    continue;
+		const ON_Interval domain = s->Domain(direction);
+		const double magnitude = std::max(std::fabs(domain.Min()),
+		    std::fabs(domain.Max()));
+		const double tolerance = 256.0 *
+		    std::numeric_limits<double>::epsilon() *
+		    std::max(magnitude, domain.Length());
+		if (parameter[direction] < domain.Min() - tolerance ||
+			parameter[direction] > domain.Max() + tolerance)
+		    include_pnt = false;
+	    }
+	}
 
 	double tMin[2];
 	tMin[0] = px - ON_ZERO_TOLERANCE;
@@ -499,7 +564,10 @@ sinfo_init(struct cdt_surf_info *sinfo, struct ON_Brep_CDT_State *s_cdt, int fac
 
 	s_cdt->face_rtrees_2d[face.m_face_index].Search(tMin, tMax, UseTrimPntCallback, (void *)&a_context);
 
-	if (include_pnt) {
+	/* A one-pole periodic chart supplies explicit pole rays.  A legacy
+	 * raw-UV normal offset from its seam boundary has no unambiguous chart
+	 * image and can fold those rays across the pole. */
+	if (include_pnt && !polar_seam_chart) {
 	    //std::cout << "Accept\n";
 	    sinfo->rtree_trim_spnts_2d.Insert(tMin, tMax, (void *)tseg);
 
@@ -509,7 +577,7 @@ sinfo_init(struct cdt_surf_info *sinfo, struct ON_Brep_CDT_State *s_cdt, int fac
 	// While we're at it, put boxes around the trim points too
 	const ON_BrepTrim &trim = brep->m_T[tseg->trim_ind];
 	ON_2dPoint pstart = trim.PointAt(tseg->trim_start);
-	dlen = 0.25*tseg->bb.Diagonal().Length();
+	double dlen = 0.25*tseg->bb.Diagonal().Length();
     	tMin[0] = pstart.x - dlen;
 	tMin[1] = pstart.y - dlen;
 	tMax[0] = pstart.x + dlen;
@@ -529,12 +597,49 @@ sinfo_init(struct cdt_surf_info *sinfo, struct ON_Brep_CDT_State *s_cdt, int fac
     // dissimilar.
     sinfo_tol_calc(sinfo);
 
+    /* Edge samples establish the shared boundary, but the smallest edge
+     * segment must not become an implicit global surface-error tolerance.
+     * Digest the caller's explicit tolerance at the face scale and retain
+     * edge-derived values only when they permit a coarser interior. */
+    const double face_scale = s->BoundingBox().Diagonal().Length();
+    const double edge_within_dist = sinfo->within_dist;
+    struct brep_cdt_tol face_tolerance = BREP_CDT_TOL_ZERO;
+    CDT_Tol_Set(&face_tolerance, face_scale, sinfo->max_edge,
+	s_cdt->tol.abs, s_cdt->tol.rel, s_cdt->absmin);
+    sinfo->min_edge = face_tolerance.min_dist;
+    sinfo->max_edge = face_tolerance.max_dist;
+    sinfo->within_dist = std::max(edge_within_dist,
+	face_tolerance.within_dist);
 }
 
 
 void
 filter_surface_pnts(struct cdt_surf_info *sinfo)
 {
+
+    cdt_mesh_t *fmesh =
+	&sinfo->s_cdt->fmeshes[sinfo->f->m_face_index];
+
+    /* Patch centers and edge-derived candidates are generated from a UV
+     * envelope, not from the trimmed region itself.  Keep only points inside
+     * the outer loop and outside every hole before evaluating the surface.
+     * This is especially important for periodic faces, where a single trim
+     * segment can cover a complete parameter period. */
+    /* A topology chart performs this test after periodic lifting.  Its raw UV
+     * boundary need not be a simple polygon when equivalent seam images are
+     * mixed in the stored p-curves. */
+    if (!cdt_face_uses_topology_chart(*sinfo->f)) {
+	fmesh->outer_loop.rm_points_in_polygon(&sinfo->on_surf_points, true,
+	    true);
+	fmesh->outer_loop.rm_points_in_polygon(&sinfo->on_trim_points, true,
+	    true);
+	for (const auto &inner : fmesh->inner_loops) {
+	    inner.second->rm_points_in_polygon(&sinfo->on_surf_points,
+		false, true);
+	    inner.second->rm_points_in_polygon(&sinfo->on_trim_points,
+		false, true);
+	}
+    }
 
     // Remove points that are troublesome per 2D filtering criteria
     std::set<ON_2dPoint *> rm_pnts;
@@ -563,12 +668,10 @@ filter_surface_pnts(struct cdt_surf_info *sinfo)
     }
 
     for (osp_it = rm_pnts.begin(); osp_it != rm_pnts.end(); osp_it++) {
-	const ON_2dPoint *p = *osp_it;
-	sinfo->on_surf_points.erase((ON_2dPoint *)p);
+	ON_2dPoint *p = *osp_it;
+	sinfo->on_surf_points.erase(p);
+	delete p;
     }
-
-    cdt_mesh_t *fmesh = &sinfo->s_cdt->fmeshes[sinfo->f->m_face_index];
-
     // Populate m_interior_pnts with the final set
     for (osp_it = sinfo->on_surf_points.begin(); osp_it != sinfo->on_surf_points.end(); osp_it++) {
 	ON_2dPoint n2dp(**osp_it);
@@ -576,9 +679,11 @@ filter_surface_pnts(struct cdt_surf_info *sinfo)
 	// Calculate the 3D point and normal values.
 	ON_3dPoint p3d;
 	ON_3dVector norm = ON_3dVector::UnsetVector;
-	if (!surface_EvNormal(sinfo->s, n2dp.x, n2dp.y, p3d, norm)) {
-	    p3d = sinfo->s->PointAt(n2dp.x, n2dp.y);
+	if (!cdt_surface_normal(sinfo->s, n2dp, p3d, norm)) {
+	    p3d = cdt_surface_point(sinfo->s, n2dp);
 	}
+	if (!p3d.IsValid())
+	    continue;
 
 	// Last filtering pass before insertion: if we're too close to an edge
 	// in 3D, the point is out.
@@ -617,9 +722,11 @@ filter_surface_pnts(struct cdt_surf_info *sinfo)
 	// Calculate the 3D point and normal values.
 	ON_3dPoint p3d;
 	ON_3dVector norm = ON_3dVector::UnsetVector;
-	if (!surface_EvNormal(sinfo->s, n2dp.x, n2dp.y, p3d, norm)) {
-	    p3d = sinfo->s->PointAt(n2dp.x, n2dp.y);
+	if (!cdt_surface_normal(sinfo->s, n2dp, p3d, norm)) {
+	    p3d = cdt_surface_point(sinfo->s, n2dp);
 	}
+	if (!p3d.IsValid())
+	    continue;
 
 	long f_ind2d = fmesh->add_point(n2dp);
 	fmesh->m_interior_pnts.insert(f_ind2d);
@@ -723,10 +830,10 @@ getSurfacePoint(
 	ON_3dPoint p[4] = {ON_3dPoint(), ON_3dPoint(), ON_3dPoint(), ON_3dPoint()};
 	ON_3dVector norm[4] = {ON_3dVector(), ON_3dVector(), ON_3dVector(), ON_3dVector()};
 
-	if ((surface_EvNormal(sinfo->s, u1, v1, p[0], norm[0]))
-		&& (surface_EvNormal(sinfo->s, u2, v1, p[1], norm[1]))
-		&& (surface_EvNormal(sinfo->s, u2, v2, p[2], norm[2]))
-		&& (surface_EvNormal(sinfo->s, u1, v2, p[3], norm[3]))) {
+	if ((cdt_surface_normal(sinfo->s, ON_2dPoint(u1, v1), p[0], norm[0]))
+		&& (cdt_surface_normal(sinfo->s, ON_2dPoint(u2, v1), p[1], norm[1]))
+		&& (cdt_surface_normal(sinfo->s, ON_2dPoint(u2, v2), p[2], norm[2]))
+		&& (cdt_surface_normal(sinfo->s, ON_2dPoint(u1, v2), p[3], norm[3]))) {
 
 
 	    ON_BoundingBox uvbb;
@@ -756,11 +863,11 @@ getSurfacePoint(
 	ON_3dPoint p[5] = {ON_3dPoint(), ON_3dPoint(), ON_3dPoint(), ON_3dPoint(), ON_3dPoint()};
 	ON_3dVector norm[5] = {ON_3dVector(), ON_3dVector(), ON_3dVector(), ON_3dVector(), ON_3dVector()};
 
-	if ((surface_EvNormal(sinfo->s, u, v1, p[0], norm[0]))
-		&& (surface_EvNormal(sinfo->s, u, v2, p[1], norm[1]))
-		&& (surface_EvNormal(sinfo->s, u1, v, p[2], norm[2]))
-		&& (surface_EvNormal(sinfo->s, u2, v, p[3], norm[3]))
-		&& (surface_EvNormal(sinfo->s, u, v, p[4], norm[4]))
+	if ((cdt_surface_normal(sinfo->s, ON_2dPoint(u, v1), p[0], norm[0]))
+		&& (cdt_surface_normal(sinfo->s, ON_2dPoint(u, v2), p[1], norm[1]))
+		&& (cdt_surface_normal(sinfo->s, ON_2dPoint(u1, v), p[2], norm[2]))
+		&& (cdt_surface_normal(sinfo->s, ON_2dPoint(u2, v), p[3], norm[3]))
+		&& (cdt_surface_normal(sinfo->s, ON_2dPoint(u, v), p[4], norm[4]))
 		) {
 	    ON_Line uline(p[2], p[3]);
 	    ON_Line vline(p[0], p[1]);
@@ -798,7 +905,7 @@ getSurfacePoint(
     return false;
 }
 
-void
+bool
 GetInteriorPoints(struct ON_Brep_CDT_State *s_cdt, int face_index)
 {
     ON_BrepFace &face = s_cdt->brep->m_F[face_index];
@@ -808,7 +915,7 @@ GetInteriorPoints(struct ON_Brep_CDT_State *s_cdt, int face_index)
     if (s->GetSurfaceSize(&sinfo.surface_width, &sinfo.surface_height)) {
 
 	if ((sinfo.surface_width < ON_ZERO_TOLERANCE) || (sinfo.surface_height < ON_ZERO_TOLERANCE)) {
-	    return;
+	    return true;
 	}
 
 	sinfo_init(&sinfo, s_cdt, face_index);
@@ -820,6 +927,49 @@ GetInteriorPoints(struct ON_Brep_CDT_State *s_cdt, int face_index)
 	face.OuterLoop()->GetBoundingBox(lbox);
 	ON_3dPoint min = lbox.Min();
 	ON_3dPoint max = lbox.Max();
+	/* Some importers encode an untrimmed two-pole surface with two seam
+	 * trims whose p-curves occupy the same periodic image.  Those two trims
+	 * are a topological cut, not a boundary of a partial surface. */
+	bool seam_only_polar = cdt_face_uses_polar_chart(face) &&
+	    face.LoopCount() == 1;
+	const ON_BrepLoop *outer = face.OuterLoop();
+	if (!outer || outer->TrimCount() < 2)
+	    seam_only_polar = false;
+	for (int trim_index = 0; seam_only_polar &&
+		trim_index < outer->TrimCount(); ++trim_index) {
+	    const ON_BrepTrim *trim = outer->Trim(trim_index);
+	    if (!trim || trim->m_type != ON_BrepTrim::seam)
+		seam_only_polar = false;
+	}
+	/* Periodic p-curves may mix equivalent images and make their raw UV
+	 * envelope span several periods.  Sampling that envelope duplicates one
+	 * physical region and can leave another with no interior support.  Use one
+	 * native period when the trim envelope is wider than the surface domain.
+	 * Sample one complete period only for this seam-only polar case when its
+	 * trim envelope has collapsed in the closed direction. */
+	const double parameter_min[2] = {sinfo.u1, sinfo.v1};
+	const double parameter_max[2] = {sinfo.u2, sinfo.v2};
+	for (int direction = 0; direction < 2; ++direction) {
+	    double &lower = direction ? min.y : min.x;
+	    double &upper = direction ? max.y : max.x;
+	    const double domain_length = parameter_max[direction] -
+		parameter_min[direction];
+	    const double tolerance = 256.0 *
+		std::numeric_limits<double>::epsilon() *
+		std::max(std::max(std::fabs(parameter_min[direction]),
+		    std::fabs(parameter_max[direction])), domain_length);
+	    if (s->IsClosed(direction) &&
+		    (upper - lower > domain_length + tolerance ||
+		    (seam_only_polar && upper - lower <= tolerance))) {
+		lower = parameter_min[direction];
+		upper = parameter_max[direction];
+	    } else if (!s->IsClosed(direction)) {
+		lower = std::max(lower, parameter_min[direction]);
+		upper = std::min(upper, parameter_max[direction]);
+	    }
+	}
+	if (!(max.x > min.x) || !(max.y > min.y))
+	    return false;
 
 	std::queue<SPatch> spq1, spq2;
 
@@ -1005,20 +1155,16 @@ GetInteriorPoints(struct ON_Brep_CDT_State *s_cdt, int face_index)
 		split_depth++;
 		//std::cout << "split_depth: " << split_depth << "\n";
 	    }
+	    if (sinfo.leaf_bboxes.size() + wq->size() + nq->size() >
+		    MAX_INITIAL_SURFACE_PATCHES)
+		return false;
 	}
 
-	float *prand;
 	std::set<ON_BoundingBox *>::iterator b_it;
-	/* We want to jitter sampled 2D points out of linearity */
-	bn_rand_init(prand, 0);
 	for (b_it = sinfo.leaf_bboxes.begin(); b_it != sinfo.leaf_bboxes.end(); b_it++) {
 	    ON_3dPoint p2d = (*b_it)->Center();
-	    ON_3dPoint pmax = (*b_it)->Max();
-	    ON_3dPoint pmin = (*b_it)->Min();
-	    double ulen = pmax.x - pmin.x;
-	    double vlen = pmax.y - pmin.y;
-	    double px = p2d.x + (bn_rand_half(prand) * 0.3*ulen);
-	    double py = p2d.y + (bn_rand_half(prand) * 0.3*vlen);
+	    double px = p2d.x;
+	    double py = p2d.y;
 
 	    double tMin[2];
 	    tMin[0] = (*b_it)->Min().x;
@@ -1037,6 +1183,7 @@ GetInteriorPoints(struct ON_Brep_CDT_State *s_cdt, int face_index)
 	filter_surface_pnts(&sinfo);
 
     }
+    return true;
 }
 
 
@@ -1050,4 +1197,3 @@ GetInteriorPoints(struct ON_Brep_CDT_State *s_cdt, int face_index)
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-
