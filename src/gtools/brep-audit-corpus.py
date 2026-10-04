@@ -158,6 +158,10 @@ def append_repair_options(command, args):
         str(args.repair_max_deviation),
         "--repair-deviation-samples",
         str(args.repair_deviation_samples),
+        "--repair-poisson-depth",
+        str(args.repair_poisson_depth),
+        "--repair-poisson-scale",
+        str(args.repair_poisson_scale),
         "--repair-relaxed-fidelity-factor",
         str(args.repair_relaxed_fidelity_factor),
     ))
@@ -177,6 +181,8 @@ def append_repair_options(command, args):
                         str(args.repair_planar_cap_area_percent)))
     if args.repair_try_invalid:
         command.append("--repair-try-invalid")
+    if args.repair_poisson:
+        command.append("--repair-poisson")
     if args.repair_union_components:
         command.append("--repair-union-components")
     if args.repair_allow_self_intersections:
@@ -874,6 +880,9 @@ def parse_args():
     parser.add_argument("--repair-full-fast", action="store_true")
     parser.add_argument("--repair-full-fast-if-needed", action="store_true")
     parser.add_argument("--repair-try-invalid", action="store_true")
+    parser.add_argument("--repair-poisson", action="store_true")
+    parser.add_argument("--repair-poisson-depth", type=int, default=8)
+    parser.add_argument("--repair-poisson-scale", type=float, default=0.0)
     parser.add_argument(
         "--repair-relaxed-fidelity-factor", type=float, default=0.0,
         help=(
@@ -927,6 +936,9 @@ def parse_args():
             args.repair_max_deviation < 0.0 or \
             args.repair_max_deviation_rel < 0.0 or \
             args.repair_deviation_samples <= 0 or \
+            not 5 <= args.repair_poisson_depth <= 10 or \
+            (args.repair_poisson_scale != 0.0 and
+             not 1.0 <= args.repair_poisson_scale <= 2.0) or \
             (args.repair_relaxed_fidelity_factor != 0.0 and
              not 1.0 <= args.repair_relaxed_fidelity_factor <= 4.0):
         parser.error("invalid repair bounds")
@@ -934,13 +946,14 @@ def parse_args():
             args.repair_max_deviation_rel > 0.0:
         parser.error("absolute and relative repair deviation conflict")
     if args.repair_no_fast and \
-            (args.repair_full_fast or args.repair_full_fast_if_needed):
+            (args.repair_full_fast or args.repair_full_fast_if_needed or
+             args.repair_poisson):
         parser.error("--repair-no-fast conflicts with whole-fast repair")
     if args.repair_full_fast_if_needed and \
-            (args.repair_full_fast):
+            (args.repair_full_fast or args.repair_poisson):
         parser.error("automatic and forced whole-fast repair conflict")
     if args.repair_try_invalid and \
-            (args.repair_full_fast):
+            (args.repair_full_fast or args.repair_poisson):
         parser.error("invalid rigorous retry conflicts with forced whole-fast")
     if not math.isfinite(args.repair_planar_cap_area_percent) or \
             args.repair_planar_cap_area_percent < 0.0:
@@ -948,7 +961,7 @@ def parse_args():
     if args.repair_planar_cap_area_percent > 0.0 and \
             not (args.quality_repair and args.repair_try_invalid):
         parser.error("planar capping needs --quality-repair and --repair-try-invalid")
-    if (args.repair_full_fast or
+    if (args.repair_poisson or args.repair_full_fast or
             args.repair_full_fast_if_needed or args.repair_try_invalid or
             args.repair_union_components or
             args.repair_allow_self_intersections or

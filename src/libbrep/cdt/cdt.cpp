@@ -44,6 +44,7 @@
 #include <vector>
 #include "bu/str.h"
 #include "bg/chull.h"
+#include "bg/spsr.h"
 #include "bg/tri_pt.h"
 #include "bg/tri_tri.h"
 #include "brep/surfacetree.h"
@@ -74,6 +75,7 @@
 #define MAX_ASSEMBLED_REFINEMENT_ATTEMPTS 16
 #define MAX_ASSEMBLED_REFINEMENT_POINTS 4096
 #define MAX_SHARED_EDGE_REFINEMENT_DISTANCE_RATIO 0.05
+#define MAX_AUTOMATIC_LOCAL_REPAIR_FACES 8192
 #define MAX_BEST_EFFORT_FOLD_DIVISOR 20
 #define MAX_BOUNDARY_STRIP_CORRESPONDENCE_TESTS 16777216
 #define MAX_BOUNDARY_STRIP_REFINEMENT_POINTS 1048576
@@ -11371,6 +11373,104 @@ repair_fast_face_output(int face_index, size_t first_face,
     range.present = face_count > 0 && point_count > 0;
 }
 
+static int
+repair_component_root(std::vector<int> &parents, int face)
+{
+    int root = face;
+    while (parents[(size_t)root] != root)
+	root = parents[(size_t)root];
+    while (parents[(size_t)face] != face) {
+	const int next = parents[(size_t)face];
+	parents[(size_t)face] = root;
+	face = next;
+    }
+    return root;
+}
+
+static std::vector<int>
+repair_brep_face_components(const ON_Brep *brep)
+{
+    const int face_count = brep ? brep->m_F.Count() : 0;
+    std::vector<int> parents((size_t)std::max(0, face_count));
+    std::iota(parents.begin(), parents.end(), 0);
+    if (!brep)
+	return parents;
+
+    std::unordered_map<int, int> edge_owner;
+    for (int trim_index = 0; trim_index < brep->m_T.Count(); ++trim_index) {
+	const ON_BrepTrim &trim = brep->m_T[trim_index];
+	const ON_BrepFace *face = trim.Face();
+	if (trim.m_ei < 0 || trim.m_ei >= brep->m_E.Count() || !face ||
+		face->m_face_index < 0 || face->m_face_index >= face_count)
+	    continue;
+	const int face_index = face->m_face_index;
+	const auto inserted = edge_owner.emplace(trim.m_ei, face_index);
+	if (inserted.second)
+	    continue;
+	const int first_root = repair_component_root(parents,
+	    inserted.first->second);
+	const int second_root = repair_component_root(parents, face_index);
+	if (first_root != second_root)
+	    parents[(size_t)second_root] = first_root;
+    }
+    for (int face = 0; face < face_count; ++face)
+	parents[(size_t)face] = repair_component_root(parents, face);
+    return parents;
+}
+
+static bool
+repair_brep_components_are_closed(const ON_Brep *brep,
+	const std::vector<int> &components)
+{
+    if (!brep || components.size() != (size_t)brep->m_F.Count())
+	return false;
+    std::vector<int> edge_uses((size_t)brep->m_E.Count(), 0);
+    std::vector<int> edge_component((size_t)brep->m_E.Count(), -1);
+    for (int trim_index = 0; trim_index < brep->m_T.Count(); ++trim_index) {
+	const ON_BrepTrim &trim = brep->m_T[trim_index];
+	if (trim.m_type == ON_BrepTrim::singular)
+	    continue;
+	const ON_BrepFace *face = trim.Face();
+	if (trim.m_ei < 0 || trim.m_ei >= brep->m_E.Count() || !face ||
+		face->m_face_index < 0 ||
+		(size_t)face->m_face_index >= components.size())
+	    return false;
+	const int component = components[(size_t)face->m_face_index];
+	if (edge_component[(size_t)trim.m_ei] >= 0 &&
+		edge_component[(size_t)trim.m_ei] != component)
+	    return false;
+	edge_component[(size_t)trim.m_ei] = component;
+	edge_uses[(size_t)trim.m_ei]++;
+    }
+    for (int uses : edge_uses) {
+	if (uses && uses != 2)
+	    return false;
+    }
+    return true;
+}
+
+struct repair_poisson_triangle {
+    size_t face;
+    int component;
+    double area;
+    fastf_t normal[3];
+    fastf_t corner_normals[3][3];
+};
+
+static double
+repair_radical_inverse(size_t index)
+{
+    double inverse = 0.0;
+    double fraction = 0.5;
+    while (index) {
+	if (index & 1)
+	    inverse += fraction;
+	index >>= 1;
+	fraction *= 0.5;
+    }
+    return inverse;
+}
+
 static double
 repair_mesh_area(const fastf_t *vertices, const int *faces, int face_count)
 {
@@ -11902,7 +12002,8 @@ enum repair_closed_boundary_action {
 static int
 brep_cdt_repair_attempt(struct ON_Brep_CDT_State *s_cdt,
 	const struct brep_cdt_repair_settings *settings,
-	struct brep_cdt_repair_report *report,
+	struct brep_cdt_repair_report *report, bool area_weighted_samples,
+	bool closure_biased_poisson, bool automatic_local_repair,
 	repair_closed_boundary_action &closed_boundary_action,
 	bool preserve_pullback_samples = false)
 {
@@ -11969,6 +12070,13 @@ brep_cdt_repair_attempt(struct ON_Brep_CDT_State *s_cdt,
 	    (settings->max_adaptive_hole_area_percent > 0.0 &&
 	    settings->max_adaptive_hole_area_percent <
 	    settings->mesh.max_hole_area_percent) ||
+	    (settings->use_poisson_reconstruction &&
+	    (!settings->use_full_fast_fallback || settings->poisson_depth < 5 ||
+	    settings->poisson_depth > 10 ||
+	    !settings->max_poisson_components ||
+	    !std::isfinite(settings->poisson_scale) ||
+	    settings->poisson_scale < 1.0 ||
+	    settings->poisson_scale > 2.0)) ||
 	    ((settings->use_fast_face_fallback ||
 	    settings->use_full_fast_fallback ||
 	    settings->use_full_fast_fallback_if_needed) &&
@@ -12654,6 +12762,8 @@ brep_cdt_repair_attempt(struct ON_Brep_CDT_State *s_cdt,
 	    fast_point_count > 0 &&
 	    fast_face_count <= INT_MAX / 3 &&
 	    (size_t)fast_point_count <= settings->max_fast_points &&
+	    (!settings->use_poisson_reconstruction ||
+	    (size_t)fast_face_count <= settings->max_fast_points) &&
 	    fast_report.result_bytes <= settings->max_fast_result_bytes;
 	for (int corner = 0; valid_fast_mesh &&
 		corner < fast_face_count * 3; ++corner) {
@@ -12689,6 +12799,338 @@ brep_cdt_repair_attempt(struct ON_Brep_CDT_State *s_cdt,
 		"whole-B-Rep fast fallback did not produce usable geometry");
 	    return -1;
 	}
+	if (settings->use_poisson_reconstruction) {
+	    report->poisson_reconstruction_attempted = 1;
+	    report->fast_fallback_triangles = fast_face_count;
+	    display_reference_faces.assign(fast_faces,
+		fast_faces + (size_t)fast_face_count * 3);
+	    display_reference_vertices.assign((fastf_t *)fast_points,
+		(fastf_t *)fast_points + (size_t)fast_point_count * 3);
+	    display_reference_face_count = fast_face_count;
+	    display_reference_brep_faces.assign((size_t)fast_face_count, -1);
+	    for (size_t brep_face = 0; brep_face < fast_face_ranges.size();
+		    ++brep_face) {
+		const repair_fast_face_range &range =
+		    fast_face_ranges[brep_face];
+		if (!range.present || range.first_face >
+			(size_t)fast_face_count || range.face_count >
+			(size_t)fast_face_count - range.first_face)
+		    continue;
+		for (size_t face = range.first_face;
+			face < range.first_face + range.face_count; ++face)
+		    display_reference_brep_faces[face] = (int)brep_face;
+	    }
+	    std::vector<int> face_components =
+		repair_brep_face_components(s_cdt->orig_brep);
+	    const bool closed_face_components =
+		repair_brep_components_are_closed(s_cdt->orig_brep,
+		    face_components);
+	    std::vector<repair_poisson_triangle> poisson_triangles;
+	    double poisson_triangle_area = 0.0;
+	    bool valid_component_ranges = face_components.size() ==
+		fast_face_ranges.size();
+	    for (size_t brep_face = 0; valid_component_ranges &&
+		    brep_face < fast_face_ranges.size(); ++brep_face) {
+		const repair_fast_face_range &range =
+		    fast_face_ranges[brep_face];
+		if (!range.present)
+		    continue;
+		if (range.first_face > (size_t)fast_face_count ||
+			range.face_count > (size_t)fast_face_count -
+			range.first_face ||
+			range.first_point > (size_t)fast_point_count ||
+			range.point_count > (size_t)fast_point_count -
+			range.first_point) {
+		    valid_component_ranges = false;
+		    break;
+		}
+		const int component = closed_face_components ?
+		    face_components[brep_face] : 0;
+		for (size_t face = range.first_face;
+			face < range.first_face + range.face_count; ++face) {
+		    const int *triangle = &fast_faces[face * 3];
+		    for (int corner = 0; corner < 3; ++corner) {
+			if (triangle[corner] < (int)range.first_point ||
+				triangle[corner] >= (int)(range.first_point +
+				range.point_count)) {
+			    valid_component_ranges = false;
+			    break;
+			}
+		    }
+		    if (!valid_component_ranges)
+			break;
+		    const point_t &a = fast_points[triangle[0]];
+		    const point_t &b = fast_points[triangle[1]];
+		    const point_t &c = fast_points[triangle[2]];
+		    vect_t ab, ac, normal;
+		    VSUB2(ab, b, a);
+		    VSUB2(ac, c, a);
+		    VCROSS(normal, ab, ac);
+		    const fastf_t normal_length = MAGNITUDE(normal);
+		    if (!(normal_length > SMALL_FASTF) ||
+			    !std::isfinite(normal_length))
+			continue;
+		    repair_poisson_triangle sample_triangle;
+		    sample_triangle.face = face;
+		    sample_triangle.component = component;
+		    sample_triangle.area = 0.5 * normal_length;
+		    /* Fast-CDT winding is face-local.  Its corner normals include
+		     * the B-Rep face reversal and therefore provide the coherent
+		     * outward orientation Poisson reconstruction requires. */
+		    VSETALL(sample_triangle.normal, 0.0);
+		    for (int corner = 0; corner < 3; ++corner) {
+			VMOVE(sample_triangle.corner_normals[corner],
+			    fast_normals[face * 3 + (size_t)corner]);
+			const fastf_t corner_normal_length = MAGNITUDE(
+			    sample_triangle.corner_normals[corner]);
+			if (corner_normal_length > SMALL_FASTF &&
+				std::isfinite(corner_normal_length)) {
+			    VSCALE(sample_triangle.corner_normals[corner],
+				sample_triangle.corner_normals[corner],
+				1.0 / corner_normal_length);
+			} else {
+			    VSCALE(sample_triangle.corner_normals[corner], normal,
+				1.0 / normal_length);
+			}
+			VADD2(sample_triangle.normal, sample_triangle.normal,
+			    sample_triangle.corner_normals[corner]);
+		    }
+		    const fastf_t surface_normal_length =
+			MAGNITUDE(sample_triangle.normal);
+		    if (surface_normal_length > SMALL_FASTF &&
+			    std::isfinite(surface_normal_length)) {
+			VSCALE(sample_triangle.normal, sample_triangle.normal,
+			    1.0 / surface_normal_length);
+		    } else {
+			VSCALE(sample_triangle.normal, normal,
+			    1.0 / normal_length);
+		    }
+		    poisson_triangle_area += sample_triangle.area;
+		    poisson_triangles.push_back(sample_triangle);
+		}
+	    }
+	    std::map<int, std::vector<struct bg_3d_spsr_sample>> component_samples;
+	    std::vector<size_t> triangle_sample_counts(
+		poisson_triangles.size(), 1);
+	    if (!poisson_triangles.empty() && poisson_triangle_area > 0.0 &&
+		    std::isfinite(poisson_triangle_area)) {
+		const size_t point_capacity = std::min(settings->max_fast_points,
+		    (size_t)INT_MAX);
+		const size_t desired_extra = area_weighted_samples ?
+		    poisson_triangles.size() : 0;
+		const size_t extra_budget = point_capacity >
+		    poisson_triangles.size() ?
+		    std::min(desired_extra, point_capacity -
+			poisson_triangles.size()) : 0;
+		size_t triangle = 0;
+		long double cumulative_area = poisson_triangles[0].area;
+		for (size_t extra = 0; extra < extra_budget; ++extra) {
+		    const long double target =
+			((long double)extra + 0.5L) /
+			(long double)extra_budget *
+			(long double)poisson_triangle_area;
+		    while (triangle + 1 < poisson_triangles.size() &&
+			    cumulative_area <= target) {
+			triangle++;
+			cumulative_area += poisson_triangles[triangle].area;
+		    }
+		    triangle_sample_counts[triangle]++;
+		}
+	    }
+	    for (size_t triangle_index = 0;
+		    triangle_index < poisson_triangles.size(); ++triangle_index) {
+		const repair_poisson_triangle &sample_triangle =
+		    poisson_triangles[triangle_index];
+		const int *triangle = &fast_faces[sample_triangle.face * 3];
+		const point_t &a = fast_points[triangle[0]];
+		const point_t &b = fast_points[triangle[1]];
+		const point_t &c = fast_points[triangle[2]];
+		std::vector<struct bg_3d_spsr_sample> &samples =
+		    component_samples[sample_triangle.component];
+		const size_t sample_count =
+		    triangle_sample_counts[triangle_index];
+		for (size_t sample_index = 0; sample_index < sample_count;
+			sample_index++) {
+		    struct bg_3d_spsr_sample sample = {};
+		    double first_weight = 1.0 / 3.0;
+		    double second_weight = 1.0 / 3.0;
+		    double final_weight = 1.0 / 3.0;
+		    if (sample_count == 1) {
+			VADD3(sample.point, a, b, c);
+			VSCALE(sample.point, sample.point, 1.0 / 3.0);
+		    } else {
+			const double root = std::sqrt(
+			    ((double)sample_index + 0.5) /
+			    (double)sample_count);
+			const double third_weight = repair_radical_inverse(
+			    sample_index);
+			first_weight = 1.0 - root;
+			second_weight = root *
+			    (1.0 - third_weight);
+			final_weight = root * third_weight;
+			for (int axis = 0; axis < 3; ++axis) {
+			    sample.point[axis] = first_weight * a[axis] +
+				second_weight * b[axis] +
+				final_weight * c[axis];
+			}
+		    }
+		    for (int axis = 0; axis < 3; ++axis) {
+			sample.normal[axis] = first_weight *
+			    sample_triangle.corner_normals[0][axis] +
+			    second_weight *
+			    sample_triangle.corner_normals[1][axis] +
+			    final_weight *
+			    sample_triangle.corner_normals[2][axis];
+		    }
+		    const fastf_t sample_normal_length = MAGNITUDE(sample.normal);
+		    if (sample_normal_length > SMALL_FASTF &&
+			    std::isfinite(sample_normal_length)) {
+			VSCALE(sample.normal, sample.normal,
+			    1.0 / sample_normal_length);
+		    } else {
+			VMOVE(sample.normal, sample_triangle.normal);
+		    }
+		    samples.push_back(sample);
+		}
+	    }
+	    report->poisson_components = (int)component_samples.size();
+	    report->poisson_area_sampling_applied =
+		area_weighted_samples ? 1 : 0;
+	    report->poisson_boundary_fallback_applied =
+		closure_biased_poisson ? 1 : 0;
+	    for (const auto &sample_set : component_samples)
+		report->poisson_input_points += (int)sample_set.second.size();
+	    struct bg_3d_spsr_adaptive_opts poisson_options =
+		BG_3D_SPSR_ADAPTIVE_OPTS_DEFAULT;
+	    poisson_options.max_refinement_passes = 0;
+	    poisson_options.solver.depth = settings->poisson_depth;
+	    poisson_options.solver.full_depth = std::min(5,
+		settings->poisson_depth);
+	    poisson_options.solver.threads = 1;
+	    poisson_options.solver.scale = settings->poisson_scale;
+	    if (closure_biased_poisson) {
+		poisson_options.solver.btype = BG_3D_SPSR_BOUNDARY_DIRICHLET;
+		poisson_options.solver.point_weight = 32.0;
+		poisson_options.solver.exact = 0;
+	    }
+	    report->poisson_scale = settings->poisson_scale;
+	    std::vector<int> combined_poisson_faces;
+	    std::vector<fastf_t> combined_poisson_points;
+	    bool valid_poisson = valid_component_ranges &&
+		!component_samples.empty() && component_samples.size() <=
+		settings->max_poisson_components;
+	    std::string poisson_failure =
+		"bounded component Poisson reconstruction did not produce "
+		"usable geometry";
+	    if (valid_component_ranges && component_samples.size() >
+		    settings->max_poisson_components) {
+		poisson_failure = "Poisson reconstruction found " +
+		    std::to_string(component_samples.size()) +
+		    " face components (limit " +
+		    std::to_string(settings->max_poisson_components) + ")";
+	    }
+	    for (const auto &sample_set : component_samples) {
+		if (!valid_poisson)
+		    break;
+		const std::vector<struct bg_3d_spsr_sample> &samples =
+		    sample_set.second;
+		if (samples.size() <= 3 || samples.size() > (size_t)INT_MAX) {
+		    valid_poisson = false;
+		    poisson_failure = "a B-Rep face component supplied only " +
+			std::to_string(samples.size()) +
+			" usable Poisson samples";
+		    break;
+		}
+		int *component_faces = NULL;
+		int component_face_count = 0;
+		point_t *component_points = NULL;
+		int component_point_count = 0;
+		const int poisson_result = bg_3d_spsr_adaptive(&component_faces,
+		    &component_face_count, &component_points,
+		    &component_point_count, samples.data(), samples.size(),
+		    &poisson_options, NULL, NULL, NULL);
+		valid_poisson = poisson_result == BRLCAD_OK && component_faces &&
+		    component_face_count > 0 && component_face_count <=
+		    INT_MAX / 3 && component_points && component_point_count > 0;
+		for (int corner = 0; valid_poisson &&
+			corner < component_face_count * 3; ++corner) {
+		    valid_poisson = component_faces[corner] >= 0 &&
+			component_faces[corner] < component_point_count;
+		}
+		for (int point = 0; valid_poisson &&
+			point < component_point_count; ++point) {
+		    valid_poisson = std::isfinite(component_points[point][X]) &&
+			std::isfinite(component_points[point][Y]) &&
+			std::isfinite(component_points[point][Z]);
+		}
+		const size_t combined_point_count =
+		    combined_poisson_points.size() / 3;
+		const size_t combined_face_count =
+		    combined_poisson_faces.size() / 3;
+		const size_t new_point_count = combined_point_count +
+		    (valid_poisson ? (size_t)component_point_count : 0);
+		const size_t new_face_count = combined_face_count +
+		    (valid_poisson ? (size_t)component_face_count : 0);
+		const size_t new_bytes = new_point_count * sizeof(point_t) +
+		    new_face_count * 3 * sizeof(int);
+		valid_poisson = valid_poisson && new_point_count <=
+		    settings->max_fast_points && new_point_count <=
+		    (size_t)INT_MAX && new_face_count <= (size_t)INT_MAX &&
+		    new_bytes <= settings->max_fast_result_bytes;
+		if (valid_poisson) {
+		    for (int corner = 0; corner < component_face_count * 3;
+			    ++corner) {
+			combined_poisson_faces.push_back(
+			    component_faces[corner] +
+			    (int)combined_point_count);
+		    }
+		    const fastf_t *component_coordinates =
+			(const fastf_t *)component_points;
+		    combined_poisson_points.insert(
+			combined_poisson_points.end(), component_coordinates,
+			component_coordinates +
+			(size_t)component_point_count * 3);
+		}
+		bu_free(component_faces, "component Poisson repair faces");
+		bu_free(component_points, "component Poisson repair points");
+	    }
+	    if (!valid_poisson) {
+		bu_free(fast_faces, "Poisson source faces");
+		bu_free(fast_normals, "Poisson source normals");
+		bu_free(fast_points, "Poisson source points");
+		bu_free(input_faces, "repair rigorous input faces");
+		bu_free(input_vertices, "repair rigorous input vertices");
+		cdt_diagnostic_set(s_cdt, BREP_CDT_RESULT_REPAIR_FAILED,
+		    BREP_CDT_STAGE_MESH_REPAIR, -1,
+		    report->source_diagnostic.completed_faces,
+		    report->source_failed_faces,
+		    poisson_failure.c_str());
+		return -1;
+	    }
+	    int *poisson_faces = (int *)bu_malloc(
+		combined_poisson_faces.size() * sizeof(int),
+		"combined Poisson repair faces");
+	    point_t *poisson_points = (point_t *)bu_malloc(
+		(combined_poisson_points.size() / 3) * sizeof(point_t),
+		"combined Poisson repair points");
+	    memcpy(poisson_faces, combined_poisson_faces.data(),
+		combined_poisson_faces.size() * sizeof(int));
+	    memcpy(poisson_points, combined_poisson_points.data(),
+		combined_poisson_points.size() * sizeof(fastf_t));
+	    const int poisson_face_count =
+		(int)(combined_poisson_faces.size() / 3);
+	    const int poisson_point_count =
+		(int)(combined_poisson_points.size() / 3);
+	    bu_free(fast_faces, "Poisson source faces");
+	    bu_free(fast_points, "Poisson source points");
+	    fast_faces = poisson_faces;
+	    fast_face_count = poisson_face_count;
+	    fast_points = poisson_points;
+	    fast_point_count = poisson_point_count;
+	    report->poisson_reconstruction_applied = 1;
+	    report->poisson_output_points = poisson_point_count;
+	    report->poisson_output_faces = poisson_face_count;
+	}
 	bu_free(fast_normals, "repair full fast fallback normals");
 	bu_free(input_faces, "repair rigorous input faces");
 	bu_free(input_vertices, "repair rigorous input vertices");
@@ -12698,17 +13140,19 @@ brep_cdt_repair_attempt(struct ON_Brep_CDT_State *s_cdt,
 	input_vertex_count = fast_point_count;
 	rigorous_input_face_count = 0;
 	input_face_brep_sources.assign((size_t)fast_face_count, -1);
-	for (size_t brep_face = 0; brep_face < fast_face_ranges.size();
-		++brep_face) {
-	    const repair_fast_face_range &range =
-		fast_face_ranges[brep_face];
-	    if (!range.present || range.first_face >
-		    (size_t)fast_face_count || range.face_count >
-		    (size_t)fast_face_count - range.first_face)
-		continue;
-	    for (size_t face = range.first_face;
-		    face < range.first_face + range.face_count; ++face)
-		input_face_brep_sources[face] = (int)brep_face;
+	if (!report->poisson_reconstruction_applied) {
+	    for (size_t brep_face = 0; brep_face < fast_face_ranges.size();
+		    ++brep_face) {
+		const repair_fast_face_range &range =
+		    fast_face_ranges[brep_face];
+		if (!range.present || range.first_face >
+			(size_t)fast_face_count || range.face_count >
+			(size_t)fast_face_count - range.first_face)
+		    continue;
+		for (size_t face = range.first_face;
+			face < range.first_face + range.face_count; ++face)
+		    input_face_brep_sources[face] = (int)brep_face;
+	    }
 	}
 	report->fast_fallback_used_faces = fast_report.completed_faces;
 	report->fast_fallback_failed_faces = fast_report.failed_faces;
@@ -12931,7 +13375,22 @@ brep_cdt_repair_attempt(struct ON_Brep_CDT_State *s_cdt,
 	return -1;
     }
 
-    if (settings->use_full_fast_fallback) {
+    if (automatic_local_repair && input_face_count >
+	    MAX_AUTOMATIC_LOCAL_REPAIR_FACES) {
+	bu_free(input_faces, "oversized automatic local repair faces");
+	bu_free(input_vertices, "oversized automatic local repair vertices");
+	std::string message = "automatic local mesh repair skipped " +
+	    std::to_string(input_face_count) + " triangles (limit " +
+	    std::to_string(MAX_AUTOMATIC_LOCAL_REPAIR_FACES) + ")";
+	cdt_diagnostic_set(s_cdt, BREP_CDT_RESULT_REPAIR_FAILED,
+	    BREP_CDT_STAGE_MESH_REPAIR, -1,
+	    report->source_diagnostic.completed_faces,
+	    report->source_failed_faces, message.c_str());
+	return -1;
+    }
+
+    if (settings->use_full_fast_fallback &&
+	    !report->poisson_reconstruction_applied) {
 	struct bg_trimesh_solid_errors edge_errors =
 	    BG_TRIMESH_SOLID_ERRORS_INIT_NULL;
 	(void)bg_trimesh_solid2(input_vertex_count, input_face_count,
@@ -13144,8 +13603,9 @@ brep_cdt_repair_attempt(struct ON_Brep_CDT_State *s_cdt,
     repair_degenerate_neighborhood_stats degenerate_neighborhood_stats;
     bool degenerate_neighborhood_repair = false;
     bool rigorous_boundary_repair = false;
-    if (settings->use_fast_face_fallback ||
-	    settings->use_full_fast_fallback) {
+    if (!report->poisson_reconstruction_applied &&
+	    (settings->use_fast_face_fallback ||
+	    settings->use_full_fast_fallback)) {
 	std::vector<int> input_source_faces = input_face_brep_sources;
 	if (input_source_faces.size() != (size_t)input_face_count)
 	    input_source_faces.assign((size_t)input_face_count, -1);
@@ -13670,8 +14130,9 @@ brep_cdt_repair_attempt(struct ON_Brep_CDT_State *s_cdt,
      * open mixed-source mesh can remove valid, very small facets and create a
      * new hole.  The independent fidelity gates still run below. */
     bool preserve_input = false;
-    if (closed_boundary_action == REPAIR_DEFERRED_CLOSED_BOUNDARY &&
-	    !settings->mesh.union_components) {
+    if (report->poisson_reconstruction_applied ||
+	    (closed_boundary_action == REPAIR_DEFERRED_CLOSED_BOUNDARY &&
+	    !settings->mesh.union_components)) {
 	assembled_mesh_validation input_validation;
 	const bool input_geometric = assembled_mesh_validate(
 	    input_vertex_count, input_face_count, input_vertices,
@@ -13720,6 +14181,16 @@ brep_cdt_repair_attempt(struct ON_Brep_CDT_State *s_cdt,
 	    mesh_settings.max_hole_area_percent = adaptive_hole_area;
 	    bu_log("Retrying final mesh repair with a bounded %.6g%% hole "
 		"area ceiling\n", adaptive_hole_area);
+	    repair_result = run_mesh_repair();
+	}
+	/* Point-contact separation is useful for Poisson meshes with touching
+	 * shells, but can reopen a seam that tolerance welding just closed.
+	 * Preserve positions first and perturb contacts only when the caller did
+	 * not already request separation and conservative repair cannot produce
+	 * a solid. */
+	if (repair_result < 0 && settings->use_poisson_reconstruction &&
+		!mesh_settings.separate_touching_vertices) {
+	    mesh_settings.separate_touching_vertices = 1;
 	    repair_result = run_mesh_repair();
 	}
     }
@@ -13831,6 +14302,76 @@ brep_cdt_repair_attempt(struct ON_Brep_CDT_State *s_cdt,
 	repaired_face_count, (fastf_t *)repaired_vertices, repaired_faces,
 	&solid_errors);
     bg_free_trimesh_solid_errors(&solid_errors);
+    /* Once conservative repair has made an indexed solid, duplicate closed
+     * fans can still touch at one geometric point.  Separate those contacts
+     * only at this stage: doing it before the final weld can reopen seams.
+     * Accept the perturbed candidate only after complete validation. */
+    if (!geometric_valid && !not_solid &&
+	    mesh_validation.intersecting_triangle_pairs &&
+	    !mesh_validation.invalid_indices &&
+	    !mesh_validation.nonfinite_vertices &&
+	    !mesh_validation.unused_vertices &&
+	    !mesh_validation.degenerate_faces &&
+	    !mesh_validation.invalid_vertex_links &&
+	    settings->use_poisson_reconstruction &&
+	    !settings->mesh.separate_touching_vertices) {
+	struct bg_trimesh_repair_settings separation_settings = mesh_settings;
+	separation_settings.fill_holes = 0;
+	separation_settings.max_iterations = 1;
+	separation_settings.separate_touching_vertices = 1;
+	separation_settings.union_components = 0;
+	int *separated_faces = NULL;
+	int separated_face_count = 0;
+	point_t *separated_points = NULL;
+	int separated_vertex_count = 0;
+	struct bg_trimesh_repair_report separated_report =
+	    BG_TRIMESH_REPAIR_REPORT_INIT;
+	const int separated_result = bg_trimesh_repair_ex(&separated_faces,
+	    &separated_face_count, &separated_points,
+	    &separated_vertex_count, repaired_faces, repaired_face_count,
+	    (const point_t *)repaired_vertices, repaired_vertex_count,
+	    &separation_settings, &separated_report);
+	if (separated_report.allocation_failed)
+	    report->resource_limits |= BREP_CDT_REPAIR_LIMIT_MEMORY;
+	assembled_mesh_validation separated_validation;
+	const bool separated_geometric = separated_result == 0 &&
+	    assembled_mesh_validate(separated_vertex_count,
+		separated_face_count, (const fastf_t *)separated_points,
+		separated_faces, &separated_validation,
+		!settings->mesh.allow_self_intersections);
+	const bool separated_solid = separated_result == 0 &&
+	    !bg_trimesh_solid2(separated_vertex_count,
+		separated_face_count, (fastf_t *)separated_points,
+		separated_faces, NULL);
+	if (separated_geometric && separated_solid) {
+	    const struct bg_trimesh_repair_report initial_report =
+		report->mesh;
+	    separated_report.input_vertices = initial_report.input_vertices;
+	    separated_report.input_faces = initial_report.input_faces;
+	    separated_report.input_area = initial_report.input_area;
+	    separated_report.removed_faces += initial_report.removed_faces;
+	    separated_report.added_faces += initial_report.added_faces;
+	    separated_report.rejected_hole_faces +=
+		initial_report.rejected_hole_faces;
+	    separated_report.component_union_applied =
+		separated_report.component_union_applied ||
+		initial_report.component_union_applied;
+	    report->mesh = separated_report;
+	    bu_free(repaired_faces, "pre-separation repaired faces");
+	    bu_free(repaired_points, "pre-separation repaired vertices");
+	    repaired_faces = separated_faces;
+	    repaired_face_count = separated_face_count;
+	    repaired_points = separated_points;
+	    repaired_vertex_count = separated_vertex_count;
+	    repaired_vertices = (fastf_t *)repaired_points;
+	    mesh_validation = separated_validation;
+	    geometric_valid = true;
+	    not_solid = 0;
+	} else {
+	    bu_free(separated_faces, "rejected separated faces");
+	    bu_free(separated_points, "rejected separated vertices");
+	}
+    }
     if (!geometric_valid || not_solid) {
 	std::string message =
 	    "repaired mesh failed final solid/geometric validation: "
@@ -14056,6 +14597,7 @@ brep_cdt_repair_attempt(struct ON_Brep_CDT_State *s_cdt,
     repair_missing_patch_report missing_patch_report;
     if (missing_rigorous_triangles &&
 	    !settings->use_full_fast_fallback &&
+	    !settings->use_poisson_reconstruction &&
 	    !settings->mesh.union_components) {
 	bounded_local_replacement = repair_missing_patch_bounded(
 	    unresolved_rigorous_keys, report->mesh.input_area,
@@ -14063,6 +14605,7 @@ brep_cdt_repair_attempt(struct ON_Brep_CDT_State *s_cdt,
     }
     if (missing_rigorous_triangles &&
 	    !settings->use_full_fast_fallback &&
+	    !settings->use_poisson_reconstruction &&
 	    !settings->mesh.union_components &&
 	    !bounded_local_replacement) {
 	bu_free(repaired_faces, "nonlocal repaired faces");
@@ -14767,6 +15310,8 @@ brep_cdt_repair_attempt(struct ON_Brep_CDT_State *s_cdt,
     if (report->relaxed_fidelity_applied)
 	report->approximation_tier =
 	    BREP_CDT_REPAIR_APPROX_RELAXED_FIDELITY;
+    else if (report->poisson_reconstruction_applied)
+	report->approximation_tier = BREP_CDT_REPAIR_APPROX_POISSON;
     else if (report->full_fast_fallback_used)
 	report->approximation_tier = BREP_CDT_REPAIR_APPROX_FULL_FAST;
     else if (report->mesh.added_faces > 0 ||
@@ -14778,6 +15323,7 @@ brep_cdt_repair_attempt(struct ON_Brep_CDT_State *s_cdt,
 	report->approximation_tier =
 	    BREP_CDT_REPAIR_APPROX_CONSTRAINED_FACE;
     if (report->full_fast_fallback_used ||
+	    report->poisson_reconstruction_applied ||
 	    (report->relaxed_fidelity_applied &&
 	    approximation_faces.empty())) {
 	approximation_faces.clear();
@@ -14905,11 +15451,12 @@ brep_cdt_repair(struct ON_Brep_CDT_State *s_cdt,
 	s_cdt->repair_source_valid = true;
     }
     unsigned int resource_limits = 0;
-    const auto run_repair_attempt = [&](const brep_cdt_repair_settings *opts) {
+    const auto run_repair_attempt = [&](const brep_cdt_repair_settings *opts,
+	    bool area_weighted, bool closure_biased, bool automatic_local) {
 	repair_closed_boundary_action closed_boundary_action =
 	    REPAIR_PRESERVE_CLOSED_BOUNDARY;
 	int result = brep_cdt_repair_attempt(s_cdt, opts, active_report,
-
+	    area_weighted, closure_biased, automatic_local,
 	    closed_boundary_action);
 	resource_limits |= active_report->resource_limits;
 	/* Edge closure alone does not prove a manifold: flat facets can join
@@ -14921,7 +15468,7 @@ brep_cdt_repair(struct ON_Brep_CDT_State *s_cdt,
 	    bu_log("Retrying failed closed approximation with rigorous-boundary "
 		"reconstruction\n");
 	    result = brep_cdt_repair_attempt(s_cdt, opts, active_report,
-
+		area_weighted, closure_biased, automatic_local,
 		closed_boundary_action);
 	    resource_limits |= active_report->resource_limits;
 	}
@@ -14929,6 +15476,7 @@ brep_cdt_repair(struct ON_Brep_CDT_State *s_cdt,
 	 * a long edge opposite a finely sampled neighboring boundary.  Retry a
 	 * small open residue on a closed source before giving up on assembly. */
 	if (result < 0 && opts && opts->use_full_fast_fallback &&
+	    !opts->use_poisson_reconstruction &&
 	    active_report->full_fast_fallback_used &&
 	    active_report->mesh.unmatched_edges > 0 &&
 	    (size_t)active_report->mesh.unmatched_edges <=
@@ -14939,7 +15487,7 @@ brep_cdt_repair(struct ON_Brep_CDT_State *s_cdt,
 	    s_cdt->orig_brep->IsSolid() &&
 	    cdt_topology_references_safe(s_cdt->orig_brep, NULL)) {
 	    result = brep_cdt_repair_attempt(s_cdt, opts, active_report,
-
+		area_weighted, closure_biased, automatic_local,
 		closed_boundary_action, true);
 	    active_report->pullback_retry_attempted = 1;
 	    active_report->pullback_retry_applied = result >= 0 ? 1 : 0;
@@ -14970,52 +15518,158 @@ brep_cdt_repair(struct ON_Brep_CDT_State *s_cdt,
 	}
 	return result;
     };
-    const bool automatic_full_fast = settings &&
-	settings->use_full_fast_fallback_if_needed &&
-	!settings->use_full_fast_fallback;
-    int result = run_repair_attempt(settings);
-    struct brep_cdt_repair_report rigorous_report = *active_report;
-    if (automatic_full_fast) {
-	active_report->rigorous_first_attempted = 1;
-	active_report->rigorous_first_result = result;
-	active_report->rigorous_first_fast_faces =
-	    rigorous_report.fast_fallback_used_faces;
-	active_report->rigorous_first_constrained_edges =
-	    rigorous_report.fast_fallback_constrained_edges;
-	active_report->rigorous_first_constrained_samples =
-	    rigorous_report.fast_fallback_constrained_samples;
-	active_report->rigorous_first_reference_area =
-	    rigorous_report.reference_area;
-	active_report->rigorous_first_output_area =
-	    rigorous_report.mesh.output_area;
-	active_report->rigorous_first_area_change_percent =
-	    rigorous_report.reference_area_change_percent;
+    const bool valid_poisson_request = settings &&
+	settings->use_poisson_reconstruction &&
+	settings->use_full_fast_fallback && settings->poisson_depth >= 5 &&
+	settings->poisson_depth <= 10 && settings->max_poisson_components &&
+	settings->max_fast_points && settings->max_fast_result_bytes &&
+	settings->max_fast_time_ms > 0 &&
+	std::isfinite(settings->poisson_scale) &&
+	!(settings->poisson_scale > 0.0) &&
+	!(settings->poisson_scale < 0.0);
+    if (valid_poisson_request) {
+	/* Preserve the display tessellation whenever bounded local repair can
+	 * certify it.  Poisson remains available below for the harder cases, but
+	 * should not replace a close mesh merely because the caller enabled the
+	 * last-resort tier. */
+	struct brep_cdt_repair_settings local_settings = *settings;
+	local_settings.use_poisson_reconstruction = 0;
+	const int local_result = run_repair_attempt(&local_settings, false,
+	    false, true);
+	if (local_result >= 0)
+	    return local_result;
     }
-    if (result < 0 && automatic_full_fast) {
-	struct brep_cdt_repair_settings fallback_settings = *settings;
-	fallback_settings.use_full_fast_fallback = 1;
-	fallback_settings.use_full_fast_fallback_if_needed = 0;
-	fallback_settings.try_invalid_brep = 0;
-	/* The outer healing transaction owns cap construction and its area
-	 * ceiling.  A mesh-only retry must disable both topology options. */
-	fallback_settings.max_planar_cap_area_percent = 0.0;
-	result = run_repair_attempt(&fallback_settings);
-	active_report->rigorous_first_attempted = 1;
-	active_report->rigorous_first_result = -1;
-	active_report->rigorous_first_fast_faces =
-	    rigorous_report.fast_fallback_used_faces;
-	active_report->rigorous_first_constrained_edges =
-	    rigorous_report.fast_fallback_constrained_edges;
-	active_report->rigorous_first_constrained_samples =
-	    rigorous_report.fast_fallback_constrained_samples;
-	active_report->rigorous_first_reference_area =
-	    rigorous_report.reference_area;
-	active_report->rigorous_first_output_area =
-	    rigorous_report.mesh.output_area;
-	active_report->rigorous_first_area_change_percent =
-	    rigorous_report.reference_area_change_percent;
+    const bool automatic_scale = settings &&
+	settings->use_poisson_reconstruction &&
+	std::isfinite(settings->poisson_scale) &&
+	!(settings->poisson_scale > 0.0) &&
+	!(settings->poisson_scale < 0.0);
+    if (!automatic_scale) {
+	const bool automatic_full_fast = settings &&
+	    settings->use_full_fast_fallback_if_needed &&
+	    !settings->use_full_fast_fallback &&
+	    !settings->use_poisson_reconstruction;
+	int result = run_repair_attempt(settings, false, false, false);
+	struct brep_cdt_repair_report rigorous_report = *active_report;
+	if (automatic_full_fast) {
+	    active_report->rigorous_first_attempted = 1;
+	    active_report->rigorous_first_result = result;
+	    active_report->rigorous_first_fast_faces =
+		rigorous_report.fast_fallback_used_faces;
+	    active_report->rigorous_first_constrained_edges =
+		rigorous_report.fast_fallback_constrained_edges;
+	    active_report->rigorous_first_constrained_samples =
+		rigorous_report.fast_fallback_constrained_samples;
+	    active_report->rigorous_first_reference_area =
+		rigorous_report.reference_area;
+	    active_report->rigorous_first_output_area =
+		rigorous_report.mesh.output_area;
+	    active_report->rigorous_first_area_change_percent =
+		rigorous_report.reference_area_change_percent;
+	}
+	if (result < 0 && automatic_full_fast) {
+	    struct brep_cdt_repair_settings fallback_settings = *settings;
+	    fallback_settings.use_full_fast_fallback = 1;
+	    fallback_settings.use_full_fast_fallback_if_needed = 0;
+	    fallback_settings.try_invalid_brep = 0;
+	    /* The outer healing transaction owns cap construction and its area
+	     * ceiling.  A mesh-only retry must disable both topology options. */
+	    fallback_settings.max_planar_cap_area_percent = 0.0;
+	    result = run_repair_attempt(&fallback_settings, false, false,
+		false);
+	    active_report->rigorous_first_attempted = 1;
+	    active_report->rigorous_first_result = -1;
+	    active_report->rigorous_first_fast_faces =
+		rigorous_report.fast_fallback_used_faces;
+	    active_report->rigorous_first_constrained_edges =
+		rigorous_report.fast_fallback_constrained_edges;
+	    active_report->rigorous_first_constrained_samples =
+		rigorous_report.fast_fallback_constrained_samples;
+	    active_report->rigorous_first_reference_area =
+		rigorous_report.reference_area;
+	    active_report->rigorous_first_output_area =
+		rigorous_report.mesh.output_area;
+	    active_report->rigorous_first_area_change_percent =
+		rigorous_report.reference_area_change_percent;
+	}
+	if (active_report->poisson_reconstruction_attempted)
+	    active_report->poisson_attempts = 1;
+	return result;
     }
-    return result;
+
+    struct brep_cdt_repair_settings attempt_settings = *settings;
+    int attempts = 0;
+    const auto run_attempt = [&](double scale, bool area_weighted,
+	    bool closure_biased) {
+	attempt_settings.poisson_scale = scale;
+	const int attempt_result = run_repair_attempt(&attempt_settings,
+	    area_weighted, closure_biased, false);
+	if (active_report->poisson_reconstruction_attempted)
+	    attempts++;
+	active_report->poisson_attempts = attempts;
+	return attempt_result;
+    };
+    const auto sampling_retry_needed = [&](const brep_cdt_repair_report
+	    *candidate) {
+	return candidate->coverage_failures > 0 ||
+	    (settings->max_area_change_percent > 0.0 &&
+	    candidate->reference_area_change_percent >
+	    settings->max_area_change_percent);
+    };
+    const auto closure_retry_needed = [](const brep_cdt_repair_report
+	    *candidate) {
+	return candidate->poisson_reconstruction_applied &&
+	    candidate->mesh.unmatched_edges > 0 &&
+	    !(candidate->reference_area > 0.0);
+    };
+
+    int result = run_attempt(1.1, false, false);
+    if (result >= 0 || !active_report->poisson_reconstruction_applied)
+	return result;
+    bool sampling_failure_seen = sampling_retry_needed(active_report);
+    bool closure_failure_seen = closure_retry_needed(active_report);
+
+    result = run_attempt(1.2, false, false);
+    if (result >= 0)
+	return result;
+    sampling_failure_seen = sampling_failure_seen ||
+	sampling_retry_needed(active_report);
+    closure_failure_seen = closure_failure_seen ||
+	closure_retry_needed(active_report);
+    if (sampling_failure_seen) {
+	result = run_attempt(1.1, true, false);
+	if (result >= 0 || !active_report->poisson_reconstruction_applied)
+	    return result;
+	closure_failure_seen = closure_failure_seen ||
+	    closure_retry_needed(active_report);
+	result = run_attempt(1.2, true, false);
+	if (result >= 0)
+	    return result;
+	closure_failure_seen = closure_failure_seen ||
+	    closure_retry_needed(active_report);
+    }
+    if (!closure_failure_seen)
+	return result;
+
+    result = run_attempt(1.1, false, true);
+    if (result >= 0 || !active_report->poisson_reconstruction_applied)
+	return result;
+    bool closure_sampling_failure = sampling_retry_needed(active_report) ||
+	closure_retry_needed(active_report);
+
+    result = run_attempt(1.2, false, true);
+    if (result >= 0)
+	return result;
+    closure_sampling_failure = closure_sampling_failure ||
+	sampling_retry_needed(active_report) ||
+	closure_retry_needed(active_report);
+    if (!closure_sampling_failure)
+	return result;
+
+    result = run_attempt(1.1, true, true);
+    if (result >= 0 || !active_report->poisson_reconstruction_applied)
+	return result;
+    return run_attempt(1.2, true, true);
 }
 
 int
