@@ -23,6 +23,7 @@
 #include <iostream>
 #include "bu/app.h"
 #include "brep/cdt.h"
+#include "cdt/test_api.h"
 
 int
 main(int argc, const char **argv)
@@ -31,6 +32,7 @@ main(int argc, const char **argv)
 
     if (argc != 2) {
 	std::cerr << "brep_cdt_mesh <serialization_file>\n";
+	return 1;
     }
     struct cdt_bmesh *fmesh;
     if (cdt_bmesh_create(&fmesh)) return -1;
@@ -57,4 +59,3 @@ main(int argc, const char **argv)
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-
