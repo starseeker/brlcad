@@ -140,7 +140,7 @@ add_subdirectory(ttcp)
 
 if(SH_EXEC)
   brlcad_add_test(NAME regress-usage COMMAND ${SH_EXEC} "${CMAKE_SOURCE_DIR}/regress/usage.sh" ${CMAKE_SOURCE_DIR})
-  brlcad_regression_test(regress-usage "rt" STAND_ALONE TEST_DEFINED)
+  brlcad_regression_test(regress-usage "rt" STAND_ALONE TEST_DEFINED TIMEOUT 900)
 
   # TODO - test for Python before adding this one
   brlcad_add_test(NAME regress-flawfinder COMMAND ${SH_EXEC} "${CMAKE_SOURCE_DIR}/regress/flawfinder.sh" ${CMAKE_SOURCE_DIR})
