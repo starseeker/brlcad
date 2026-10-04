@@ -42,6 +42,27 @@ arb_check_enabled(const std::map<std::string, std::set<std::string>> &imt, const
 }
 
 
+static bool
+brep_check_requested(const std::map<std::string, std::set<std::string>> &imt,
+	const char *check)
+{
+    std::map<std::string, std::set<std::string>>::const_iterator b_it =
+	imt.find(std::string("brep"));
+    if (b_it == imt.end())
+	return false;
+
+    return b_it->second.find(std::string(check)) != b_it->second.end();
+}
+
+
+static bool
+brep_check_enabled(const std::map<std::string, std::set<std::string>> &imt,
+	const char *check)
+{
+    return !imt.size() || brep_check_requested(imt, check);
+}
+
+
 /* Someday, when we have parametric constraint evaluation for parameters for primitives, we can hook
  * that into this logic as well... for now, run various special-case routines that are available to
  * spot various categories of problematic primitives. */
@@ -73,17 +94,25 @@ _ged_invalid_prim_check(lint_data *ldata, struct directory *dp)
 	    rt_db_free_internal(&intern);
 	    break;
 	case DB5_MINORTYPE_BRLCAD_BREP:
-	    if (imt.size() && imt.find(std::string("brep")) == imt.end())
-		return;
-	    not_valid = !rt_brep_valid(&vlog, &intern, 0);
-	    if (not_valid) {
-		nlohmann::json berr;
-		berr["problem_type"] = "opennurbs_invalid";
-		berr["object_type"] = "brep";
-		berr["object_name"] = dp->d_namep;
-		berr["verbose_log"] = std::string(bu_vls_cstr(&vlog));
-		ldata->j.push_back(berr);
+	    if (!imt.size() || imt.find(std::string("brep")) != imt.end()) {
+		not_valid = !rt_brep_valid(&vlog, &intern, 0);
+		if (not_valid && brep_check_enabled(imt, "opennurbs")) {
+		    nlohmann::json berr;
+		    berr["problem_type"] = "opennurbs_invalid";
+		    berr["object_type"] = "brep";
+		    berr["object_name"] = dp->d_namep;
+		    berr["verbose_log"] = std::string(bu_vls_cstr(&vlog));
+		    ldata->j.push_back(berr);
+		}
+		struct rt_brep_internal *bi =
+		    (struct rt_brep_internal *)intern.idb_ptr;
+		if (brep_check_requested(imt, "fast_shading"))
+		    brep_fast_shading_check(ldata, dp, bi);
+		/* Detailed traversal is unsafe if the topology itself is invalid. */
+		if (!not_valid)
+		    brep_checks(ldata, dp, bi);
 	    }
+	    rt_db_free_internal(&intern);
 	    break;
 	case DB5_MINORTYPE_BRLCAD_ARB8:
 	    if (imt.size() && imt.find(std::string("arb")) == imt.end())

@@ -1,10 +1,11 @@
-set(PLUGIN_LIBS libged libbu)
+set(PLUGIN_LIBS libged libbrep libbu)
 
 set(
   LINT_SRCS
   cyclic.cpp
   invalid_shape.cpp
   lint.cpp
+  lint_brep.cpp
   lint_bot.cpp
   missing.cpp
   raytrace.cpp
