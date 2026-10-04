@@ -110,6 +110,7 @@ check_clean_constraint(void)
     const int outer[4] = {0, 1, 2, 3};
     const int steiner[2] = {4, 5};
     const int constraints[2] = {4, 5};
+    int endpoints[2] = {-1, -1};
     int *faces = NULL;
     int face_count = 0;
     point2d_t *out_points = NULL;
@@ -125,7 +126,6 @@ check_clean_constraint(void)
 	goto done;
     }
 
-    int endpoints[2] = {-1, -1};
     for (int i = 0; i < out_point_count; ++i) {
 	if (V2NEAR_EQUAL(out_points[i], points[4], 1.0e-8))
 	    endpoints[0] = i;
