@@ -37,6 +37,7 @@
 #include <iostream>
 #include <algorithm>
 #include <set>
+#include <unordered_map>
 #include <utility>
 
 #include "../../libbg/RTree.h"
@@ -61,9 +62,17 @@
 #include "brep/pullback.h"
 #include "brep/util.h"
 
+#include "./test_api.h"
 #include "./mesh.h"
+#include "./owned.h"
 
 #define BREP_PLANAR_TOL 0.05
+
+/* Strict tessellation and repair share the same refinement ceilings. */
+#define CDT_MAX_CHART_REFINEMENT_ATTEMPTS 16
+#define CDT_MAX_CHART_REFINEMENT_POINTS 4096
+#define CDT_MAX_ASSEMBLED_REFINEMENT_ATTEMPTS 16
+#define CDT_MAX_ASSEMBLED_REFINEMENT_POINTS 4096
 
 /***************************************************/
 
@@ -76,15 +85,13 @@
  * value from the GED 'tol' command */
 #define BREP_CDT_DEFAULT_TOL_REL 0.01
 
-/* this is a debugging structure - it holds origin information for
- * a point added to the CDT state */
+/* Origin information used for tolerance checks and failure diagnostics. */
 struct cdt_audit_info {
     int face_index;
     int vert_index;
     int trim_index;
     int edge_index;
     ON_2dPoint surf_uv;
-    ON_3dPoint vert_pnt; // For auditing normals
 };
 
 struct brep_cdt_tol {
@@ -95,9 +102,37 @@ struct brep_cdt_tol {
 };
 #define BREP_CDT_TOL_ZERO {0.0, 0.0, 0.0, 0.0}
 
+/* Export arrays have a single owner, including while certification retries. */
+struct cdt_mesh_output {
+    cdt_owned_array<int> faces;
+    int face_count = 0;
+    cdt_owned_array<fastf_t> vertices;
+    int vertex_count = 0;
+    cdt_owned_array<int> face_normals;
+    int face_normal_count = 0;
+    cdt_owned_array<fastf_t> normals;
+    int normal_count = 0;
+    bool repaired = false;
+
+    void clear_normals()
+    {
+	face_normals.reset();
+	face_normal_count = 0;
+	normals.reset();
+	normal_count = 0;
+    }
+
+    void clear() { *this = cdt_mesh_output(); }
+};
+
 struct ON_Brep_CDT_State {
 
     int status;
+    struct brep_cdt_diagnostic diagnostic;
+    std::vector<int> failed_face_indices;
+    std::map<int, struct brep_cdt_diagnostic> failed_face_diagnostics;
+    bool repair_source_valid;
+    struct brep_cdt_diagnostic repair_source_diagnostic;
     ON_Brep *orig_brep;
     ON_Brep *brep;
     const char *name;
@@ -108,6 +143,8 @@ struct ON_Brep_CDT_State {
     fastf_t absmin;
     fastf_t cos_within_ang;
     fastf_t ovlp_max_len;
+    long max_face_time_ms;
+    int64_t face_deadline;
 
     /* 3D data */
     std::vector<ON_3dPoint *> *w3dpnts;
@@ -125,13 +162,35 @@ struct ON_Brep_CDT_State {
     std::map<int, double> *max_edge_seg_len;
     std::map<ON_3dPoint *, std::set<BrepTrimPoint *>> *on_brep_edge_pnts;
     std::map<int, std::set<bedge_seg_t *>> e2polysegs;
+    /* Derived mesh-only welding for explicit B-Rep edges whose complete
+     * curve is smaller than the modeling tolerance.  Source B-Rep topology
+     * and geometry are never changed. */
+    std::map<ON_3dPoint *, ON_3dPoint *> collapsed_edge_pnts;
+    std::set<int> collapsed_edges;
+    /* A repair-only retry may use the midpoint between disagreeing paired
+     * p-curves when both misses stay within this explicit fidelity bound. */
+    bool allow_bounded_edge_approximation;
+    fastf_t bounded_edge_approximation_tolerance;
+    std::map<int, fastf_t> approximated_edges;
+    /* A mandatory split of a closed edge may prove that one face pullback
+     * agrees with the 3-D edge while its mate does not.  Preserve the shared
+     * topology and quarantine only the inconsistent face. */
+    std::map<int, std::pair<int, fastf_t>> inconsistent_edge_faces;
     std::map<ON_3dPoint *, double> v_min_seg_len;
     std::map<int, double> l_median_len;
     std::set<cpolyedge_t *> unsplit_singular_edges;
 
     /* Audit data */
-    std::map<int, ON_3dPoint *> *bot_pnt_to_on_pnt;
-    std::map<ON_3dPoint *, struct cdt_audit_info *> *pnt_audit_info;
+    std::vector<ON_3dPoint *> *bot_pnt_to_on_pnt;
+    std::vector<int> bot_face_to_brep_face;
+    std::vector<size_t> bot_face_to_cdt_triangle;
+    std::unordered_map<ON_3dPoint *, struct cdt_audit_info> *pnt_audit_info;
+
+    /* A successful full tessellation has already paid for assembly,
+     * orientation synchronization, and solid validation.  Retain that
+     * certified export so callers do not repeat those full-mesh operations
+     * while all face-local state is still resident. */
+    cdt_mesh_output certified;
 
     /* Face specific data */
     std::map<int, cdt_mesh_t> fmeshes;
@@ -147,23 +206,49 @@ struct ON_Brep_CDT_State {
 };
 
 ON_3dVector calc_trim_vnorm(ON_BrepVertex& v, ON_BrepTrim *trim);
-bool initialize_edge_segs(struct ON_Brep_CDT_State *s_cdt);
+bool initialize_edge_segs(struct ON_Brep_CDT_State *s_cdt, char *message,
+	size_t message_size);
 bool initialize_loop_polygons(struct ON_Brep_CDT_State *s_cdt);
+bool split_edges_at_surface_poles(struct ON_Brep_CDT_State *s_cdt,
+    char *failure_message, size_t failure_message_size);
+size_t synchronize_coincident_edge_samples(
+    struct ON_Brep_CDT_State *s_cdt,
+    std::map<ON_3dPoint *, ON_3dPoint *> &welds);
 double ang_deg(const ON_3dVector &v1, const ON_3dVector &v2);
-std::set<bedge_seg_t *> split_edge_seg(struct ON_Brep_CDT_State *s_cdt, bedge_seg_t *bseg, int force, double *t, int update_rtrees);
+std::set<bedge_seg_t *> split_edge_seg(struct ON_Brep_CDT_State *s_cdt,
+    bedge_seg_t *bseg, int force, double *t, int update_rtrees,
+    ON_3dPoint *shared_point = NULL, bool required_closed_split = false);
 std::set<cpolyedge_t *> split_singular_seg(struct ON_Brep_CDT_State *s_cdt, cpolyedge_t *ce, int update_rtree);
 std::vector<cpolyedge_t *> cdt_face_polyedges(struct ON_Brep_CDT_State *s_cdt, int face_index);
 void CDT_Add3DNorm(struct ON_Brep_CDT_State *s, ON_3dPoint *norm, ON_3dPoint *vert, int fid, int vid, int tid, int eid, fastf_t x2d, fastf_t y2d);
 void CDT_Add3DPnt(struct ON_Brep_CDT_State *s, ON_3dPoint *p, int fid, int vid, int tid, int eid, fastf_t x2d, fastf_t y2d);
 void CDT_Tol_Set(struct brep_cdt_tol *cdt, double dist, fastf_t md, double t_abs, double t_rel, double t_dist);
-void GetInteriorPoints(struct ON_Brep_CDT_State *s_cdt, int face_index);
+bool GetInteriorPoints(struct ON_Brep_CDT_State *s_cdt, int face_index);
 void cdt_tol_global_calc(struct ON_Brep_CDT_State *s);
 void curved_edges_refine(struct ON_Brep_CDT_State *s_cdt);
 void finalize_rtrees(struct ON_Brep_CDT_State *s_cdt);
 void initialize_edge_containers(struct ON_Brep_CDT_State *s_cdt);
 void refine_close_edges(struct ON_Brep_CDT_State *s_cdt);
 void tol_curved_edges_split(struct ON_Brep_CDT_State *s_cdt);
-void tol_linear_edges_split(struct ON_Brep_CDT_State *s_cdt);
+bool tol_linear_edges_split(struct ON_Brep_CDT_State *s_cdt,
+	char *failure_message, size_t failure_message_size);
+void cdt_state_reset(struct ON_Brep_CDT_State *s_cdt);
+void cdt_diagnostic_set(struct ON_Brep_CDT_State *s_cdt, int result,
+	int stage, int face_index, int completed_faces, int failed_faces,
+	const char *message);
+bool cdt_tri_tri_intersection(const point_t first[3],
+	const point_t second[3]);
+bool cdt_trim_pcurves_retrace(const ON_BrepTrim *first,
+	const ON_BrepTrim *second);
+
+/* Repair reuses the strict tessellator's state and refinement machinery. */
+struct assembled_mesh_validation;
+int brep_cdt_tessellate(struct ON_Brep_CDT_State *s_cdt, int face_cnt,
+    int *faces, bool try_invalid_brep);
+bool cdt_rebuild_repair_face(struct ON_Brep_CDT_State *s_cdt,
+    cdt_mesh_t *mesh);
+size_t refine_assembled_intersection(struct ON_Brep_CDT_State *s_cdt,
+    const assembled_mesh_validation &validation, size_t max_points);
 
 /* debug */
 void trimesh_error_report(struct ON_Brep_CDT_State *s_cdt, int valid_fcnt, int valid_vcnt, int *valid_faces, fastf_t *valid_vertices, struct bg_trimesh_solid_errors *se);
@@ -185,4 +270,3 @@ bool TRICHECK(triangle_t &tri);
 // ex: shiftwidth=4 tabstop=8
 
 #endif /* LIBBREP_CDT_H */
-

@@ -45,6 +45,7 @@ extern BREP_EXPORT int cdt_test_local_defects(void);
 extern BREP_EXPORT int cdt_test_edge_singular_pair(void);
 extern BREP_EXPORT int cdt_test_closed_edge_seed_policy(void);
 extern BREP_EXPORT int cdt_test_linear_edge_spacing(void);
+extern BREP_EXPORT int cdt_test_rtree_finalization(void);
 extern BREP_EXPORT int cdt_test_bounded_edge_midpoint(void);
 extern BREP_EXPORT int cdt_test_assembled_mesh_validation(void);
 extern BREP_EXPORT int cdt_test_assembled_shared_chords(void);
