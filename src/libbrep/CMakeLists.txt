@@ -15,6 +15,8 @@ set(
   cdt/fast.cpp
   cdt/fast_face.cpp
   cdt/heal.cpp
+  cdt/repair.cpp
+  cdt/repair_boundary.cpp
   cdt/surf.cpp
   cdt/cdt_util.cpp
   cdt/validate.cpp
@@ -83,6 +85,7 @@ cmakefiles(
   cdt/fast_budget.h
   cdt/fast_face.h
   cdt/heal.h
+  cdt/repair_boundary.h
   cdt/surface.h
   cdt/mesh.h
   cdt/owned.h
