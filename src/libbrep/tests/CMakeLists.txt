@@ -8,6 +8,18 @@ brlcad_add_test(NAME brep_ppx COMMAND test_brep_ppx)
 brlcad_addexec(test_brep_assembly assembly.cpp "libbrep" TEST)
 brlcad_add_test(NAME brep_assembly COMMAND test_brep_assembly)
 
+# Fast display tessellation must be deterministic across worker counts, leave
+# its const BRep input untouched, and stop cleanly at configured limits.
+brlcad_addexec(test_brep_fast brep_fast.cpp "libbrep;librt" TEST)
+brlcad_add_test(
+  NAME brep_fast
+  COMMAND test_brep_fast "${CMAKE_CURRENT_SOURCE_DIR}/cyl_hole.g" CUBE.s
+)
+brlcad_add_test(
+  NAME brep_fast_closed
+  COMMAND test_brep_fast "${CMAKE_CURRENT_SOURCE_DIR}/cyl_hole.g" PEG_ROT_LONG.s
+)
+
 # Display curve trees stop once a trim feature is below model-space display
 # tolerance, before their independent working-memory guard is needed.
 brlcad_addexec(test_brep_curvetree_display brep_curvetree_display.cpp "libbrep" TEST)
@@ -38,6 +50,7 @@ cmakefiles(
   brep_cdt_invalid.cpp
   brep_cdt_hole_face17.c
   brep_cdt_hole_face27.c
+  brep_fast.cpp
   brep_curvetree_display.cpp
   brep_cdt_mesh.cpp
   cyl_hole.g
