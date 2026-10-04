@@ -34,6 +34,8 @@
 #ifdef __cplusplus
 // @cond SKIP_C++_INCLUDE
 extern "C++" {
+#  include <cstddef>
+#  include <cstdint>
 #  include <map>
 }
 // @endcond
@@ -56,7 +58,24 @@ namespace brlcad {
      */
     class BREP_EXPORT CurveTree : public PooledObject<CurveTree> {
     public:
-	explicit CurveTree(const ON_BrepFace *face);
+	/**
+	 * Build a curve tree with an optional transient-memory limit.
+	 * A zero byte limit selects the library default.
+	 */
+	explicit CurveTree(const ON_BrepFace *face,
+	    std::size_t max_bytes = 0);
+	/**
+	 * Build a curve tree with a minimum feature-size sampling limit.
+	 * A zero feature size selects the library default.
+	 */
+	CurveTree(const ON_BrepFace *face, std::size_t max_bytes,
+	    double min_feature_size);
+	/**
+	 * Build a curve tree with feature-size and deadline limits.
+	 * The deadline is an absolute timestamp from bu_gettime(); zero disables it.
+	 */
+	CurveTree(const ON_BrepFace *face, std::size_t max_bytes,
+	    double min_feature_size, int64_t deadline);
 	~CurveTree();
 
 	CurveTree(Deserializer &deserializer, const ON_BrepFace &face);
@@ -64,6 +83,14 @@ namespace brlcad {
 	std::vector<std::size_t> serialize_get_leaves_keys(const std::list<const BRNode *> &leaves) const;
 	std::list<const BRNode *> serialize_get_leaves(const std::size_t *keys, std::size_t num_keys) const;
 	void serialize_cleanup() const;
+
+	/**
+	 * Report whether construction stopped at the node/memory limit.
+	 * A limited tree must not be used for geometric queries.
+	 */
+	bool limit_reached() const { return m_limit_reached; }
+	/** Report whether construction stopped at its time deadline. */
+	bool time_limit_reached() const { return m_time_limit_reached; }
 
 	/**
 	 * Return just the leaves of the surface tree
@@ -95,12 +122,19 @@ namespace brlcad {
 
 	bool getHVTangents(const ON_Curve *curve, const ON_Interval &t, std::list<fastf_t> &list) const;
 	bool isLinear(const ON_Curve *curve, double min, double max) const;
+	bool deadlineExpired() const;
 	BRNode *subdivideCurve(const ON_Curve *curve, int trim_index, int adj_face_index, double min, double max, bool innerTrim, int depth) const;
 	BRNode *curveBBox(const ON_Curve *curve, int trim_index, int adj_face_index, const ON_Interval &t, bool isLeaf, bool innerTrim, const ON_BoundingBox &bb) const;
 	static ON_BoundingBox initialLoopBBox(const ON_BrepFace &face);
 
 	const ON_BrepFace * const m_face;
 	BRNode *m_root;
+	const std::size_t m_max_nodes;
+	const double m_min_feature_size;
+	const int64_t m_deadline;
+	mutable std::size_t m_node_count;
+	mutable bool m_limit_reached;
+	mutable bool m_time_limit_reached;
 
 
 	struct Stl : public PooledObject<Stl> {

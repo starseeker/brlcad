@@ -468,31 +468,25 @@ surface_EvNormal(// returns false if unable to evaluate
 
 
 struct PullbackSurfaceScratch {
-    ON_RevSurface *rev_surface;
     ON_NurbsSurface *nurbs_surface;
     ON_Extrusion *extr_surface;
     ON_PlaneSurface *plane_surface;
     ON_SumSurface *sum_surface;
-    ON_SurfaceProxy *proxy_surface;
 
     PullbackSurfaceScratch()
-	: rev_surface(ON_RevSurface::New()),
-	  nurbs_surface(ON_NurbsSurface::New()),
+	: nurbs_surface(ON_NurbsSurface::New()),
 	  extr_surface(new ON_Extrusion()),
 	  plane_surface(new ON_PlaneSurface()),
-	  sum_surface(ON_SumSurface::New()),
-	  proxy_surface(new ON_SurfaceProxy())
+	  sum_surface(ON_SumSurface::New())
     {
     }
 
     ~PullbackSurfaceScratch()
     {
-	delete rev_surface;
 	delete nurbs_surface;
 	delete extr_surface;
 	delete plane_surface;
 	delete sum_surface;
-	delete proxy_surface;
     }
 
     PullbackSurfaceScratch(const PullbackSurfaceScratch &) = delete;
@@ -500,6 +494,77 @@ struct PullbackSurfaceScratch {
 };
 
 static thread_local PullbackSurfaceScratch pullback_surface_scratch;
+
+
+static bool
+surface_collapsed_interval_bounding_box(const ON_Surface *surface,
+    const ON_Interval &u_interval, const ON_Interval &v_interval,
+    ON_BoundingBox &bbox, bool grow)
+{
+    if (!surface)
+	return false;
+
+    const ON_Interval intervals[2] = {u_interval, v_interval};
+    bool increasing[2] = {false, false};
+    bool collapsed[2] = {false, false};
+    for (int direction = 0; direction < 2; ++direction) {
+	const double first = intervals[direction].m_t[0];
+	const double second = intervals[direction].m_t[1];
+	if (!std::isfinite(first) || !std::isfinite(second) || first > second)
+	    return false;
+	increasing[direction] = first < second;
+	collapsed[direction] = !increasing[direction];
+    }
+    if (increasing[0] && increasing[1])
+	return false;
+    if ((!increasing[0] && !collapsed[0]) ||
+	    (!increasing[1] && !collapsed[1]))
+	return false;
+
+    ON_BoundingBox local_box = ON_BoundingBox::EmptyBoundingBox;
+    if (collapsed[0] && collapsed[1]) {
+	const ON_3dPoint point = surface->PointAt(u_interval.m_t[0],
+	    v_interval.m_t[0]);
+	if (!point.IsValid())
+	    return false;
+	local_box = ON_BoundingBox(point, point);
+    } else {
+	const int varying_direction = increasing[0] ? 0 : 1;
+	const int constant_direction = 1 - varying_direction;
+	const double constant = intervals[constant_direction].m_t[0];
+	std::unique_ptr<ON_Curve> isocurve(surface->IsoCurve(
+	    varying_direction, constant));
+	if (!isocurve)
+	    return false;
+	const ON_Interval requested = intervals[varying_direction];
+	const ON_Interval curve_domain = isocurve->Domain();
+	const double parameter_scale = std::max(1.0,
+	    std::max(fabs(curve_domain.Min()), fabs(curve_domain.Max())));
+	const double parameter_tolerance = 128.0 * DBL_EPSILON *
+	    parameter_scale;
+	if (requested.Min() < curve_domain.Min() - parameter_tolerance ||
+		requested.Max() > curve_domain.Max() + parameter_tolerance)
+	    return false;
+	const ON_Interval bounded(std::max(requested.Min(),
+	    curve_domain.Min()), std::min(requested.Max(),
+	    curve_domain.Max()));
+	if (!bounded.IsIncreasing())
+	    return false;
+	if ((bounded.Min() > curve_domain.Min() ||
+		bounded.Max() < curve_domain.Max()) &&
+		!isocurve->Trim(bounded))
+	    return false;
+	if (!isocurve->GetBoundingBox(local_box, false) ||
+		!local_box.IsValid())
+	    return false;
+    }
+
+    if (grow && bbox.IsValid())
+	bbox.Union(local_box);
+    else
+	bbox = local_box;
+    return bbox.IsValid();
+}
 
 /* Return the raw ON_NurbsSurface span containing an interior parameter.  The
  * public span vector removes repeated knots, while ConvertSpanToBezier expects
@@ -624,6 +689,10 @@ surface_GetBoundingBox(
     bool bGrowBox
     )
 {
+    if (surface_collapsed_interval_bounding_box(surf, u_interval,
+	    v_interval, bbox, bGrowBox))
+	return true;
+
     const ON_NurbsSurface *nurbs =
 	dynamic_cast<const ON_NurbsSurface *>(surf);
     if (nurbs && nurbs_single_span_bounding_box(nurbs, u_interval,
@@ -645,13 +714,13 @@ surface_GetBoundingBox(
 	for (int j=0; j<2; j++) {
 	    if (domSplits[1][j] != ON_Interval::EmptyInterval) {
 		if (dynamic_cast<ON_RevSurface * >(const_cast<ON_Surface *>(surf)) != NULL) {
-		    *scratch.rev_surface = *dynamic_cast<ON_RevSurface * >(const_cast<ON_Surface *>(surf));
-		    if (scratch.rev_surface->Trim(0, domSplits[0][i]) && scratch.rev_surface->Trim(1, domSplits[1][j])) {
-			if (!scratch.rev_surface->GetBoundingBox(bbox, growcurrent)) {
-			    return false;
-			}
-			growcurrent = true;
-		    }
+		    ON_NurbsSurface *bounded = surf->NurbsSurface(
+			scratch.nurbs_surface, 0.0, &domSplits[0][i],
+			&domSplits[1][j]);
+		    if (!bounded ||
+			    !bounded->GetBoundingBox(bbox, growcurrent))
+			return false;
+		    growcurrent = true;
 		} else if (dynamic_cast<ON_NurbsSurface * >(const_cast<ON_Surface *>(surf)) != NULL) {
 		    *scratch.nurbs_surface = *dynamic_cast<ON_NurbsSurface * >(const_cast<ON_Surface *>(surf));
 		    if (scratch.nurbs_surface->Trim(0, domSplits[0][i]) && scratch.nurbs_surface->Trim(1, domSplits[1][j])) {
@@ -685,9 +754,16 @@ surface_GetBoundingBox(
 		    }
 		    growcurrent = true;
 		} else if (dynamic_cast<ON_SurfaceProxy * >(const_cast<ON_Surface *>(surf)) != NULL) {
-		    *scratch.proxy_surface = *dynamic_cast<ON_SurfaceProxy * >(const_cast<ON_Surface *>(surf));
-		    if (scratch.proxy_surface->Trim(0, domSplits[0][i]) && scratch.proxy_surface->Trim(1, domSplits[1][j])) {
-			if (!scratch.proxy_surface->GetBoundingBox(bbox, growcurrent)) {
+		    /* An ON_SurfaceProxy does not own its underlying surface.  A
+		     * thread-local proxy would therefore retain a pointer into the
+		     * caller's B-Rep after this operation returns.  Keep this copy
+		     * local so it is destroyed while the source B-Rep is alive. */
+		    ON_SurfaceProxy bounded =
+			*dynamic_cast<ON_SurfaceProxy *>(
+			    const_cast<ON_Surface *>(surf));
+		    if (bounded.Trim(0, domSplits[0][i]) &&
+			    bounded.Trim(1, domSplits[1][j])) {
+			if (!bounded.GetBoundingBox(bbox, growcurrent)) {
 			    return false;
 			}
 		    }
@@ -712,6 +788,9 @@ face_GetBoundingBox(
 {
     const ON_Surface *surf = face.SurfaceOf();
 
+    if (!surf)
+	return false;
+
     // may be a smaller trimmed subset of surface so worth getting
     // face boundary
     bool growcurrent = bGrowBox != 0;
@@ -719,21 +798,43 @@ face_GetBoundingBox(
     // empty, which is what we want for the initial calculation
     ON_3dPoint min(DBL_MAX, DBL_MAX, DBL_MAX);
     ON_3dPoint max(-DBL_MAX, -DBL_MAX, -DBL_MAX);
+    bool have_trim_box = false;
+    bool trim_box_failed = false;
     for (int li = 0; li < face.LoopCount(); li++) {
 	for (int ti = 0; ti < face.Loop(li)->TrimCount(); ti++) {
 	    ON_BrepTrim *trim = face.Loop(li)->Trim(ti);
-	    trim->GetBoundingBox(min, max, growcurrent);
-	    growcurrent = true;
+	    if (!trim || !trim->GetBoundingBox(min, max,
+		    have_trim_box ? true : growcurrent)) {
+		trim_box_failed = true;
+		continue;
+	    }
+	    have_trim_box = true;
 	}
     }
 
-    ON_Interval u_interval(min.x, max.x);
-    ON_Interval v_interval(min.y, max.y);
-    if (!surface_GetBoundingBox(surf, u_interval, v_interval, bbox, growcurrent)) {
-	return false;
+
+    if (have_trim_box && !trim_box_failed) {
+	const ON_Interval u_interval(min.x, max.x);
+	const ON_Interval v_interval(min.y, max.y);
+	if (surface_GetBoundingBox(surf, u_interval, v_interval, bbox,
+		growcurrent))
+	    return true;
     }
 
-    return true;
+    /* A valid B-Rep can contain a zero-area or otherwise degenerate face.
+     * If its trim envelope cannot bound a two-dimensional surface region,
+     * retain a conservative bound from the complete supporting surface.
+     * This is intentionally an upper bound: callers use this routine for
+     * spatial rejection and must never receive an undersized box. */
+    ON_BoundingBox surface_box = ON_BoundingBox::EmptyBoundingBox;
+    if (!surf->GetBoundingBox(surface_box, false) ||
+	    !surface_box.IsValid())
+	return false;
+    if (bGrowBox && bbox.IsValid())
+	bbox.Union(surface_box);
+    else
+	bbox = surface_box;
+    return bbox.IsValid();
 }
 
 
@@ -1912,12 +2013,15 @@ brlcad::PullbackContext::SurfaceClosestPoint(
 	m_impl->statistics.multiseed_us += static_cast<uint64_t>(
 	    std::chrono::duration_cast<std::chrono::microseconds>(
 		std::chrono::steady_clock::now() - fallback_started).count());
-	if (fallback_result)
+	const bool valid_fallback = fallback_result && p2d.IsValid() &&
+	    p3d.IsValid() && std::isfinite(current_distance) &&
+	    current_distance < DBL_MAX;
+	if (valid_fallback)
 	    ++m_impl->statistics.multiseed_successes;
 	else
 	    ++m_impl->statistics.multiseed_failures;
 	PullbackWorkProgress();
-	return fallback_result;
+	return valid_fallback;
     }
     PullbackWorkProgress();
 
@@ -2924,12 +3028,24 @@ brlcad::PullbackContext::SurfaceClosestPoint(
     }
 cleanup:
 
+    const auto valid_result = [&]() {
+	return p2d.IsValid() && p3d.IsValid() &&
+	    std::isfinite(current_distance) && current_distance < DBL_MAX;
+    };
+    if (rc && !valid_result())
+	rc = false;
+
     m_impl->statistics.primary_search_us += static_cast<uint64_t>(
 	std::chrono::duration_cast<std::chrono::microseconds>(
 	    std::chrono::steady_clock::now() - primary_started).count());
     if (rc) ++m_impl->statistics.primary_search_successes;
 
     if (!rc && !PullbackWorkCancelled()) {
+	if (!valid_result()) {
+	    p2d = ON_2dPoint::UnsetPoint;
+	    p3d = ON_3dPoint::UnsetPoint;
+	    current_distance = DBL_MAX;
+	}
 	++m_impl->statistics.multiseed_fallbacks;
 	const std::chrono::steady_clock::time_point fallback_started =
 	    std::chrono::steady_clock::now();
@@ -2938,6 +3054,7 @@ cleanup:
 	    &m_impl->statistics, preparation->surface_closed,
 	    preparation->surface_domains, &preparation->u_spans,
 	    &preparation->v_spans, &preparation->boxes);
+	rc = rc && valid_result();
 	m_impl->statistics.multiseed_us += static_cast<uint64_t>(
 	    std::chrono::duration_cast<std::chrono::microseconds>(
 		std::chrono::steady_clock::now() - fallback_started).count());
@@ -2952,7 +3069,7 @@ cleanup:
 	static_cast<uint64_t>(closest_point_subdivision_nodes));
     PullbackWorkProgress(closest_point_subdivision_nodes ?
 	closest_point_subdivision_nodes : 1);
-    return rc;
+    return rc && valid_result();
 }
 
 
