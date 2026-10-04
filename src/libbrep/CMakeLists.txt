@@ -9,6 +9,8 @@ set(
   Subcurve.cpp
   Subsurface.cpp
   boolean.cpp
+  cdt/assembly.cpp
+  cdt/chart.cpp
   cdt/cdt.cpp
   cdt/fast.cpp
   cdt/fast_face.cpp
@@ -75,12 +77,15 @@ cmakefiles(
   PullbackCurve.h
   brep_defines.h
   brep_except.h
+  cdt/assembly.h
+  cdt/chart.h
   cdt/cdt.h
   cdt/fast_budget.h
   cdt/fast_face.h
   cdt/heal.h
   cdt/surface.h
   cdt/mesh.h
+  cdt/owned.h
   cdt/test_api.h
   debug_plot.h
   quality.cpp
