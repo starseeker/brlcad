@@ -10,10 +10,12 @@
 
 #include "common.h"
 
+#include "bu/app.h"
 #include <cstring>
 #include <vector>
 
 #include "brep/cdt.h"
+#include "cdt/test_api.h"
 #include "bv/vlist.h"
 #include "raytrace.h"
 #include "rt/geom.h"
@@ -32,9 +34,30 @@ struct wire_output {
     struct rt_brep_draw_report report = {};
 };
 
+static bool
+same_wire_report(const struct rt_brep_draw_report &first,
+	const struct rt_brep_draw_report &second)
+{
+    return first.requested_edges == second.requested_edges &&
+	first.completed_edges == second.completed_edges &&
+	first.failed_edges == second.failed_edges &&
+	first.requested_surface_cues == second.requested_surface_cues &&
+	first.completed_surface_cues == second.completed_surface_cues &&
+	first.approximated_surface_cues == second.approximated_surface_cues &&
+	first.memory_approximated_surface_cues ==
+	    second.memory_approximated_surface_cues &&
+	first.time_approximated_surface_cues ==
+	    second.time_approximated_surface_cues &&
+	first.output_points == second.output_points &&
+	first.result_bytes == second.result_bytes &&
+	first.hit_time_limit == second.hit_time_limit &&
+	first.hit_memory_limit == second.hit_memory_limit &&
+	first.hit_point_limit == second.hit_point_limit;
+}
+
 static int
 run_wire(wire_output *output, struct rt_db_internal *intern, size_t workers,
-	size_t max_points)
+	size_t max_points, size_t max_working_bytes = 0)
 {
     struct bu_list vhead;
     BU_LIST_INIT(&vhead);
@@ -44,6 +67,8 @@ run_wire(wire_output *output, struct rt_db_internal *intern, size_t workers,
     rt_brep_draw_options_default(&options);
     options.max_workers = workers;
     options.max_points = max_points;
+    if (max_working_bytes)
+	options.max_working_bytes = max_working_bytes;
 
     int ret = rt_brep_plot_ex(&vhead, intern, &ttol, &tol, NULL, &options,
 	&output->report);
@@ -82,7 +107,8 @@ run_shaded(wire_output *output, struct directory *dp,
 
 static int
 run_fast(fast_output *output, const ON_Brep *brep, size_t workers,
-	size_t max_points)
+	size_t max_points, size_t max_working_bytes = 0,
+	size_t max_triangles = 0, bool adaptive_quality = true, int face_index = -1)
 {
     int *faces = NULL;
     int face_count = 0;
@@ -95,9 +121,14 @@ run_fast(fast_output *output, const ON_Brep *brep, size_t workers,
     brep_cdt_fast_options_default(&options);
     options.max_workers = workers;
     options.max_points = max_points;
+    if (max_working_bytes)
+	options.max_working_bytes = max_working_bytes;
+    if (max_triangles)
+	options.max_triangles = max_triangles;
+    options.adaptive_quality = adaptive_quality ? 1 : 0;
 
     int ret = brep_cdt_fast_ex(&faces, &face_count, &normals, &points,
-	&point_count, brep, -1, &ttol, &tol, &options, &output->report);
+	&point_count, brep, face_index, &ttol, &tol, &options, &output->report);
     if (faces)
 	output->faces.assign(faces, faces + (size_t)face_count * 3);
     if (normals) {
@@ -115,11 +146,91 @@ run_fast(fast_output *output, const ON_Brep *brep, size_t workers,
     return ret;
 }
 
+static bool
+triangle_geometric_normal(const fast_output &output, size_t triangle,
+	ON_3dVector &normal)
+{
+    ON_3dPoint points[3];
+    for (int corner = 0; corner < 3; ++corner) {
+	const int vertex = output.faces[triangle * 3 + corner];
+	if (vertex < 0 || (size_t)vertex >= output.points.size() / 3)
+	    return false;
+	points[corner] = ON_3dPoint(&output.points[(size_t)vertex * 3]);
+    }
+    normal = ON_CrossProduct(points[1] - points[0], points[2] - points[0]);
+    return normal.IsValid() && normal.Unitize();
+}
+
+static bool
+normals_match_winding(const fast_output &output)
+{
+    if (output.faces.empty() || output.faces.size() % 3 ||
+	    output.normals.size() != output.faces.size() * 3)
+	return false;
+    for (size_t triangle = 0; triangle < output.faces.size() / 3; ++triangle) {
+	ON_3dVector geometric;
+	if (!triangle_geometric_normal(output, triangle, geometric))
+	    return false;
+	for (int corner = 0; corner < 3; ++corner) {
+	    ON_3dVector normal(&output.normals[triangle * 9 + corner * 3]);
+	    if (!normal.IsValid() || !normal.Unitize() ||
+		    !(geometric * normal > 0.0))
+		return false;
+	}
+    }
+    return true;
+}
+
+static bool
+planar_winding_matches_source(const ON_Brep &brep)
+{
+    /* Check source orientation independently of the emitted normals, so
+     * the display fallback cannot hide a reversed triangulator winding. */
+    for (int face_index = 0; face_index < brep.m_F.Count(); ++face_index) {
+	const ON_BrepFace &face = brep.m_F[face_index];
+	const ON_Surface *surface = face.SurfaceOf();
+	if (!surface || !surface->IsPlanar())
+	    continue;
+	ON_3dPoint point;
+	ON_3dVector expected;
+	if (!surface->EvNormal(surface->Domain(0).Mid(),
+		surface->Domain(1).Mid(), point, expected))
+	    return false;
+	if (face.m_bRev)
+	    expected = -expected;
+	fast_output output;
+	if (run_fast(&output, &brep, 1, 0, 0, 0, true, face_index) !=
+		BREP_CDT_FAST_OK || output.faces.empty())
+	    return false;
+	for (size_t triangle = 0; triangle < output.faces.size() / 3; ++triangle) {
+	    ON_3dVector geometric;
+	    if (!triangle_geometric_normal(output, triangle, geometric) ||
+		    !(geometric * expected > 0.0))
+		return false;
+	}
+    }
+    return true;
+}
+
 int
 main(int argc, const char **argv)
 {
+    bu_setprogname(argv[0]);
     if (argc != 3)
 	return 2;
+    if (cdt_test_fast_display_normals())
+	return 1;
+
+    ON_Brep empty_brep;
+    fast_output empty;
+    fast_output nonexistent_face;
+    if (run_fast(&empty, &empty_brep, 1, 0) != BREP_CDT_FAST_OK ||
+	    !empty.faces.empty() || !empty.points.empty() || !empty.normals.empty() ||
+	    empty.report.requested_faces || empty.report.failed_faces ||
+	    empty.report.completed_faces ||
+	    run_fast(&nonexistent_face, &empty_brep, 1, 0, 0, 0, true, 0) !=
+	    BREP_CDT_FAST_ERROR)
+	return 1;
 
     struct db_i *dbip = db_open(argv[1], DB_OPEN_READONLY);
     if (dbip == DBI_NULL || db_dirbuild(dbip) < 0)
@@ -152,9 +263,11 @@ main(int argc, const char **argv)
 
     fast_output serial;
     fast_output parallel;
+    const size_t working_budget = (size_t)64 * 1024 * 1024;
     if (run_fast(&serial, bi->brep, 1, 16 * 1024 * 1024) !=
 	    BREP_CDT_FAST_OK ||
-	    run_fast(&parallel, bi->brep, 4, 16 * 1024 * 1024) !=
+	    run_fast(&parallel, bi->brep, 4, 16 * 1024 * 1024,
+		working_budget) !=
 	    BREP_CDT_FAST_OK) {
 	rt_db_free_internal(&intern);
 	db_close(dbip);
@@ -163,16 +276,43 @@ main(int argc, const char **argv)
 
     bool same = serial.faces == parallel.faces &&
 	serial.normals == parallel.normals && serial.points == parallel.points;
+    ON_Brep reversed_brep(*bi->brep);
+    reversed_brep.Flip();
+    fast_output reversed;
+    const bool oriented_normals = normals_match_winding(serial) &&
+	run_fast(&reversed, &reversed_brep, 1, 16 * 1024 * 1024) ==
+	    BREP_CDT_FAST_OK && normals_match_winding(reversed) &&
+	planar_winding_matches_source(*bi->brep) &&
+	planar_winding_matches_source(reversed_brep);
     bool complete = serial.report.failed_faces == 0 &&
 	parallel.report.failed_faces == 0 &&
 	serial.report.completed_faces == bi->brep->m_F.Count() &&
 	parallel.report.completed_faces == bi->brep->m_F.Count();
+    bool working_bounded = parallel.report.peak_working_bytes > 0 &&
+	parallel.report.peak_working_bytes <= working_budget;
+    bool adaptive_reported = serial.report.triangle_budget > 0 &&
+	serial.report.triangle_budget <= (size_t)256 * 1024 &&
+	serial.report.refinement_passes == parallel.report.refinement_passes &&
+	serial.report.approximated_faces ==
+	parallel.report.approximated_faces &&
+	serial.report.boundary_envelope_incomplete_faces == 0 &&
+	parallel.report.boundary_envelope_incomplete_faces == 0;
 
     fast_output limited;
     int limit_ret = run_fast(&limited, bi->brep, 4, 1);
     bool limited_cleanly = limit_ret == BREP_CDT_FAST_LIMIT &&
 	limited.report.hit_point_limit && limited.faces.empty() &&
 	limited.normals.empty() && limited.points.empty();
+
+    fast_output triangle_targeted;
+    int triangle_target_ret = run_fast(&triangle_targeted, bi->brep, 4,
+	16 * 1024 * 1024, 0, 1);
+    bool authoritative_boundaries_retained =
+	triangle_target_ret == BREP_CDT_FAST_OK &&
+	triangle_targeted.report.triangle_budget == 1 &&
+	triangle_targeted.report.triangle_budget_limited_faces > 0 &&
+	triangle_targeted.report.boundary_envelope_incomplete_faces == 0 &&
+	!triangle_targeted.faces.empty();
 
     wire_output wire_serial;
     wire_output wire_parallel;
@@ -186,11 +326,51 @@ main(int argc, const char **argv)
 	wire_serial.points == wire_parallel.points &&
 	!wire_serial.commands.empty();
 
+    bool wire_repeatable = true;
+    for (int repeat = 0; repeat < 8; repeat++) {
+	wire_output wire_repeat;
+	const int wire_repeat_ret = run_wire(&wire_repeat, &intern, 4,
+	    4 * 1024 * 1024);
+	wire_repeatable = wire_repeatable &&
+	    wire_repeat_ret == wire_parallel_ret &&
+	    wire_repeat.commands == wire_parallel.commands &&
+	    wire_repeat.points == wire_parallel.points &&
+	    same_wire_report(wire_repeat.report, wire_parallel.report);
+    }
+
     wire_output wire_limited;
     int wire_limit_ret = run_wire(&wire_limited, &intern, 4, 1);
     bool wire_limited_cleanly = wire_limit_ret == RT_BREP_DRAW_LIMIT &&
 	wire_limited.report.hit_point_limit && wire_limited.commands.empty() &&
 	wire_limited.points.empty();
+
+    wire_output wire_admission_serial;
+    wire_output wire_admission_parallel;
+    const int wire_admission_serial_ret = run_wire(&wire_admission_serial,
+	&intern, 1, 7);
+    const int wire_admission_parallel_ret = run_wire(
+	&wire_admission_parallel, &intern, 4, 7);
+    const bool wire_admission_repeatable =
+	wire_admission_serial_ret == RT_BREP_DRAW_LIMIT &&
+	wire_admission_parallel_ret == wire_admission_serial_ret &&
+	wire_admission_parallel.commands == wire_admission_serial.commands &&
+	wire_admission_parallel.points == wire_admission_serial.points &&
+	same_wire_report(wire_admission_parallel.report,
+	    wire_admission_serial.report);
+
+    wire_output wire_approximated;
+    int wire_approximated_ret = run_wire(&wire_approximated, &intern, 1,
+	4 * 1024 * 1024, 1);
+    bool wire_approximated_cleanly = true;
+    if (wire_approximated.report.requested_surface_cues > 0) {
+	wire_approximated_cleanly =
+	    wire_approximated_ret == RT_BREP_DRAW_PARTIAL &&
+	    wire_approximated.report.approximated_surface_cues > 0 &&
+	    wire_approximated.report.completed_edges ==
+		wire_approximated.report.requested_edges &&
+	    !wire_approximated.report.hit_memory_limit &&
+	    !wire_approximated.commands.empty();
+    }
 
     wire_output shaded;
     int shaded_ret = run_shaded(&shaded, dp, &intern);
@@ -237,6 +417,21 @@ main(int argc, const char **argv)
 
     rt_db_free_internal(&intern);
     db_close(dbip);
-    return (same && complete && unchanged && limited_cleanly && wire_same &&
-	wire_limited_cleanly && shaded_matches_fast) ? 0 : 1;
+    return (same && oriented_normals && complete && working_bounded &&
+	adaptive_reported &&
+	unchanged && limited_cleanly && authoritative_boundaries_retained &&
+	wire_same && wire_repeatable && wire_limited_cleanly &&
+	wire_admission_repeatable &&
+	wire_approximated_cleanly &&
+	shaded_matches_fast) ? 0 : 1;
 }
+
+/*
+ * Local Variables:
+ * tab-width: 8
+ * mode: C++
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

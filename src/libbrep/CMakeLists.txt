@@ -11,6 +11,7 @@ set(
   boolean.cpp
   cdt/cdt.cpp
   cdt/fast.cpp
+  cdt/heal.cpp
   cdt/surf.cpp
   cdt/cdt_util.cpp
   cdt/validate.cpp
@@ -74,7 +75,10 @@ cmakefiles(
   brep_defines.h
   brep_except.h
   cdt/cdt.h
+  cdt/heal.h
+  cdt/surface.h
   cdt/mesh.h
+  cdt/test_api.h
   debug_plot.h
   quality.cpp
   shape_recognition/shape_recognition.h
