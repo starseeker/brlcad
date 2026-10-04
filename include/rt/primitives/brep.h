@@ -24,6 +24,8 @@
 #ifndef RT_PRIMITIVES_BREP_H
 #define RT_PRIMITIVES_BREP_H
 
+#include <stddef.h>
+
 #include "common.h"
 #include "vmath.h"
 #include "bu/list.h"
@@ -39,6 +41,61 @@ RT_EXPORT extern int rt_brep_plot(struct bu_list                *vhead,
 				  const struct bg_tess_tol       *ttol,
 				  const struct bn_tol            *tol,
 				  const struct bview *info);
+
+/** Options for bounded B-Rep wireframe and surface-cue drawing. */
+struct rt_brep_draw_options {
+    size_t max_workers;
+    /** Retained output memory; zero selects the library default. */
+    size_t max_result_bytes;
+    /** Temporary edge and curve-tree working memory; zero selects default. */
+    size_t max_working_bytes;
+    size_t max_points;
+    long max_time_ms;
+    int include_surface_cues;
+    void (*item_status)(int item_type, int item_index, int status,
+	void *data);
+    void *item_status_data;
+};
+
+#define RT_BREP_DRAW_EDGE 0
+#define RT_BREP_DRAW_SURFACE_CUE 1
+#define RT_BREP_DRAW_ITEM_COMPLETED 0
+#define RT_BREP_DRAW_ITEM_FAILED 1
+#define RT_BREP_DRAW_ITEM_NOT_PROCESSED 2
+#define RT_BREP_DRAW_ITEM_APPROXIMATED 3
+
+struct rt_brep_draw_report {
+    int requested_edges;
+    int completed_edges;
+    int failed_edges;
+    int requested_surface_cues;
+    int completed_surface_cues;
+    /** Cues drawn from the bounded untrimmed surface envelope. */
+    int approximated_surface_cues;
+    int memory_approximated_surface_cues;
+    int time_approximated_surface_cues;
+    size_t output_points;
+    size_t result_bytes;
+    int hit_time_limit;
+    int hit_memory_limit;
+    int hit_point_limit;
+};
+
+#define RT_BREP_DRAW_OK 0
+#define RT_BREP_DRAW_PARTIAL 1
+#define RT_BREP_DRAW_ERROR -1
+#define RT_BREP_DRAW_LIMIT -2
+
+/** Initialize drawing options with safe bounded defaults. */
+RT_EXPORT extern void
+rt_brep_draw_options_default(struct rt_brep_draw_options *options);
+
+/** Draw bounded B-Rep wireframe edges and optional surface cues. */
+RT_EXPORT extern int
+rt_brep_plot_ex(struct bu_list *vhead, struct rt_db_internal *ip,
+	const struct bg_tess_tol *ttol, const struct bn_tol *tol,
+	const struct bview *info, const struct rt_brep_draw_options *options,
+	struct rt_brep_draw_report *report);
 RT_EXPORT extern int rt_brep_plot_poly(struct bu_list           *vhead,
 				       const struct directory   *dp,
 				       struct rt_db_internal     *ip,

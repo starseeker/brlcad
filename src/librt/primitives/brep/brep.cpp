@@ -31,22 +31,28 @@
 #include <cstdint>
 #include <limits>
 #include <vector>
+#include <atomic>
+#include <cmath>
 #include <list>
 #include <map>
 #include <mutex>
+#include <new>
 #include <stack>
 #include <iostream>
 #include <algorithm>
 #include <set>
 #include <utility>
+#include <condition_variable>
 
 #include "assert.h"
 
 #include "vmath.h"
 
 #include "bu/cv.h"
+#include "bu/env.h"
 #include "bu/opt.h"
 #include "bu/datetime.h"
+#include "bu/parallel.h"
 #include "brep.h"
 #include "bn/mat.h"
 #include "bn/dvec.h"
@@ -1877,16 +1883,16 @@ plot_face_from_surface_tree(struct bu_list *vlfree, struct bu_list *vhead, Surfa
 }
 
 static fastf_t
-brep_avg_curve_bbox_diagonal_len(ON_Brep *brep)
+brep_avg_curve_bbox_diagonal_len(const ON_Brep *brep)
 {
     fastf_t avg_curve_len = 0.0;
     int i, num_curves = 0;
 
     for (i = 0; i < brep->m_E.Count(); ++i) {
-	ON_BrepEdge &e = brep->m_E[i];
+	const ON_BrepEdge &e = brep->m_E[i];
 	const ON_Curve *crv = e.EdgeCurveOf();
 
-	if (!crv->IsLinear()) {
+	if (crv && !crv->IsLinear()) {
 	    ++num_curves;
 
 	    ON_BoundingBox bbox;
@@ -1899,9 +1905,16 @@ brep_avg_curve_bbox_diagonal_len(ON_Brep *brep)
 	    }
 	}
     }
-    avg_curve_len /= num_curves;
 
-    return avg_curve_len;
+    if (num_curves)
+	return avg_curve_len / num_curves;
+
+    const ON_BoundingBox bbox = brep->BoundingBox();
+    const double diagonal = bbox.IsValid() ? bbox.Diagonal().Length() : 0.0;
+    if (diagonal > ON_ZERO_TOLERANCE && std::isfinite(diagonal))
+	return diagonal;
+
+    return 1.0;
 }
 
 static fastf_t
@@ -1924,7 +1937,10 @@ rt_brep_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const st
     bi = (struct rt_brep_internal*)ip->idb_ptr;
     RT_BREP_CK_MAGIC(bi);
 
-    fastf_t point_spacing = solid_point_spacing(v, brep_est_avg_curve_len(bi) * M_2_PI * 2.0);
+    fastf_t point_spacing = solid_point_spacing(v,
+	brep_est_avg_curve_len(bi) * M_2_PI * 2.0);
+    if (!(point_spacing > BN_TOL_DIST) || !std::isfinite(point_spacing))
+	point_spacing = BN_TOL_DIST;
 
     ON_Brep* brep = bi->brep;
     int gridres = 10;
@@ -1934,7 +1950,7 @@ rt_brep_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const st
 	const ON_BrepFace& face = brep->m_F[index];
 	const ON_Surface *surf = face.SurfaceOf();
 
-	if (surf->IsClosed(0) || surf->IsClosed(1)) {
+	if (surf && (surf->IsClosed(0) || surf->IsClosed(1))) {
 	    ON_SumSurface *sumsurf = const_cast<ON_SumSurface *>(ON_SumSurface::Cast(surf));
 	    if (sumsurf != NULL) {
 		SurfaceTree st(&face, true, 2);
@@ -1953,6 +1969,8 @@ rt_brep_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const st
     for (int index = 0; index < bi->brep->m_E.Count(); index++) {
 	const ON_BrepEdge& e = brep->m_E[index];
 	const ON_Curve* crv = e.EdgeCurveOf();
+	if (!crv)
+	    continue;
 
 	if (crv->IsLinear()) {
 	    const ON_BrepVertex& v1 = brep->m_V[e.m_vi[0]];
@@ -1968,7 +1986,7 @@ rt_brep_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const st
 	    ON_3dPoint p = crv->PointAt(dom.ParameterAt(1.0));
 	    VMOVE(endpt, p);
 
-	    int min_linear_seg_count = crv->Degree() + 1;
+	    int min_linear_seg_count = std::max(2, crv->Degree() + 1);
 	    double max_domain_step = 1.0 / min_linear_seg_count;
 
 	    // specify first tentative segment t1 to t2
@@ -1981,17 +1999,26 @@ rt_brep_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const st
 	    // add segments until the minimum segment count is
 	    // achieved and the distance between the end of the last
 	    // segment and the endpoint is within point spacing
-	    for (int nsegs = 0; (nsegs < min_linear_seg_count) ||
-		     (DIST_PNT_PNT(pt1, endpt) > point_spacing); ++nsegs) {
+	    const int max_segments = 16384;
+	    for (int nsegs = 0; nsegs < max_segments && t1 < 1.0 &&
+		    ((nsegs < min_linear_seg_count) ||
+		     (DIST_PNT_PNT(pt1, endpt) > point_spacing)); ++nsegs) {
+		if (!(t2 > t1) || !std::isfinite(t2))
+		    break;
 		p = crv->PointAt(dom.ParameterAt(t2));
 		VMOVE(pt2, p);
 
 		// bring t2 increasingly closer to t1 until target
 		// point spacing is achieved
 		double step = t2 - t1;
-		while (DIST_PNT_PNT(pt1, pt2) > point_spacing) {
+		for (int refinement = 0;
+			DIST_PNT_PNT(pt1, pt2) > point_spacing &&
+			refinement < 64; refinement++) {
 		    step /= 2.0;
-		    t2 = t1 + step;
+		    const double next_t = t1 + step;
+		    if (!(next_t > t1) || !(next_t < t2))
+			break;
+		    t2 = next_t;
 		    p = crv->PointAt(dom.ParameterAt(t2));
 		    VMOVE(pt2, p);
 		}
@@ -2014,6 +2041,391 @@ rt_brep_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const st
 }
 
 
+struct brep_wire_edge_result {
+    std::vector<ON_3dPoint> points;
+    bool completed = false;
+    bool failed = false;
+};
+
+struct brep_wire_sample_control {
+    double chord_tolerance;
+    double cos_angle_tolerance;
+    int64_t deadline;
+    size_t max_points;
+    bool hit_time_limit = false;
+    bool hit_point_limit = false;
+};
+
+static const int BREP_WIRE_MAX_DEPTH = 32;
+static const size_t BREP_WIRE_MAX_EDGE_POINTS = 16384;
+static const int BREP_WIRE_SCALE_SAMPLES = 8;
+static const size_t BREP_WIRE_WORKER_STACK_BYTES =
+    (size_t)10 * 1024 * 1024;
+static const size_t BREP_WIRE_WORKER_ADDRESS_BYTES =
+    (size_t)16 * 1024 * 1024;
+#if defined(__GLIBC__)
+/* A glibc worker's first allocation may reserve a 128 MiB malloc arena in
+ * addition to its pthread stack.  It is sparse virtual space, but counts
+ * against RLIMIT_AS just like committed pages. */
+static const size_t BREP_WIRE_LIMITED_WORKER_ADDRESS_BYTES =
+    (size_t)160 * 1024 * 1024;
+#else
+static const size_t BREP_WIRE_LIMITED_WORKER_ADDRESS_BYTES =
+    (size_t)32 * 1024 * 1024;
+#endif
+static const size_t BREP_WIRE_ADDRESS_RESERVE_BYTES =
+    (size_t)32 * 1024 * 1024;
+
+static size_t
+brep_wire_address_headroom()
+{
+    const ssize_t available = bu_mem(BU_MEM_PROCESS_AVAIL, NULL);
+    return available >= 0 ? (size_t)available :
+	(std::numeric_limits<size_t>::max)();
+}
+
+static double
+brep_wire_curve_scale(const ON_Curve *curve, const ON_Interval &domain,
+	const ON_3dPoint &start, const ON_3dPoint &end)
+{
+    ON_3dPoint minimum = start;
+    ON_3dPoint maximum = start;
+    if (end.IsValid()) {
+	minimum.x = std::min(minimum.x, end.x);
+	minimum.y = std::min(minimum.y, end.y);
+	minimum.z = std::min(minimum.z, end.z);
+	maximum.x = std::max(maximum.x, end.x);
+	maximum.y = std::max(maximum.y, end.y);
+	maximum.z = std::max(maximum.z, end.z);
+    }
+
+    /* GetTightBoundingBox converts general curves to temporary NURBS and
+     * Bezier forms.  OpenNURBS does not reliably report allocation failure
+     * from that conversion, so address-space pressure can leave an invalid
+     * temporary knot array and crash.  A small fixed probe set is sufficient
+     * here: scale only selects a relative display tolerance, while recursive
+     * chord testing still finds curvature between probes. */
+    for (int sample = 1; sample < BREP_WIRE_SCALE_SAMPLES; sample++) {
+	const double fraction = (double)sample /
+	    (double)BREP_WIRE_SCALE_SAMPLES;
+	const ON_3dPoint point = curve->PointAt(domain.ParameterAt(fraction));
+	if (!point.IsValid())
+	    continue;
+	minimum.x = std::min(minimum.x, point.x);
+	minimum.y = std::min(minimum.y, point.y);
+	minimum.z = std::min(minimum.z, point.z);
+	maximum.x = std::max(maximum.x, point.x);
+	maximum.y = std::max(maximum.y, point.y);
+	maximum.z = std::max(maximum.z, point.z);
+    }
+
+    const double scale = minimum.DistanceTo(maximum);
+    return std::isfinite(scale) ? scale : start.DistanceTo(end);
+}
+
+static bool
+brep_wire_sample_segment(const ON_Curve *curve, double t0,
+	const ON_3dPoint &p0, double t1, const ON_3dPoint &p1, int depth,
+	std::vector<ON_3dPoint> &points, brep_wire_sample_control &control)
+{
+    if (control.deadline > 0 && bu_gettime() >= control.deadline) {
+	control.hit_time_limit = true;
+	return false;
+    }
+	if (points.size() >= control.max_points) {
+	control.hit_point_limit = true;
+	return false;
+    }
+    if (depth >= BREP_WIRE_MAX_DEPTH) {
+	control.hit_point_limit = true;
+	return false;
+    }
+
+    const double tm = (t0 + t1) * 0.5;
+    if (!std::isfinite(tm) || !(tm > t0) || !(tm < t1)) {
+	points.push_back(p1);
+	return true;
+    }
+    const ON_3dPoint pm = curve->PointAt(tm);
+    if (!pm.IsValid() || !p0.IsValid() || !p1.IsValid())
+	return false;
+
+    const ON_Line chord(p0, p1);
+    double deviation = p0.DistanceTo(p1) > ON_ZERO_TOLERANCE ?
+	pm.DistanceTo(chord.ClosestPointTo(pm)) : pm.DistanceTo(p0);
+    bool flat = deviation <= control.chord_tolerance;
+    if (flat && control.cos_angle_tolerance > -1.0) {
+	const ON_3dVector first = pm - p0;
+	const ON_3dVector second = p1 - pm;
+	const double lengths = first.Length() * second.Length();
+	if (lengths > ON_ZERO_TOLERANCE)
+	    flat = (first * second) / lengths >= control.cos_angle_tolerance;
+    }
+    if (flat) {
+	points.push_back(p1);
+	return true;
+    }
+
+    if (!brep_wire_sample_segment(curve, t0, p0, tm, pm, depth + 1,
+	    points, control))
+	return false;
+    return brep_wire_sample_segment(curve, tm, pm, t1, p1, depth + 1,
+	points, control);
+}
+
+static bool
+brep_wire_sample_edge(const ON_BrepEdge &edge,
+	const struct bg_tess_tol *ttol, const struct bn_tol *tol,
+	int64_t deadline, size_t max_points, std::vector<ON_3dPoint> &points,
+	bool *hit_time_limit, bool *hit_point_limit)
+{
+    const ON_Curve *curve = edge.EdgeCurveOf();
+    if (!curve)
+	return false;
+    const ON_Interval domain = curve->Domain();
+    if (!domain.IsIncreasing())
+	return false;
+    const ON_3dPoint start = curve->PointAt(domain.Min());
+    const ON_3dPoint end = curve->PointAt(domain.Max());
+    if (!start.IsValid() || !end.IsValid())
+	return false;
+    points.push_back(start);
+    if (curve->IsLinear()) {
+	points.push_back(end);
+	return true;
+    }
+
+    const double scale = brep_wire_curve_scale(curve, domain, start, end);
+    double chord_tolerance = std::max(tol->dist, ttol->abs);
+	if (ttol->rel > 0.0) {
+	chord_tolerance = std::max(chord_tolerance, ttol->rel * scale);
+	}
+	if (!(chord_tolerance > 0.0) || !std::isfinite(chord_tolerance)) {
+	chord_tolerance = std::max(BN_TOL_DIST, scale * 0.01);
+	}
+
+	brep_wire_sample_control control = {
+	chord_tolerance,
+	(ttol->norm > 0.0) ? cos(ttol->norm) : -1.0,
+	deadline,
+	max_points
+    };
+    bool success = brep_wire_sample_segment(curve, domain.Min(), start,
+	domain.Max(), end, 0, points, control);
+    *hit_time_limit = control.hit_time_limit;
+    *hit_point_limit = control.hit_point_limit;
+    return success && points.size() > 1;
+}
+
+struct brep_wire_parallel_state {
+    const ON_Brep *brep = NULL;
+    const struct bg_tess_tol *ttol = NULL;
+    const struct bn_tol *tol = NULL;
+    std::vector<brep_wire_edge_result> *results = NULL;
+    std::atomic<int> next_edge = 0;
+    std::atomic<bool> stop = false;
+    std::atomic<bool> hit_time_limit = false;
+    std::atomic<bool> hit_memory_limit = false;
+    std::atomic<bool> hit_point_limit = false;
+    size_t max_result_bytes = 0;
+    size_t max_points = 0;
+    size_t max_edge_points = 0;
+    bool edge_work_limited = false;
+    int64_t deadline = 0;
+    std::mutex commit_mutex;
+    std::condition_variable commit_ready;
+    int next_commit_edge = 0;
+    size_t result_bytes = 0;
+    size_t result_points = 0;
+};
+
+static bool
+brep_wire_commit_edge(brep_wire_parallel_state *state, int edge_index,
+	bool sampled, bool hit_time_limit, bool hit_point_limit)
+{
+    brep_wire_edge_result &result =
+	(*state->results)[(size_t)edge_index];
+    std::unique_lock<std::mutex> lock(state->commit_mutex);
+    state->commit_ready.wait(lock, [state, edge_index]() {
+	return state->stop.load() || state->next_commit_edge == edge_index;
+    });
+    if (state->stop.load()) {
+	std::vector<ON_3dPoint>().swap(result.points);
+	return false;
+    }
+
+    if (!sampled) {
+	result.failed = true;
+	std::vector<ON_3dPoint>().swap(result.points);
+	if (hit_time_limit) {
+	    state->hit_time_limit = true;
+	    state->stop = true;
+	}
+	if (hit_point_limit)
+	    state->hit_point_limit = true;
+	if (hit_point_limit && state->edge_work_limited)
+	    state->hit_memory_limit = true;
+	state->next_commit_edge++;
+	lock.unlock();
+	state->commit_ready.notify_all();
+	return !state->stop.load();
+    }
+
+    const size_t point_count = result.points.size();
+    const size_t point_bytes = sizeof(ON_3dPoint) + sizeof(point_t) +
+	sizeof(int);
+    const bool byte_overflow = point_count > SIZE_MAX / point_bytes;
+    const size_t bytes = byte_overflow ? SIZE_MAX :
+	point_count * point_bytes;
+    if (byte_overflow || state->result_bytes > state->max_result_bytes ||
+	    bytes > state->max_result_bytes - state->result_bytes) {
+	state->hit_memory_limit = true;
+	state->stop = true;
+	result.failed = true;
+	std::vector<ON_3dPoint>().swap(result.points);
+	lock.unlock();
+	state->commit_ready.notify_all();
+	return false;
+    }
+    if (state->result_points > state->max_points ||
+	    point_count > state->max_points - state->result_points) {
+	state->hit_point_limit = true;
+	state->stop = true;
+	result.failed = true;
+	std::vector<ON_3dPoint>().swap(result.points);
+	lock.unlock();
+	state->commit_ready.notify_all();
+	return false;
+    }
+
+    state->result_bytes += bytes;
+    state->result_points += point_count;
+    result.completed = true;
+    state->next_commit_edge++;
+    lock.unlock();
+    state->commit_ready.notify_all();
+    return true;
+}
+
+static void
+brep_wire_edge_worker(int UNUSED(cpu), void *data)
+{
+    brep_wire_parallel_state *state = (brep_wire_parallel_state *)data;
+    const int edge_count = state->brep->m_E.Count();
+    for (;;) {
+	if (state->stop.load())
+	    return;
+	const int edge_index = state->next_edge.fetch_add(1);
+	if (edge_index >= edge_count)
+	    return;
+	brep_wire_edge_result &result = (*state->results)[(size_t)edge_index];
+	bool hit_time_limit = state->deadline > 0 &&
+	    bu_gettime() >= state->deadline;
+	bool hit_point_limit = false;
+	bool sampled = false;
+	try {
+	    if (!hit_time_limit)
+		sampled = brep_wire_sample_edge(state->brep->m_E[edge_index],
+		    state->ttol, state->tol, state->deadline,
+		    state->max_edge_points, result.points, &hit_time_limit,
+		    &hit_point_limit);
+	} catch (...) {
+	    state->hit_memory_limit = true;
+	    state->stop = true;
+	    result.failed = true;
+	    std::vector<ON_3dPoint>().swap(result.points);
+	    state->commit_ready.notify_all();
+	    return;
+	}
+	if (!brep_wire_commit_edge(state, edge_index, sampled,
+		hit_time_limit, hit_point_limit))
+	    return;
+    }
+}
+
+static size_t
+brep_wire_vlist_points(const struct bu_list *head)
+{
+    size_t count = 0;
+    const struct bv_vlist *vlist;
+    for (BU_LIST_FOR(vlist, bv_vlist, head))
+	count += vlist->nused;
+    return count;
+}
+
+/* Surface cues are optional display aids.  Their trimming hierarchy is
+ * temporary working state, so give it a peak-memory policy independent of
+ * retained line output.  CurveTree translates this byte budget using its
+ * actual node representation rather than exposing an arbitrary node count. */
+static const size_t BREP_WIRE_DEFAULT_WORKING_BYTES =
+    (size_t)64 * 1024 * 1024;
+
+static double
+brep_wire_face_feature_size(const ON_BrepFace &face,
+	const struct bg_tess_tol *ttol, const struct bn_tol *tol)
+{
+    ON_BoundingBox bbox = ON_BoundingBox::EmptyBoundingBox;
+    std::set<const ON_BrepEdge *> sampled_edges;
+    for (int loop_index = 0; loop_index < face.LoopCount(); loop_index++) {
+	const ON_BrepLoop *loop = face.Loop(loop_index);
+	if (!loop)
+	    continue;
+	for (int trim_index = 0; trim_index < loop->TrimCount(); trim_index++) {
+	    const ON_BrepTrim *trim = loop->Trim(trim_index);
+	    const ON_BrepEdge *edge = trim ? trim->Edge() : NULL;
+	    if (!edge || !sampled_edges.insert(edge).second)
+		continue;
+	    const ON_Interval domain = edge->Domain();
+	    const int samples = std::max(8,
+		std::min(256, edge->SpanCount() * 2));
+	    for (int sample = 0; sample <= samples; sample++) {
+		const ON_3dPoint point = edge->PointAt(domain.ParameterAt(
+		    (double)sample / (double)samples));
+		if (!point.IsValid())
+		    continue;
+		if (bbox.IsValid())
+		    bbox.Set(point, true);
+		else
+		    bbox = ON_BoundingBox(point, point);
+	    }
+	}
+    }
+
+    double scale = 0.0;
+    if (!bbox.IsValid())
+	face.GetBoundingBox(bbox, false);
+    if (bbox.IsValid())
+	scale = bbox.Diagonal().Length();
+
+    double feature_size = tol->dist;
+    if (ttol->abs > 0.0)
+	feature_size = std::max(feature_size, ttol->abs);
+    if (ttol->rel > 0.0 && scale > ON_ZERO_TOLERANCE &&
+	    std::isfinite(scale))
+	feature_size = std::max(feature_size, ttol->rel * scale);
+    if (!(feature_size > 0.0) || !std::isfinite(feature_size))
+	feature_size = BN_TOL_DIST;
+    return feature_size;
+}
+
+void
+rt_brep_draw_options_default(struct rt_brep_draw_options *options)
+{
+    if (!options)
+	return;
+    options->max_workers = std::min((size_t)8, bu_avail_cpus());
+    if (!options->max_workers)
+	options->max_workers = 1;
+    options->max_result_bytes = (size_t)256 * 1024 * 1024;
+    options->max_working_bytes = BREP_WIRE_DEFAULT_WORKING_BYTES;
+    options->max_points = (size_t)4 * 1024 * 1024;
+    options->max_time_ms = 0;
+    options->include_surface_cues = 1;
+    options->item_status = NULL;
+    options->item_status_data = NULL;
+}
+
+
 /**
  * There are several ways to visualize NURBS surfaces, depending on
  * the purpose.  For "normal" wireframe viewing, the ideal approach is
@@ -2030,70 +2442,324 @@ rt_brep_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const st
  *
  */
 int
-rt_brep_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *tol, const struct bview *UNUSED(info))
+rt_brep_plot_ex(struct bu_list *vhead, struct rt_db_internal *ip,
+	const struct bg_tess_tol *ttol, const struct bn_tol *tol,
+	const struct bview *UNUSED(info),
+	const struct rt_brep_draw_options *user_options,
+	struct rt_brep_draw_report *report)
 {
     TRACE1("rt_brep_plot");
-    struct rt_brep_internal* bi;
-    int i;
+
+    if (!vhead || !ip || !ttol || !tol)
+	return RT_BREP_DRAW_ERROR;
+    if (report)
+	memset(report, 0, sizeof(*report));
 
     BU_CK_LIST_HEAD(vhead);
     RT_CK_DB_INTERNAL(ip);
     struct bu_list *vlfree = &rt_vlfree;
-    bi = (struct rt_brep_internal*)ip->idb_ptr;
+    struct rt_brep_internal *bi = (struct rt_brep_internal *)ip->idb_ptr;
     RT_BREP_CK_MAGIC(bi);
 
-    ON_Brep* brep = bi->brep;
-    int gridres = 10;
-    int isocurveres = 100;
+    const ON_Brep *brep = bi->brep;
+    struct rt_brep_draw_options options;
+    rt_brep_draw_options_default(&options);
+    if (user_options) {
+	if (user_options->max_workers)
+	    options.max_workers = user_options->max_workers;
+	if (user_options->max_result_bytes)
+	    options.max_result_bytes = user_options->max_result_bytes;
+	if (user_options->max_working_bytes)
+	    options.max_working_bytes = user_options->max_working_bytes;
+	if (user_options->max_points)
+	    options.max_points = user_options->max_points;
+	options.max_time_ms = user_options->max_time_ms;
+	options.include_surface_cues = user_options->include_surface_cues;
+	options.item_status = user_options->item_status;
+	options.item_status_data = user_options->item_status_data;
+    }
 
-    for (int index = 0; index < brep->m_F.Count(); index++) {
-	const ON_BrepFace& face = brep->m_F[index];
-	const ON_Surface *surf = face.SurfaceOf();
+    const int edge_count = brep->m_E.Count();
+    options.max_workers = std::max((size_t)1,
+	std::min(options.max_workers, (size_t)std::max(1, edge_count)));
 
-	if (surf != NULL) {
-	    if (surf->IsClosed(0) || surf->IsClosed(1)) {
-		ON_SumSurface *sumsurf = const_cast<ON_SumSurface *>(ON_SumSurface::Cast(surf));
-		if (sumsurf != NULL) {
-		    SurfaceTree st(&face, true, 2);
-		    plot_face_from_surface_tree(vlfree, vhead, &st, isocurveres, gridres);
-		} else {
-		    ON_RevSurface *revsurf = const_cast<ON_RevSurface *>(ON_RevSurface::Cast(surf));
+    /* A pthread launched by bu_parallel currently reserves a 10 MiB stack.
+     * Curve evaluation also needs transient address space that is not
+     * represented by the sampled-point vectors.  Include both in the shared
+     * working policy, and honor a finite process address-space limit when the
+     * platform exposes one.  bu_parallel runs serially on the caller for one
+     * worker, but launches every worker as a child thread for larger counts. */
+    const size_t address_headroom = brep_wire_address_headroom();
+    const bool finite_address_headroom = address_headroom !=
+	(std::numeric_limits<size_t>::max)();
+    if (finite_address_headroom) {
+	const size_t safe_headroom = address_headroom >
+	    BREP_WIRE_ADDRESS_RESERVE_BYTES ?
+	    address_headroom - BREP_WIRE_ADDRESS_RESERVE_BYTES : 0;
+	options.max_working_bytes = std::min(options.max_working_bytes,
+	    safe_headroom);
+    }
+    const size_t worker_address_reservation = finite_address_headroom ?
+	BREP_WIRE_LIMITED_WORKER_ADDRESS_BYTES :
+	BREP_WIRE_WORKER_ADDRESS_BYTES;
+    const size_t worker_budget = options.max_working_bytes /
+	worker_address_reservation;
+    if (worker_budget < 2)
+	options.max_workers = 1;
+    else
+	options.max_workers = std::min(options.max_workers, worker_budget);
 
-		    if (revsurf != NULL) {
-			SurfaceTree st(&face, true, 0);
-			plot_face_from_surface_tree(vlfree, vhead, &st, isocurveres, gridres);
-		    }
+    const size_t worker_address_bytes = options.max_workers > 1 ?
+	options.max_workers * BREP_WIRE_WORKER_STACK_BYTES : 0;
+    const size_t edge_working_bytes = options.max_working_bytes >
+	worker_address_bytes ?
+	options.max_working_bytes - worker_address_bytes : 0;
+    const size_t min_edge_working_bytes =
+	2 * sizeof(ON_3dPoint) * (size_t)2;
+    const size_t budget_workers = edge_working_bytes /
+	min_edge_working_bytes;
+    if (budget_workers > 0)
+	options.max_workers = std::min(options.max_workers, budget_workers);
+    const size_t per_worker_bytes = edge_working_bytes /
+	options.max_workers;
+    size_t max_edge_points = per_worker_bytes /
+	(2 * sizeof(ON_3dPoint));
+    max_edge_points = std::min(max_edge_points,
+	(size_t)BREP_WIRE_MAX_EDGE_POINTS);
+    if (max_edge_points < 2)
+	max_edge_points = 2;
+    const bool edge_work_limited = max_edge_points <
+	(size_t)BREP_WIRE_MAX_EDGE_POINTS;
+    int64_t deadline = 0;
+    if (options.max_time_ms > 0) {
+	const int64_t now = bu_gettime();
+	const int64_t max_delta = std::numeric_limits<int64_t>::max() - now;
+	const int64_t requested = (int64_t)options.max_time_ms;
+	const int64_t delta = requested > max_delta / 1000 ?
+	    max_delta : requested * 1000;
+	deadline = now + delta;
+    }
+
+    std::vector<brep_wire_edge_result> edge_results((size_t)edge_count);
+    bool hit_time_limit = false;
+    bool hit_memory_limit = false;
+    bool hit_point_limit = false;
+    size_t result_bytes = 0;
+    if (edge_count > 0) {
+	brep_wire_parallel_state state;
+	state.brep = brep;
+	state.ttol = ttol;
+	state.tol = tol;
+	state.results = &edge_results;
+	state.max_result_bytes = options.max_result_bytes;
+	state.max_points = options.max_points;
+	state.max_edge_points = max_edge_points;
+	state.edge_work_limited = edge_work_limited;
+	state.deadline = deadline;
+	bu_parallel(brep_wire_edge_worker, options.max_workers, &state);
+	/* bu_parallel cannot report thread-creation failure.  Its workers use
+	 * self-dispatch, so the caller can safely finish any untouched work when
+	 * the platform could not launch even one worker. */
+	if (!state.stop.load() && state.next_edge.load() < edge_count)
+	    brep_wire_edge_worker(0, &state);
+	hit_time_limit = state.hit_time_limit.load();
+	hit_memory_limit = state.hit_memory_limit.load();
+	hit_point_limit = state.hit_point_limit.load();
+	result_bytes = state.result_bytes;
+    }
+
+    int completed_edges = 0;
+    size_t output_points = 0;
+    for (int edge_index = 0; edge_index < edge_count; edge_index++) {
+	brep_wire_edge_result &result = edge_results[(size_t)edge_index];
+	if (!result.completed) {
+	    if (options.item_status)
+		options.item_status(RT_BREP_DRAW_EDGE, edge_index,
+		    result.failed ? RT_BREP_DRAW_ITEM_FAILED :
+		    RT_BREP_DRAW_ITEM_NOT_PROCESSED,
+		    options.item_status_data);
+	    continue;
+	}
+	completed_edges++;
+	if (options.item_status)
+	    options.item_status(RT_BREP_DRAW_EDGE, edge_index,
+		RT_BREP_DRAW_ITEM_COMPLETED, options.item_status_data);
+	for (size_t point_index = 0; point_index < result.points.size();
+		point_index++) {
+	    point_t point;
+	    VMOVE(point, result.points[point_index]);
+	    BV_ADD_VLIST(vlfree, vhead, point,
+		point_index ? BV_VLIST_LINE_DRAW : BV_VLIST_LINE_MOVE);
+	    output_points++;
+	}
+	std::vector<ON_3dPoint>().swap(result.points);
+    }
+
+    std::vector<int> surface_cue_faces;
+    if (options.include_surface_cues) {
+	for (int face_index = 0; face_index < brep->m_F.Count(); face_index++) {
+	    const ON_Surface *surface = brep->m_F[face_index].SurfaceOf();
+	    if (!surface || (!surface->IsClosed(0) && !surface->IsClosed(1)))
+		continue;
+	    if (ON_SumSurface::Cast(surface) || ON_RevSurface::Cast(surface))
+		surface_cue_faces.push_back(face_index);
+	}
+    }
+
+    int completed_surface_cues = 0;
+    int approximated_surface_cues = 0;
+    int memory_approximated_surface_cues = 0;
+    int time_approximated_surface_cues = 0;
+    std::vector<int> surface_cue_status((size_t)brep->m_F.Count(),
+	RT_BREP_DRAW_ITEM_NOT_PROCESSED);
+    for (size_t cue_index = 0; cue_index < surface_cue_faces.size();
+	    ++cue_index) {
+	const int face_index = surface_cue_faces[cue_index];
+	if (hit_memory_limit || hit_point_limit)
+	    break;
+	const int64_t cue_start = bu_gettime();
+	if (deadline > 0 && cue_start >= deadline) {
+	    hit_time_limit = true;
+	    break;
+	}
+	int64_t cue_deadline = 0;
+	if (deadline > 0) {
+	    const int64_t remaining_time = deadline - cue_start;
+	    const size_t remaining_cues = surface_cue_faces.size() -
+		cue_index;
+	    const int64_t fair_share = std::max((int64_t)1,
+		remaining_time / (int64_t)remaining_cues);
+	    const int64_t exact_share = fair_share - fair_share / 4;
+	    cue_deadline = std::min(deadline, cue_start +
+		std::max((int64_t)1, exact_share));
+	}
+	struct bu_list face_vhead;
+	BU_LIST_INIT(&face_vhead);
+	bool approximated = false;
+	bool time_approximated = false;
+	bool memory_approximated = false;
+	try {
+	    const ON_BrepFace &face = brep->m_F[face_index];
+	    const ON_Surface *surface = face.SurfaceOf();
+	    const int tree_depth = ON_SumSurface::Cast(surface) ? 2 : 0;
+	    const double min_feature_size = brep_wire_face_feature_size(face,
+		ttol, tol);
+	    SurfaceTree tree(&face, true, tree_depth,
+		BREP_EDGE_MISS_TOLERANCE, options.max_working_bytes,
+		min_feature_size, cue_deadline);
+	    if (tree.Valid()) {
+		plot_face_from_surface_tree(vlfree, &face_vhead, &tree, 100, 10);
+	    } else if (tree.CurveTreeLimitReached()) {
+		/* Preserve exact B-Rep edges and retain a bounded surface cue
+		 * over the face's trim-parameter envelope.  This deliberately
+		 * omits unreliable hole/outer-loop classification and is tagged
+		 * as an approximation for callers that need provenance. */
+		SurfaceTree fallback(&face, false, tree_depth,
+		    BREP_EDGE_MISS_TOLERANCE);
+		if (!fallback.Valid()) {
+		    surface_cue_status[(size_t)face_index] =
+			RT_BREP_DRAW_ITEM_FAILED;
+		    continue;
 		}
+		plot_face_from_surface_tree(vlfree, &face_vhead, &fallback,
+		    100, 10);
+		approximated = true;
+		time_approximated = tree.CurveTreeTimeLimitReached();
+		memory_approximated = !time_approximated;
+	    } else {
+		surface_cue_status[(size_t)face_index] =
+		    RT_BREP_DRAW_ITEM_FAILED;
+		continue;
 	    }
+	} catch (...) {
+	    BV_FREE_VLIST(vlfree, &face_vhead);
+	    surface_cue_status[(size_t)face_index] =
+		RT_BREP_DRAW_ITEM_FAILED;
+	    continue;
+	}
+
+	const size_t cue_points = brep_wire_vlist_points(&face_vhead);
+	const size_t cue_bytes = cue_points * (sizeof(point_t) + sizeof(int));
+	if (output_points + cue_points > options.max_points) {
+	    hit_point_limit = true;
+	    BV_FREE_VLIST(vlfree, &face_vhead);
+	    surface_cue_status[(size_t)face_index] =
+		RT_BREP_DRAW_ITEM_FAILED;
+	    break;
+	}
+	if (result_bytes + cue_bytes > options.max_result_bytes) {
+	    hit_memory_limit = true;
+	    BV_FREE_VLIST(vlfree, &face_vhead);
+	    surface_cue_status[(size_t)face_index] =
+		RT_BREP_DRAW_ITEM_FAILED;
+	    break;
+	}
+	BU_LIST_APPEND_LIST(vhead, &face_vhead);
+	output_points += cue_points;
+	result_bytes += cue_bytes;
+	if (approximated) {
+	    approximated_surface_cues++;
+	    time_approximated_surface_cues += time_approximated ? 1 : 0;
+	    memory_approximated_surface_cues += memory_approximated ? 1 : 0;
+	    surface_cue_status[(size_t)face_index] =
+		RT_BREP_DRAW_ITEM_APPROXIMATED;
 	} else {
-	    bu_log("Surface index %d not defined.\n", index);
+	    completed_surface_cues++;
+	    surface_cue_status[(size_t)face_index] =
+		RT_BREP_DRAW_ITEM_COMPLETED;
 	}
     }
 
-    {
-	for (i = 0; i < bi->brep->m_E.Count(); i++) {
-	    int j = 0;
-	    int pnt_cnt = 0;
-	    ON_3dPoint p;
-	    point_t pt1 = VINIT_ZERO;
-	    ON_Polyline poly;
-	    const ON_BrepEdge& e = brep->m_E[i];
-	    const ON_Curve* crv = e.EdgeCurveOf();
-	    pnt_cnt = ON_Curve_PolyLine_Approx(&poly, crv, tol->dist);
-	    if (pnt_cnt > 1) {
-		p = poly[0];
-		VMOVE(pt1, p);
-		BV_ADD_VLIST(vlfree, vhead, pt1, BV_VLIST_LINE_MOVE);
-		for (j = 1; j < pnt_cnt; j++) {
-		    p = poly[j];
-		    VMOVE(pt1, p);
-		    BV_ADD_VLIST(vlfree, vhead, pt1, BV_VLIST_LINE_DRAW);
-		}
-	    }
-	}
+    if (options.item_status) {
+	for (int face_index : surface_cue_faces)
+	    options.item_status(RT_BREP_DRAW_SURFACE_CUE, face_index,
+		surface_cue_status[(size_t)face_index],
+		options.item_status_data);
     }
 
-    return 0;
+    if (report) {
+	report->requested_edges = edge_count;
+	report->completed_edges = completed_edges;
+	report->failed_edges = edge_count - completed_edges;
+	report->requested_surface_cues = (int)surface_cue_faces.size();
+	report->completed_surface_cues = completed_surface_cues;
+	report->approximated_surface_cues = approximated_surface_cues;
+	report->memory_approximated_surface_cues =
+	    memory_approximated_surface_cues;
+	report->time_approximated_surface_cues =
+	    time_approximated_surface_cues;
+	report->output_points = output_points;
+	report->result_bytes = result_bytes;
+	report->hit_time_limit = hit_time_limit;
+	report->hit_memory_limit = hit_memory_limit;
+	report->hit_point_limit = hit_point_limit;
+    }
+
+    const bool hit_limit = hit_time_limit || hit_memory_limit ||
+	hit_point_limit;
+    if (!output_points)
+	return hit_limit ? RT_BREP_DRAW_LIMIT : RT_BREP_DRAW_ERROR;
+    if (hit_limit)
+	return RT_BREP_DRAW_LIMIT;
+    if (completed_edges != edge_count ||
+	    completed_surface_cues != (int)surface_cue_faces.size())
+	return RT_BREP_DRAW_PARTIAL;
+    return RT_BREP_DRAW_OK;
+}
+
+
+int
+rt_brep_plot(struct bu_list *vhead, struct rt_db_internal *ip,
+	const struct bg_tess_tol *ttol, const struct bn_tol *tol,
+	const struct bview *info)
+{
+    struct rt_brep_draw_options options;
+    struct rt_brep_draw_report report;
+    rt_brep_draw_options_default(&options);
+    int ret = rt_brep_plot_ex(vhead, ip, ttol, tol, info, &options,
+	&report);
+    return (ret == RT_BREP_DRAW_OK || ret == RT_BREP_DRAW_PARTIAL ||
+	(ret == RT_BREP_DRAW_LIMIT && report.output_points > 0)) ? 0 : -1;
 }
 
 
