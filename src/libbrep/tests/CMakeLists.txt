@@ -8,6 +8,11 @@ brlcad_add_test(NAME brep_ppx COMMAND test_brep_ppx)
 brlcad_addexec(test_brep_assembly assembly.cpp "libbrep" TEST)
 brlcad_add_test(NAME brep_assembly COMMAND test_brep_assembly)
 
+# Display curve trees stop once a trim feature is below model-space display
+# tolerance, before their independent working-memory guard is needed.
+brlcad_addexec(test_brep_curvetree_display brep_curvetree_display.cpp "libbrep" TEST)
+brlcad_add_test(NAME brep_curvetree_display COMMAND test_brep_curvetree_display)
+
 # Standalone CDT hole-triangulation tests: verify that bg_nested_poly_triangulate
 # produces no triangles whose centroid falls inside a hole polygon, for two
 # faces from the NIST MBE PMI sample that are known to have multiple holes.
@@ -33,6 +38,7 @@ cmakefiles(
   brep_cdt_invalid.cpp
   brep_cdt_hole_face17.c
   brep_cdt_hole_face27.c
+  brep_curvetree_display.cpp
   brep_cdt_mesh.cpp
   cyl_hole.g
   cyls_holes.g
