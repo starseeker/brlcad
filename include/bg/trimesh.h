@@ -85,6 +85,20 @@ BG_EXPORT extern int bg_trimesh_manifold_closed(int vcnt, int fcnt, fastf_t *v, 
 BG_EXPORT extern int bg_trimesh_oriented(int vcnt, int fcnt, fastf_t *v, int *f);
 
 /**
+ * Check whether the bundled Manifold library accepts an indexed triangle
+ * mesh and returns a topologically equivalent closed mesh.  This is a
+ * read-only certification check; it does not expose Manifold's normalized
+ * output or perform a Boolean union.
+ *
+ * @return 1 if accepted and independently validated, 0 otherwise.
+ *
+ * Invalid or resource-exhausted inputs also return 0; C++ exceptions are not
+ * propagated across this C API.
+ */
+BG_EXPORT extern int bg_trimesh_manifold_accepted(int vcnt, int fcnt,
+	const fastf_t *v, const int *f);
+
+/**
  * Check if a mesh is topologically solid. Returns 1 if the mesh is NOT SOLID
  * and 0 if the mesh is SOLID. A SOLID (0) outcome indicates the mesh satisfies
  * all three criteria:  Closed, Manifold, Oriented.  If @p bedges is non-NULL,
@@ -570,6 +584,103 @@ bg_trimesh_repair(
 	const int *ifaces, int n_ifaces,
 	const point_t *ipnts, int n_ipnts,
 	struct bg_trimesh_repair_opts *opts);
+
+
+/**
+ * Conservative controls for triangle mesh repair.
+ *
+ * Unlike the legacy bg_trimesh_repair_opts interface, component removal and
+ * hole filling are disabled unless their corresponding flags are set.  A
+ * zero vertex_tolerance selects 1e-8 times the input bounding-box diagonal.
+ * Absolute area limits take precedence over percentage limits.  A zero area
+ * limit with fill_holes enabled permits holes of any area, subject to
+ * max_hole_edges.  A zero max_hole_edges permits any boundary length.
+ * union_components requests a regularized Manifold union of closed output
+ * components, resolving compatible bounded overlaps; it is disabled by
+ * default because it may change connectivity and triangulation.
+ * separate_touching_vertices moves disconnected duplicate-coordinate fans
+ * apart along their area-weighted normals by no more than vertex_tolerance.
+ * It is disabled by default because it changes vertex positions.
+ * allow_self_intersections permits hole caps and repaired surfaces to cross;
+ * topological solid, orientation, degeneracy, and vertex-link checks remain
+ * mandatory.  require_manifold verifies that the bundled Manifold library can
+ * import the final indexed mesh.  Both policies are disabled by default.
+ */
+struct bg_trimesh_repair_settings {
+    fastf_t vertex_tolerance;
+    int remove_small_components;
+    fastf_t max_component_area;
+    fastf_t max_component_area_percent;
+    int fill_holes;
+    fastf_t max_hole_area;
+    fastf_t max_hole_area_percent;
+    size_t max_hole_edges;
+    int max_iterations;
+    int separate_touching_vertices;
+    int union_components;
+    int allow_self_intersections;
+    int require_manifold;
+    int require_solid;
+};
+
+#define BG_TRIMESH_REPAIR_SETTINGS_INIT {0.0, 0, 0.0, 0.0, 0, 0.0, 0.0, 0, 10, 0, 0, 0, 0, 1}
+
+/** Summary of the operations performed by bg_trimesh_repair_ex. */
+struct bg_trimesh_repair_report {
+    int input_vertices;
+    int input_faces;
+    int output_vertices;
+    int output_faces;
+    int removed_faces;
+    int added_faces;
+    int repair_iterations;
+    int separated_vertices;
+    int component_union_applied;
+    int manifold_normalization_applied;
+    int self_intersections_allowed;
+    int manifold_accepted;
+    int solid;
+    int rejected_hole_faces;
+    int geometric_degenerate_faces;
+    int unmatched_edges;
+    int excess_edges;
+    int misoriented_edges;
+    int invalid_vertex_links;
+    int reoriented_faces;
+    fastf_t input_area;
+    fastf_t output_area;
+    fastf_t output_volume;
+    fastf_t max_vertex_displacement;
+    /** An allocation failure prevented completion of the repair attempt. */
+    int allocation_failed;
+};
+
+#define BG_TRIMESH_REPAIR_REPORT_INIT {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0}
+
+/**
+ * Attempt a bounded, explicitly configured triangle mesh repair.
+ *
+ * Unless separate_touching_vertices is enabled, current operations preserve
+ * input vertex positions: welding selects an existing representative,
+ * topology splitting duplicates an existing point, and hole filling
+ * triangulates existing boundary vertices.  The report records the maximum
+ * displacement when point-contact separation is requested.
+ *
+ * @return 1 if the input was already solid, 0 if repair produced an accepted
+ * output, and -1 on invalid input or if the requested postconditions were not
+ * satisfied.  On return 1, the output pointers remain NULL and their counts
+ * remain zero unless topology normalization required an exported copy.
+ * Allocation and library exceptions are converted to return value -1.
+ * The report distinguishes allocation failure from geometric rejection.
+ */
+BG_EXPORT extern int
+bg_trimesh_repair_ex(
+	int **ofaces, int *n_ofaces,
+	point_t **opnts, int *n_opnts,
+	const int *ifaces, int n_ifaces,
+	const point_t *ipnts, int n_ipnts,
+	const struct bg_trimesh_repair_settings *settings,
+	struct bg_trimesh_repair_report *report);
 
 
 /**

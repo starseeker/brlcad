@@ -28,11 +28,14 @@
 #include <string.h>
 
 #include <array>
+#include <memory>
 #include <vector>
+#include <Mathematics/MeshHoleFilling.h>
+#include <Mathematics/MeshPreprocessing.h>
+#include <Mathematics/MeshRepair.h>
 
 #include "bu.h"
 #include "bg.h"
-#include "Mathematics/MeshRepair.h"
 
 /* --------------------------------------------------------------------------
  * Test geometry helpers
@@ -174,6 +177,104 @@ test_tet_already_solid(void)
     return 0;
 }
 
+/* The public acceptance check must exercise the bundled Manifold importer
+ * without repairing or normalizing the caller's arrays. */
+static int
+test_manifold_acceptance_check(void)
+{
+    point_t *closed_points;
+    int closed_point_count;
+    int *closed_faces;
+    int closed_face_count;
+    make_cube(&closed_points, &closed_point_count, &closed_faces,
+	&closed_face_count);
+    point_t *open_points;
+    int open_point_count;
+    int *open_faces;
+    int open_face_count;
+    make_open_cube(&open_points, &open_point_count, &open_faces,
+	&open_face_count);
+    int invalid_faces[36];
+    memcpy(invalid_faces, closed_faces, sizeof(invalid_faces));
+    invalid_faces[0] = closed_point_count;
+    std::vector<int> reversed_faces((size_t)closed_face_count * 3);
+    for (int face = 0; face < closed_face_count; ++face) {
+	reversed_faces[(size_t)face * 3] = closed_faces[(size_t)face * 3];
+	reversed_faces[(size_t)face * 3 + 1] =
+	    closed_faces[(size_t)face * 3 + 2];
+	reversed_faces[(size_t)face * 3 + 2] =
+	    closed_faces[(size_t)face * 3 + 1];
+    }
+
+    const bool valid = bg_trimesh_manifold_accepted(closed_point_count,
+	closed_face_count, (fastf_t *)closed_points, closed_faces) == 1 &&
+	bg_trimesh_manifold_accepted(closed_point_count, closed_face_count,
+	    (fastf_t *)closed_points, reversed_faces.data()) == 1 &&
+	bg_trimesh_manifold_accepted(open_point_count, open_face_count,
+	    (fastf_t *)open_points, open_faces) == 0 &&
+	bg_trimesh_manifold_accepted(closed_point_count, closed_face_count,
+	    (fastf_t *)closed_points, invalid_faces) == 0;
+    if (!valid) {
+	bu_log("FAIL test_manifold_acceptance_check\n");
+	return -1;
+    }
+    bu_log("PASS test_manifold_acceptance_check\n");
+    return 0;
+}
+
+/* A closed orientable mesh with inconsistent local winding needs no
+ * geometric repair.  Synchronize only triangle order, preserve the complete
+ * point and face sets, and require acceptance by both topology validators. */
+static int
+test_closed_orientation_sync(void)
+{
+    point_t *pts;
+    int n_pts;
+    int *cube_faces;
+    int n_faces;
+    make_cube(&pts, &n_pts, &cube_faces, &n_faces);
+    int faces[36];
+    memcpy(faces, cube_faces, sizeof(faces));
+    std::swap(faces[0], faces[1]);
+
+    int *ofaces = NULL;
+    int n_ofaces = 0;
+    point_t *opnts = NULL;
+    int n_opnts = 0;
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.allow_self_intersections = 1;
+    settings.require_manifold = 1;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int ret = bg_trimesh_repair_ex(&ofaces, &n_ofaces, &opnts,
+	&n_opnts, faces, n_faces, pts, n_pts, &settings, &report);
+    const bool valid = ret == 0 && ofaces && opnts &&
+	n_ofaces == n_faces && n_opnts == n_pts && report.solid &&
+	report.manifold_accepted && report.reoriented_faces == 1 &&
+	!report.removed_faces && !report.added_faces &&
+	!report.geometric_degenerate_faces && !report.unmatched_edges &&
+	!report.excess_edges && !report.misoriented_edges &&
+	!report.invalid_vertex_links &&
+	!bg_trimesh_solid2(n_opnts, n_ofaces, (fastf_t *)opnts, ofaces,
+	    NULL);
+    if (ofaces)
+	bu_free(ofaces, "orientation sync faces");
+    if (opnts)
+	bu_free(opnts, "orientation sync points");
+    if (!valid) {
+	bu_log("FAIL test_closed_orientation_sync: ret=%d, reoriented=%d, "
+	    "solid=%d, manifold=%d, topology=%d/%d/%d/%d\n", ret,
+	    report.reoriented_faces, report.solid,
+	    report.manifold_accepted, report.unmatched_edges,
+	    report.excess_edges, report.misoriented_edges,
+	    report.invalid_vertex_links);
+	return -1;
+    }
+    bu_log("PASS test_closed_orientation_sync\n");
+    return 0;
+}
+
 /* An open mesh (cube missing one face) should be repaired to a solid. */
 static int
 test_open_cube_repair(void)
@@ -231,6 +332,1252 @@ test_open_cube_repair(void)
 	bu_log("PASS test_open_cube_repair (already solid – no fill needed)\n");
     }
 
+    return 0;
+}
+
+/* Repair output must not retain vertices which no output triangle uses. */
+static int
+test_unused_vertex_compaction(void)
+{
+    point_t *cube_pts;
+    int cube_point_count;
+    int *faces;
+    int face_count;
+    make_open_cube(&cube_pts, &cube_point_count, &faces, &face_count);
+    point_t points[9];
+    memcpy(points, cube_pts, (size_t)cube_point_count * sizeof(point_t));
+    VSET(points[8], 99.0, 99.0, 99.0);
+
+    int *output_faces = NULL;
+    int output_face_count = 0;
+    point_t *output_points = NULL;
+    int output_point_count = 0;
+    struct bg_trimesh_repair_opts options = BG_TRIMESH_REPAIR_OPTS_DEFAULT;
+    options.max_hole_area_percent = 30.0;
+    const int result = bg_trimesh_repair(&output_faces,
+	&output_face_count, &output_points, &output_point_count, faces,
+	face_count, points, 9, &options);
+    bool retained_unused = false;
+    for (int point = 0; point < output_point_count; ++point) {
+	if (VNEAR_EQUAL(output_points[point], points[8], SMALL_FASTF)) {
+	    retained_unused = true;
+	    break;
+	}
+    }
+    const bool valid = result == 0 && output_faces && output_points &&
+	output_face_count >= face_count && !retained_unused;
+    bu_free(output_faces, "unused vertex output faces");
+    bu_free(output_points, "unused vertex output points");
+    if (!valid) {
+	bu_log("FAIL test_unused_vertex_compaction: result %d, points %d, "
+	    "unused %d\n", result, output_point_count,
+	    retained_unused ? 1 : 0);
+	return -1;
+    }
+    bu_log("PASS test_unused_vertex_compaction\n");
+    return 0;
+}
+
+/* The extended interface is conservative by default: it must not silently
+ * close a hole unless the caller explicitly enables hole filling. */
+static int
+test_repair2_conservative_default(void)
+{
+    point_t *pts;
+    int n_pts;
+    int *faces;
+    int n_faces;
+    make_open_cube(&pts, &n_pts, &faces, &n_faces);
+
+    int *ofaces = NULL;
+    int n_ofaces = 0;
+    point_t *opnts = NULL;
+    int n_opnts = 0;
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    int ret = bg_trimesh_repair_ex(&ofaces, &n_ofaces, &opnts, &n_opnts,
+	faces, n_faces, pts, n_pts, &settings, &report);
+    if (ret != -1 || ofaces || opnts || n_ofaces || n_opnts ||
+	    report.solid) {
+	bu_log("FAIL test_repair2_conservative_default: ret=%d solid=%d\n",
+	    ret, report.solid);
+	if (ofaces) bu_free(ofaces, "ofaces");
+	if (opnts) bu_free(opnts, "opnts");
+	return -1;
+    }
+
+    bu_log("PASS test_repair2_conservative_default\n");
+    return 0;
+}
+
+/* Explicitly permitting the missing cube face should produce a certified
+ * solid and a useful operation report. */
+static int
+test_repair2_report(void)
+{
+    point_t *pts;
+    int n_pts;
+    int *faces;
+    int n_faces;
+    make_open_cube(&pts, &n_pts, &faces, &n_faces);
+
+    int *ofaces = NULL;
+    int n_ofaces = 0;
+    point_t *opnts = NULL;
+    int n_opnts = 0;
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.fill_holes = 1;
+    settings.max_hole_area_percent = 30.0;
+    settings.max_hole_edges = 8;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    int ret = bg_trimesh_repair_ex(&ofaces, &n_ofaces, &opnts, &n_opnts,
+	faces, n_faces, pts, n_pts, &settings, &report);
+    const bool valid_report = ret == 0 && report.solid &&
+	report.input_vertices == n_pts && report.input_faces == n_faces &&
+	report.output_vertices == n_opnts &&
+	report.output_faces == n_ofaces && report.added_faces >= 2 &&
+	report.removed_faces == 0 && report.input_area > 0.0 &&
+	report.output_area > report.input_area && report.output_volume > 0.0 &&
+	NEAR_ZERO(report.max_vertex_displacement, SMALL_FASTF);
+    if (!valid_report || !ofaces || !opnts ||
+	    bg_trimesh_solid2(n_opnts, n_ofaces, (fastf_t *)opnts, ofaces,
+		NULL)) {
+	bu_log("FAIL test_repair2_report: ret=%d solid=%d added=%d\n",
+	    ret, report.solid, report.added_faces);
+	if (ofaces) bu_free(ofaces, "ofaces");
+	if (opnts) bu_free(opnts, "opnts");
+	return -1;
+    }
+
+    bu_free(ofaces, "ofaces");
+    bu_free(opnts, "opnts");
+    bu_log("PASS test_repair2_report\n");
+    return 0;
+}
+
+/* Two triangular holes which touch only at one boundary vertex form a
+ * figure-eight boundary.  Each exact three-edge cycle must be capped before
+ * non-manifold boundary splitting destroys the cycles. */
+static int
+test_touching_triangular_holes(void)
+{
+    static point_t points[6] = {
+	{0, 0, 1}, {0, 0, -1}, {1, 0, 0}, {0, 1, 0},
+	{-1, 0, 0}, {0, -1, 0}
+    };
+    static int faces[18] = {
+	0, 3, 4, 0, 5, 2,
+	1, 3, 2, 1, 4, 3, 1, 5, 4, 1, 2, 5
+    };
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.fill_holes = 1;
+    settings.max_hole_area_percent = 100.0;
+    settings.max_hole_edges = 3;
+    settings.require_manifold = 1;
+    int *output_faces = NULL;
+    int output_face_count = 0;
+    point_t *output_points = NULL;
+    int output_point_count = 0;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int result = bg_trimesh_repair_ex(&output_faces,
+	&output_face_count, &output_points, &output_point_count, faces, 6,
+	points, 6, &settings, &report);
+    const bool valid = result == 0 && report.solid &&
+	report.manifold_accepted && report.added_faces == 2 &&
+	output_face_count == 8 && !bg_trimesh_solid2(output_point_count,
+	output_face_count, (fastf_t *)output_points, output_faces, NULL);
+    if (output_faces)
+	bu_free(output_faces, "touching triangular hole faces");
+    if (output_points)
+	bu_free(output_points, "touching triangular hole points");
+    if (!valid) {
+	bu_log("FAIL test_touching_triangular_holes: ret=%d solid=%d "
+	    "manifold=%d added=%d faces=%d\n", result, report.solid,
+	    report.manifold_accepted, report.added_faces,
+	    output_face_count);
+	return -1;
+    }
+    bu_log("PASS test_touching_triangular_holes\n");
+    return 0;
+}
+
+/* Two open boxes can likewise have four-edge holes which share one indexed
+ * boundary vertex.  They are two exact cycles, not one self-touching polygon;
+ * close both and then split the point contact into valid vertex links. */
+static int
+test_touching_quadrilateral_holes(void)
+{
+    static point_t points[15] = {
+	{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0},
+	{0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1},
+	{2, 1, 1}, {2, 2, 1}, {1, 2, 1},
+	{1, 1, 2}, {2, 1, 2}, {2, 2, 2}, {1, 2, 2}
+    };
+    static int faces[60] = {
+	0, 2, 1, 0, 3, 2,
+	0, 1, 5, 0, 5, 4,
+	1, 2, 6, 1, 6, 5,
+	2, 3, 7, 2, 7, 6,
+	3, 0, 4, 3, 4, 7,
+	11, 12, 13, 11, 13, 14,
+	6, 8, 12, 6, 12, 11,
+	8, 9, 13, 8, 13, 12,
+	9, 10, 14, 9, 14, 13,
+	10, 6, 11, 10, 11, 14
+    };
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.fill_holes = 1;
+    settings.max_hole_area_percent = 100.0;
+    settings.max_hole_edges = 4;
+    settings.require_manifold = 1;
+    int *output_faces = NULL;
+    int output_face_count = 0;
+    point_t *output_points = NULL;
+    int output_point_count = 0;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int result = bg_trimesh_repair_ex(&output_faces,
+	&output_face_count, &output_points, &output_point_count, faces, 20,
+	points, 15, &settings, &report);
+    const bool valid = result == 0 && report.solid &&
+	report.manifold_accepted && report.added_faces == 4 &&
+	output_face_count == 24 && !bg_trimesh_solid2(output_point_count,
+	output_face_count, (fastf_t *)output_points, output_faces, NULL);
+    if (output_faces)
+	bu_free(output_faces, "touching quadrilateral hole faces");
+    if (output_points)
+	bu_free(output_points, "touching quadrilateral hole points");
+    if (!valid) {
+	bu_log("FAIL test_touching_quadrilateral_holes: ret=%d solid=%d "
+	    "manifold=%d added=%d faces=%d links=%d\n", result,
+	    report.solid, report.manifold_accepted, report.added_faces,
+	    output_face_count, report.invalid_vertex_links);
+	return -1;
+    }
+    bu_log("PASS test_touching_quadrilateral_holes\n");
+    return 0;
+}
+
+/* A failed Manifold postcondition must still report the topology of the
+ * candidate that was rejected.  Otherwise a modest open seam is
+ * indistinguishable from an empty or catastrophically malformed mesh. */
+static int
+test_manifold_rejection_report(void)
+{
+    static point_t points[4] = {
+	{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}
+    };
+    static int faces[9] = {
+	0, 2, 1, 0, 1, 3, 1, 2, 3
+    };
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.require_manifold = 1;
+    int *output_faces = NULL;
+    int output_face_count = 0;
+    point_t *output_points = NULL;
+    int output_point_count = 0;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int result = bg_trimesh_repair_ex(&output_faces,
+	&output_face_count, &output_points, &output_point_count, faces, 3,
+	points, 4, &settings, &report);
+    const bool valid = result == -1 && !output_faces && !output_points &&
+	report.unmatched_edges == 3 && !report.excess_edges &&
+	!report.misoriented_edges && report.invalid_vertex_links == 3 &&
+	!report.solid && !report.manifold_accepted;
+    if (output_faces)
+	bu_free(output_faces, "rejected Manifold faces");
+    if (output_points)
+	bu_free(output_points, "rejected Manifold points");
+    if (!valid) {
+	bu_log("FAIL test_manifold_rejection_report: ret=%d unmatched=%d "
+	    "excess=%d misoriented=%d links=%d solid=%d manifold=%d\n",
+	    result, report.unmatched_edges, report.excess_edges,
+	    report.misoriented_edges, report.invalid_vertex_links,
+	    report.solid, report.manifold_accepted);
+	return -1;
+    }
+    bu_log("PASS test_manifold_rejection_report\n");
+    return 0;
+}
+
+/* Manifold accepts disconnected closed components which meet at one point
+ * when their coincident vertices remain topologically distinct.  Preserve
+ * that indexed interpretation instead of welding the contact into a
+ * non-manifold vertex.  Requesting hole filling must remain a no-op for an
+ * already closed input. */
+static int
+test_manifold_preserves_point_contact(void)
+{
+    static point_t points[8] = {
+	{0, 0, 0}, {1, 0, 0}, {0.5, 1, 0}, {0.5, 0.5, 1},
+	{0, 0, 0}, {-1, 0, 0}, {-0.5, -1, 0}, {-0.5, -0.5, -1}
+    };
+    static int faces[24] = {
+	0, 2, 1, 0, 1, 3, 1, 2, 3, 0, 3, 2,
+	4, 5, 6, 4, 7, 5, 5, 7, 6, 4, 6, 7
+    };
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.allow_self_intersections = 1;
+    settings.fill_holes = 1;
+    settings.require_manifold = 1;
+    int *output_faces = NULL;
+    int output_face_count = 0;
+    point_t *output_points = NULL;
+    int output_point_count = 0;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int result = bg_trimesh_repair_ex(&output_faces,
+	&output_face_count, &output_points, &output_point_count, faces, 8,
+	points, 8, &settings, &report);
+    const bool valid = result == 0 && output_faces && output_points &&
+	output_face_count == 8 && output_point_count == 8 && report.solid &&
+	report.manifold_accepted && !report.excess_edges &&
+	!report.invalid_vertex_links &&
+	!memcmp(output_faces, faces, sizeof(faces)) &&
+	!memcmp(output_points, points, sizeof(points));
+    if (output_faces)
+	bu_free(output_faces, "point-contact faces");
+    if (output_points)
+	bu_free(output_points, "point-contact points");
+    if (!valid) {
+	bu_log("FAIL test_manifold_preserves_point_contact: ret=%d "
+	    "faces=%d points=%d solid=%d manifold=%d excess=%d links=%d\n",
+	    result, output_face_count, output_point_count, report.solid,
+	    report.manifold_accepted, report.excess_edges,
+	    report.invalid_vertex_links);
+	return -1;
+    }
+    bu_log("PASS test_manifold_preserves_point_contact\n");
+    return 0;
+}
+
+/* Two closed tetrahedra sharing one indexed point have closed edge incidence
+ * but a disconnected vertex link.  Repair should split the common index into
+ * two coincident topological vertices before any coordinate welding. */
+static int
+test_manifold_splits_pinched_vertex(void)
+{
+    static point_t points[7] = {
+	{0, 0, 0}, {1, 0, 0}, {0.5, 1, 0}, {0.5, 0.5, 1},
+	{-1, 0, 0}, {-0.5, -1, 0}, {-0.5, -0.5, -1}
+    };
+    static int faces[24] = {
+	0, 2, 1, 0, 1, 3, 1, 2, 3, 0, 3, 2,
+	0, 4, 5, 0, 6, 4, 4, 6, 5, 0, 5, 6
+    };
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.allow_self_intersections = 1;
+    settings.require_manifold = 1;
+    int *output_faces = NULL;
+    int output_face_count = 0;
+    point_t *output_points = NULL;
+    int output_point_count = 0;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int result = bg_trimesh_repair_ex(&output_faces,
+	&output_face_count, &output_points, &output_point_count, faces, 8,
+	points, 7, &settings, &report);
+    const bool valid = result == 0 && output_faces && output_points &&
+	output_face_count == 8 && output_point_count == 8 && report.solid &&
+	report.manifold_accepted && !report.unmatched_edges &&
+	!report.invalid_vertex_links;
+    if (output_faces)
+	bu_free(output_faces, "pinched vertex faces");
+    if (output_points)
+	bu_free(output_points, "pinched vertex points");
+    if (!valid) {
+	bu_log("FAIL test_manifold_splits_pinched_vertex: ret=%d "
+	    "faces=%d points=%d solid=%d manifold=%d unmatched=%d "
+	    "links=%d\n", result, output_face_count, output_point_count,
+	    report.solid, report.manifold_accepted, report.unmatched_edges,
+	    report.invalid_vertex_links);
+	return -1;
+    }
+    bu_log("PASS test_manifold_splits_pinched_vertex\n");
+    return 0;
+}
+
+/* Split a closed pinched link before deleting a separate flat closed island.
+ * Deleting degenerates first must not turn a topology-only operation into an
+ * expensive global repair. */
+static int
+test_pinched_vertex_before_flat_removal(void)
+{
+    static point_t points[10] = {
+	{0, 0, 0}, {1, 0, 0}, {0.5, 1, 0}, {0.5, 0.5, 1},
+	{-1, 0, 0}, {-0.5, -1, 0}, {-0.5, -0.5, -1},
+	{10, 0, 0}, {11, 0, 0}, {12, 0, 0}
+    };
+    static int faces[30] = {
+	0, 2, 1, 0, 1, 3, 1, 2, 3, 0, 3, 2,
+	0, 4, 5, 0, 6, 4, 4, 6, 5, 0, 5, 6,
+	7, 8, 9, 7, 9, 8
+    };
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.allow_self_intersections = 1;
+    settings.fill_holes = 1;
+    settings.require_manifold = 1;
+    int *output_faces = NULL;
+    int output_face_count = 0;
+    point_t *output_points = NULL;
+    int output_point_count = 0;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int result = bg_trimesh_repair_ex(&output_faces,
+	&output_face_count, &output_points, &output_point_count, faces, 10,
+	points, 10, &settings, &report);
+    const bool valid = result == 0 && output_faces && output_points &&
+	output_face_count == 8 && output_point_count == 8 && report.solid &&
+	report.manifold_accepted && report.removed_faces >= 2 &&
+	report.separated_vertices == 1 && !report.unmatched_edges &&
+	!report.invalid_vertex_links;
+    if (output_faces)
+	bu_free(output_faces, "pinched flat faces");
+    if (output_points)
+	bu_free(output_points, "pinched flat points");
+    if (!valid) {
+	bu_log("FAIL test_pinched_vertex_before_flat_removal: ret=%d "
+	    "faces=%d points=%d removed=%d separated=%d solid=%d "
+	    "manifold=%d unmatched=%d links=%d\n", result,
+	    output_face_count, output_point_count, report.removed_faces,
+	    report.separated_vertices, report.solid,
+	    report.manifold_accepted, report.unmatched_edges,
+	    report.invalid_vertex_links);
+	return -1;
+    }
+    bu_log("PASS test_pinched_vertex_before_flat_removal\n");
+    return 0;
+}
+
+/* A topologically valid cap is not acceptable when it cuts through another
+ * closed component.  Both available triangulations cover the same square, so
+ * repair must leave the hole open and fail instead of returning an
+ * intersecting, incidence-only "solid". */
+static int
+test_intersecting_hole_patch_rejected(void)
+{
+    static point_t pts[12] = {
+	{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0},
+	{0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1},
+	{0.5, 0.5, 0.8}, {0.4, 0.4, 1.2},
+	{0.6, 0.4, 1.2}, {0.5, 0.6, 1.2}
+    };
+    static int faces[42] = {
+	0, 2, 1, 0, 3, 2,
+	0, 1, 5, 0, 5, 4,
+	1, 2, 6, 1, 6, 5,
+	2, 3, 7, 2, 7, 6,
+	3, 0, 4, 3, 4, 7,
+	8, 10, 9, 8, 9, 11, 9, 10, 11, 8, 11, 10
+    };
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.fill_holes = 1;
+    settings.max_hole_area_percent = 100.0;
+    settings.max_hole_edges = 8;
+    int *ofaces = NULL;
+    int n_ofaces = 0;
+    point_t *opnts = NULL;
+    int n_opnts = 0;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int ret = bg_trimesh_repair_ex(&ofaces, &n_ofaces, &opnts,
+	&n_opnts, faces, 14, pts, 12, &settings, &report);
+    const bool rejected = ret == -1 && !ofaces && !opnts &&
+	!n_ofaces && !n_opnts && !report.solid;
+    if (ofaces)
+	bu_free(ofaces, "intersecting patch faces");
+    if (opnts)
+	bu_free(opnts, "intersecting patch points");
+    if (!rejected) {
+	bu_log("FAIL test_intersecting_hole_patch_rejected: "
+	    "ret=%d solid=%d added=%d\n", ret, report.solid,
+	    report.added_faces);
+	return -1;
+    }
+    bu_log("PASS test_intersecting_hole_patch_rejected\n");
+    return 0;
+}
+
+/* The same obstructed cap is usable for consumers which require indexed
+ * manifold topology but permit geometric self-intersections.  The opt-in
+ * policy must retain all topological checks and independently prove that the
+ * bundled Manifold library accepts the result. */
+static int
+test_intersecting_hole_patch_manifold_accepted(void)
+{
+    static point_t pts[12] = {
+	{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0},
+	{0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1},
+	{0.5, 0.5, 0.8}, {0.4, 0.4, 1.2},
+	{0.6, 0.4, 1.2}, {0.5, 0.6, 1.2}
+    };
+    static int faces[42] = {
+	0, 2, 1, 0, 3, 2,
+	0, 1, 5, 0, 5, 4,
+	1, 2, 6, 1, 6, 5,
+	2, 3, 7, 2, 7, 6,
+	3, 0, 4, 3, 4, 7,
+	8, 10, 9, 8, 9, 11, 9, 10, 11, 8, 11, 10
+    };
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.fill_holes = 1;
+    settings.max_hole_area_percent = 100.0;
+    settings.max_hole_edges = 8;
+    settings.allow_self_intersections = 1;
+    settings.require_manifold = 1;
+    int *ofaces = NULL;
+    int n_ofaces = 0;
+    point_t *opnts = NULL;
+    int n_opnts = 0;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int ret = bg_trimesh_repair_ex(&ofaces, &n_ofaces, &opnts,
+	&n_opnts, faces, 14, pts, 12, &settings, &report);
+    const bool accepted = ret == 0 && ofaces && opnts && report.solid &&
+	report.self_intersections_allowed && report.manifold_accepted &&
+	!report.unmatched_edges && !report.excess_edges &&
+	!report.misoriented_edges && !report.invalid_vertex_links &&
+	!bg_trimesh_solid2(n_opnts, n_ofaces, (fastf_t *)opnts, ofaces,
+	    NULL);
+    if (ofaces)
+	bu_free(ofaces, "allowed intersecting patch faces");
+    if (opnts)
+	bu_free(opnts, "allowed intersecting patch points");
+    if (!accepted) {
+	bu_log("FAIL test_intersecting_hole_patch_manifold_accepted: "
+	    "ret=%d solid=%d manifold=%d unmatched=%d links=%d\n",
+	    ret, report.solid, report.manifold_accepted,
+	    report.unmatched_edges, report.invalid_vertex_links);
+	return -1;
+    }
+    bu_log("PASS test_intersecting_hole_patch_manifold_accepted\n");
+    return 0;
+}
+
+/* An obstructed hole must not discard an independent safe cap.  Leave the
+ * first cube open because its cap crosses the tetrahedron, but retain the
+ * valid cap on the translated second cube. */
+static int
+test_independent_safe_hole_patch_retained(void)
+{
+    static point_t pts[20] = {
+	{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0},
+	{0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1},
+	{3, 0, 0}, {4, 0, 0}, {4, 1, 0}, {3, 1, 0},
+	{3, 0, 1}, {4, 0, 1}, {4, 1, 1}, {3, 1, 1},
+	{0.5, 0.5, 0.8}, {0.4, 0.4, 1.2},
+	{0.6, 0.4, 1.2}, {0.5, 0.6, 1.2}
+    };
+    static int faces[72] = {
+	0, 2, 1, 0, 3, 2,
+	0, 1, 5, 0, 5, 4,
+	1, 2, 6, 1, 6, 5,
+	2, 3, 7, 2, 7, 6,
+	3, 0, 4, 3, 4, 7,
+	8, 10, 9, 8, 11, 10,
+	8, 9, 13, 8, 13, 12,
+	9, 10, 14, 9, 14, 13,
+	10, 11, 15, 10, 15, 14,
+	11, 8, 12, 11, 12, 15,
+	16, 18, 17, 16, 17, 19, 17, 18, 19, 16, 19, 18
+    };
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.fill_holes = 1;
+    settings.max_hole_area_percent = 100.0;
+    settings.max_hole_edges = 8;
+    settings.require_solid = 0;
+    int *ofaces = NULL;
+    int n_ofaces = 0;
+    point_t *opnts = NULL;
+    int n_opnts = 0;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int ret = bg_trimesh_repair_ex(&ofaces, &n_ofaces, &opnts,
+	&n_opnts, faces, 24, pts, 20, &settings, &report);
+    int safe_cap_faces = 0;
+    int obstructed_cap_faces = 0;
+    for (int face = 0; ret == 0 && face < n_ofaces; ++face) {
+	bool on_top = true;
+	double x_sum = 0.0;
+	for (int corner = 0; corner < 3; ++corner) {
+	    const int vertex = ofaces[face * 3 + corner];
+	    on_top = on_top && NEAR_EQUAL(opnts[vertex][Z], 1.0,
+		SMALL_FASTF);
+	    x_sum += opnts[vertex][X];
+	}
+	if (!on_top)
+	    continue;
+	if (x_sum / 3.0 > 2.0)
+	    safe_cap_faces++;
+	else
+	    obstructed_cap_faces++;
+    }
+    const bool retained = ret == 0 && ofaces && opnts && !report.solid &&
+	report.added_faces >= 2 && safe_cap_faces == 2 &&
+	!obstructed_cap_faces;
+    if (ofaces)
+	bu_free(ofaces, "independent cap faces");
+    if (opnts)
+	bu_free(opnts, "independent cap points");
+    if (!retained) {
+	bu_log("FAIL test_independent_safe_hole_patch_retained: "
+	    "ret=%d solid=%d added=%d safe=%d obstructed=%d\n", ret,
+	    report.solid, report.added_faces, safe_cap_faces,
+	    obstructed_cap_faces);
+	return -1;
+    }
+    bu_log("PASS test_independent_safe_hole_patch_retained\n");
+    return 0;
+}
+
+/* Cap many independent five-edge holes while retaining an oversized hole.
+ * Unchanged defects outside each cap's neighborhood must not affect the
+ * decision to retain that cap.  Five edges exercise the general hole filler
+ * rather than the preliminary triangle and quad cycle passes. */
+static int
+test_many_independent_holes(void)
+{
+    static const double pyramid_points[6][3] = {
+	{0, 0, 0}, {2, 0, 0}, {3, 1, 0}, {1, 3, 0}, {0, 2, 0},
+	{1, 1, 1}
+    };
+    constexpr int boundary_vertices = 5;
+    constexpr int capped_components = 64;
+    constexpr double spacing = 16.0;
+    constexpr double oversized_scale = 4.0;
+    constexpr double hole_area_limit = 8.0;
+    constexpr int closed_pyramid_faces = 8;
+    std::vector<std::array<double, 3>> points;
+    std::vector<int> faces;
+    for (int component = 0; component <= capped_components; ++component) {
+	const int first = (int)points.size();
+	const double scale = component == capped_components ? oversized_scale : 1.0;
+	for (const auto &point : pyramid_points)
+	    points.push_back({component * spacing + scale * point[0],
+		scale * point[1], scale * point[2]});
+	for (int edge = 0; edge < boundary_vertices; ++edge)
+	    faces.insert(faces.end(), {first + edge,
+		first + (edge + 1) % boundary_vertices, first + boundary_vertices});
+    }
+    struct bg_trimesh_repair_settings settings = BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.fill_holes = 1;
+    settings.max_hole_area = hole_area_limit;
+    settings.max_hole_edges = boundary_vertices;
+    settings.require_solid = 0;
+    int *output_faces = NULL;
+    int output_face_count = 0;
+    point_t *output_points = NULL;
+    int output_point_count = 0;
+    struct bg_trimesh_repair_report report = BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int result = bg_trimesh_repair_ex(&output_faces, &output_face_count,
+	&output_points, &output_point_count, faces.data(), (int)faces.size() / 3,
+	reinterpret_cast<const point_t *>(points.data()), (int)points.size(),
+	&settings, &report);
+    const bool valid = result == 0 && output_faces && output_points &&
+	!report.solid && report.unmatched_edges == boundary_vertices &&
+	!report.excess_edges && !report.misoriented_edges &&
+	output_face_count == capped_components * closed_pyramid_faces + boundary_vertices;
+    bu_free(output_faces, "independent hole faces");
+    bu_free(output_points, "independent hole points");
+    if (!valid) {
+	bu_log("FAIL test_many_independent_holes: result=%d faces=%d unmatched=%d\n",
+	    result, output_face_count, report.unmatched_edges);
+	return -1;
+    }
+    bu_log("PASS test_many_independent_holes\n");
+    return 0;
+}
+
+/* Imported B-Rep edges normally retain multiple samples on each straight
+ * boundary segment.  A circle-parameterized ear can be valid in 2D while its
+ * three restored 3D vertices are collinear.  Hole filling must fall back to
+ * the geometric ear selector and still use every boundary edge. */
+static int
+test_collinear_hole_boundary(void)
+{
+    static point_t pts[12] = {
+	{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0},
+	{0, 0, 1}, {0.5, 0, 1}, {1, 0, 1}, {1, 0.5, 1},
+	{1, 1, 1}, {0.5, 1, 1}, {0, 1, 1}, {0, 0.5, 1}
+    };
+    static int faces[42] = {
+	0, 2, 1, 0, 3, 2,
+	0, 1, 6, 0, 6, 5, 0, 5, 4,
+	1, 2, 8, 1, 8, 7, 1, 7, 6,
+	2, 3, 10, 2, 10, 9, 2, 9, 8,
+	3, 0, 4, 3, 4, 11, 3, 11, 10
+    };
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.fill_holes = 1;
+    settings.max_hole_area_percent = 30.0;
+    settings.max_hole_edges = 16;
+    int *ofaces = NULL;
+    int n_ofaces = 0;
+    point_t *opnts = NULL;
+    int n_opnts = 0;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    int ret = bg_trimesh_repair_ex(&ofaces, &n_ofaces, &opnts, &n_opnts,
+	faces, 14, pts, 12, &settings, &report);
+    bool valid = ret == 0 && report.solid && report.added_faces >= 6 &&
+	!bg_trimesh_solid2(n_opnts, n_ofaces, (fastf_t *)opnts, ofaces,
+	    NULL);
+    for (int face = 0; valid && face < n_ofaces; ++face) {
+	const point_t &a = opnts[ofaces[(size_t)face * 3]];
+	const point_t &b = opnts[ofaces[(size_t)face * 3 + 1]];
+	const point_t &c = opnts[ofaces[(size_t)face * 3 + 2]];
+	vect_t ab, ac, cross;
+	VSUB2(ab, b, a);
+	VSUB2(ac, c, a);
+	VCROSS(cross, ab, ac);
+	valid = MAGSQ(cross) > SMALL_FASTF;
+    }
+    if (ofaces)
+	bu_free(ofaces, "collinear repair faces");
+    if (opnts)
+	bu_free(opnts, "collinear repair points");
+    if (!valid) {
+	bu_log("FAIL test_collinear_hole_boundary: ret=%d solid=%d added=%d\n",
+	    ret, report.solid, report.added_faces);
+	return -1;
+    }
+    bu_log("PASS test_collinear_hole_boundary\n");
+    return 0;
+}
+
+/* Circle-parameterizing a concave planar boundary discards its concavity, so
+ * restored 3-D diagonals can leave the polygon and cut its side walls.  Mesh
+ * repair should preserve a planar boundary's actual projected outline. */
+static int
+test_concave_planar_hole(void)
+{
+    static point_t points[10] = {
+	{0, 0, 0}, {2, 0, 0}, {2, 2, 0}, {1, 1, 0}, {0, 2, 0},
+	{0, 0, 1}, {2, 0, 1}, {2, 2, 1}, {1, 1, 1}, {0, 2, 1}
+    };
+    static int faces[39] = {
+	0, 3, 1, 1, 3, 2, 0, 4, 3,
+	0, 1, 6, 0, 6, 5,
+	1, 2, 7, 1, 7, 6,
+	2, 3, 8, 2, 8, 7,
+	3, 4, 9, 3, 9, 8,
+	4, 0, 5, 4, 5, 9
+    };
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.fill_holes = 1;
+    settings.max_hole_area_percent = 100.0;
+    settings.max_hole_edges = 16;
+    int *output_faces = NULL;
+    int output_face_count = 0;
+    point_t *output_points = NULL;
+    int output_point_count = 0;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int result = bg_trimesh_repair_ex(&output_faces,
+	&output_face_count, &output_points, &output_point_count, faces, 13,
+	points, 10, &settings, &report);
+    const bool valid = result == 0 && report.solid &&
+	report.added_faces >= 3 && output_faces && output_points &&
+	!bg_trimesh_solid2(output_point_count, output_face_count,
+	    (fastf_t *)output_points, output_faces, NULL);
+    if (output_faces)
+	bu_free(output_faces, "concave hole faces");
+    if (output_points)
+	bu_free(output_points, "concave hole points");
+    if (!valid) {
+	bu_log("FAIL test_concave_planar_hole: ret=%d solid=%d "
+	    "added=%d rejected=%d\n", result, report.solid,
+	    report.added_faces, report.rejected_hole_faces);
+	return -1;
+    }
+    bu_log("PASS test_concave_planar_hole\n");
+    return 0;
+}
+
+/* A collision gate must be able to reject one otherwise preferred ear and
+ * let the 3-D filler choose a different valid triangulation. */
+static int
+test_validated_ear_alternative(void)
+{
+    point_t *input_points = NULL;
+    int input_point_count = 0;
+    int *input_faces = NULL;
+    int input_face_count = 0;
+    make_open_cube(&input_points, &input_point_count, &input_faces,
+	&input_face_count);
+    std::vector<gte::Vector3<double>> points((size_t)input_point_count);
+    for (int point = 0; point < input_point_count; ++point) {
+	for (int axis = 0; axis < 3; ++axis)
+	    points[(size_t)point][axis] = input_points[point][axis];
+    }
+    std::vector<std::array<int32_t, 3>> faces((size_t)input_face_count);
+    for (int face = 0; face < input_face_count; ++face) {
+	for (int corner = 0; corner < 3; ++corner)
+	    faces[(size_t)face][corner] = input_faces[face * 3 + corner];
+    }
+    bool rejected_preferred_ear = false;
+    gte::MeshHoleFilling<double>::Parameters parameters;
+    parameters.method = gte::MeshHoleFilling<double>::
+	TriangulationMethod::EarClipping3D;
+    parameters.autoFallback = false;
+    parameters.maxValidatedEdges = 8;
+    parameters.triangleValidator = [&](const std::array<int32_t, 3> &candidate,
+	    const std::vector<std::array<int32_t, 3>> &) {
+	const bool uses_5 = candidate[0] == 5 || candidate[1] == 5 ||
+	    candidate[2] == 5;
+	const bool uses_6 = candidate[0] == 6 || candidate[1] == 6 ||
+	    candidate[2] == 6;
+	const bool uses_7 = candidate[0] == 7 || candidate[1] == 7 ||
+	    candidate[2] == 7;
+	if (uses_5 && uses_6 && uses_7) {
+	    rejected_preferred_ear = true;
+	    return false;
+	}
+	return true;
+    };
+    gte::MeshHoleFilling<double>::FillHoles(points, faces, parameters);
+    std::vector<int> flat_faces;
+    flat_faces.reserve(faces.size() * 3);
+    for (const std::array<int32_t, 3> &face : faces)
+	flat_faces.insert(flat_faces.end(), face.begin(), face.end());
+    std::unique_ptr<point_t[]> flat_points(new point_t[points.size()]);
+    for (size_t point = 0; point < points.size(); ++point)
+	VSET(flat_points[point], points[point][0], points[point][1],
+	    points[point][2]);
+    struct bg_trimesh_solid_errors solid_errors =
+	BG_TRIMESH_SOLID_ERRORS_INIT_NULL;
+    const int solid_result = bg_trimesh_solid2((int)points.size(),
+	(int)faces.size(), flat_points[0], flat_faces.data(),
+	&solid_errors);
+    const bool valid = rejected_preferred_ear && faces.size() == 12 &&
+	!solid_result;
+    if (!valid) {
+	bu_log("FAIL test_validated_ear_alternative: rejected=%d faces=%zu "
+	    "solid=%d unmatched=%d excess=%d misoriented=%d degenerate=%d\n",
+	    (int)rejected_preferred_ear, faces.size(), solid_result,
+	    solid_errors.unmatched.count, solid_errors.excess.count,
+	    solid_errors.misoriented.count, solid_errors.degenerate.count);
+	bg_free_trimesh_solid_errors(&solid_errors);
+	return -1;
+    }
+    bg_free_trimesh_solid_errors(&solid_errors);
+    bu_log("PASS test_validated_ear_alternative\n");
+    return 0;
+}
+
+/* The final hole fallback may add one interior vertex when boundary-only
+ * diagonals cannot form a usable cap.  Its fan must retain the boundary
+ * winding and produce a closed oriented mesh. */
+static int
+test_steiner_hole_fan(void)
+{
+    point_t *input_points = NULL;
+    int input_point_count = 0;
+    int *input_faces = NULL;
+    int input_face_count = 0;
+    make_open_cube(&input_points, &input_point_count, &input_faces,
+	&input_face_count);
+    std::vector<gte::Vector3<double>> points((size_t)input_point_count);
+    for (int point = 0; point < input_point_count; ++point) {
+	for (int axis = 0; axis < 3; ++axis)
+	    points[(size_t)point][axis] = input_points[point][axis];
+    }
+    std::vector<std::array<int32_t, 3>> faces((size_t)input_face_count);
+    for (int face = 0; face < input_face_count; ++face) {
+	for (int corner = 0; corner < 3; ++corner)
+	    faces[(size_t)face][corner] = input_faces[face * 3 + corner];
+    }
+    gte::MeshHoleFilling<double>::Parameters parameters;
+    parameters.method = gte::MeshHoleFilling<double>::
+	TriangulationMethod::PlanarProjection;
+    parameters.autoFallback = false;
+    parameters.maxValidatedEdges = 8;
+    parameters.steinerAboveEdges = 3;
+    parameters.triangleValidator = [&](const std::array<int32_t, 3> &,
+	    const std::vector<std::array<int32_t, 3>> &) {
+	return points.size() > 8 && std::fabs(points[8][2] - 1.0) > 1.0e-12;
+    };
+    gte::MeshHoleFilling<double>::FillHoles(points, faces, parameters);
+    std::vector<int> flat_faces;
+    flat_faces.reserve(faces.size() * 3);
+    for (const std::array<int32_t, 3> &face : faces)
+	flat_faces.insert(flat_faces.end(), face.begin(), face.end());
+    std::unique_ptr<point_t[]> flat_points(new point_t[points.size()]);
+    for (size_t point = 0; point < points.size(); ++point)
+	VSET(flat_points[point], points[point][0], points[point][1],
+	    points[point][2]);
+    const bool valid = points.size() == 9 && faces.size() == 14 &&
+	std::fabs(points[8][2] - 1.0) > 1.0e-12 &&
+	!bg_trimesh_solid2((int)points.size(), (int)faces.size(),
+	    flat_points[0], flat_faces.data(), NULL);
+    if (!valid) {
+	bu_log("FAIL test_steiner_hole_fan: points=%zu faces=%zu\n",
+	    points.size(), faces.size());
+	return -1;
+    }
+    bu_log("PASS test_steiner_hole_fan\n");
+    return 0;
+}
+
+/* Normal orientation must handle many disconnected repair fragments without
+ * rescanning the complete triangle array for every component. */
+static int
+test_component_orientation(void)
+{
+    std::vector<gte::Vector3<double>> points;
+    std::vector<std::array<int32_t, 3>> faces;
+    point_t *tet_points = NULL;
+    int tet_point_count = 0;
+    int *tet_faces = NULL;
+    int tet_face_count = 0;
+    make_tet(&tet_points, &tet_point_count, &tet_faces, &tet_face_count);
+    for (int component = 0; component < 3; ++component) {
+	const int offset = (int)points.size();
+	for (int point = 0; point < tet_point_count; ++point) {
+	    points.push_back({tet_points[point][X] + 2.0 * component,
+		tet_points[point][Y], tet_points[point][Z]});
+	}
+	for (int face = 0; face < tet_face_count; ++face) {
+	    std::array<int32_t, 3> triangle = {
+		tet_faces[(size_t)face * 3] + offset,
+		tet_faces[(size_t)face * 3 + 1] + offset,
+		tet_faces[(size_t)face * 3 + 2] + offset
+	    };
+	    if (component == 1)
+		std::swap(triangle[1], triangle[2]);
+	    faces.push_back(triangle);
+	}
+    }
+    gte::MeshPreprocessing<double>::OrientNormals(points, faces);
+    double volumes[3] = {0.0, 0.0, 0.0};
+    for (size_t face = 0; face < faces.size(); ++face) {
+	const std::array<int32_t, 3> &triangle = faces[face];
+	volumes[face / (size_t)tet_face_count] += Dot(points[triangle[0]],
+	    Cross(points[triangle[1]], points[triangle[2]])) / 6.0;
+    }
+    if (volumes[0] <= 0.0 || volumes[1] <= 0.0 || volumes[2] <= 0.0) {
+	bu_log("FAIL test_component_orientation: volumes=%g,%g,%g\n",
+	    volumes[0], volumes[1], volumes[2]);
+	return -1;
+    }
+    bu_log("PASS test_component_orientation\n");
+    return 0;
+}
+
+/* Component union is deliberately opt-in.  Two individually closed cubes
+ * overlap geometrically but pass an edge-incidence solid check; the Manifold
+ * pass must regularize them into one closed boundary. */
+static int
+test_overlapping_component_union(void)
+{
+    point_t *cube_points;
+    int cube_point_count;
+    int *cube_faces;
+    int cube_face_count;
+    make_cube(&cube_points, &cube_point_count, &cube_faces,
+	&cube_face_count);
+    point_t points[16];
+    int faces[72];
+    for (int vertex = 0; vertex < cube_point_count; ++vertex) {
+	VMOVE(points[vertex], cube_points[vertex]);
+	VMOVE(points[vertex + cube_point_count], cube_points[vertex]);
+	points[vertex + cube_point_count][X] += 0.5;
+    }
+    for (int corner = 0; corner < cube_face_count * 3; ++corner) {
+	faces[corner] = cube_faces[corner];
+	faces[cube_face_count * 3 + corner] =
+	    cube_faces[corner] + cube_point_count;
+    }
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.union_components = 1;
+    int *ofaces = NULL;
+    int n_ofaces = 0;
+    point_t *opnts = NULL;
+    int n_opnts = 0;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int ret = bg_trimesh_repair_ex(&ofaces, &n_ofaces, &opnts,
+	&n_opnts, faces, 2 * cube_face_count, points,
+	2 * cube_point_count, &settings, &report);
+    bool valid = ret == 0 && report.solid &&
+	report.component_union_applied && report.output_volume > 1.4 &&
+	report.output_volume < 1.6 && ofaces && opnts &&
+	!bg_trimesh_solid2(n_opnts, n_ofaces, (fastf_t *)opnts, ofaces,
+	    NULL);
+    bool unique_vertices = valid;
+    for (int face = 0; valid && face < n_ofaces; ++face) {
+	const point_t &a = opnts[ofaces[(size_t)face * 3]];
+	const point_t &b = opnts[ofaces[(size_t)face * 3 + 1]];
+	const point_t &c = opnts[ofaces[(size_t)face * 3 + 2]];
+	vect_t ab, ac, cross;
+	VSUB2(ab, b, a);
+	VSUB2(ac, c, a);
+	VCROSS(cross, ab, ac);
+	valid = MAGSQ(cross) > SMALL_FASTF;
+    }
+    for (int first = 0; unique_vertices && first < n_opnts; ++first) {
+	for (int second = first + 1; second < n_opnts; ++second) {
+	    if (!memcmp(opnts[first], opnts[second], sizeof(point_t))) {
+		unique_vertices = false;
+		break;
+	    }
+	}
+    }
+    if (ofaces)
+	bu_free(ofaces, "component union faces");
+    if (opnts)
+	bu_free(opnts, "component union points");
+    if (!valid || !unique_vertices) {
+	bu_log("FAIL test_overlapping_component_union: ret=%d applied=%d "
+	    "solid=%d volume=%g unique_vertices=%d\n", ret,
+	    report.component_union_applied, report.solid,
+	    report.output_volume, (int)unique_vertices);
+	return -1;
+    }
+    bu_log("PASS test_overlapping_component_union\n");
+    return 0;
+}
+
+/* Two closed components which meet only at a duplicate-coordinate vertex
+ * are topologically solid but not an embedded manifold.  The explicitly
+ * requested separation pass must move their disconnected fans apart by no
+ * more than the configured tolerance. */
+static int
+test_touching_component_separation(void)
+{
+    point_t *cube_points;
+    int cube_point_count;
+    int *cube_faces;
+    int cube_face_count;
+    make_cube(&cube_points, &cube_point_count, &cube_faces,
+	&cube_face_count);
+    point_t points[16];
+    int faces[72];
+    vect_t offset = {1.0, 1.0, 1.0};
+    for (int vertex = 0; vertex < cube_point_count; ++vertex) {
+	VMOVE(points[vertex], cube_points[vertex]);
+	VADD2(points[vertex + cube_point_count], cube_points[vertex],
+	    offset);
+    }
+    for (int corner = 0; corner < cube_face_count * 3; ++corner) {
+	faces[corner] = cube_faces[corner];
+	faces[cube_face_count * 3 + corner] =
+	    cube_faces[corner] + cube_point_count;
+    }
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.vertex_tolerance = 1.0e-5;
+    settings.separate_touching_vertices = 1;
+    int *ofaces = NULL;
+    int n_ofaces = 0;
+    point_t *opnts = NULL;
+    int n_opnts = 0;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int ret = bg_trimesh_repair_ex(&ofaces, &n_ofaces, &opnts,
+	&n_opnts, faces, 2 * cube_face_count, points,
+	2 * cube_point_count, &settings, &report);
+    bool unique_vertices = ret == 0 && report.solid &&
+	report.separated_vertices >= 2 &&
+	report.max_vertex_displacement > 0.0 &&
+	report.max_vertex_displacement <= settings.vertex_tolerance &&
+	report.output_volume > 1.9 && report.output_volume < 2.1;
+    for (int first = 0; unique_vertices && first < n_opnts; ++first) {
+	for (int second = first + 1; second < n_opnts; ++second) {
+	    if (!memcmp(opnts[first], opnts[second], sizeof(point_t))) {
+		unique_vertices = false;
+		break;
+	    }
+	}
+    }
+    int separated_inward = 0;
+    for (int vertex = 0; unique_vertices && vertex < n_opnts; ++vertex) {
+	bool near_touch = true;
+	for (int axis = 0; axis < 3; ++axis)
+	    near_touch = near_touch &&
+		std::fabs(opnts[vertex][axis] - 1.0) <=
+		2.0 * settings.vertex_tolerance;
+	if (!near_touch)
+	    continue;
+	point_t neighbors = VINIT_ZERO;
+	int neighbor_count = 0;
+	for (int face = 0; face < n_ofaces; ++face) {
+	    for (int corner = 0; corner < 3; ++corner) {
+		if (ofaces[face * 3 + corner] != vertex)
+		    continue;
+		for (int other = 1; other < 3; ++other) {
+		    const int adjacent =
+			ofaces[face * 3 + (corner + other) % 3];
+		    VADD2(neighbors, neighbors, opnts[adjacent]);
+		    neighbor_count++;
+		}
+	    }
+	}
+	bool inward = neighbor_count > 0;
+	for (int axis = 0; inward && axis < 3; ++axis) {
+	    const double neighbor_average =
+		neighbors[axis] / (double)neighbor_count;
+	    inward = (neighbor_average - 1.0) *
+		(opnts[vertex][axis] - 1.0) > 0.0;
+	}
+	if (inward)
+	    separated_inward++;
+    }
+    unique_vertices = unique_vertices && separated_inward == 2;
+    if (ofaces)
+	bu_free(ofaces, "touch separation faces");
+    if (opnts)
+	bu_free(opnts, "touch separation points");
+    if (!unique_vertices) {
+	bu_log("FAIL test_touching_component_separation: ret=%d solid=%d "
+	    "separated=%d displacement=%g volume=%g\n", ret,
+	    report.solid, report.separated_vertices,
+	    report.max_vertex_displacement, report.output_volume);
+	return -1;
+    }
+    bu_log("PASS test_touching_component_separation\n");
+    return 0;
+}
+
+/* A display patch may insert an extra sample on a shared edge while the
+ * rigorous neighbor retains one long edge.  Splitting the long incident
+ * triangle at the hanging vertex must close the seam without hole filling. */
+static int
+test_hanging_boundary_edge_split(void)
+{
+    static point_t points[9] = {
+	{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0},
+	{0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1},
+	{0.5, 0, 1}
+    };
+    static int faces[39] = {
+	0, 2, 1, 0, 3, 2,
+	4, 8, 6, 8, 5, 6, 4, 6, 7,
+	0, 1, 5, 0, 5, 4,
+	1, 2, 6, 1, 6, 5,
+	2, 3, 7, 2, 7, 6,
+	3, 0, 4, 3, 4, 7
+    };
+    struct bg_trimesh_repair_settings settings =
+	BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.vertex_tolerance = 1.0e-9;
+    int *ofaces = NULL;
+    int n_ofaces = 0;
+    point_t *opnts = NULL;
+    int n_opnts = 0;
+    struct bg_trimesh_repair_report report =
+	BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int ret = bg_trimesh_repair_ex(&ofaces, &n_ofaces, &opnts,
+	&n_opnts, faces, 13, points, 9, &settings, &report);
+    const bool valid = ret == 0 && report.solid &&
+	report.added_faces >= 1 && ofaces && opnts &&
+	!bg_trimesh_solid2(n_opnts, n_ofaces, (fastf_t *)opnts, ofaces,
+	    NULL);
+    if (ofaces)
+	bu_free(ofaces, "hanging edge faces");
+    if (opnts)
+	bu_free(opnts, "hanging edge points");
+    if (!valid) {
+	bu_log("FAIL test_hanging_boundary_edge_split: ret=%d added=%d "
+	    "solid=%d\n", ret, report.added_faces, report.solid);
+	return -1;
+    }
+    bu_log("PASS test_hanging_boundary_edge_split\n");
+    return 0;
+}
+
+/* Nearby samples must all split the long edge in parameter order, regardless
+ * of spatial-index traversal order.  Distant open seams and samples outside
+ * the requested radius must not affect that decision. */
+static int
+test_hanging_boundary_neighborhood(double normal_offset_fraction)
+{
+    point_t *cube_points;
+    int cube_point_count;
+    int *cube_faces;
+    int cube_face_count;
+    make_cube(&cube_points, &cube_point_count, &cube_faces, &cube_face_count);
+    constexpr int grid_width = 8;
+    constexpr int component_count = grid_width * grid_width;
+    constexpr double component_spacing = 4.0;
+    constexpr double tolerance = 1.0e-6;
+    const double fractions[] = {0.75, 0.25, 0.5};
+    std::vector<std::array<double, 3>> points;
+    std::vector<int> faces;
+    for (int component = 0; component < component_count; ++component) {
+	const int first = (int)points.size();
+	const double translation[3] = {
+	    component_spacing * (component % grid_width - grid_width / 2),
+	    component_spacing * (component / grid_width - grid_width / 2), 0.0
+	};
+	const auto append_point = [&](const double *point) {
+	    std::array<double, 3> transformed;
+	    for (int axis = 0; axis < 3; ++axis)
+		transformed[axis] = point[(axis + component) % 3] + translation[axis];
+	    points.push_back(transformed);
+	};
+	for (int point = 0; point < cube_point_count; ++point)
+	    append_point(cube_points[point]);
+	for (double fraction : fractions) {
+	    const double point[3] = {fraction, normal_offset_fraction * tolerance, 1.0};
+	    append_point(point);
+	}
+	for (int face = 0; face < cube_face_count; ++face) {
+	    if (face == 2) {
+		/* Subdivide the (4,5,6) top triangle around three boundary
+		 * points stored out of edge order. */
+		const int chain[] = {4, 9, 10, 8, 5};
+		for (size_t i = 1; i < sizeof(chain) / sizeof(chain[0]); ++i)
+		    faces.insert(faces.end(), {first + chain[i - 1], first + chain[i], first + 6});
+	    } else {
+		for (int corner = 0; corner < 3; ++corner)
+		    faces.push_back(first + cube_faces[face * 3 + corner]);
+	    }
+	}
+    }
+    struct bg_trimesh_repair_settings settings = BG_TRIMESH_REPAIR_SETTINGS_INIT;
+    settings.vertex_tolerance = tolerance;
+    int *output_faces = NULL;
+    int output_face_count = 0;
+    point_t *output_points = NULL;
+    int output_point_count = 0;
+    struct bg_trimesh_repair_report report = BG_TRIMESH_REPAIR_REPORT_INIT;
+    const int result = bg_trimesh_repair_ex(&output_faces, &output_face_count,
+	&output_points, &output_point_count, faces.data(), (int)faces.size() / 3,
+	reinterpret_cast<const point_t *>(points.data()), (int)points.size(),
+	&settings, &report);
+    const bool expected_solid = normal_offset_fraction < 1.0;
+    const bool valid = expected_solid ? result == 0 && report.solid &&
+	output_faces && output_points && output_face_count == component_count * 18 &&
+	!bg_trimesh_solid2(output_point_count, output_face_count,
+	    (fastf_t *)output_points, output_faces, NULL) :
+	result < 0 && !report.solid && !output_faces && !output_points;
+    bu_free(output_faces, "boundary neighborhood faces");
+    bu_free(output_points, "boundary neighborhood points");
+    if (!valid) {
+	bu_log("FAIL test_hanging_boundary_neighborhood: offset=%g result=%d solid=%d faces=%d\n",
+	    normal_offset_fraction, result, report.solid, output_face_count);
+	return -1;
+    }
+    bu_log("PASS test_hanging_boundary_neighborhood: offset=%g\n", normal_offset_fraction);
     return 0;
 }
 
@@ -349,6 +1696,41 @@ test_split_nmv_backward_walk(void)
     return 0;
 }
 
+/* Malformed facet adjacency can contain a directed cycle that does not
+ * return to the corner where a vertex-fan walk began.  The original walk
+ * trusted adjacency and never checked already visited corners, so the first
+ * fan (which retains the original vertex index) looped forever. */
+static int
+test_split_nmv_cyclic_adjacency(void)
+{
+    std::vector<gte::Vector3<double>> vertices = {
+	{0.0, 0.0, 0.0},
+	{1.0, 0.0, 0.0}, {0.0, 1.0, 0.0},
+	{0.0, 0.0, 1.0}, {-1.0, 0.0, 0.0},
+	{0.0, -1.0, 0.0}, {0.0, 0.0, -1.0}
+    };
+    std::vector<std::array<int32_t, 3>> triangles = {
+	{0, 1, 2}, {0, 3, 4}, {0, 5, 6}
+    };
+    std::vector<int32_t> adjacency(9, -1);
+    adjacency[0] = 1;
+    adjacency[3] = 2;
+    adjacency[6] = 1;
+    gte::MeshRepair<double>::SplitNonManifoldVertices(vertices,
+	triangles, adjacency);
+    const bool valid = vertices.size() == 7 &&
+	triangles[0][0] == 0 && triangles[1][0] == 0 &&
+	triangles[2][0] == 0;
+    if (!valid) {
+	bu_log("FAIL test_split_nmv_cyclic_adjacency: %zu vertices, "
+	    "fan indices %d/%d/%d\n", vertices.size(), triangles[0][0],
+	    triangles[1][0], triangles[2][0]);
+	return -1;
+    }
+    bu_log("PASS test_split_nmv_cyclic_adjacency\n");
+    return 0;
+}
+
 
 /* A malformed/non-manifold fan may produce an adjacency cycle that does not
  * include the facet where the walk began.  The backward fan walk must stop
@@ -430,9 +1812,40 @@ main(int UNUSED(argc), const char *argv[])
     failures += (test_null_params()               != 0) ? 1 : 0;
     failures += (test_already_solid()             != 0) ? 1 : 0;
     failures += (test_tet_already_solid()         != 0) ? 1 : 0;
+    failures += (test_manifold_acceptance_check() != 0) ? 1 : 0;
+    failures += (test_closed_orientation_sync()   != 0) ? 1 : 0;
     failures += (test_open_cube_repair()          != 0) ? 1 : 0;
+    failures += (test_unused_vertex_compaction()  != 0) ? 1 : 0;
+    failures += (test_repair2_conservative_default() != 0) ? 1 : 0;
+    failures += (test_repair2_report()             != 0) ? 1 : 0;
+    failures += (test_touching_triangular_holes()   != 0) ? 1 : 0;
+    failures += (test_touching_quadrilateral_holes() != 0) ? 1 : 0;
+    failures += (test_manifold_rejection_report()   != 0) ? 1 : 0;
+    failures +=
+	(test_manifold_preserves_point_contact() != 0) ? 1 : 0;
+    failures +=
+	(test_manifold_splits_pinched_vertex() != 0) ? 1 : 0;
+    failures +=
+	(test_pinched_vertex_before_flat_removal() != 0) ? 1 : 0;
+    failures += (test_intersecting_hole_patch_rejected() != 0) ? 1 : 0;
+    failures +=
+	(test_intersecting_hole_patch_manifold_accepted() != 0) ? 1 : 0;
+    failures += (test_independent_safe_hole_patch_retained() != 0) ? 1 : 0;
+    failures += (test_many_independent_holes() != 0) ? 1 : 0;
+    failures += (test_collinear_hole_boundary()    != 0) ? 1 : 0;
+    failures += (test_concave_planar_hole()         != 0) ? 1 : 0;
+    failures += (test_validated_ear_alternative()    != 0) ? 1 : 0;
+    failures += (test_steiner_hole_fan()             != 0) ? 1 : 0;
+    failures += (test_component_orientation()         != 0) ? 1 : 0;
+    failures += (test_overlapping_component_union() != 0) ? 1 : 0;
+    failures += (test_touching_component_separation() != 0) ? 1 : 0;
+    failures += (test_hanging_boundary_edge_split() != 0) ? 1 : 0;
+    failures += (test_hanging_boundary_neighborhood(0.0) != 0) ? 1 : 0;
+    failures += (test_hanging_boundary_neighborhood(0.5) != 0) ? 1 : 0;
+    failures += (test_hanging_boundary_neighborhood(2.0) != 0) ? 1 : 0;
     failures += (test_split_nmv_backward_walk()   != 0) ? 1 : 0;
     failures += (test_split_nmv_cycle_guard()     != 0) ? 1 : 0;
+    failures += (test_split_nmv_cyclic_adjacency() != 0) ? 1 : 0;
 
     if (failures) {
 	bu_log("%d test(s) FAILED\n", failures);
