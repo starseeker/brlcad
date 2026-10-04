@@ -8,6 +8,67 @@ brlcad_add_test(NAME brep_ppx COMMAND test_brep_ppx)
 brlcad_addexec(test_brep_assembly assembly.cpp "libbrep" TEST)
 brlcad_add_test(NAME brep_assembly COMMAND test_brep_assembly)
 
+# Replay serialized face-mesh failures without rerunning a complete BRep
+# tessellation.  mesh.cpp emits this format at the exact repair failure site,
+# making it useful both for diagnosis and for compact regression fixtures.
+brlcad_addexec(test_brep_cdt_mesh brep_cdt_mesh.cpp "libbrep" TEST)
+brlcad_add_test(
+  NAME brep_cdt_mesh_single_bad_edge
+  COMMAND test_brep_cdt_mesh "${CMAKE_CURRENT_SOURCE_DIR}/single_bad_edge.cdtmesh"
+)
+
+# A cyclic rotation of the same co-circular boundary must not change the CDT
+# diagonal merely because its cpolyedge allocations have different addresses.
+brlcad_addexec(test_brep_cdt_boundary_start brep_cdt_boundary_start.cpp "libbrep" TEST)
+brlcad_add_test(NAME brep_cdt_boundary_start COMMAND test_brep_cdt_boundary_start)
+
+# An interior sample exactly on a constrained face boundary must not be passed
+# to the triangulator a second time as a Steiner point.
+brlcad_addexec(test_brep_cdt_boundary_steiner brep_cdt_boundary_steiner.cpp "libbrep" TEST)
+brlcad_add_test(NAME brep_cdt_boundary_steiner COMMAND test_brep_cdt_boundary_steiner)
+
+# A closed source solid may not retain redundant open local-remesh islands
+# after either retained-solid or same-source-face coverage validation.
+brlcad_addexec(test_brep_cdt_spurious_components brep_cdt_spurious_components.cpp "libbrep" TEST)
+brlcad_add_test(NAME brep_cdt_spurious_components COMMAND test_brep_cdt_spurious_components)
+
+brlcad_addexec(test_brep_cdt_local_defects brep_cdt_local_defects.cpp "libbrep" TEST)
+brlcad_add_test(NAME brep_cdt_local_defects COMMAND test_brep_cdt_local_defects)
+
+# Explicit B-Rep edges wholly below min(BN_TOL_DIST, absmin) may be welded in
+# derived mesh state.  Guard whole-curve selection, bounded non-transitive
+# components, deterministic endpoint choice, adjacent edge propagation, and
+# seam-copy provenance during zero-length constraint removal.
+brlcad_addexec(test_brep_cdt_subtolerance brep_cdt_subtolerance.cpp "libbrep" TEST)
+brlcad_add_test(NAME brep_cdt_subtolerance COMMAND test_brep_cdt_subtolerance)
+
+# A conical pole is one chart vertex even though its native rectangular UV
+# domain has two periodic seam copies.  Exercise scale, rotation, translation,
+# explicit pole identity, and chart/native evaluation round trips.
+brlcad_addexec(test_brep_cdt_cone_chart brep_cdt_cone_chart.cpp "libbrep" TEST)
+brlcad_add_test(NAME brep_cdt_cone_chart COMMAND test_brep_cdt_cone_chart)
+
+# A closed two-pole surface is a diamond after cutting its periodic seam.
+# Verify explicit pole identities, chart/native round trips, constrained
+# meridians, scale independence, and certified solid assembly.
+brlcad_addexec(test_brep_cdt_polar_chart brep_cdt_polar_chart.cpp "libbrep" TEST)
+brlcad_add_test(NAME brep_cdt_polar_chart COMMAND test_brep_cdt_polar_chart)
+
+# A trimmed cylinder is unwrapped in physical angle-height coordinates.  Keep
+# full periodic seams explicit despite fit offsets and equivalent-bound
+# p-curves.
+brlcad_addexec(test_brep_cdt_cylinder_chart brep_cdt_cylinder_chart.cpp "libbrep" TEST)
+brlcad_add_test(NAME brep_cdt_cylinder_chart COMMAND test_brep_cdt_cylinder_chart)
+
+# Conversion-quality tessellation is a fail-closed transaction: status and
+# diagnostics must describe every attempt, tolerance changes invalidate all
+# derived state, and rebuilding the same input must produce identical arrays.
+brlcad_addexec(test_brep_cdt_contract brep_cdt_contract.cpp "libbrep;librt" TEST)
+brlcad_add_test(
+  NAME brep_cdt_contract
+  COMMAND test_brep_cdt_contract "${CMAKE_CURRENT_SOURCE_DIR}/cyl_hole.g" CUBE.s
+)
+
 # Fast display tessellation must be deterministic across worker counts, leave
 # its const BRep input untouched, and stop cleanly at configured limits.
 brlcad_addexec(test_brep_fast brep_fast.cpp "libbrep;librt" TEST)
@@ -56,6 +117,15 @@ cmakefiles(
   brep_cdt_invalid.cpp
   brep_cdt_hole_face17.c
   brep_cdt_hole_face27.c
+  brep_cdt_boundary_start.cpp
+  brep_cdt_boundary_steiner.cpp
+  brep_cdt_contract.cpp
+  brep_cdt_cone_chart.cpp
+  brep_cdt_cylinder_chart.cpp
+  brep_cdt_polar_chart.cpp
+  brep_cdt_local_defects.cpp
+  brep_cdt_spurious_components.cpp
+  brep_cdt_subtolerance.cpp
   brep_fast.cpp
   brep_curvetree_display.cpp
   brep_fast_repair.cpp
