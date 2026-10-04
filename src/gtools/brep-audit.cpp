@@ -188,6 +188,16 @@ struct geom_result {
     int repair_bounded_edge_approximation_edges = 0;
     int repair_bounded_edge_approximation_faces = 0;
     double repair_max_bounded_edge_deviation = 0.0;
+    bool repair_poisson_attempted = false;
+    bool repair_poisson_applied = false;
+    int repair_poisson_input_points = 0;
+    int repair_poisson_components = 0;
+    int repair_poisson_output_points = 0;
+    int repair_poisson_output_faces = 0;
+    int repair_poisson_attempts = 0;
+    bool repair_poisson_area_sampling = false;
+    bool repair_poisson_boundary_fallback = false;
+    double repair_poisson_scale = 0.0;
     double repair_max_deviation = 0.0;
     double repair_rms_deviation = 0.0;
     double repair_allowed_deviation = 0.0;
@@ -1193,6 +1203,23 @@ quality_result(struct db_i *dbip, struct directory *dp,
 	    repair_report.bounded_edge_approximation_faces;
 	result.repair_max_bounded_edge_deviation =
 	    repair_report.max_bounded_edge_deviation;
+	result.repair_poisson_attempted =
+	    repair_report.poisson_reconstruction_attempted != 0;
+	result.repair_poisson_applied =
+	    repair_report.poisson_reconstruction_applied != 0;
+	result.repair_poisson_input_points =
+	    repair_report.poisson_input_points;
+	result.repair_poisson_components = repair_report.poisson_components;
+	result.repair_poisson_output_points =
+	    repair_report.poisson_output_points;
+	result.repair_poisson_output_faces =
+	    repair_report.poisson_output_faces;
+	result.repair_poisson_attempts = repair_report.poisson_attempts;
+	result.repair_poisson_area_sampling =
+	    repair_report.poisson_area_sampling_applied != 0;
+	result.repair_poisson_boundary_fallback =
+	    repair_report.poisson_boundary_fallback_applied != 0;
+	result.repair_poisson_scale = repair_report.poisson_scale;
 	result.repair_max_deviation = repair_report.max_surface_deviation;
 	result.repair_rms_deviation = repair_report.rms_surface_deviation;
 	result.repair_allowed_deviation =
@@ -1632,6 +1659,24 @@ print_result(const geom_result &result, const vect_t ref_dims)
 	<< result.repair_bounded_edge_approximation_faces
 	<< ",\"max_bounded_edge_deviation\":"
 	<< result.repair_max_bounded_edge_deviation
+	<< ",\"poisson_reconstruction_attempted\":"
+	<< (result.repair_poisson_attempted ? "true" : "false")
+	<< ",\"poisson_reconstruction_applied\":"
+	<< (result.repair_poisson_applied ? "true" : "false")
+	<< ",\"poisson_input_points\":"
+	<< result.repair_poisson_input_points
+	<< ",\"poisson_components\":"
+	<< result.repair_poisson_components
+	<< ",\"poisson_output_points\":"
+	<< result.repair_poisson_output_points
+	<< ",\"poisson_output_faces\":"
+	<< result.repair_poisson_output_faces
+	<< ",\"poisson_attempts\":" << result.repair_poisson_attempts
+	<< ",\"poisson_area_sampling_applied\":"
+	<< (result.repair_poisson_area_sampling ? "true" : "false")
+	<< ",\"poisson_boundary_fallback_applied\":"
+	<< (result.repair_poisson_boundary_fallback ? "true" : "false")
+	<< ",\"poisson_scale\":" << result.repair_poisson_scale
 	<< ",\"max_surface_deviation\":";
     print_num(result.repair_max_deviation);
     std::cout << ",\"rms_surface_deviation\":";
@@ -1810,6 +1855,9 @@ struct audit_config {
     bool repair_full_fast;
     bool repair_full_fast_if_needed;
     bool repair_try_invalid;
+    bool repair_poisson;
+    long repair_poisson_depth;
+    double repair_poisson_scale;
     bool repair_union_components;
     bool repair_allow_self_intersections;
     bool repair_require_manifold;
@@ -2170,10 +2218,14 @@ audit_brep(struct db_i *dbip, struct directory *dp, const char *db_path,
     repair_settings.allow_untrimmed_surface_match =
 	config.repair_allow_untrimmed ? 1 : 0;
     repair_settings.use_full_fast_fallback =
-	config.repair_full_fast ? 1 : 0;
+	(config.repair_full_fast || config.repair_poisson) ? 1 : 0;
     repair_settings.use_full_fast_fallback_if_needed =
 	config.repair_full_fast_if_needed ? 1 : 0;
     repair_settings.try_invalid_brep = config.repair_try_invalid ? 1 : 0;
+    repair_settings.use_poisson_reconstruction =
+	config.repair_poisson ? 1 : 0;
+    repair_settings.poisson_depth = (int)config.repair_poisson_depth;
+    repair_settings.poisson_scale = config.repair_poisson_scale;
     repair_settings.mesh.union_components =
 	config.repair_union_components ? 1 : 0;
     repair_settings.mesh.allow_self_intersections =
@@ -2450,6 +2502,9 @@ main(int argc, const char **argv)
     int repair_full_fast = 0;
     int repair_full_fast_if_needed = 0;
     int repair_try_invalid = 0;
+    int repair_poisson = 0;
+    long repair_poisson_depth = 8;
+    double repair_poisson_scale = 0.0;
     int repair_union_components = 0;
     int repair_allow_self_intersections = 0;
     int repair_require_manifold = 0;
@@ -2459,7 +2514,7 @@ main(int argc, const char **argv)
     long image_size = 1024;
     const char *batch_object_file = NULL;
     const char *mode_name = "both";
-    struct bu_opt_desc d[46];
+    struct bu_opt_desc d[49];
     BU_OPT(d[0], "h", "help", "", NULL, &print_help, "Print help and exit");
     BU_OPT(d[1], "l", "list", "", NULL, &list_only, "List BRep primitive names");
     BU_OPT(d[2], "", "ratio-min", "#", &bu_opt_fastf_t, &ratio_min, "Minimum acceptable generated/reference dimension ratio");
@@ -2506,56 +2561,64 @@ main(int argc, const char **argv)
 	"Regularize closed repair components with a Manifold union");
     BU_OPT(d[26], "", "repair-no-fast", "", NULL, &repair_no_fast,
 	"Repair only the rigorous face meshes, without display fallback faces");
-    BU_OPT(d[27], "", "batch-object-file", "file", &bu_opt_str,
+    BU_OPT(d[27], "", "repair-poisson", "", NULL, &repair_poisson,
+	"Reconstruct the whole display mesh with Screened Poisson repair");
+    BU_OPT(d[28], "", "repair-poisson-depth", "#", &bu_opt_long,
+	&repair_poisson_depth,
+	"Screened Poisson octree depth (5 through 10)");
+    BU_OPT(d[29], "", "batch-object-file", "file", &bu_opt_str,
 	&batch_object_file,
 	"In batch mode, audit only object names listed one per line");
-    BU_OPT(d[28], "", "repair-max-deviation-rel", "fraction",
+    BU_OPT(d[30], "", "repair-max-deviation-rel", "fraction",
 	&bu_opt_fastf_t, &repair_max_deviation_rel,
 	"Maximum repair deviation as a boundary bbox diagonal fraction");
-    BU_OPT(d[29], "", "repair-allow-self-intersections", "", NULL,
+    BU_OPT(d[31], "", "repair-poisson-scale", "factor",
+	&bu_opt_fastf_t, &repair_poisson_scale,
+	"Poisson domain scale from 1 through 2; zero uses bounded retries");
+    BU_OPT(d[32], "", "repair-allow-self-intersections", "", NULL,
 	&repair_allow_self_intersections,
 	"Permit repaired manifold topology to contain self-intersections");
-    BU_OPT(d[30], "", "repair-require-manifold", "", NULL,
+    BU_OPT(d[33], "", "repair-require-manifold", "", NULL,
 	&repair_require_manifold,
 	"Require the bundled Manifold library to import the repaired mesh");
-    BU_OPT(d[31], "", "repair-full-fast-if-needed", "", NULL,
+    BU_OPT(d[34], "", "repair-full-fast-if-needed", "", NULL,
 	&repair_full_fast_if_needed,
 	"Retry whole-B-Rep display repair only after rigorous repair fails");
-    BU_OPT(d[32], "", "repair-try-invalid", "", NULL,
+    BU_OPT(d[35], "", "repair-try-invalid", "", NULL,
 	&repair_try_invalid,
 	"Try rigorous faces of structurally safe invalid B-Reps before repair");
-    BU_OPT(d[33], "", "repair-relaxed-fidelity-factor", "factor",
+    BU_OPT(d[36], "", "repair-relaxed-fidelity-factor", "factor",
 	&bu_opt_fastf_t, &repair_relaxed_fidelity_factor,
 	"Accept and tag Manifold repair within 1 through 4 times strict fidelity");
-    BU_OPT(d[34], "", "repair-adaptive-hole-edges", "#", &bu_opt_long,
+    BU_OPT(d[37], "", "repair-adaptive-hole-edges", "#", &bu_opt_long,
 	&repair_adaptive_hole_edges,
 	"Second-pass edge ceiling when only bounded open holes remain");
-    BU_OPT(d[35], "", "quality-face-time-ms", "#", &bu_opt_long,
+    BU_OPT(d[38], "", "quality-face-time-ms", "#", &bu_opt_long,
 	&quality_face_time_ms,
 	"Wall-clock limit for each rigorous quality face (zero disables)");
-    BU_OPT(d[36], "", "repair-adaptive-hole-area-percent", "#",
+    BU_OPT(d[39], "", "repair-adaptive-hole-area-percent", "#",
 	&bu_opt_fastf_t, &repair_adaptive_hole_area_percent,
 	"Final-only hole candidate area ceiling for bounded open-edge repair");
-    BU_OPT(d[37], "", "max-working-mib", "#", &bu_opt_long,
+    BU_OPT(d[40], "", "max-working-mib", "#", &bu_opt_long,
 	&max_working_mib, "Maximum shared temporary generator memory");
-    BU_OPT(d[38], "", "max-triangles", "#", &bu_opt_long,
+    BU_OPT(d[41], "", "max-triangles", "#", &bu_opt_long,
 	&max_triangles, "Maximum adaptive shaded triangle target");
-    BU_OPT(d[39], "", "display-coarse-rel", "fraction",
+    BU_OPT(d[42], "", "display-coarse-rel", "fraction",
 	&bu_opt_fastf_t, &display_coarse_rel,
 	"Initial relative tolerance for adaptive shaded display");
-    BU_OPT(d[40], "", "display-area-change", "fraction",
+    BU_OPT(d[43], "", "display-area-change", "fraction",
 	&bu_opt_fastf_t, &display_area_change,
 	"Per-face unsigned area convergence threshold");
-    BU_OPT(d[41], "", "display-only", "", NULL, &display_only,
+    BU_OPT(d[44], "", "display-only", "", NULL, &display_only,
 	"Run only bounded visualization generators; skip source reference checks");
-	BU_OPT(d[42], "", "image-dir", "directory", &bu_opt_str, &image_dir,
+	BU_OPT(d[45], "", "image-dir", "directory", &bu_opt_str, &image_dir,
 	"Write successful display geometry images to this directory");
-	BU_OPT(d[43], "", "image-size", "pixels", &bu_opt_long, &image_size,
+	BU_OPT(d[46], "", "image-size", "pixels", &bu_opt_long, &image_size,
 	"Square output image size (default 1024)");
-    BU_OPT(d[44], "", "repair-planar-cap-area-percent", "#",
+    BU_OPT(d[47], "", "repair-planar-cap-area-percent", "#",
 	&bu_opt_fastf_t, &repair_planar_cap_area_percent,
 	"Opt-in aggregate planar cap area as a percentage of remaining surface area");
-	BU_OPT_NULL(d[45]);
+	BU_OPT_NULL(d[48]);
     int ac = bu_opt_parse(NULL, argc, argv, d);
     const char *usage =
 	"Usage: brep-audit [options] [--list|--batch] file.g [brep]\n";
@@ -2593,11 +2656,16 @@ main(int argc, const char **argv)
 	    (repair_relaxed_fidelity_factor < 1.0 ||
 	    repair_relaxed_fidelity_factor > 4.0)) ||
 	    repair_deviation_samples <= 0 ||
+	    repair_poisson_depth < 5 || repair_poisson_depth > 10 ||
+	    !std::isfinite(repair_poisson_scale) ||
+	    (((repair_poisson_scale > 0.0) ||
+	    (repair_poisson_scale < 0.0)) &&
+	    (repair_poisson_scale < 1.0 || repair_poisson_scale > 2.0)) ||
 	    (repair_no_fast && (repair_full_fast ||
-	    repair_full_fast_if_needed)) ||
+	    repair_full_fast_if_needed || repair_poisson)) ||
 	    (repair_full_fast_if_needed &&
-	    (repair_full_fast)) ||
-	    (repair_try_invalid && (repair_full_fast)) ||
+	    (repair_full_fast || repair_poisson)) ||
+	    (repair_try_invalid && (repair_full_fast || repair_poisson)) ||
 	    (batch_object_file && !batch) ||
 	    (batch && face_index != -1) ||
 	    (display_only && valid_solids_only) ||
@@ -2644,7 +2712,8 @@ main(int argc, const char **argv)
 	repair_max_deviation_rel,
 	repair_deviation_samples, repair_allow_untrimmed != 0,
 	repair_full_fast != 0, repair_full_fast_if_needed != 0,
-	repair_try_invalid != 0,
+	repair_try_invalid != 0, repair_poisson != 0,
+	repair_poisson_depth, repair_poisson_scale,
 	repair_union_components != 0,
 	repair_allow_self_intersections != 0,
 	repair_require_manifold != 0,

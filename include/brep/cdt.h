@@ -123,6 +123,27 @@ struct brep_cdt_diagnostic {
  * Edge-initialization failures caused by disagreeing paired p-curves may make
  * one repair-only retry when their shared midpoint stays within the same
  * maximum surface-deviation bound of both faces and the native edge curve.
+ * With the automatic zero poisson_scale, use_poisson_reconstruction first
+ * gives conservative mesh repair one chance to close the whole display mesh
+ * without replacing its triangles.  Only if that fails does Screened Poisson
+ * replace the display mesh with an implicit-surface reconstruction.  An
+ * internal triangle cap bounds that opportunistic pass; use_full_fast_fallback
+ * without Poisson remains the explicit route for larger local repairs.  An
+ * explicit nonzero scale requests Poisson directly.  This is the most
+ * approximate tier and is therefore separately opt-in.  Its depth
+ * is restricted to the bounded range accepted by this API.  A zero
+ * poisson_scale tries the upstream 1.1 domain scale followed by a 1.2 retry
+ * if the first reconstructed mesh cannot be certified.  If either scale
+ * exceeds the reference-area bound or omits input coverage, the same bounded
+ * scale pair is retried with one area-weighted sample budget.  If the default
+ * Neumann reconstruction remains open, the bounded scale and sampling
+ * attempts are repeated with a Dirichlet boundary
+ * and stronger non-exact screening.  This closure-biased fallback is reported
+ * explicitly and remains subject to every solid, area, deviation, and input
+ * coverage gate.  A value from 1.0 through 2.0 requests one fixed scale
+ * without either automatic retry.  Disconnected B-Rep face components are
+ * reconstructed independently so a large component cannot erase a smaller
+ * one; max_poisson_components bounds that work.
  * relaxed_fidelity_factor is a separately opt-in final acceptance tier for a
  * mesh which already satisfies every solid and Manifold requirement.  A
  * value from 1 through 4 multiplies the strict surface-deviation and enabled
@@ -139,6 +160,8 @@ struct brep_cdt_diagnostic {
 #define BREP_CDT_REPAIR_APPROX_LOCAL_MESH 2
 /** The complete B-Rep used display triangulation. */
 #define BREP_CDT_REPAIR_APPROX_FULL_FAST 3
+/** The complete display mesh was replaced by an implicit reconstruction. */
+#define BREP_CDT_REPAIR_APPROX_POISSON 4
 /** A Manifold mesh used the explicitly relaxed final fidelity bound. */
 #define BREP_CDT_REPAIR_APPROX_RELAXED_FIDELITY 5
 /** Source topology was healed without replacing its support geometry. */
@@ -163,9 +186,13 @@ struct brep_cdt_repair_settings {
     int allow_untrimmed_surface_match;
     int use_fast_face_fallback;
     int use_full_fast_fallback;
+    int use_poisson_reconstruction;
+    int poisson_depth;
+    size_t max_poisson_components;
     size_t max_fast_points;
     size_t max_fast_result_bytes;
     long max_fast_time_ms;
+    fastf_t poisson_scale;
     int use_full_fast_fallback_if_needed;
     int try_invalid_brep;
     brep_cdt_repair_provenance_t provenance;
@@ -192,7 +219,7 @@ struct brep_cdt_repair_settings {
     fastf_t max_planar_cap_area_percent;
 };
 
-#define BREP_CDT_REPAIR_SETTINGS_INIT {BG_TRIMESH_REPAIR_SETTINGS_INIT, 0.0, 4096, 1.0, 0, 1, 0, 1048576, 134217728, 5000, 0, 0, NULL, NULL, 0.0, 0, 0.0, 0.0}
+#define BREP_CDT_REPAIR_SETTINGS_INIT {BG_TRIMESH_REPAIR_SETTINGS_INIT, 0.0, 4096, 1.0, 0, 1, 0, 0, 8, 64, 1048576, 134217728, 5000, 0.0, 0, 0, NULL, NULL, 0.0, 0, 0.0, 0.0}
 
 /** Bounded topology interpretation, distinct from triangle-mesh repair.
  * Counts describe a candidate; applied is set only after mesh acceptance. */
@@ -235,6 +262,16 @@ struct brep_cdt_repair_report {
     int fast_fallback_failed_faces;
     int fast_fallback_triangles;
     int full_fast_fallback_used;
+    int poisson_reconstruction_attempted;
+    int poisson_reconstruction_applied;
+    int poisson_input_points;
+    int poisson_components;
+    int poisson_output_points;
+    int poisson_output_faces;
+    int poisson_attempts;
+    int poisson_area_sampling_applied;
+    int poisson_boundary_fallback_applied;
+    fastf_t poisson_scale;
     fastf_t max_surface_deviation;
     fastf_t rms_surface_deviation;
     fastf_t allowed_surface_deviation;
@@ -316,7 +353,7 @@ struct brep_cdt_repair_report {
     unsigned int resource_limits;
 };
 
-#define BREP_CDT_REPAIR_REPORT_INIT {BG_TRIMESH_REPAIR_REPORT_INIT, {BREP_CDT_RESULT_UNATTEMPTED, BREP_CDT_STAGE_NONE, -1, 0, 0, {0}}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0, 0, 0, 0.0, BREP_CDT_HEALING_REPORT_INIT, 0, 0, 0u}
+#define BREP_CDT_REPAIR_REPORT_INIT {BG_TRIMESH_REPAIR_REPORT_INIT, {BREP_CDT_RESULT_UNATTEMPTED, BREP_CDT_STAGE_NONE, -1, 0, 0, {0}}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0, 0, 0, 0.0, BREP_CDT_HEALING_REPORT_INIT, 0, 0, 0u}
 
 /** Create and initialize a CDT state with default tolerances.  bv
  * must be a pointer to an ON_Brep object. */
