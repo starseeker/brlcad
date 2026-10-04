@@ -75,7 +75,10 @@ main(int argc, const char **argv)
     if (result)
 	return result;
     result = cdt_test_repair_rigorous_boundary();
-    return result ? result : cdt_test_repair_patch_boundary();
+    if (result)
+	return result;
+    result = cdt_test_repair_patch_boundary();
+    return result ? result : cdt_test_repair_patch_mapping();
 }
 
 /*

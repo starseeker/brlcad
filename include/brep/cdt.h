@@ -88,6 +88,236 @@ struct brep_cdt_diagnostic {
     char message[256];
 };
 
+/**
+ * Explicit controls for the post-tessellation mesh-repair tier.
+ *
+ * Repair is never attempted by ON_Brep_CDT_Tessellate.  Hole and component
+ * operations must also be enabled and bounded explicitly in @p mesh.  A zero
+ * max_surface_deviation uses the tessellation's maximum chord tolerance.  A
+ * zero max_deviation_samples uses the library's bounded default.  The area
+ * change limit applies to the complete repaired mesh; zero disables that
+ * additional aggregate limit.  By default deviation samples must project
+ * inside a trimmed source face.  allow_untrimmed_surface_match permits an
+ * explicitly reported fallback to the source face's underlying analytic
+ * surface when defective trim topology prevents that classification.  The
+ * fast-face fallback supplies display-CDT triangles for failed rigorous faces
+ * before mesh repair; its point, byte, and time limits bound that extra work.
+ * use_full_fast_fallback instead supplies one coherent whole-B-Rep display
+ * mesh.  It is intended as a lower-fidelity alternative when mixing rigorous
+ * and display face meshes leaves irreparable boundary topology.
+ * use_full_fast_fallback_if_needed preserves the rigorous-first attempt and
+ * retries with that whole display mesh only if the mixed mesh cannot be
+ * certified.  try_invalid_brep permits the repair entry point to make one
+ * rigorous attempt after broad OpenNURBS validity failure, while retaining
+ * the mesher's closed-manifold and paired-edge topology prerequisites.
+ * If ordinary repair fails, that option also permits a bounded topology
+ * healing attempt on an owned copy: unused edges, inconsistent orientations,
+ * and supported planar trim loops may be corrected without changing source
+ * surfaces or 3-D curves.  Sampling, storage, and time are bounded by the fast
+ * fallback limits.  Ambiguous boundaries are left unresolved; any candidate
+ * must still pass the requested mesh and fidelity checks.  Provenance uses
+ * the caller's original face and edge indices, including ignored wire edges.
+ * A failed whole-display repair of a valid closed source may retry a small
+ * open boundary residue with its validated pullback samples retained.  The
+ * same resource, solid, and fidelity requirements apply to that retry.
+ * Edge-initialization failures caused by disagreeing paired p-curves may make
+ * one repair-only retry when their shared midpoint stays within the same
+ * maximum surface-deviation bound of both faces and the native edge curve.
+ * relaxed_fidelity_factor is a separately opt-in final acceptance tier for a
+ * mesh which already satisfies every solid and Manifold requirement.  A
+ * value from 1 through 4 multiplies the strict surface-deviation and enabled
+ * area-change limits without changing the generated mesh.  Acceptance is
+ * tagged explicitly in the report and provenance callback; zero disables it.
+ */
+/* These identifiers describe accepted paths; their values do not rank
+ * geometric error. */
+/** No approximate geometry was needed. */
+#define BREP_CDT_REPAIR_APPROX_NONE 0
+/** A failed face used display triangulation with rigorous edge samples. */
+#define BREP_CDT_REPAIR_APPROX_CONSTRAINED_FACE 1
+/** Bounded local mesh repair added or reconstructed a tagged neighborhood. */
+#define BREP_CDT_REPAIR_APPROX_LOCAL_MESH 2
+/** The complete B-Rep used display triangulation. */
+#define BREP_CDT_REPAIR_APPROX_FULL_FAST 3
+/** A Manifold mesh used the explicitly relaxed final fidelity bound. */
+#define BREP_CDT_REPAIR_APPROX_RELAXED_FIDELITY 5
+/** Source topology was healed without replacing its support geometry. */
+#define BREP_CDT_REPAIR_APPROX_TOPOLOGY 6
+
+/**
+ * Report the B-Rep topology whose interpretation required approximation.
+ * The callback is invoked only for an accepted repaired solid.  face_indices
+ * and edge_indices remain valid only for the duration of the call.  Callers
+ * producing a BoT may use these lists and approximation_tier to attach
+ * provenance attributes to the converted object.
+ */
+typedef void (*brep_cdt_repair_provenance_t)(int approximation_tier,
+	const int *face_indices, size_t face_count, const int *edge_indices,
+	size_t edge_count, void *data);
+
+struct brep_cdt_repair_settings {
+    struct bg_trimesh_repair_settings mesh;
+    fastf_t max_surface_deviation;
+    size_t max_deviation_samples;
+    fastf_t max_area_change_percent;
+    int allow_untrimmed_surface_match;
+    int use_fast_face_fallback;
+    int use_full_fast_fallback;
+    size_t max_fast_points;
+    size_t max_fast_result_bytes;
+    long max_fast_time_ms;
+    int use_full_fast_fallback_if_needed;
+    int try_invalid_brep;
+    brep_cdt_repair_provenance_t provenance;
+    void *provenance_data;
+    fastf_t relaxed_fidelity_factor;
+    /**
+     * Optional second-pass ceiling when only open boundary edges remain.
+     * max_hole_edges remains the normal limit; zero disables the retry.
+     * Earlier rigorous-boundary reconstruction keeps its original budget.
+     */
+    size_t max_adaptive_hole_edges;
+    /**
+     * Final-repair-only hole candidate ceiling for a bounded open-edge
+     * residue.  The independent aggregate area-change and surface-deviation
+     * limits remain authoritative for accepting the resulting solid.
+     */
+    fastf_t max_adaptive_hole_area_percent;
+    /** Opt-in planar caps for simple open boundaries on a multi-face B-Rep.
+     * Cap bounding boxes must be disjoint.  Their aggregate conservative
+     * area bound must not exceed this percentage of
+     * the accepted mesh's remaining area.  Zero disables capping.  Capped
+     * candidates require Manifold acceptance and retain the caller's mesh
+     * intersection policy and fidelity limits.  Requires try_invalid_brep. */
+    fastf_t max_planar_cap_area_percent;
+};
+
+#define BREP_CDT_REPAIR_SETTINGS_INIT {BG_TRIMESH_REPAIR_SETTINGS_INIT, 0.0, 4096, 1.0, 0, 1, 0, 1048576, 134217728, 5000, 0, 0, NULL, NULL, 0.0, 0, 0.0, 0.0}
+
+/** Bounded topology interpretation, distinct from triangle-mesh repair.
+ * Counts describe a candidate; applied is set only after mesh acceptance. */
+struct brep_cdt_healing_report {
+    int attempted;
+    int applied;
+    int limited;
+    int restored_outer_loops;
+    int corrected_loop_roles;
+    int reoriented_faces;
+    int removed_unused_edges;
+    /** Plane-distance bound for reconstructed outer loops and cap curves. */
+    fastf_t max_edge_deviation;
+    int capped_loops;
+    fastf_t cap_area_bound;
+    fastf_t cap_area_percent;
+};
+
+#define BREP_CDT_HEALING_REPORT_INIT {0, 0, 0, 0, 0, 0, 0, 0.0, 0, 0.0, 0.0}
+
+/* Resource limits encountered by any nested repair attempt. */
+#define BREP_CDT_REPAIR_LIMIT_TIME 1u
+#define BREP_CDT_REPAIR_LIMIT_MEMORY 2u
+#define BREP_CDT_REPAIR_LIMIT_POINTS 4u
+/* Bounded refinement or topology healing exhausted its work budget. */
+#define BREP_CDT_REPAIR_LIMIT_REFINEMENT 8u
+
+/** Provenance and quality measurements for a repair attempt. */
+struct brep_cdt_repair_report {
+    struct bg_trimesh_repair_report mesh;
+    struct brep_cdt_diagnostic source_diagnostic;
+    int source_failed_faces;
+    int changed_faces;
+    size_t deviation_samples;
+    size_t deviation_projection_failures;
+    size_t untrimmed_surface_samples;
+    size_t input_mesh_surface_samples;
+    int fast_fallback_attempted_faces;
+    int fast_fallback_used_faces;
+    int fast_fallback_failed_faces;
+    int fast_fallback_triangles;
+    int full_fast_fallback_used;
+    fastf_t max_surface_deviation;
+    fastf_t rms_surface_deviation;
+    fastf_t allowed_surface_deviation;
+    fastf_t reference_area;
+    fastf_t reference_area_change_percent;
+    fastf_t area_change_percent;
+    size_t coverage_samples;
+    size_t coverage_failures;
+    fastf_t max_coverage_deviation;
+    fastf_t rms_coverage_deviation;
+    int relaxed_tessellation_attempted;
+    int relaxed_tessellation_completed_faces;
+    int bounded_edge_retry_attempted;
+    int bounded_edge_retry_completed_faces;
+    int bounded_edge_approximation_edges;
+    int bounded_edge_approximation_faces;
+    fastf_t max_bounded_edge_deviation;
+    size_t fast_fallback_constrained_edges;
+    size_t fast_fallback_constrained_samples;
+    int added_patch_components;
+    int largest_added_patch_faces;
+    fastf_t largest_added_patch_area;
+    int rigorous_first_attempted;
+    int rigorous_first_result;
+    int rigorous_first_fast_faces;
+    size_t rigorous_first_constrained_edges;
+    size_t rigorous_first_constrained_samples;
+    fastf_t rigorous_first_reference_area;
+    fastf_t rigorous_first_output_area;
+    fastf_t rigorous_first_area_change_percent;
+    int approximation_tier;
+    int approximation_faces;
+    int approximation_edges;
+    /** Triangles retained byte-for-byte from the rigorous input mesh. */
+    int retained_rigorous_triangles;
+    /** Triangles replaced only inside accepted, tagged local neighborhoods. */
+    int missing_rigorous_triangles;
+    /** Certified triangles retained by a bounded hanging-edge subdivision. */
+    int subdivided_rigorous_triangles;
+    /** Accepted local neighborhoods replacing certified triangles. */
+    int replaced_rigorous_components;
+    int largest_replaced_rigorous_triangles;
+    size_t largest_replaced_boundary_edges;
+    fastf_t replaced_rigorous_area;
+    fastf_t largest_replaced_rigorous_area;
+    /** Failed adaptive faces retained as approximate repair input. */
+    int best_effort_faces;
+    int best_effort_triangles;
+    int best_effort_folded_triangles;
+    /** Chord samples projected to their source face within four tolerances. */
+    size_t best_effort_reference_samples;
+    /** Chord samples with no source projection inside that diagnostic bound. */
+    size_t best_effort_reference_failures;
+    fastf_t max_best_effort_surface_deviation;
+    /** Sparse local periodic strips joining rigorous neighboring boundaries. */
+    int boundary_strip_faces;
+    int boundary_strip_triangles;
+    size_t boundary_strip_constrained_edges;
+    size_t boundary_strip_constrained_samples;
+    /** Topological disks spanning complete authoritative shared boundaries. */
+    int topological_disk_faces;
+    int topological_disk_triangles;
+    size_t topological_disk_constrained_edges;
+    size_t topological_disk_constrained_samples;
+    /** Final acceptance used the separately enabled relaxed fidelity tier. */
+    int relaxed_fidelity_applied;
+    fastf_t relaxed_fidelity_factor;
+    fastf_t relaxed_surface_deviation_limit;
+    fastf_t relaxed_area_change_percent_limit;
+    int adaptive_hole_retry_attempted;
+    size_t adaptive_hole_edges;
+    int adaptive_hole_area_retry_attempted;
+    fastf_t adaptive_hole_area_percent;
+    struct brep_cdt_healing_report healing;
+    /** A closed-source retry retained validated pullback boundary samples. */
+    int pullback_retry_attempted;
+    int pullback_retry_applied;
+    /** Cumulative BREP_CDT_REPAIR_LIMIT_* flags, also retained on success. */
+    unsigned int resource_limits;
+};
+
+#define BREP_CDT_REPAIR_REPORT_INIT {BG_TRIMESH_REPAIR_REPORT_INIT, {BREP_CDT_RESULT_UNATTEMPTED, BREP_CDT_STAGE_NONE, -1, 0, 0, {0}}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0, 0, 0, 0.0, BREP_CDT_HEALING_REPORT_INIT, 0, 0, 0u}
+
 /** Create and initialize a CDT state with default tolerances.  bv
  * must be a pointer to an ON_Brep object. */
 extern BREP_EXPORT struct ON_Brep_CDT_State *
@@ -128,6 +358,30 @@ ON_Brep_CDT_Brep(struct ON_Brep_CDT_State *s);
  * last Tessellate call, the old tessellation information will be replaced. */
 extern BREP_EXPORT int
 ON_Brep_CDT_Tessellate(struct ON_Brep_CDT_State *s, int face_cnt, int *faces);
+
+/**
+ * Attempt an explicitly bounded mesh repair after tessellation left a
+ * partial or non-solid mesh.  The original failed-face diagnostics remain
+ * available as repair provenance.  A repaired result is accepted only when
+ * it is a closed, oriented manifold with valid vertex links, nondegenerate
+ * triangles, bounded area change, and sampled deviation from the source
+ * B-Rep within the requested tolerance.  Nonadjacent triangle intersections
+ * are rejected unless explicitly permitted by the mesh settings.  A
+ * certified triangle neighborhood may be reconstructed only when its area
+ * and boundary stay within the configured hole limits; every affected B-Rep
+ * face and edge is then reported as approximation provenance.  A failed
+ * single-loop face may also be spanned as a topological disk when every trim
+ * has complete authoritative shared-edge samples.  This preserves its exact
+ * boundary while explicitly reporting the interior as a local approximation.
+ *
+ * Returns 1 if the state already contains a certified solid, 0 if repair
+ * produced a certified approximation, and -1 if repair was not possible or
+ * did not satisfy all postconditions.
+ */
+extern BREP_EXPORT int
+ON_Brep_CDT_Repair(struct ON_Brep_CDT_State *s,
+	const struct brep_cdt_repair_settings *settings,
+	struct brep_cdt_repair_report *report);
 
 /** Given a state, report the status of its triangulation. -3 indicates a
  * failed attempt to tessellate, -2 indicates a non-solid tessellation is
