@@ -33,6 +33,7 @@
 #ifdef __cplusplus
 extern "C++" {
 /* @cond */
+#  include <cstddef>
 #  include <vector>
 #  include <list>
 /* @endcond */
@@ -76,6 +77,12 @@ namespace brlcad {
 
 	/** Report the depth of this node in the hierarchy */
 	int depth() const;
+
+	/**
+	 * Return the conservative per-node storage estimate used to translate
+	 * caller byte budgets into bounded hierarchy work.
+	 */
+	static std::size_t estimated_allocation_size();
 
 	/**
 	 * Get 2 points defining bounding box:
