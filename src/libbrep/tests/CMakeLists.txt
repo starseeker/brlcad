@@ -25,6 +25,12 @@ brlcad_add_test(
 brlcad_addexec(test_brep_curvetree_display brep_curvetree_display.cpp "libbrep" TEST)
 brlcad_add_test(NAME brep_curvetree_display COMMAND test_brep_curvetree_display)
 
+# Fast display recovery must retain thin nonlinear loops, reconstruct periodic
+# caps and bands, repair malformed pcurves from their 3-D edges, and report
+# exact zero-area imports separately from triangulation failures.
+brlcad_addexec(test_brep_fast_repair brep_fast_repair.cpp "libbrep" TEST)
+brlcad_add_test(NAME brep_fast_repair COMMAND test_brep_fast_repair)
+
 # Standalone CDT hole-triangulation tests: verify that bg_nested_poly_triangulate
 # produces no triangles whose centroid falls inside a hole polygon, for two
 # faces from the NIST MBE PMI sample that are known to have multiple holes.
@@ -52,6 +58,7 @@ cmakefiles(
   brep_cdt_hole_face27.c
   brep_fast.cpp
   brep_curvetree_display.cpp
+  brep_fast_repair.cpp
   brep_cdt_mesh.cpp
   cyl_hole.g
   cyls_holes.g
