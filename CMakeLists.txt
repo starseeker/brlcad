@@ -231,7 +231,7 @@ set(CMAKE_FIND_USE_PACKAGE_REGISTRY FALSE)
 # Prepare to manage and build BRL-CAD's external dependencies. Specifies a
 # specific commit hash to use in the 'bext' repository.
 include(BRLCAD_ExternalDeps)
-brlcad_bext_init(f8245e0bb31c5f96b17d8d32a988b9a7679fe4b9)
+brlcad_bext_init(cfe7b808cf829143be3c8675e43e190a94d5b271)
 
 #---------------------------------------------------------------------
 # Define various utilities.
@@ -352,9 +352,10 @@ set(CMAKE_SKIP_BUILD_RPATH FALSE)
 # it should only be set to the installation value when actually installed.
 set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
 
-# Add the automatically determined parts of the RPATH which point to
-# directories outside the build tree to the install RPATH
-set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+# Installed runtime paths are defined explicitly below.  Do not append
+# directories discovered on the build host, since those paths may not exist
+# or may resolve to unrelated libraries on the installed system.
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
 
 # The following logic is what allows binaries to run successfully in the build
 # directory AND install directory.

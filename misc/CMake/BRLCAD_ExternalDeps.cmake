@@ -1108,9 +1108,9 @@ function(brlcad_install_strclear_replace stamp_dir strclear source install_file 
   endif()
 endfunction()
 
-function(brlcad_install_binary_postprocess stamp_dir strclear source install_file install_type mode rpath_tool install_rpath build_lib_path rel_rpath use_selective_rpath verbose)
+function(brlcad_install_binary_postprocess stamp_dir strclear source install_file install_type mode rpath_tool install_rpath build_lib_path rel_rpath verbose)
   set(_brlcad_physical_file "$ENV{DESTDIR}${install_file}")
-  set(_brlcad_signature "binary-postprocess|${install_type}|${mode}|${rpath_tool}|${install_rpath}|${build_lib_path}|${rel_rpath}|${use_selective_rpath}|${strclear}")
+  set(_brlcad_signature "binary-postprocess|${install_type}|${mode}|${rpath_tool}|${install_rpath}|${build_lib_path}|${rel_rpath}|${strclear}")
   _brlcad_postprocess_needed(_brlcad_needed "${stamp_dir}" "${source}" "${_brlcad_physical_file}" "${_brlcad_signature}")
   if(NOT _brlcad_needed)
     return()
@@ -1121,32 +1121,41 @@ function(brlcad_install_binary_postprocess stamp_dir strclear source install_fil
     message(FATAL_ERROR "Post-install copy did not create ${_brlcad_physical_file}")
   endif()
   set(_brlcad_result 0)
+  set(_brlcad_rpath_output)
+  set(_brlcad_rpath_error)
   if("${mode}" STREQUAL "RPATH_TOOL")
-    set(_brlcad_selective_rpath_args)
-    if(use_selective_rpath)
-      set(_brlcad_selective_rpath_args --set-rpath-if-needed --set-rpath-if-needed-prepend --stale-rpath-prefix "${build_lib_path}")
-    endif()
+    # Install the exact project-defined search order.  A selective update can
+    # leave an existing relative-only RPATH without the canonical install path.
     execute_process(
-      COMMAND "${rpath_tool}" --set-rpath "${install_rpath}" ${_brlcad_selective_rpath_args} "${_brlcad_physical_file}"
+      COMMAND "${rpath_tool}" --set-rpath "${install_rpath}" "${_brlcad_physical_file}"
       RESULT_VARIABLE _brlcad_result
+      OUTPUT_VARIABLE _brlcad_rpath_output
+      ERROR_VARIABLE _brlcad_rpath_error
     )
   elseif("${mode}" STREQUAL "APPLE")
     execute_process(
       COMMAND install_name_tool -delete_rpath "${build_lib_path}" "${_brlcad_physical_file}"
       RESULT_VARIABLE _brlcad_result
-      OUTPUT_VARIABLE _brlcad_output
-      ERROR_VARIABLE _brlcad_error
+      OUTPUT_VARIABLE _brlcad_rpath_output
+      ERROR_VARIABLE _brlcad_rpath_error
     )
     if(_brlcad_result EQUAL 0)
       execute_process(
         COMMAND install_name_tool -add_rpath "${rel_rpath}" "${_brlcad_physical_file}"
         RESULT_VARIABLE _brlcad_result
+        OUTPUT_VARIABLE _brlcad_rpath_output
+        ERROR_VARIABLE _brlcad_rpath_error
       )
     endif()
   endif()
 
   if(NOT _brlcad_result EQUAL 0)
-    message(WARNING "Post-install RPATH update failed for ${_brlcad_physical_file}")
+    message(
+      WARNING
+        "Post-install RPATH update failed for ${_brlcad_physical_file}\n"
+        "stdout: ${_brlcad_rpath_output}\n"
+        "stderr: ${_brlcad_rpath_error}"
+    )
     return()
   endif()
 
@@ -1840,13 +1849,9 @@ endfunction()
       elseif(APPLE)
         set(_brlcad_install_postprocess_mode "APPLE")
       endif(P_RPATH_EXECUTABLE)
-      set(_brlcad_install_use_selective_rpath FALSE)
-      if(P_RPATH_SUPPORTS_SET_IF_NEEDED_PREPEND)
-        set(_brlcad_install_use_selective_rpath TRUE)
-      endif(P_RPATH_SUPPORTS_SET_IF_NEEDED_PREPEND)
       install(
         CODE
-          "include(\"${BRLCAD_EXT_INSTALL_POSTPROCESS_SCRIPT}\")\nbrlcad_install_binary_postprocess(\"${BRLCAD_EXT_INSTALL_POSTPROCESS_STAMP_DIR}\" \"${STRCLEAR_EXECUTABLE}\" \"${CMAKE_BINARY_DIR}/${tf}\" \"\${CMAKE_INSTALL_PREFIX}/${tf}\" \"PROGRAM\" \"${_brlcad_install_postprocess_mode}\" \"${_brlcad_install_postprocess_tool}\" \"${_brlcad_install_postprocess_rpath}\" \"${CMAKE_BINARY_DIR}/${LIB_DIR}\" \"${REL_RPATH}\" \"${_brlcad_install_use_selective_rpath}\" \"${BRLCAD_VERBOSE}\")"
+          "include(\"${BRLCAD_EXT_INSTALL_POSTPROCESS_SCRIPT}\")\nbrlcad_install_binary_postprocess(\"${BRLCAD_EXT_INSTALL_POSTPROCESS_STAMP_DIR}\" \"${STRCLEAR_EXECUTABLE}\" \"${CMAKE_BINARY_DIR}/${tf}\" \"\${CMAKE_INSTALL_PREFIX}/${tf}\" \"PROGRAM\" \"${_brlcad_install_postprocess_mode}\" \"${_brlcad_install_postprocess_tool}\" \"${_brlcad_install_postprocess_rpath}\" \"${CMAKE_BINARY_DIR}/${LIB_DIR}\" \"${REL_RPATH}\" \"${BRLCAD_VERBOSE}\")"
       )
       continue()
     endif("${tf}" IN_LIST ALL_BINARY_FILES)
