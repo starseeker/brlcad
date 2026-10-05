@@ -13,6 +13,22 @@ changes made.  See document footer for additional details.
 --- 2026-10-0X  Release 7.46.0                                     ---
 ----------------------------------------------------------------------
 
+This release expands geometry conversion and improves modeling
+reliability.  STEP support adds AP203e2, AP214, and AP242
+import/export, native CSG round trips, and AP242 product and
+manufacturing information (PMI) import.  IGES and JT conversion is
+expanded, and new OpenSCAD CSG import/export tools are available.
+
+Facetization is more reliable, NMG solid ray tracing is 10-20 times
+faster, CSG ray tracing is faster, and BoT, DSP, and point-cloud ray
+intersections are corrected.  MGED gains numerous fixes to primitive,
+sketch, and combination editing, drawing, dialogs, and preferences.
+
+New tools support object nesting with arrange, building generation
+with mkbuilding, annotation editing, and primitive repair.  Geometry
+analysis, image utilities, Windows support, documentation, and bundled
+dependencies also receive substantial updates.
+
 * fixed inside BoT rays, DSP surface normals, PNTS bounds - Cliff Yapp
 * improved mged fallback HTML manual viewer - Cliff Yapp
 * fixed gqa undefined densities and exit status - Chris McGregor
@@ -563,6 +579,7 @@ for more information.
 ----------------------------------------------------------------------
 --- 2023-11-06  Release 7.38.0                                     ---
 ----------------------------------------------------------------------
+
 This major release of BRL-CAD introduces significant improvements to
 the robustness of the facetize command by leveraging the Manifold
 library for boolean evaluation of meshes. Facetization is an operation
@@ -601,6 +618,7 @@ processing high level assemblies in BRL-CAD's example geometry files:
 ----------------------------------------------------------------------
 --- 2023-07-26  Release 7.36.0                                     ---
 ----------------------------------------------------------------------
+
 This major release of BRL-CAD introduces significant updates to
 geometry conversion support. The update includes modernization for
 NURBS importing and interaction, BoT manipulation, and incorporates
