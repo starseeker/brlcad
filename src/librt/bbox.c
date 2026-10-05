@@ -522,7 +522,7 @@ rt_bound_internal(struct db_i *dbip, struct directory *dp,
     }
 
     RT_CK_COMB(combp);
-    if (rt_traverse_tree(rtip, combp->tree, tree_min, tree_max)) {
+    if (!combp->tree || rt_traverse_tree(rtip, combp->tree, tree_min, tree_max)) {
 	bu_log("rt_bound_internal: rt_bound_tree() failed\n");
 	rt_db_free_internal(&intern);
 	rt_i_destroy(rtip);
