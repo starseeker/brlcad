@@ -75,7 +75,7 @@ brlcad_addexec(rt_reprep_prune reprep_prune.c "librt;libwdb;libbu;${M_LIBRARY}" 
 # Note - this feature is not available in a BRLCAD_ENABLE_RUNTIME_DEBUG=OFF
 # build, since it has an unavoidable performance overhead in the hot loop to
 # check if the setting is enabled.
-if (NOT BRLCAD_ENABLE_RUNTIME_DEBUG)
+if (BRLCAD_ENABLE_RUNTIME_DEBUG)
   brlcad_addexec(rt_rtcmp_capture rtcmp_capture.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
   brlcad_add_test(NAME rt_rtcmp_capture COMMAND rt_rtcmp_capture)
   brlcad_add_test(NAME rt_rtcmp_capture_primitives COMMAND rt_rtcmp_capture primitives)
