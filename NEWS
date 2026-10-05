@@ -14,31 +14,31 @@ changes made.  See document footer for additional details.
 ----------------------------------------------------------------------
 
 * fixed shared OpenGL dlist z-buffer and lighting state - Cliff Yapp
-* improved MGED fallback HTML manual viewer - Cliff Yapp
-* preserved GIST subprocess diagnostics on failure - Chris McGregor
-* fixed GQA undefined densities and exit status - Chris McGregor
+* improved mged fallback HTML manual viewer - Cliff Yapp
+* preserved gist subprocess diagnostics on failure - Chris McGregor
+* fixed gqa undefined densities and exit status - Chris McGregor
 * added ARBN support to the inside command - Cliff Yapp
-* added MGED HYP neck-to-base ratio edit label - Cliff Yapp
-* fixed MGED BoT face selection and feedback - Cliff Yapp
-* fixed MGED view-mode panning and solid edit queries - Cliff Yapp
-* fixed MGED middle-click edit rotation moving the view - Cliff Yapp
+* added mged HYP neck-to-base ratio edit label - Cliff Yapp
+* fixed mged BoT face selection and feedback - Cliff Yapp
+* fixed mged view-mode panning and solid edit queries - Cliff Yapp
+* fixed mged middle-click edit rotation moving the view - Cliff Yapp
 * prevented rejected solid edits from altering geometry - Cliff Yapp
-* restored MGED command prompt focus at GUI startup - Cliff Yapp
+* restored mged command prompt focus at GUI startup - Cliff Yapp
 * fixed Windows temporary-file binary data corruption - Cliff Yapp
 * improved pixscale & bwscale scaling and image piping - Sean Morrison
 * restored pixdiff behavior on .pix, added -b for .bw - Sean Morrison
 * improved fallback methodologies for facetize pipeline - Cliff Yapp
 * improved facetize pipeline robustness - Cliff Yapp
 * corrected DSP, PNTS, and BoT ray edge cases - Cliff Yapp
-* updated MGED and Archer for Tcl 8.6.18 and Itcl/Itk 4 - Cliff Yapp
+* updated mged and Archer for Tcl 8.6.18 and Itcl/Itk 4 - Cliff Yapp
 * fixed writes to fileless geometry databases - Cliff Yapp
 * fixed nastran-g handling of large property IDs - Rupesh, Cliff Yapp
 * fixed dxf-g invalid polyface idx crash - Meghna45-code, Cliff Yapp
 * fixed TclCAD framebuffer listing and deletion - Cliff Yapp
-* fixed MGED Build Pattern progress updates - Cliff Yapp
-* fixed MGED search -exec reentry and Ctrl-C crashes - Cliff Yapp
-* fixed MGED asynchronous commands and clone progress - Cliff Yapp
-* accelerated large and repeated MGED path drawing - Cliff Yapp
+* fixed mged Build Pattern progress updates - Cliff Yapp
+* fixed mged search -exec reentry and Ctrl-C crashes - Cliff Yapp
+* fixed mged asynchronous commands and clone progress - Cliff Yapp
+* accelerated large and repeated mged path drawing - Cliff Yapp
 * fixed ARB7 inside solid construction - Cliff Yapp
 * fixed direct ARB face and edge-direction editing - Cliff Yapp
 * fixed rtwizard startup with framebuffer contention - Cliff Yapp
@@ -47,28 +47,28 @@ changes made.  See document footer for additional details.
 * fixed toggle arrow callbacks during setup - Cliff Yapp
 * fixed Tcl dialogs with multi-word titles and msgs - Cliff Yapp
 * fixed Archer Tank Wizard gun generation - Cliff Yapp
-* fixed MGED and Archer sketch arc tangency editing - Cliff Yapp
+* fixed mged and Archer sketch arc tangency editing - Cliff Yapp
 * fixed Archer ARB4 point 3 editing - Cliff Yapp
 * fixed ARB4 storage from make and mk_arb4 - Cliff Yapp
 * fixed ARB4 and ARB6 center point calculations - Cliff Yapp
-* fixed concurrent MGED and rtwizard framebuffer use - Cliff Yapp
-* fixed MGED ShotVis editing and reload failures - Cliff Yapp
+* fixed concurrent mged and rtwizard framebuffer use - Cliff Yapp
+* fixed mged ShotVis editing and reload failures - Cliff Yapp
 * fixed Tcl widget geometry and selection defects - Cliff Yapp
-* fixed MGED BoT editor property handling - Cliff Yapp
-* fixed MGED LOD dialog and adaptive BoT wireframes - Cliff Yapp
-* fixed MGED Plot, PostScript, and manual launch tools - Cliff Yapp
-* fixed MGED Overlap Tool multi-object result handling - Cliff Yapp
+* fixed mged BoT editor property handling - Cliff Yapp
+* fixed mged LOD dialog and adaptive BoT wireframes - Cliff Yapp
+* fixed mged Plot, PostScript, and manual launch tools - Cliff Yapp
+* fixed mged Overlap Tool multi-object result handling - Cliff Yapp
 * eliminated 16-fold redundant gchecker grid analysis - Cliff Yapp
 * fixed Archer tree handling for names with spaces - Cliff Yapp
 * fixed RtWizard multi-object edge occlusion handling - Cliff Yapp
 * fixed RtWizard title, About, and preference handling - Cliff Yapp
-* fixed MGED startup file false legacy-syntax warnings - Cliff Yapp
-* fixed MGED saved-view deletion and collaboration sync - Cliff Yapp
-* fixed MGED font preferences apply and persistence - Cliff Yapp
+* fixed mged startup file false legacy-syntax warnings - Cliff Yapp
+* fixed mged saved-view deletion and collaboration sync - Cliff Yapp
+* fixed mged font preferences apply and persistence - Cliff Yapp
 * fixed Archer combination edits changing Boolean trees - Cliff Yapp
 * fixed Archer command-line help startup crash - Cliff Yapp
-* fixed MGED Geometry Browser menu and close behavior - Cliff Yapp
-* fixed MGED collaboration view unshare crash - Cliff Yapp
+* fixed mged Geometry Browser menu and close behavior - Cliff Yapp
+* fixed mged collaboration view unshare crash - Cliff Yapp
 * added override for Archer's preference file location - Cliff Yapp
 * fixed embedded Archer display and mode menus - Cliff Yapp
 * added Archer -h and --help command-line options - Cliff Yapp
@@ -97,9 +97,9 @@ changes made.  See document footer for additional details.
 * bot split now groups results and preserves mesh data - Cliff Yapp
 * bot decimate now preserves nrmls, UVs, and plate data - Cliff Yapp
 * added raytracing support for annotation objects - Cliff Yapp
-* fixed MGED NIRT output capture and subprocess cleanup - Cliff Yapp
+* fixed mged NIRT output capture and subprocess cleanup - Cliff Yapp
 * fixed Windows subprocess quoting and empty arguments - Cliff Yapp
-* fixed MGED X embedded framebuffer display manager crash - Cliff Yapp
+* fixed mged X embedded framebuffer display manager crash - Cliff Yapp
 * fixed Windows drive-letter path handling - Cliff Yapp
 * added annotate command for managing annotation objects - Cliff Yapp
 * added repair command for supported invalid primitives - Cliff Yapp
@@ -123,8 +123,8 @@ changes made.  See document footer for additional details.
 * added contributor, API, command, & raytracing guides - Sean Morrison
 * added and updated command and library manual pages - Sean Morrison
 * added pnts write -f xyz export option - Chris McGregor
-* fixed MGED ARB5 point editing - Cliff Yapp
-* fixed MGED gqa and rtcheck overlap plot updates - Cliff Yapp
+* fixed mged ARB5 point editing - Cliff Yapp
+* fixed mged gqa and rtcheck overlap plot updates - Cliff Yapp
 * fixed procedural tree generator use-after-free - Cliff Yapp
 * added gaia support for day/dusk/night textures - Sean Morrison
 * added gaia Earth-model generator - Sean Morrison
@@ -134,14 +134,14 @@ changes made.  See document footer for additional details.
 * all raytracing apps now report object prep failures - Sean Morrison
 * improved fast4-g robustness and error reporting - Cliff Yapp
 * improved robustness of g-vrml plate mode handling - Cliff Yapp
-* added support for tick drawing on MGED model axis - Cliff Yapp
+* added support for tick drawing on mged model axis - Cliff Yapp
 * added naca456 left and paired wing generation - Cliff Yapp
 * added patch-g -j option, specify object thicknesses - Sean Morrison
 * fixed fbcolor color ramp bug drawing the last color - Sean Morrison
 * corrected bwstat median and empty/read-error handling - Sean Morrison
 * fixed gist -Q quick preview option - Sean Morrison
 * rt preserves eye_pt setting in command scripts - Sean Morrison
-* removed trailing whitespace from NIRT output/fmts - Sean Morrison
+* removed trailing whitespace from nirt output/fmts - Sean Morrison
 * rt -l8 heat graphs now measure CPU time - Sean Morrison
 * documented gqa centroid & moments of inertia options - Sean Morrison
 * pixdiff now calculates pixel differences on bw files - Sean Morrison
@@ -149,8 +149,8 @@ changes made.  See document footer for additional details.
 * fixed isize in non-mm databases - Josh Baker
 * fixed metaball adjust clearing points on errors - Sean Morrison
 * fixed benchmark+pixcmp correctness validation bug - Sean Morrison
-* fixed GIST hierarchy overflow rendering - Chris McGregor
-* fixed MGED gqa option and value parsing - Sean Morrison
+* fixed gist hierarchy overflow rendering - Chris McGregor
+* fixed mged gqa option and value parsing - Sean Morrison
 * fixed rtxray -o grayscale/BW output - Sean Morrison
 * fbhelp writes help to stdout and rest to stderr - Sean Morrison
 * FB now supports /dev/stdout and /dev/stderr devices - Sean Morrison
@@ -160,7 +160,7 @@ changes made.  See document footer for additional details.
 * added rtsil -o support for bw output - Sean Morrison
 * added cutting plane animation generation to rtwizard - Cliff Yapp
 * fixed pixdiff bug on Windows - Sean Morrison
-* fixed MGED startup window placement on Windows - Chris McGregor
+* fixed mged startup window placement on Windows - Chris McGregor
 * fixed pixborder utility right-side edge bug - Sean Morrison
 * fixed 'wavelet' image processing tool on Windows - Sean Morrison
 * quieted mged killtree spurious lookup failure output - Sean Morrison
