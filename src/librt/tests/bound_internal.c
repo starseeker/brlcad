@@ -37,6 +37,7 @@ main(int UNUSED(argc), const char **argv)
     point_t bmin, bmax;
     point_t expected_min = {-1.0, -1.0, -1.0};
     point_t expected_max = { 1.0,  1.0,  1.0};
+    mat_t translated;
     int ret = 1;
 
     bu_setprogname(argv[0]);
@@ -73,6 +74,68 @@ main(int UNUSED(argc), const char **argv)
     if (!VNEAR_EQUAL(bmin, expected_min, BN_TOL_DIST))
 	goto done;
     if (!VNEAR_EQUAL(bmax, expected_max, BN_TOL_DIST))
+	goto done;
+
+    dp = db_lookup(dbip, "left.s", LOOKUP_QUIET);
+    if (dp == RT_DIR_NULL || rt_bound_internal(dbip, dp, bmin, bmax))
+	goto done;
+    if (!VNEAR_EQUAL(bmin, expected_min, BN_TOL_DIST) ||
+	!VNEAR_EQUAL(bmax, expected_max, BN_TOL_DIST))
+	goto done;
+
+    BU_LIST_INIT(&wm.l);
+    if (mk_comb(wdbp, "empty.c", &wm.l, 0, NULL, NULL, NULL,
+	0, 0, 0, 0, 0, 0, 0))
+	goto done;
+    dp = db_lookup(dbip, "empty.c", LOOKUP_QUIET);
+    if (dp == RT_DIR_NULL ||
+	rt_bound_internal(dbip, dp, bmin, bmax) == 0)
+	goto done;
+
+    BU_LIST_INIT(&wm.l);
+    if (!mk_addmember("empty.c", &wm.l, NULL, WMOP_UNION))
+	goto done;
+    if (mk_lcomb(wdbp, "nested.c", &wm, 0, NULL, NULL, NULL, 0))
+	goto done;
+    dp = db_lookup(dbip, "nested.c", LOOKUP_QUIET);
+    if (dp == RT_DIR_NULL ||
+	rt_bound_internal(dbip, dp, bmin, bmax) == 0)
+	goto done;
+
+    MAT_IDN(translated);
+    MAT_DELTAS(translated, 20.0, 0.0, 0.0);
+    BU_LIST_INIT(&wm.l);
+    if (!mk_addmember("left.s", &wm.l, NULL, WMOP_UNION) ||
+	!mk_addmember("left.s", &wm.l, translated, WMOP_UNION))
+	goto done;
+    if (mk_lcomb(wdbp, "instanced.r", &wm, 1, NULL, NULL, NULL, 0))
+	goto done;
+    dp = db_lookup(dbip, "instanced.r", LOOKUP_QUIET);
+    if (dp == RT_DIR_NULL || rt_bound_internal(dbip, dp, bmin, bmax))
+	goto done;
+    VSET(expected_max, 21.0, 1.0, 1.0);
+    if (!VNEAR_EQUAL(bmin, expected_min, BN_TOL_DIST) ||
+	!VNEAR_EQUAL(bmax, expected_max, BN_TOL_DIST))
+	goto done;
+
+    BU_LIST_INIT(&wm.l);
+    if (!mk_addmember("left.s", &wm.l, translated, WMOP_UNION))
+	goto done;
+    if (mk_lcomb(wdbp, "child.c", &wm, 0, NULL, NULL, NULL, 0))
+	goto done;
+    MAT_DELTAS(translated, 10.0, 0.0, 0.0);
+    BU_LIST_INIT(&wm.l);
+    if (!mk_addmember("child.c", &wm.l, translated, WMOP_UNION))
+	goto done;
+    if (mk_lcomb(wdbp, "parent.r", &wm, 1, NULL, NULL, NULL, 0))
+	goto done;
+    dp = db_lookup(dbip, "parent.r", LOOKUP_QUIET);
+    if (dp == RT_DIR_NULL || rt_bound_internal(dbip, dp, bmin, bmax))
+	goto done;
+    VSET(expected_min, 29.0, -1.0, -1.0);
+    VSET(expected_max, 31.0, 1.0, 1.0);
+    if (!VNEAR_EQUAL(bmin, expected_min, BN_TOL_DIST) ||
+	!VNEAR_EQUAL(bmax, expected_max, BN_TOL_DIST))
 	goto done;
 
     ret = 0;
