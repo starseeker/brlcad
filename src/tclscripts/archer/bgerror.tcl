@@ -165,8 +165,7 @@ proc secErrorDialog {root title text default args} {
     update idletasks
 
     # First frame consists of error icon and message
-    frame $base.frame\#1 \
-	-class Panedwindow
+    frame $base.frame\#1
     pack $base.frame\#1 -fill x -anchor w
 
     canvas $base.frame\#1.bitmap \

@@ -85,6 +85,69 @@ proc exercise_object_lifecycle {class object args} {
     }
 }
 
+proc exercise_panedwindow_bindings {} {
+    set pane_size 200
+    set drag_distance 20
+    set native_motion_binding [bind Panedwindow <Motion>]
+
+    toplevel .panes
+    foreach orientation {horizontal vertical} {
+	set pane .panes.$orientation
+	iwidgets::panedwindow $pane -orient $orientation \
+	    -width $pane_size -height $pane_size -showhandle 0
+	$pane add first -minimum 0 -margin 0
+	$pane add second -minimum 0 -margin 0
+	pack $pane -side left -fill both -expand yes
+    }
+
+    panedwindow .panes.native -width $pane_size -height $pane_size
+    foreach name {first second} {
+	frame .panes.native.$name
+	.panes.native add .panes.native.$name
+    }
+    pack .panes.native -side left -fill both -expand yes
+    update
+
+    # Hull events must not invoke native Tk handlers on Iwidgets objects.
+    foreach pane {.panes.horizontal .panes.vertical .panes.native} {
+	foreach event {
+	    <Motion> <Leave>
+	    <ButtonPress-1> <B1-Motion> <ButtonRelease-1>
+	    <ButtonPress-2> <B2-Motion> <ButtonRelease-2>
+	} {
+	    event generate $pane $event -x 1 -y 1
+	}
+	update
+	assert_equal "$pane pointer events" $::background_errors {}
+    }
+    assert_equal "native panedwindow motion binding" \
+	[bind Panedwindow <Motion>] $native_motion_binding
+
+    # Removing the hull's class tag must retain Iwidgets' sash dragging.
+    foreach orientation {horizontal vertical} {
+	set pane .panes.$orientation
+	set before [$pane fraction]
+	set sash [$pane component sash1]
+	set x 0
+	set y 0
+	if {$orientation eq "horizontal"} {
+	    set y $drag_distance
+	} else {
+	    set x $drag_distance
+	}
+	event generate $sash <ButtonPress-1> -x 0 -y 0
+	event generate $sash <B1-Motion> -x $x -y $y
+	event generate $sash <B1-ButtonRelease-1> -x $x -y $y
+	update
+	if {[lindex [$pane fraction] 0] <= [lindex $before 0]} {
+	    fail "$orientation panedwindow sash did not move"
+	}
+	assert_equal "$orientation sash events" $::background_errors {}
+    }
+    destroy .panes
+    update
+}
+
 proc require_at_least {package minimum} {
     set version [package require $package $minimum]
     if {[package vcompare $version $minimum] < 0} {
@@ -102,6 +165,7 @@ set tk_version [require_at_least Tk 8.6]
 set itcl_version [require_at_least Itcl 4.3.0]
 set itk_version [require_at_least Itk 4.2.3]
 set iwidgets_version [require_at_least Iwidgets 4.1.1]
+exercise_panedwindow_bindings
 interp alias {} Hierarchy {} ::iwidgets::Hierarchy
 interp alias {} scrolledlistbox {} ::iwidgets::scrolledlistbox
 
