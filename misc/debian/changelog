@@ -1,3 +1,9 @@
+brlcad (7.46.0-0) unstable; urgency=low
+
+  * update brlcad version
+
+ -- Cliff Yapp <cyapp@brlcad.org>  Thu, 07 Oct 2026 20:24:00 +0000
+
 brlcad (7.44.0-0) unstable; urgency=low
 
   * update brlcad version
