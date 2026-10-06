@@ -63,7 +63,6 @@ extern int gettimeofday(struct timeval *, void *);
 
 static constexpr int64_t usec_per_sec = 1000000;
 static constexpr int64_t nsec_per_sec = 1000000000;
-static constexpr int64_t nsec_per_usec = 1000;
 #if defined(HAVE_GETPROCESSTIMES) || defined(HAVE_GETTHREADTIMES)
 static constexpr int64_t nsec_per_windows_tick = 100;
 #endif
@@ -107,7 +106,7 @@ timer_rusage(const struct rusage *usage)
 	+ (int64_t)usage->ru_stime.tv_sec * usec_per_sec
 	+ (int64_t)usage->ru_stime.tv_usec;
 
-    return usec * nsec_per_usec;
+    return usec * (nsec_per_sec / usec_per_sec);
 }
 
 
@@ -149,7 +148,7 @@ static int64_t
 timer_mach_time_val(const time_value_t *time_val)
 {
     return ((int64_t)time_val->seconds * nsec_per_sec
-	    + (int64_t)time_val->microseconds * nsec_per_usec);
+	    + (int64_t)time_val->microseconds * (nsec_per_sec / usec_per_sec));
 }
 
 static int64_t
