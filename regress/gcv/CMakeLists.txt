@@ -79,7 +79,9 @@ endif(NOT EXISTS \"\${GCV_EXEC}\")\n"
   # setup conversion tests
   foreach(in_file ${INPUT_FILES})
     get_filename_component(curr_in_basename ${in_file} NAME_WLE)
-    set(out_path "${CMAKE_CURRENT_BINARY_DIR}/conv-${curr_in_basename}")
+    # Tests in the same directory may run concurrently, so their output paths
+    # must not overlap.
+    set(out_path "${CMAKE_CURRENT_BINARY_DIR}/conv-${TARGET_DIRECTION}-${curr_in_basename}")
 
     # need to split suffix so we can distinguish from different converters
     if(${fmt}_EXPORTER)
@@ -120,7 +122,7 @@ endif(NOT EXISTS \"\${GCV_EXEC}\")\n"
         )
       endif(${fmt}_GCV_OPTIONS)
 
-      set(out_distclean ${out_distclean}} "${out_path}-${out_fmt}${out_suffix}")
+      set(out_distclean ${out_distclean} "${out_path}-${out_fmt}${out_suffix}")
       set(expected_output_files "${expected_output_files} \"${out_path}-${out_fmt}${out_suffix}\"")
     endforeach(out_fmt ${${fmt}_CONVERTERS})
 
@@ -162,19 +164,8 @@ execute_process(
 
 file(APPEND \"\${LOGFILE}\" \"\${log_msg}\\n\")
 unset(log_msg)
-  "
-    )
 
-    set(OUTPUT_FILES ${OUTPUT_FILES} ${out_distclean})
-    unset(expected_output_files)
-    unset(out_distclean)
-  endforeach(in_file ${INPUT_FILES})
-
-  file(
-    APPEND
-    ${cmake_in_path}
-    "
-# check output files exists and are a reasonable size
+# check output files exist and are a reasonable size
 foreach(out_file \${ofiles})
   if(NOT EXISTS \"\${out_file}\")
     file(APPEND \"\${LOGFILE}\" \"FAILURE: \${curr_result}, \${out_file} not found.\")
@@ -191,13 +182,18 @@ foreach(out_file \${ofiles})
       file(APPEND \"\${LOGFILE}\" \"FAILURE: \${curr_result} file size is \${file_size} for \${out_file}\\n    Expecting ${EXPECTED_FILE_SIZE} with delta ${FILE_SIZE_DELTA}\")
       message(FATAL_ERROR \"[gcv] Failure while converting ${in_file}, see \${LOGFILE} for more info.\")
     endif(\"\${size_delta}\" GREATER \"${FILE_SIZE_DELTA}\")
-  endif(NOT EXISTS \"\${out_file}\")\n
+  endif(NOT EXISTS \"\${out_file}\")
 
   # cleanup file from build dir
   file(REMOVE \"\${out_file}\")
 endforeach(out_file \${ofiles})
-    "
-  )
+  "
+    )
+
+    set(OUTPUT_FILES ${OUTPUT_FILES} ${out_distclean})
+    unset(expected_output_files)
+    unset(out_distclean)
+  endforeach(in_file ${INPUT_FILES})
 
   # assume the fmt is the gcv dependency unless specified
   if(${fmt}_DEPS)
