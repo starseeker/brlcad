@@ -72,17 +72,15 @@ set(archer_wizard_FILES
 )
 
 if(BRLCAD_ENABLE_TCL)
-  brlcad_adddata(archer_utility_FILES plugins/archer/Utility)
-  brlcad_adddata(archer_wizard_FILES plugins/archer/Wizards)
+  # Archer scans only the plugin category directories for registration scripts.
+  # Keep class definitions in their subdirectories so they are not sourced twice.
+  foreach(plugin_file IN LISTS archer_utility_FILES archer_wizard_FILES)
+    get_filename_component(plugin_dir "${plugin_file}" DIRECTORY)
+    file(RELATIVE_PATH plugin_dir "${CMAKE_CURRENT_SOURCE_DIR}/plugins" "${CMAKE_CURRENT_SOURCE_DIR}/${plugin_dir}")
+    brlcad_adddata("${plugin_file}" "plugins/archer/${plugin_dir}")
+  endforeach()
   brlcad_adddata(plugins/Commands/README plugins/archer/Command)
   brlcad_adddata(plugins/Core/README plugins/archer/Core)
-  brlcad_adddata(plugins/Utility/attrGroupsDisplayUtilityP/AttrGroupsDisplayUtilityP.tcl plugins/archer/Utility/attrGroupsDisplayUtilityP)
-  brlcad_adddata(plugins/Utility/botUtilityP/BotUtilityP.tcl plugins/archer/Utility/botUtilityP)
-  brlcad_adddata(plugins/Utility/lodUtilityP/LODUtilityP.tcl plugins/archer/Utility/lodUtilityP)
-  brlcad_adddata(plugins/Wizards/humanwizard/HumanWizard.tcl plugins/archer/Wizards/humanwizard)
-  brlcad_adddata(plugins/Wizards/tankwizard/TankWizard.tcl plugins/archer/Wizards/tankwizard)
-  brlcad_adddata(plugins/Wizards/tankwizard/images/tank.png plugins/archer/Wizards/tankwizardIA/images)
-  brlcad_adddata(plugins/Wizards/tirewizard/TireWizard.tcl plugins/archer/Wizards/tirewizard)
 endif(BRLCAD_ENABLE_TCL)
 
 set(
