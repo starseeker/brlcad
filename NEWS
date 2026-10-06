@@ -29,6 +29,7 @@ with mkbuilding, annotation editing, and primitive repair.  Geometry
 analysis, image utilities, Windows support, documentation, and bundled
 dependencies also receive substantial updates.
 
+* corrected Archer logic for saving window size - Cliff Yapp
 * fixed inside BoT rays, DSP surface normals, PNTS bounds - Cliff Yapp
 * improved mged fallback HTML manual viewer - Cliff Yapp
 * fixed gqa undefined densities and exit status - Chris McGregor

@@ -144,6 +144,18 @@ if(BRLCAD_X11_PROVIDER_RESOLVED STREQUAL "XMIN" AND
       )
       brlcad_regression_test(regress-archer-embedded-xmin-gui
         "archer;bwish" STAND_ALONE TEST_DEFINED)
+
+      brlcad_add_gui_test(
+        NAME regress-archer-geometry-xmin-gui
+        TIMEOUT 120
+        ENVIRONMENT ${_gui_smoke_environment}
+          "GUI_TEST_LIBRARY=${_gui_test_library}"
+        COMMAND "${SH_EXEC}" "${_gui_tcl_runner}" archer-geometry
+          $<TARGET_FILE:bwish>
+          "${CMAKE_CURRENT_SOURCE_DIR}/archer_geometry_xmin_gui.tcl"
+      )
+      brlcad_regression_test(regress-archer-geometry-xmin-gui
+        "archer;bwish" STAND_ALONE TEST_DEFINED)
     endif()
   endif()
 
@@ -201,6 +213,7 @@ cmakefiles(
   archer_action.sh
   archer_smoke.sh
   archer_embedded_xmin_gui.tcl
+  archer_geometry_xmin_gui.tcl
   archer_menu_manifest.txt
   archer_xmin_gui.tcl
   qged_action.sh

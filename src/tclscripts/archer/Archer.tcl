@@ -226,7 +226,7 @@ package provide Archer 1.0
 	method buildViewAxesPreferences {}
 	method doAboutArcher {}
 	method doarcherHelp {}
-	method handleMap {}
+	method handleMap {_window}
 	method handleBindingModeChange {_name1 _name2 _op}
 	method overrideBindingMode {_mode}
 	method updateOverrideBindingMode {_keysym}
@@ -427,6 +427,7 @@ package provide Archer 1.0
 
     private {
 	variable mInstanceInit 1
+	variable mWindowMapped 0
     }
 }
 
@@ -528,7 +529,7 @@ package provide Archer 1.0
     }
 
     # resize and position window after it's drawn
-    bind [namespace tail $this] <Map> [::itcl::code $this handleMap]
+    bind [namespace tail $this] <Map> [::itcl::code $this handleMap %W]
 }
 
 
@@ -4263,18 +4264,26 @@ proc title_node_handler {node} {
 
 }
 
-::itcl::body Archer::handleMap {} {
-    if {$mWindowGeometry != ""} {
-	after idle "wm geometry [namespace tail $this] $mWindowGeometry"
-    } else {
-	after idle "wm geometry [namespace tail $this] $itk_option(-geometry)"
+::itcl::body Archer::handleMap {_window} {
+    # Child windows also dispatch Map events through the toplevel's tag.
+    if {$_window ne [namespace tail $this]} {
+	return
+    }
+    set mWindowMapped 1
+
+    set geometry $mWindowGeometry
+    if {$geometry eq ""} {
+	set geometry $itk_option(-geometry)
+    }
+    if {$geometry ne ""} {
+	after idle [list wm geometry $_window $geometry]
     }
 
     if {$mSeparateCommandWindow && $mCmdWindowGeometry != ""} {
-	after idle [::itcl::code wm geometry $itk_component(sepcmdT) $mCmdWindowGeometry]
+	after idle [list wm geometry $itk_component(sepcmdT) $mCmdWindowGeometry]
     }
 
-    bind [namespace tail $this] <Map> {}
+    bind $_window <Map> {}
 }
 
 ::itcl::body Archer::handleDisplayEscape {_dm} {
@@ -9351,7 +9360,17 @@ proc title_node_handler {node} {
     puts $_pfile "set mVPaneToggle3 $mVPaneToggle3"
     puts $_pfile "set mVPaneToggle5 $mVPaneToggle5"
 
-    puts $_pfile "set mWindowGeometry [winfo geometry [namespace tail $this]]"
+    # Before the first map, the hull's size only reflects unfinished layout.
+    if {$mWindowMapped} {
+	if {$ArcherCore::inheritFromToplevel} {
+	    set mWindowGeometry [wm geometry [namespace tail $this]]
+	} else {
+	    set mWindowGeometry [winfo geometry [namespace tail $this]]
+	}
+    }
+    if {$mWindowGeometry ne ""} {
+	puts $_pfile [list set mWindowGeometry $mWindowGeometry]
+    }
 
     if {$mSeparateCommandWindow} {
 	puts $_pfile "set mCmdWindowGeometry [winfo geometry $itk_component(sepcmdT)]"
