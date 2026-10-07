@@ -220,7 +220,7 @@ function(remote_sha1 SHA1_VAR BRANCH)
   # This needs a working internet connection to succeed (and GitHub
   # must be up and working as well.)
   execute_process(
-    COMMAND ${GIT_EXEC} ls-remote https://github.com/BRL-CAD/bext.git ${BRANCH}
+    COMMAND "${CMAKE_COMMAND}" -E env GIT_TERMINAL_PROMPT=0 ${GIT_EXEC} -c credential.helper= -c credential.interactive=false ls-remote https://github.com/BRL-CAD/bext.git ${BRANCH}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     RESULT_VARIABLE LS_REMOTE_STATUS
     OUTPUT_VARIABLE LS_REMOTE_STR
