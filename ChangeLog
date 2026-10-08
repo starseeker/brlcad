@@ -1,3 +1,15 @@
+commit 975e0417fbffe1fb7b2f68b39cbccaad9e04fcb8
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Thu Apr 16 11:50:42 2026 -0400
+
+    Spotted by Keith - we weren't respecting the -S flag when redrawing a previously drawn comb
+
+commit b311f6794789b647c191778bbc7b6382a0f46ab7
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Fri Sep 25 11:57:01 2026 -0400
+
+    Update version number for 7.42.4 patch
+
 commit 1eaf01d7b708d73e85b288826c93e3025f15f489
 Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
 Date:   Wed Sep 23 15:20:33 2026 +0000
