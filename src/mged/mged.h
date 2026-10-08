@@ -575,6 +575,7 @@ void pr_beep(void);
 void pr_prompt(struct mged_state *s);
 
 /* grid.c */
+extern struct bv_grid_state default_grid_state;
 extern void round_to_grid(struct mged_state *s, fastf_t *view_dx, fastf_t *view_dy);
 extern void snap_keypoint_to_grid(struct mged_state *s);
 extern void snap_view_center_to_grid(struct mged_state *s);
