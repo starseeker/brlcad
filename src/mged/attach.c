@@ -425,6 +425,8 @@ mged_attach(struct mged_state *s, const char *wp_name, int argc, const char *arg
 {
     int opt_argc;
     char **opt_argv;
+    const char *dm_name;
+    const char *dm_lname;
     struct mged_dm *o_dm;
 
     if (!wp_name) {
@@ -495,8 +497,8 @@ mged_attach(struct mged_state *s, const char *wp_name, int argc, const char *arg
     mged_link_vars(s->mged_curr_dm);
 
     Tcl_ResetResult(s->interp);
-    const char *dm_name = dm_get_dm_name(DMP);
-    const char *dm_lname = dm_get_dm_lname(DMP);
+    dm_name = dm_get_dm_name(DMP);
+    dm_lname = dm_get_dm_lname(DMP);
     if (dm_name && dm_lname) {
 	Tcl_AppendResult(s->interp, "ATTACHING ", dm_name, " (", dm_lname,	")\n", (char *)NULL);
     }
