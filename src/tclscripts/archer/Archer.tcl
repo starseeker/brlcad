@@ -2522,15 +2522,17 @@ package provide Archer 1.0
 }
 
 
+proc Archer::html_help_load {browser url} {
+    catch {$browser goto $url}
+}
+
 proc Archer::html_help_display {_browser url _attributes} {
     global htmlviewer
 
-    $htmlviewer goto $url
+    Archer::html_help_load $htmlviewer $url
 }
 
-
 ::itcl::body Archer::buildarcherHelp {} {
-    global env
     global htmlviewer
 
     itk_component add archerHelp {
@@ -2557,51 +2559,42 @@ proc Archer::html_help_display {_browser url _attributes} {
 
     set tlparent [$itk_component(archerHelp) childsite]
 
+    # Table of Contents
+    itk_component add archerHelpToC {
+	::tk::frame $tlparent.archerManToc
+    } {}
+    set docstoc $itk_component(archerHelpToC)
 
-    if {[file exists [file join [bu_dir doc] html books BRL-CAD_Tutorial_Series-VolumeI.html]] &&
-	[file exists [file join [bu_dir doc] html main_menu.html]] } {
+    set docstoclist [::tklitehtml::browser $docstoc.htmlview \
+	-width 250 -linkcommand Archer::html_help_display]
+    Archer::html_help_load $docstoclist \
+	[file join [bu_dir doc] html main_menu.html]
 
-	# Table of Contents
-	itk_component add archerHelpToC {
-	    ::tk::frame $tlparent.archerManToc
-	} {}
-	set docstoc $itk_component(archerHelpToC)
-	pack $docstoc -side left -expand yes -fill y
+    grid $docstoclist -sticky nsew -in $docstoc
 
-	set docstoclist [::tklitehtml::browser $docstoc.htmlview \
-	    -width 250 -linkcommand Archer::html_help_display]
-	$docstoclist goto [file join [bu_dir doc] html main_menu.html]
+    grid columnconfigure $docstoc 0 -weight 1
+    grid rowconfigure $docstoc 0 -weight 1
 
-	grid $docstoclist -sticky nsew -in $docstoc
+    pack $itk_component(archerHelpToC) -side left -expand no -fill y
 
-	grid columnconfigure $docstoc 0 -weight 1
-	grid rowconfigure $docstoc 0 -weight 1
+    # Main HTML window
 
-	pack $docstoc -side left -expand yes -fill both
+    itk_component add archerHelpF {
+	::tk::frame $tlparent.archerHelpF
+    } {}
 
-	pack $itk_component(archerHelpToC) -side left -expand no -fill y
+    set sfcs $itk_component(archerHelpF)
 
+    set htmlviewer [::tklitehtml::browser $sfcs.htmlview]
+    Archer::html_help_load $htmlviewer [file join [bu_dir doc] html books \
+	BRL-CAD_Tutorial_Series-VolumeI.html]
 
-	# Main HTML window
+    grid $htmlviewer -sticky nsew -in $sfcs
 
-	itk_component add archerHelpF {
-	    ::tk::frame $tlparent.archerHelpF
-	} {}
+    grid columnconfigure $sfcs 0 -weight 1
+    grid rowconfigure $sfcs 0 -weight 1
 
-	set sfcs $itk_component(archerHelpF)
-	pack $sfcs -expand yes -fill both
-
-	set htmlviewer [::tklitehtml::browser $sfcs.htmlview]
-	$htmlviewer goto [file join [bu_dir doc] html books BRL-CAD_Tutorial_Series-VolumeI.html]
-
-	grid $htmlviewer -sticky nsew -in $sfcs
-
-	grid columnconfigure $sfcs 0 -weight 1
-	grid rowconfigure $sfcs 0 -weight 1
-
-	pack $itk_component(archerHelpF) -side left -expand yes -fill both
-
-    }
+    pack $itk_component(archerHelpF) -side left -expand yes -fill both
 
     wm geometry $itk_component(archerHelp) "1100x800"
     $itk_component(archerHelp) center
