@@ -520,106 +520,14 @@ proc echo args {
 # HTML support
 #==============================================================================
 namespace eval ::mged::manual {
-    variable back_history
-    variable suppress_history
 }
 
 proc ::mged::manual::file_uri {path} {
-    set uri_path [string map {\\ /} [file normalize $path]]
-    if {[string index $uri_path 0] ne "/"} {
-	set uri_path /$uri_path
-    }
-    set uri_path [::tkhtml::encode $uri_path]
-    return file://[string map {%2F /} $uri_path]
+    return [::tklitehtml::file_uri $path]
 }
 
 proc ::mged::manual::local_path {location} {
-    set uri [::tkhtml::uri $location]
-    set scheme [$uri scheme]
-    set authority [$uri authority]
-    set path [::tkhtml::decode [$uri path]]
-    $uri destroy
-
-    if {![string equal -nocase $scheme file]} {
-	error "unsupported URI scheme '$scheme'"
-    }
-    if {$authority ne "" && ![string equal -nocase $authority localhost]} {
-	set path //$authority$path
-    }
-    if {$::tcl_platform(platform) eq "windows" &&
-	[regexp {^/[A-Za-z]:/} $path]} {
-	set path [string range $path 1 end]
-    }
-    return [file normalize $path]
-}
-
-proc ::mged::manual::request_error {handle error_message} {
-    global message
-
-    set message $error_message
-    $handle configure -mimetype text/plain
-    $handle finish $error_message
-}
-
-proc ::mged::manual::request {handle} {
-    global message
-
-    set location [$handle cget -uri]
-    if {[catch {set path [local_path $location]} path_error]} {
-	request_error $handle "Cannot read $location: $path_error"
-	return
-    }
-
-    set message "Reading file $path"
-    if {[catch {
-	set channel [open $path rb]
-	try {
-	    set data [read $channel]
-	} finally {
-	    close $channel
-	}
-    } read_error]} {
-	request_error $handle "Cannot read $path: $read_error"
-	return
-    }
-    $handle finish $data
-}
-
-proc ::mged::manual::remember_location {viewer} {
-    variable back_history
-    variable suppress_history
-
-    if {[info exists suppress_history($viewer)] &&
-	$suppress_history($viewer)} {
-	return
-    }
-    if {[catch {$viewer location} location] ||
-	$location eq "home://blank/"} {
-	return
-    }
-    if {![info exists back_history($viewer)] ||
-	[lindex $back_history($viewer) end] ne $location} {
-	lappend back_history($viewer) $location
-    }
-}
-
-proc ::mged::manual::go_back {viewer} {
-    variable back_history
-    variable suppress_history
-
-    if {![info exists back_history($viewer)] ||
-	![llength $back_history($viewer)]} {
-	return
-    }
-
-    set location [lindex $back_history($viewer) end]
-    set back_history($viewer) [lrange $back_history($viewer) 0 end-1]
-    set suppress_history($viewer) 1
-    set status [catch {$viewer goto $location -nosave} result options]
-    set suppress_history($viewer) 0
-    if {$status} {
-	return -options $options $result
-    }
+    return [::tklitehtml::local_path $location]
 }
 
 proc ::mged::manual::go_to {viewer screen} {
@@ -646,21 +554,10 @@ proc ::mged::manual::go_to {viewer screen} {
 	"Cannot read file $filename." error 0 OK
 }
 
-proc ::mged::manual::cleanup {viewer destroyed_widget} {
-    variable back_history
-    variable suppress_history
-
-    if {$destroyed_widget ne $viewer} {
-	return
-    }
-    unset -nocomplain back_history($viewer)
-    unset -nocomplain suppress_history($viewer)
-}
-
 proc ia_man {parent screen} {
     global mged_html_dir message
 
-    package require hv3
+    package require tklitehtml 0.1.0
 
     set w $parent.man
     catch {destroy $w}
@@ -670,26 +567,21 @@ proc ia_man {parent screen} {
     frame $w.f -relief sunken -bd 1
     pack $w.f -side top -fill x
 
-    set viewer [::hv3::hv3 $w.html \
-	-requestcmd ::mged::manual::request]
+    set viewer [::tklitehtml::browser $w.html]
     button $w.f.close -text Close -command [list destroy $w]
     button $w.f.goto -text "Go To" \
 	-command [list ::mged::manual::go_to $viewer $screen]
     button $w.f.back -text "Back" \
-	-command [list ::mged::manual::go_back $viewer]
+	-command [list $viewer back]
 
     pack $w.f.close $w.f.goto $w.f.back -side left -fill x -expand yes
     label $w.message -textvariable message -anchor w
     pack $w.message -side top -anchor w -fill x
     pack $viewer -side top -fill both -expand yes
-
-    set ::mged::manual::back_history($viewer) {}
-    set ::mged::manual::suppress_history($viewer) 0
-    bind $viewer <<Goto>> +[list ::mged::manual::remember_location $viewer]
-    bind $viewer <Destroy> +[list ::mged::manual::cleanup $viewer %W]
+    update idletasks
 
     set contents [file join $mged_html_dir contents.html]
-    $viewer goto [::mged::manual::file_uri $contents]
+    $viewer goto $contents
 }
 
 #==============================================================================

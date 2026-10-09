@@ -76,7 +76,7 @@ if {[info exists argv0]} {
 }
 
 if {$tcl_platform(platform) == "windows"} {
-    lappend auto_path ${dir}/lib/Tkhtml3.0
+    lappend auto_path ${dir}/lib/tklitehtml0.1.0
     lappend auto_path ${dir}/lib/Tktable2.10
 }
 
@@ -305,4 +305,3 @@ if { [info exists ::no_bwish] } {
 # indent-tabs-mode: t
 # End:
 # ex: shiftwidth=4 tabstop=8
-

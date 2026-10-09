@@ -34,7 +34,7 @@
 package provide ManBrowser 1.0
 package require Tk
 package require Itcl
-package require hv3
+package require tklitehtml 0.1.0
 package require cadwidgets::Accordion 1.0
 
 if {[llength [info commands manpage_search_terms]] == 0} {
@@ -115,15 +115,7 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 	}
     }
     if {[info exists pathname]} {
-	set htmlFile [open $pathname]
-	set pageData [read $htmlFile]
-	close $htmlFile
-
-	# Display page
-	set htmlview [[$this childsite].browser.htmlview html]
-	$htmlview reset
-	$htmlview configure -parsemode html
-	$htmlview parse $pageData
+	[$this childsite].browser.htmlview goto $pathname
     }
 }
 
@@ -347,9 +339,7 @@ if {[llength [info commands manpage_search_terms]] == 0} {
     set sfcsman $itk_component(browser)
     pack $sfcsman -expand yes -fill both
 
-    # HTML widget
-    set manhtmlviewer [::hv3::hv3 $sfcsman.htmlview]
-    set manhtml [$manhtmlviewer html]
+    set manhtmlviewer [::tklitehtml::browser $sfcsman.htmlview]
 
     grid $manhtmlviewer -sticky nsew -in $sfcsman
 
@@ -370,15 +360,6 @@ if {[llength [info commands manpage_search_terms]] == 0} {
     if {$itk_option(-useToC)} {
 	bind $itk_component(manpagelistbox) <<ListboxSelect>> \
 	    [::itcl::code $this loadSelectedPage %W]
-    }
-
-    # bind MouseWheel listener to the widget.document (this is the html
-    # displayed as the current man page so it needs the 'active' listener)
-    bind $manhtml.document <MouseWheel> {
-        # strip the ".document" so that the widget's yview (not the document)
-        # can be updated with the scroll
-        set widget_base [regsub {\.document} %W ""]
-        $widget_base yview scroll [expr {-%D/120}] units
     }
 
     configure -height 600 -width 800

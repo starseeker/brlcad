@@ -173,7 +173,7 @@ tclcad_auto_path(Tcl_Interp *interp)
 	bu_ptbl_ins(&lib_subpaths, (long *)p);
 #endif
 
-	bu_vls_sprintf(&buffer, "Tkhtml3.0");
+	bu_vls_sprintf(&buffer, "tklitehtml0.1.0");
 	p = bu_strdup(bu_vls_cstr(&buffer));
 	bu_ptbl_ins(&lib_subpaths, (long *)p);
 

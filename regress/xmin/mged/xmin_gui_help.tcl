@@ -177,7 +177,7 @@ proc ::mged::xmin::help::exercise_html_manual {top} {
     } "internal Manual viewer did not preserve special path characters"
 
     set html [$viewer html]
-    set contents [$html text text]
+    set contents [$html text]
     ::gui::test::require {
 	[string first "Preface" $contents] >= 0 &&
 	[string first "background-color" $contents] < 0
@@ -185,10 +185,11 @@ proc ::mged::xmin::help::exercise_html_manual {top} {
 
     $viewer goto mged.html#csg
     ::mged::gui::test::settle
-    set contents [$html text text]
+    set contents [$html text]
+    set manual_title [$viewer title]
+    set manual_heading [string first "Modeling With CSG" $contents]
     ::gui::test::require {
-	[$viewer title] eq "Mged User's Manual" &&
-	[string first "Modeling With CSG" $contents] >= 0
+	$manual_title eq "Mged User's Manual" && $manual_heading >= 0
     } "internal Manual viewer did not follow its document links"
 
     $fallback.f.back invoke

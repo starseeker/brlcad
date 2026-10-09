@@ -2522,66 +2522,15 @@ package provide Archer 1.0
 }
 
 
-proc Archer::get_html_data {helpfile} {
-    global archer_help_data
-
-    set help_fd [open $helpfile]
-    set archer_help_data [read $help_fd]
-    close $help_fd
-}
-
-
-proc Archer::get_html_man_data {cmdname} {
-    global archer_help_data
-    set help_fd [open [file join [bu_dir doc] html mann $cmdname.html]]
-    set archer_help_data [read $help_fd]
-    close $help_fd
-}
-
-
-proc Archer::html_man_display {w} {
-    global archer_help_data
-    $w reset;
-    $w configure -parsemode html
-    $w parse $archer_help_data
-}
-
-
-proc Archer::html_help_display {me} {
+proc Archer::html_help_display {_browser url _attributes} {
     global htmlviewer
-    global archer_help_data
 
-    upvar $me O
-    set origurl $O(-uri)
-    if {[catch {regexp {(home://blank)(.+)} $origurl match prefix tempurl} msg]} {
-	tk_messageBox -message "html_help_display: regexp failed, msg - $msg"
-    }
-    set url [file join [bu_dir doc] html]
-    append url $tempurl
-    get_html_data $url
-    $htmlviewer reset
-    $htmlviewer parse $archer_help_data
-}
-
-
-proc Archer::mkHelpTkImage {file} {
-    set fullpath [file join [bu_dir doc] html manuals $file]
-    set name [image create photo -file $fullpath]
-    return [list $name [list image delete $name]]
-}
-
-
-proc title_node_handler {node} {
-    set titletext ""
-    foreach child [$node children] {
-	append titletext [$child text]
-    }
+    $htmlviewer goto $url
 }
 
 
 ::itcl::body Archer::buildarcherHelp {} {
     global env
-    global archer_help_data
     global htmlviewer
 
     itk_component add archerHelp {
@@ -2619,13 +2568,9 @@ proc title_node_handler {node} {
 	set docstoc $itk_component(archerHelpToC)
 	pack $docstoc -side left -expand yes -fill y
 
-	# HTML widget
-	set docstoclist [::hv3::hv3 $docstoc.htmlview -width 250 -requestcmd Archer::html_help_display]
-	set docstochtml [$docstoclist html]
-	$docstochtml configure -parsemode html
-	set help_fd [lindex [list [file join [bu_dir doc] html main_menu.html]] 0]
-	get_html_data $help_fd
-	$docstochtml parse $archer_help_data
+	set docstoclist [::tklitehtml::browser $docstoc.htmlview \
+	    -width 250 -linkcommand Archer::html_help_display]
+	$docstoclist goto [file join [bu_dir doc] html main_menu.html]
 
 	grid $docstoclist -sticky nsew -in $docstoc
 
@@ -2646,16 +2591,10 @@ proc title_node_handler {node} {
 	set sfcs $itk_component(archerHelpF)
 	pack $sfcs -expand yes -fill both
 
-	# HTML widget
-	set hv3htmlviewer [::hv3::hv3 $sfcs.htmlview]
-	set htmlviewer [$hv3htmlviewer html]
-	$htmlviewer configure -parsemode html
-	$htmlviewer configure -imagecmd Archer::mkHelpTkImage
-	set help_fd [lindex [list [file join [bu_dir doc] html books BRL-CAD_Tutorial_Series-VolumeI.html]] 0]
-	get_html_data $help_fd
-	$htmlviewer parse $archer_help_data
+	set htmlviewer [::tklitehtml::browser $sfcs.htmlview]
+	$htmlviewer goto [file join [bu_dir doc] html books BRL-CAD_Tutorial_Series-VolumeI.html]
 
-	grid $hv3htmlviewer -sticky nsew -in $sfcs
+	grid $htmlviewer -sticky nsew -in $sfcs
 
 	grid columnconfigure $sfcs 0 -weight 1
 	grid rowconfigure $sfcs 0 -weight 1
