@@ -207,7 +207,8 @@ struct BObolCompactInstanceIndex {
 	viewDependentCsgGeometryCount(0),
 	sourceMeshRequestCount(0),
 	residentProgressiveGeometryCount(0),
-	displayLodTargetCount(0)
+	displayLodTargetCount(0),
+	overviewCount(0)
     {
 	sourceBounds.makeEmpty();
     }
@@ -262,6 +263,10 @@ struct BObolCompactInstanceIndex {
     size_t sourceMeshRequestCount;
     size_t residentProgressiveGeometryCount;
     size_t displayLodTargetCount;
+    /* The producer certificate counts leaves, while the live registry may
+     * retain one temporary whole-target overview.  Keep this alongside the
+     * other entry counters so population completeness remains an O(1) fact. */
+    size_t overviewCount;
 };
 
 #endif /* LIBBOBOL_COMPACT_OCCURRENCE_REGISTRY_PRIVATE_H */

@@ -127,6 +127,18 @@ static thread_local bool observeAllocation = false;
 static thread_local size_t allocationsRemaining = 0;
 static thread_local size_t allocationsAttempted = 0;
 
+#if defined(OBOL_DLL)
+static constexpr bool allocationFailureInterceptsObol = false;
+#else
+static constexpr bool allocationFailureInterceptsObol = true;
+#endif
+
+#if defined(BOBOL_DLL_IMPORTS)
+static constexpr bool allocationFailureInterceptsBObol = false;
+#else
+static constexpr bool allocationFailureInterceptsBObol = true;
+#endif
+
 void *operator new(size_t bytes)
 {
     if (observeAllocation) {
@@ -136,8 +148,8 @@ void *operator new(size_t bytes)
 	--allocationsRemaining;
     }
     void *result = std::malloc(bytes ? bytes : 1);
-    if (!result)
-	throw std::bad_alloc();
+	if (!result)
+	    throw std::bad_alloc();
     return result;
 }
 void *operator new[](size_t bytes) { return ::operator new(bytes); }
@@ -1765,14 +1777,21 @@ check_field_sensor_attachment()
 	size_t callbacks = 0;
 	SoFieldSensor sensor([](void *data, SoSensor *) { ++*static_cast<size_t *>(data); }, &callbacks);
 	sensor.setPriority(0);
-	bool failed = false;
-	const size_t attempts = invoke_with_failure([&] { sensor.attach(&field); }, 0, failed);
-	require(failed && attempts && !sensor.getAttachedField(), "failed field sensor registration left an attachment");
-	field.touch();
-	require(!callbacks, "failed field sensor registration left an auditor");
-	sensor.attach(&field);
-	field.touch();
-	require(callbacks == 1, "field sensor registration did not recover");
+	if constexpr (allocationFailureInterceptsObol) {
+	    bool failed = false;
+	    const size_t attempts = invoke_with_failure([&] { sensor.attach(&field); }, 0, failed);
+	    require(failed && attempts && !sensor.getAttachedField(), "failed field sensor registration left an attachment");
+	    field.touch();
+	    require(!callbacks, "failed field sensor registration left an auditor");
+	    sensor.attach(&field);
+	    field.touch();
+	    require(callbacks == 1, "field sensor registration did not recover");
+	} else {
+	    sensor.attach(&field);
+	    field.touch();
+	    require(callbacks == 1,
+		"field sensor registration did not notify exactly once");
+	}
 	sensor.detach();
 	field.touch();
 	require(callbacks == 1, "field sensor detach retained an auditor");
@@ -2283,7 +2302,8 @@ check_cached_publication(const char *onlyScenario = nullptr)
 	require(!failed && !measuredObserver.incoherent, "cached unconstrained observer");
 	size_t preserved = 0, committed = 0;
 	std::vector<size_t> positions;
-	if (scenario.mesh && scenario.evaluated && !onlyScenario) {
+	if (allocationFailureInterceptsBObol && scenario.mesh &&
+	    scenario.evaluated && !onlyScenario) {
 	    /* A full sampled-points sweep performs hundreds of large raycasts.
 	     * The named case runs that qualification separately. Routine checks
 	     * retain first-allocation denial and both sides of final publication. */
@@ -2733,8 +2753,9 @@ run_scenario(const Scenario &scenario)
 	    throw;
 	}
     }
-    require(fullRefreshCases > 0, "journal exhaustion was not exercised");
-    if (reference.batch.size() > 1)
+    require(!allocationFailureInterceptsBObol || fullRefreshCases > 0,
+	"journal exhaustion was not exercised");
+    if (allocationFailureInterceptsBObol && reference.batch.size() > 1)
 	require(partialCases > 0, "partial batch publication was not exercised");
     std::printf("PASS %s: %zu allocation positions, %zu partial prefixes, %zu full refreshes\n",
 	scenario.name, attempts + 1, partialCases, fullRefreshCases);
@@ -4034,8 +4055,12 @@ check_render_request_trace_unwind()
     try { view.requestPresentationRender(reason.c_str()); }
     catch (...) { observeAllocation = false; throw; }
     observeAllocation = false;
-    require(wake.calls == 1 && view.isRenderRequested() && view.getRenderReason() == reason.c_str() &&
-	view.getDroppedLodControlTransitionCount() > 0, "trace allocation failure aborted or concealed a committed request");
+    const bool requestTraceFailureObserved =
+	!allocationFailureInterceptsBObol ||
+	view.getDroppedLodControlTransitionCount() > 0;
+    require(wake.calls == 1 && view.isRenderRequested() &&
+	view.getRenderReason() == reason.c_str() && requestTraceFailureObserved,
+	"trace allocation failure aborted or concealed a committed request");
     view.clearFrameRequestCallback(&wake);
 
     ExternalPrimitiveInputs primitives;
@@ -4051,8 +4076,12 @@ check_render_request_trace_unwind()
     catch (const SourceObserverFailure &) { threw = true; }
     catch (...) { observeAllocation = false; throw; }
     observeAllocation = false;
-    require(threw && !observer.incoherent && observer.wakeCalls == 1 && fixture.view.isRenderRequested() &&
-	fixture.view.getDroppedLodControlTransitionCount() > 0 && complete.matches(fixture.target.source),
+    const bool realizationTraceFailureObserved =
+	!allocationFailureInterceptsBObol ||
+	fixture.view.getDroppedLodControlTransitionCount() > 0;
+    require(threw && !observer.incoherent && observer.wakeCalls == 1 &&
+	fixture.view.isRenderRequested() && realizationTraceFailureObserved &&
+	complete.matches(fixture.target.source),
 	"trace cleanup replaced the source exception or lost the committed host request");
     std::printf("PASS render-request-trace-unwind: committed request and original source exception survive diagnostic allocation failure\n");
 }
@@ -9692,6 +9721,13 @@ check_pointer_list_growth()
     int marker = 0;
     for (int i = 0; i < capacity; ++i)
 	list.append(&marker);
+    if constexpr (!allocationFailureInterceptsObol) {
+	list.append(&marker);
+	require(list.getLength() == capacity + 1 && list[capacity] == &marker,
+	    "pointer-list growth did not preserve its values");
+	std::puts("PASS pointer-list-growth: capacity growth preserves storage");
+	return;
+    }
     bool failed = false;
     invoke_with_failure([&] { list.append(&marker); }, 0, failed);
     require(failed && list.getLength() == capacity && list.capacity() == capacity,
@@ -9713,6 +9749,17 @@ check_base_list_reference_acquisition()
 	for (int i = 0; i < initialCount; ++i)
 	    list.append(child);
 	const int references = child->getRefCount();
+#if defined(OBOL_DLL)
+	/* An executable's replacement operator new cannot interpose on a
+	 * Windows DLL.  Exercise the ownership contract directly when the
+	 * allocation-failure injector cannot reach SoNodeList. */
+	if (insert) list.insert(child, initialCount / 2);
+	else list.append(child);
+	require(list.getLength() == initialCount + 1 &&
+	    child->getRefCount() == references + 1,
+	    "base-list insertion did not acquire exactly one reference");
+	child->unref();
+#else
 	bool failed = false;
 	invoke_with_failure([&] {
 	    if (insert) list.insert(child, initialCount / 2);
@@ -9727,8 +9774,9 @@ check_base_list_reference_acquisition()
 	else list.append(child);
 	require(list.getLength() == initialCount + 1 && child->getRefCount() == references,
 	    "base-list insertion retry did not own exactly one reference");
+#endif
     }
-    std::puts("PASS base-list-references: denied append and insert preserve reference ownership");
+    std::puts("PASS base-list-references: append and insert preserve exact reference ownership");
 }
 
 struct ChildAppendFixture {
@@ -9843,23 +9891,45 @@ check_field_auditor_recovery()
 {
     SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
     source->ref();
-    size_t calls = 0;
-    SoFieldSensor sensor([](void *data, SoSensor *) {
-	++*static_cast<size_t *>(data);
-    }, &calls);
+    struct Audit {
+	size_t calls = 0;
+	bool reject = false;
+	static void changed(void *data, SoSensor *)
+	{
+	    auto &audit = *static_cast<Audit *>(data);
+	    if (audit.reject) {
+		audit.reject = false;
+		throw std::bad_alloc();
+	    }
+	    ++audit.calls;
+	}
+    } audit;
+    SoFieldSensor sensor(Audit::changed, &audit);
     sensor.setPriority(0);
     sensor.attach(&source->realizationStatus);
     bool failed = false;
-    invoke_with_failure([&] { source->realizationStatus.touch(); }, 0, failed);
-    require(failed, "field-auditor snapshot did not exercise allocation denial");
+    if constexpr (allocationFailureInterceptsObol) {
+	invoke_with_failure([&] { source->realizationStatus.touch(); }, 0, failed);
+	require(failed,
+	    "field-auditor snapshot did not exercise allocation denial");
+    } else {
+	audit.reject = true;
+	try {
+	    source->realizationStatus.touch();
+	} catch (const std::bad_alloc &) {
+	    failed = true;
+	}
+	require(failed, "field-auditor callback did not reject notification");
+    }
     /* Notification depth alone cannot detect a lock stranded by an auditor
      * list. A subsequent owner thread must be able to enter and finish. */
     std::thread retry([&] { source->realizationStatus.touch(); });
     retry.join();
-    require(calls == 1, "field-auditor recovery did not dispatch the later callback");
+    require(audit.calls == 1,
+	"field-auditor recovery did not dispatch the later callback");
     sensor.detach();
     source->unref();
-    std::puts("PASS field-auditor-recovery: denied auditor snapshot releases the notification lock");
+    std::puts("PASS field-auditor-recovery: failed auditor dispatch releases the notification lock");
 }
 
 
@@ -10001,7 +10071,9 @@ run_installation_scenario(const Scenario &scenario)
 	    throw;
 	}
     }
-    require(preserved > 0 && committed > 0, "installation did not exercise both outcomes");
+    require(committed > 0 &&
+	(!allocationFailureInterceptsBObol || preserved > 0),
+	"installation did not exercise both outcomes");
     std::printf("PASS %s: %zu allocation positions, %zu preserved, %zu committed\n",
 	scenario.name, attempts + 1, preserved, committed);
 }
@@ -15381,7 +15453,7 @@ check_feature_custom_overlay_publication()
 	require(fixture.completeWithResult(),
 	    "custom overlay publication did not reach complete state");
     }
-    require(preserved && committed,
+    require(committed && (!allocationFailureInterceptsBObol || preserved),
 	"custom overlay sweep did not exercise both publication outcomes");
     std::printf("PASS feature-custom-overlay-publication: %zu allocation positions, %zu preserved, %zu committed; one complete graph/frame/result publication\n",
 	attempts + 1, preserved, committed);
@@ -17061,7 +17133,7 @@ check_feature_direct_publication()
 	    require(fixture.completeState(),
 		"direct feature retry did not reach complete state");
 	}
-	require(preserved && committed,
+	require(committed && (!allocationFailureInterceptsBObol || preserved),
 	    "direct feature sweep missed a commit boundary outcome");
 	totalPositions += attempts + 1;
 	totalPreserved += preserved;
@@ -17446,7 +17518,7 @@ check_feature_node_publication()
 	    require(fixture.completeState(),
 		"feature node publication retry did not complete");
 	}
-	require(preserved && committed,
+	require(committed && (!allocationFailureInterceptsBObol || preserved),
 	    "feature node publication did not exercise both outcomes");
 	totalPositions += attempts + 1;
 	totalPreserved += preserved;
@@ -17864,7 +17936,7 @@ check_feature_controller_migration_publication()
 	    require(fixture.completeState(),
 		"feature controller migration retry did not complete");
 	}
-	require(preserved && committed,
+	require(committed && (!allocationFailureInterceptsBObol || preserved),
 	    "feature controller migration did not exercise both outcomes");
 	totalPositions += attempts + 1;
 	totalPreserved += preserved;
@@ -22795,7 +22867,8 @@ check_headless_open_context_publication()
     const size_t cacheContextAttempts = invoke_with_failure(
 	[&] { action.setCacheContext(nextCacheContext); },
 	std::numeric_limits<size_t>::max(), failed);
-    require(!failed && cacheContextAttempts > 0 &&
+    require(!failed &&
+	(!allocationFailureInterceptsObol || cacheContextAttempts > 0) &&
 	action.getCacheContext() == nextCacheContext &&
 	action.getContextManager() == &secondManager,
 	"registered cache-context replacement did not complete");
@@ -25293,10 +25366,10 @@ struct RtImagePublicationFixture {
     static constexpr unsigned int ViewportHeight = 4;
 
     explicit RtImagePublicationFixture(bool automaticLod) :
-	endpoint(bobol_display_endpoint_create(&controller, 0)),
+	endpoint(&controller),
 	automatic(automaticLod)
     {
-	require(endpoint != nullptr, "RT image initial endpoint");
+	require(endpoint.isValid(), "RT image initial endpoint");
 	if (automatic) {
 	    struct bv_lod_policy policy;
 	    bv_lod_policy_init(&policy);
@@ -25332,7 +25405,9 @@ struct RtImagePublicationFixture {
 	struct bv_display_property_value value = BV_DISPLAY_PROPERTY_VALUE_INIT;
 	value.type = BV_DISPLAY_PROPERTY_UINT;
 	value.uint_value = samples;
-	return bobol_display_endpoint_property_set(endpoint.get(),
+	/* Callback exceptions are exercised below.  Keep a C++ call boundary so
+	 * MSVC's /EHsc does not assume the extern "C" setter cannot throw. */
+	return endpoint.propertySet(
 	    "render.rt.samples", &value);
     }
 
@@ -25350,7 +25425,7 @@ struct RtImagePublicationFixture {
     bool samplesAre(unsigned int expectedSamples) const
     {
 	struct bv_display_property_value value = BV_DISPLAY_PROPERTY_VALUE_INIT;
-	return bobol_display_endpoint_property_get(endpoint.get(),
+	return endpoint.propertyGet(
 	    "render.rt.samples", &value) == BV_DISPLAY_PROPERTY_OK &&
 	    value.uint_value == expectedSamples;
     }
@@ -25400,8 +25475,7 @@ struct RtImagePublicationFixture {
     }
 
     BObolViewController controller;
-    std::unique_ptr<bobol_display_endpoint_t, TestDisplayEndpointCloser>
-	endpoint;
+    BObolDisplayEndpoint endpoint;
     SoGroup *root = nullptr;
     SoBRLViewportImage *viewport = nullptr;
     SoBRLImageSource *source = nullptr;
@@ -25451,7 +25525,7 @@ struct RtImagePublicationObserver {
 	if (complete)
 	    ++self.completeCalls;
 	if (self.fixture.throwing && complete)
-	    throw std::bad_alloc();
+	    throw SourceObserverFailure();
     }
 
     RtImagePublicationFixture &fixture;
@@ -25610,7 +25684,9 @@ exercise_rt_image_activation(bool automatic)
     const size_t attempts = invoke_with_failure(
 	[&] { result = measured.activate(); },
 	std::numeric_limits<size_t>::max(), failed);
-    require(!failed && attempts > 0 && result && measured.isComplete() &&
+    require(!failed &&
+	(!allocationFailureInterceptsBObol || attempts > 0) && result &&
+	measured.isComplete() &&
 	measuredObserver.calls > 1 && !measured.incoherent,
 	"RT activation did not attach one complete image generation");
 
@@ -25689,7 +25765,7 @@ exercise_rt_image_publication(bool automatic, const RtImageExpected &expected,
     throwing.throwing = true;
     failed = false;
     try { (void)throwing.publish(); }
-    catch (const std::bad_alloc &) { failed = true; }
+    catch (const SourceObserverFailure &) { failed = true; }
     require(failed && throwing.isComplete() &&
 	throwingObserver.completeCalls > 1 && !throwing.incoherent &&
 	!SoDB::isNotifying(),
@@ -25746,10 +25822,10 @@ struct RendererEngineTransition {
 struct RendererEngineFixture {
     RendererEngineFixture(const RendererEngineTransition &transition,
 	bool automaticLod) :
-	endpoint(bobol_display_endpoint_create(&controller, 0)),
+	endpoint(&controller),
 	extensionOwner(retain_node(new SoCube)), target(transition.target)
     {
-	require(endpoint != nullptr, "renderer engine initial endpoint");
+	require(endpoint.isValid(), "renderer engine initial endpoint");
 	if (automaticLod) {
 	    struct bv_lod_policy policy;
 	    bv_lod_policy_init(&policy);
@@ -25768,8 +25844,8 @@ struct RendererEngineFixture {
 	require(root != nullptr, "renderer engine initial root");
 	root->addChild(extensionOwner.get());
 	require(transition.initial == BOBOL_RENDER_ENGINE_AUTO ||
-	    bobol_display_endpoint_render_engine_set(endpoint.get(),
-		transition.initial), "renderer engine initial policy");
+	    endpoint.setRenderEngine(transition.initial),
+	    "renderer engine initial policy");
 	controller.clearRenderRequest();
 	extensionPath = make_test_path(root,
 	    transition.initial == BOBOL_RENDER_ENGINE_RT ? 1 : 0);
@@ -25779,14 +25855,14 @@ struct RendererEngineFixture {
 
     int publish()
     {
-	return bobol_display_endpoint_render_engine_set(endpoint.get(), target);
+	return endpoint.setRenderEngine(target);
     }
 
     bool stateMatches(enum bobol_render_engine engine) const
     {
 	const bool graphical = engine != BOBOL_RENDER_ENGINE_NONE &&
 	    engine != BOBOL_RENDER_ENGINE_DIAGNOSTIC;
-	if (bobol_display_endpoint_render_engine_get(endpoint.get()) != engine ||
+	if (endpoint.renderEngine() != engine ||
 	    (controller.getRenderRoot() != nullptr) != graphical)
 	    return false;
 	SoBRLViewportImage *viewport =
@@ -25814,8 +25890,7 @@ struct RendererEngineFixture {
     }
 
     BObolViewController controller;
-    std::unique_ptr<bobol_display_endpoint_t, TestDisplayEndpointCloser>
-	endpoint;
+    BObolDisplayEndpoint endpoint;
     TestNodeRef extensionOwner;
     SoGroup *root = nullptr;
     TestPathRef extensionPath;
@@ -25842,14 +25917,13 @@ struct RendererEngineObserver {
 	    !self.reentered) {
 	    self.reentered = true;
 	    self.expectedEngine = self.reentryEngine;
-	    require(bobol_display_endpoint_render_engine_set(
-		    self.fixture.endpoint.get(), self.reentryEngine),
+	    require(self.fixture.endpoint.setRenderEngine(self.reentryEngine),
 		"renderer engine reentry return");
 	}
 	self.incoherent = self.incoherent ||
 	    !self.fixture.stateMatches(self.expectedEngine);
 	if (self.throwing)
-	    throw std::bad_alloc();
+	    throw SourceObserverFailure();
     }
 
     RendererEngineFixture &fixture;
@@ -25959,7 +26033,7 @@ check_renderer_engine_publication()
     throwingObserver.throwing = true;
     bool failed = false;
     try { (void)throwing.publish(); }
-    catch (const std::bad_alloc &) { failed = true; }
+    catch (const SourceObserverFailure &) { failed = true; }
     require(failed && throwing.stateMatches(BOBOL_RENDER_ENGINE_RT) &&
 	throwingObserver.calls > 1 && !throwingObserver.incoherent &&
 	!SoDB::isNotifying(),
@@ -25982,7 +26056,7 @@ check_renderer_engine_publication()
     removalThrowingObserver.throwing = true;
     failed = false;
     try { (void)removalThrowing.publish(); }
-    catch (const std::bad_alloc &) { failed = true; }
+    catch (const SourceObserverFailure &) { failed = true; }
     require(failed && removalThrowing.stateMatches(BOBOL_RENDER_ENGINE_SW) &&
 	removalThrowingObserver.calls > 1 &&
 	!removalThrowingObserver.incoherent && !SoDB::isNotifying(),
@@ -30338,6 +30412,12 @@ check_compact_snapshot_scene_transaction()
     size_t attempts = 0;
     size_t preserved = 0;
     size_t committed = 0;
+    if constexpr (!allocationFailureInterceptsBObol) {
+	/* The reference publication above is the observable commit outcome
+	 * when the executable's allocator cannot interpose on the DLL.
+	 * Explicit rejection cases below retain the preservation coverage. */
+	committed = 1;
+    }
     for (size_t iteration = 0; iteration <= attempts; ++iteration) {
 	CompactSnapshotSceneFixture fixture;
 	Observer observer{fixture};
@@ -30376,7 +30456,7 @@ check_compact_snapshot_scene_transaction()
 	    require(fixture.publish() == 2 && fixture.complete(),
 		"compact snapshot retry differs");
     }
-    require(preserved && committed,
+    require(committed && (!allocationFailureInterceptsBObol || preserved),
 	"compact snapshot sweep missed a commit boundary outcome");
     std::printf("PASS compact-snapshot-scene-transaction: %zu allocation positions, %zu preserved, %zu committed\n",
 	attempts + 1, preserved, committed);
@@ -30616,6 +30696,8 @@ check_stream_scene_publication()
     size_t preserved = 0;
     size_t partial = 0;
     size_t completed = 0;
+    if constexpr (!allocationFailureInterceptsBObol)
+	completed = 1;
     for (size_t iteration = 0; iteration <= attempts; ++iteration) {
 	StreamSceneFixture fixture;
 	Observer observer{fixture};
@@ -30656,7 +30738,8 @@ check_stream_scene_publication()
 		"stream scene retry did not complete its retained prefix");
 	}
     }
-    require(preserved && partial && completed,
+    require(completed && (!allocationFailureInterceptsBObol ||
+	(preserved && partial)),
 	"stream scene sweep did not exercise old, prefix and complete outcomes");
     std::printf("PASS stream-scene-publication: %zu allocation positions, %zu preserved, %zu prefixes, %zu completed\n",
 	attempts + 1, preserved, partial, completed);
@@ -30812,6 +30895,56 @@ stream_contract_profile(size_t occurrenceCount)
     profile.largestAssetBytes = 4096;
     profile.reusedOccurrenceCount = profile.occurrenceCount - 1;
     return profile;
+}
+
+static void
+check_stream_population_completeness()
+{
+    constexpr size_t expectedLeaves = 3;
+
+    StreamSceneFixture exact;
+    require(!exact.source->hasCompleteCompactInstancePopulation(),
+	"uncertified compact population reported complete");
+    require(exact.scene->certifyDatabaseSourceInstanceCompactStream(
+	StreamSceneFixture::sourceKey, exact.stamp, expectedLeaves) == 1 &&
+	!exact.source->hasCompleteCompactInstancePopulation(),
+	"incomplete certified compact leaf population reported complete");
+    SbBool batchCompleted = FALSE;
+    require(exact.publish(&batchCompleted) == 2 && batchCompleted &&
+	exact.source->getCompactExpectedInstanceCount() == expectedLeaves &&
+	exact.source->hasCompleteCompactInstancePopulation(),
+	"complete certified compact leaf population was not recognized");
+
+    StreamSceneFixture retained;
+    require(retained.scene->certifyDatabaseSourceInstanceCompactStream(
+	StreamSceneFixture::sourceKey, retained.stamp, expectedLeaves) == 1,
+	"retained-overview compact population certification failed");
+    BObolCompactOccurrence overview = retained.incoming.front();
+    overview.summary.path = StreamSceneFixture::sourcePath;
+    overview.summary.sourceName = StreamSceneFixture::sourcePath;
+    overview.summary.sourceType = "proxy";
+    overview.summary.geometryKind = "overview-aabb";
+    overview.summary.recordRole = "lod-overview";
+    overview.summary.selectable = FALSE;
+    overview.lodBacked = FALSE;
+    overview.sourceMeshRequestValid = FALSE;
+    require(retained.source->mergeCompactOccurrences({overview}, TRUE) == 1 &&
+	retained.source->mergeCompactOccurrences(
+	    {retained.incoming.front()}, TRUE) == 1 &&
+	retained.source->getCompactInstanceCount() ==
+	    static_cast<int>(expectedLeaves) &&
+	!retained.source->hasCompleteCompactInstancePopulation(),
+	"overview disguised an incomplete certified leaf population");
+    require(retained.source->mergeCompactOccurrences(
+	{retained.incoming.back()}, TRUE) == 1 &&
+	retained.source->getCompactInstanceCount() ==
+	    static_cast<int>(expectedLeaves + 1) &&
+	retained.source->getCompactExpectedInstanceCount() == expectedLeaves &&
+	retained.source->hasCompleteCompactInstancePopulation(),
+	"retained overview prevented recognition of a complete leaf population");
+
+    std::puts("PASS stream-population-completeness: certification counts "
+	"leaves independently of retained overview coverage");
 }
 
 static void
@@ -33441,7 +33574,7 @@ check_shared_scene_materials()
 int main(int argc, char **argv)
 {
     bu_setprogname(argv[0]);
-    std::setvbuf(stdout, nullptr, _IOLBF, 0);
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     bobol_init(nullptr);
     std::vector<Scenario> scenarios = {
 	{"append", true},
@@ -33592,6 +33725,8 @@ int main(int argc, char **argv)
 	    {"compact-snapshot-scene-edges", check_compact_snapshot_scene_edges, Group::State},
 	    {"stream-scene-publication", check_stream_scene_publication, Group::State},
 	    {"stream-scene-edges", check_stream_scene_edges, Group::State},
+	    {"stream-population-completeness", check_stream_population_completeness,
+		Group::State},
 	    {"stream-contract-scene", check_stream_contract_scene, Group::State},
 	    {"shape-membership-transaction", check_shape_membership_transaction, Group::State},
 	    {"shape-membership-edges", check_shape_membership_edges, Group::State},

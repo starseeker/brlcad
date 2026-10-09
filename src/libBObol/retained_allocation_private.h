@@ -153,6 +153,12 @@ struct BObolRetainedAllocationResult {
      * plan and selectedPresentationCost fits certifiedPresentationBudget.
      */
     size_t selectedPresentationCost = 0;
+    /* Richest progressive cut which must remain visible as mesh geometry for
+     * this allocation.  Point-aggregated occurrences are deliberately absent:
+     * their retained mesh cuts may be richer than a temporary renderer-wide
+     * ceiling without changing the selected framebuffer population. */
+    int maximumNonAggregatedProgressiveCut = -1;
+    bool maximumNonAggregatedProgressiveCutKnown = false;
     /* Least complete population which this allocation's classifier can
      * select.  This may exceed requestedSceneBudget when a sole visible
      * occurrence cannot be aggregated.  Capacity search must use this exact
@@ -190,6 +196,8 @@ struct BObolRetainedAllocationResult {
      * must refresh these entries before one successor allocation may begin. */
     size_t unresolvedViewDependentPayloadCount = 0;
     std::vector<BObolRetainedProjectionRefreshPlan> projectionRefreshPlans;
+    /* All aggregate point occurrences selected by this allocation, including
+     * pixel-exact fixed points as well as budget-selected candidates. */
     size_t selectedPointProxyCount = 0;
     /* The transaction changed at least one assembly's occurrence-level
      * point/mesh classification policy.  Unlike a PoP cut mutation this does

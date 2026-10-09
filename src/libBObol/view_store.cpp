@@ -3833,6 +3833,34 @@ BObolFeatureStore::replacePrimitiveMetadata(BObolFeatureHandle handle,
 }
 
 SbBool
+BObolFeatureStore::replacePrimitiveMetadata(BObolFeatureHandle handle,
+	std::vector<BObolFeaturePrimitiveMetadata> metadata)
+{
+    BObolFeatureStoreRecord *rec = this->impl->record(handle);
+    if (!rec)
+	return FALSE;
+
+    std::unordered_set<int32_t> primitives;
+    primitives.reserve(metadata.size());
+    for (const BObolFeaturePrimitiveMetadata &item : metadata) {
+	if (item.primitiveIndex < 0 ||
+	    !primitives.insert(item.primitiveIndex).second)
+	    return FALSE;
+    }
+
+    metadata.erase(std::remove_if(metadata.begin(), metadata.end(),
+	[](const BObolFeaturePrimitiveMetadata &item) {
+	    return item.metadata.empty();
+	}), metadata.end());
+
+    return this->impl->publishExistingDataEdit(rec,
+	[&metadata](BObolFeatureStoreRecord &candidate) {
+	    candidate.primitiveMetadata = std::move(metadata);
+	    store_revision_advance(candidate.revision);
+	}, "replacePrimitiveMetadataBatch");
+}
+
+SbBool
 BObolFeatureStore::primitiveMetadata(BObolFeatureHandle handle,
 				       int32_t primitiveIndex,
 				       std::vector<BObolFeatureMetadata> &metadataOut) const
