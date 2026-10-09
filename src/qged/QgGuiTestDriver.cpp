@@ -36,6 +36,7 @@
 #include <Inventor/actions/SoGetBoundingBoxAction.h>
 #include <Inventor/SbViewVolume.h>
 #include <Inventor/nodes/SoCamera.h>
+#include <Inventor/tools/SbModernUtils.h>
 
 #include "BObol/BEditManipulator.h"
 #include "BObol/BDisplayEndpoint.h"
@@ -331,7 +332,7 @@ qged_test_drag_obol_mesh_vertex(QgEdApp &app,
     struct SurfaceSnapshot {
 	BObolViewController *controller;
 	BObolFeatureHandle feature;
-	SoNode *node;
+	SbModernUtils::SoNodeRef node;
 	SoBRLMeshShape *geometry;
     };
 
@@ -383,7 +384,8 @@ qged_test_drag_obol_mesh_vertex(QgEdApp &app,
 	    }
 	    auto *candidateMesh = static_cast<SoBRLMeshShape *>(candidateNode);
 	    surfaceSnapshots.push_back({candidateController, candidateFeature,
-		candidateNode, candidateMesh->getSharedGeometrySource()});
+		SbModernUtils::SoNodeRef(candidateNode),
+		candidateMesh->getSharedGeometrySource()});
 	}
     }
     const int vertex = arguments.value(QStringLiteral("vertex")).toInt(-1);
@@ -505,13 +507,23 @@ qged_test_drag_obol_mesh_vertex(QgEdApp &app,
 		SoBRLMeshShape::getClassTypeId()) ||
 	    afterFeature.id != before.feature.id ||
 	    afterFeature.revision <= before.feature.revision ||
-	    afterNode == before.node ||
+	    afterNode == before.node.get() ||
 	    static_cast<SoBRLMeshShape *>(afterNode)->getSharedGeometrySource() !=
 		before.geometry) {
 	    if (error)
 		*error = QStringLiteral(
-		    "Obol edit mesh in view %1 did not publish a new surface wrapper over the retained shared geometry")
-		    .arg(i);
+		    "Obol edit mesh in view %1 did not publish a new surface wrapper over the retained shared geometry (feature %2/%3 -> %4/%5, node %6 -> %7, geometry %8 -> %9)")
+		    .arg(i)
+		    .arg(static_cast<qulonglong>(before.feature.id))
+		    .arg(static_cast<qulonglong>(before.feature.revision))
+		    .arg(static_cast<qulonglong>(afterFeature.id))
+		    .arg(static_cast<qulonglong>(afterFeature.revision))
+		    .arg(reinterpret_cast<quintptr>(before.node.get()), 0, 16)
+		    .arg(reinterpret_cast<quintptr>(afterNode), 0, 16)
+		    .arg(reinterpret_cast<quintptr>(before.geometry), 0, 16)
+		    .arg(reinterpret_cast<quintptr>(afterNode ?
+			static_cast<SoBRLMeshShape *>(afterNode)->
+			getSharedGeometrySource() : nullptr), 0, 16);
 	    return false;
 	}
     }

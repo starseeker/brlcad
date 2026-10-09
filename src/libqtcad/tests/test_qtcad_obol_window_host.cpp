@@ -137,6 +137,85 @@ test_qtcad_progressive_timer_contract(void)
     return 0;
 }
 
+static int
+test_qtcad_hidden_endpoint_progressive_startup(void)
+{
+    CHECK(qtcad_obol_host_factories_register(),
+	"hidden startup test registers Qt Obol host factories");
+
+    QWidget parent;
+    parent.resize(120, 90);
+    QgSW canvas(&parent);
+    canvas.resize(72, 54);
+
+    struct bobol_host_desc desc = {};
+    desc.struct_size = sizeof(desc);
+    desc.mode = BOBOL_HOST_MODE_EMBEDDED;
+    desc.width = 72;
+    desc.height = 54;
+    desc.device_pixel_ratio = 1.0;
+    desc.visible = 0;
+    desc.required_capabilities = BOBOL_HOST_CAP_EMBEDDED |
+	BOBOL_HOST_CAP_PIXEL_PRESENT | BOBOL_HOST_CAP_READBACK;
+    desc.application_context = static_cast<QgCanvasBase *>(&canvas);
+
+    bobol_display_endpoint_t *endpoint =
+	bobol_display_endpoint_create(NULL, 0);
+    CHECK(endpoint != NULL,
+	"hidden startup test creates an Obol endpoint");
+    CHECK(bobol_display_endpoint_host_open(endpoint, "qt-sw", &desc),
+	"hidden startup test opens an embedded Qt endpoint");
+
+    BObolViewController *controller = static_cast<BObolViewController *>(
+	bobol_display_endpoint_controller(endpoint));
+    CHECK(controller && canvas.obolViewController() == controller,
+	"hidden startup test binds the endpoint controller to its canvas");
+
+    /* Drain callback handoff work before raising the tested provider edge.
+     * This also ensures an earlier canvas-owned callback cannot accidentally
+     * provide the wake which the endpoint path is required to supply. */
+    controller->clearProgressiveProviders();
+    controller->clearProgressiveWorkPending();
+    controller->clearRenderRequest();
+    QElapsedTimer settle;
+    settle.start();
+    while (settle.elapsed() < 50) {
+	QApplication::processEvents(QEventLoop::AllEvents, 20);
+	QThread::msleep(1);
+    }
+    controller->clearProgressiveWorkPending();
+    controller->clearRenderRequest();
+    CHECK(!canvas.isVisible() && !canvas.isPresentationInitialized(),
+	"hidden startup fixture has not received a paint event");
+
+    BoundedProgressState state;
+    state.target = 1;
+    const uint64_t token = controller->registerProgressiveProvider(
+	bounded_progress_provider, &state);
+    CHECK(token != 0 && controller->hasProgressiveWorkPending(),
+	"hidden startup provider publishes its initial pump level");
+
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while ((state.calls < state.target ||
+	    controller->hasProgressiveWorkPending()) && elapsed.elapsed() < 2000) {
+	QApplication::processEvents(QEventLoop::AllEvents, 20);
+	QThread::msleep(1);
+    }
+    BObolLodConvergenceStatus status;
+    controller->getLodConvergenceStatus(status);
+    CHECK(state.calls == state.target &&
+	!controller->hasProgressiveWorkPending() &&
+	status.sourcePreparationProviderCount == 0 &&
+	!status.progressDisplayStatus().visible &&
+	!canvas.isPresentationInitialized(),
+	"hidden endpoint startup drains an idle provider without a paint or orange progress overlay");
+
+    controller->unregisterProgressiveProvider(token);
+    bobol_display_endpoint_destroy(endpoint);
+    return 0;
+}
+
 static void
 add_visible_obol_content(BObolViewController *controller)
 {
@@ -1046,6 +1125,8 @@ main(int argc, char **argv)
     if (test_qtcad_canvas_rebinding_validation())
 	return 1;
     if (test_qtcad_progressive_timer_contract())
+	return 1;
+    if (test_qtcad_hidden_endpoint_progressive_startup())
 	return 1;
     if (test_qtcad_owned_window_host())
 	return 1;

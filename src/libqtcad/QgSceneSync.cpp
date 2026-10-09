@@ -27,9 +27,16 @@ qg_scene_bind(struct ged *gedp, QgView *display)
 	ged_view_context_from_bv(display->viewContext());
     if (!endpoint || !view_ctx)
 	return 0;
-    if (ged_view_context_obol_endpoint_get(view_ctx) == endpoint)
+    if (ged_view_context_obol_endpoint_get(view_ctx) == endpoint) {
+	display->setNativeLodProgressOverlay(
+	    display->nativeLodProgressOverlay());
 	return 1;
-    return ged_view_context_obol_endpoint_set(view_ctx, endpoint, 0);
+    }
+    if (!ged_view_context_obol_endpoint_set(view_ctx, endpoint, 0))
+	return 0;
+    display->setNativeLodProgressOverlay(
+	display->nativeLodProgressOverlay());
+    return 1;
 }
 
 int

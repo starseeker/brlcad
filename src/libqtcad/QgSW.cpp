@@ -151,6 +151,10 @@ void QgSW::present_frame()
      * camera until a later mouse event. */
     request_update(BV_REFRESH_VIEW | BV_REFRESH_FRAMEBUFFER |
 	BV_REFRESH_FORCE);
+    /* A hidden embedded widget may never receive the paint requested above.
+     * Provider progression is a separate host obligation, so keep its timer
+     * alive even before the application exposes the canvas. */
+    qgcanvas_queue_obol_progressive_update(*d, this);
 }
 
 void QgSW::queued_update()
@@ -203,6 +207,7 @@ return;
 	{
 	    QPainter painter(this);
 	    painter.fillRect(e->rect(), Qt::black);
+	    qgcanvas_paint_lod_progress_overlay(*d, this, painter);
 	}
 	QImage black(qgcanvas_render_size(this), QImage::Format_RGBA8888);
 	black.fill(Qt::black);
@@ -231,6 +236,7 @@ return;
 	painter.translate(0, height());
 	painter.scale(1, -1);
 	painter.drawImage(QPoint(0, 0), image);
+	qgcanvas_paint_lod_progress_overlay(*d, this, painter);
     }
     d->last_presented_software_frame = image;
     d->presented_feature_revision = imageFeatureRevision;
@@ -251,6 +257,11 @@ return;
 	 * orientation to diagnostic observers. */
 	QImage presented = qgcanvas_flip_vertical(image);
 	presented.setDevicePixelRatio(devicePixelRatioF());
+	{
+	    QPainter presentedPainter(&presented);
+	    qgcanvas_paint_lod_progress_overlay(
+		*d, this, presentedPainter);
+	}
 	emit frame_presented(presented);
     }
 }

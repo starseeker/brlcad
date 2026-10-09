@@ -524,12 +524,12 @@ main(int argc, char **argv)
 	    operation->currentText() == QStringLiteral("Select Edge") &&
 	    !parameters->isEnabled() && !apply->isEnabled(),
 	    "command-originated ARB selection updates the custom widget state");
-	const char *moveVertex[] = {
-	    "edit", "-i", "arb8.s", "move_vertex", "0", "2", "2", "2",
+	const char *moveEdge[] = {
+	    "edit", "-i", "arb8.s", "move_edge", "0", "2", "2", "2",
 	    nullptr
 	};
-	CHECK(ged_exec(gedp, 8, moveVertex) == BRLCAD_OK &&
-	    operation->currentText() == QStringLiteral("Move Vertex") &&
+	CHECK(ged_exec(gedp, 8, moveEdge) == BRLCAD_OK &&
+	    operation->currentText() == QStringLiteral("Move Edge") &&
 	    !parameters->isEnabled() && !apply->isEnabled(),
 	    "command-originated custom edit updates the widget without enabling a false form");
 	editor.cancel();

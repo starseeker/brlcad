@@ -381,7 +381,7 @@
       "action": "qged_command_expect",
       "arguments": {
 	"command": "get ell.s B",
-	"contains": "1.5"
+	"contains": "0 1."
       }
     },
     {
@@ -770,26 +770,13 @@
       }
     },
     {
-      "target": "i:primitiveEdit.operation",
-      "action": "assert_state",
-      "arguments": { "text": "Move Vertex", "index": 5 }
-    },
-    {
-      "target": ".",
-      "action": "qged_command_expect",
-      "arguments": {
-	"command": "edit group.c/arb.s get move_vertex",
-	"contains": ["5", "3"]
-      }
-    },
-    {
       "target": ".",
       "action": "assert_obol_indexed_edit_handle",
       "arguments": {
 	"feature": "_arb_edit_manipulator",
 	"domain": "vertex",
 	"index": 5,
-	"position": [3.0, 0.0, 2.0],
+	"position": [2.0, 0.0, 2.0],
 	"all_views": true,
 	"tolerance": 0.05
       }
@@ -797,16 +784,56 @@
     {
       "target": ".",
       "action": "qged_command_expect",
-      "arguments": { "command": "edit -i group.c/arb.s move_vertex 5 4 0 2" }
+      "arguments": { "command": "edit -i group.c/arb.s select_edge 6" }
+    },
+    {
+      "target": ".",
+      "action": "drag_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_arb_edit_manipulator",
+	"domain": "edge",
+	"index": 4,
+	"target_point": [1.0, -1.0, 2.0]
+      }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": { "text": "Move Edge", "index": 4 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/arb.s get move_edge",
+	"contains": ["6", "-1"]
+      }
     },
     {
       "target": ".",
       "action": "assert_obol_indexed_edit_handle",
       "arguments": {
 	"feature": "_arb_edit_manipulator",
-	"domain": "vertex",
-	"index": 5,
-	"position": [4.0, 0.0, 2.0],
+	"domain": "edge",
+	"index": 4,
+	"position": [1.0, -1.0, 2.0],
+	"all_views": true,
+	"tolerance": 0.05
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/arb.s move_edge 6 1 -2 2" }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_arb_edit_manipulator",
+	"domain": "edge",
+	"index": 4,
+	"position": [1.0, -2.0, 2.0],
 	"all_views": true,
 	"tolerance": 0.05
       }

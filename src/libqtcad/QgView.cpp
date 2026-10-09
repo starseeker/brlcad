@@ -37,6 +37,7 @@
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgObolWindowHost.h"
 #include "bv.h"
+#include "ged/display.h"
 #include "ged/view.h"
 
 extern "C" {
@@ -303,6 +304,25 @@ QgCanvasBase *
 QgView::canvasBase()
 {
     return canvas;
+}
+
+void
+QgView::setNativeLodProgressOverlay(bool enabled)
+{
+    native_lod_progress_overlay = enabled;
+    struct ged_view_context *view_ctx =
+	ged_view_context_from_bv(viewContext());
+    if (!view_ctx || !ged_view_context_owner(view_ctx))
+	return;
+    (void)ged_view_lod_progress_presentation_mode_set(view_ctx,
+	enabled ? GED_VIEW_LOD_PROGRESS_PRESENTATION_NATIVE_HOST :
+	GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED);
+}
+
+bool
+QgView::nativeLodProgressOverlay() const
+{
+    return native_lod_progress_overlay;
 }
 
 void
