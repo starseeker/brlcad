@@ -106,6 +106,13 @@ struct ged_view_feature_metadata {
     const char *value;
 };
 
+/** Metadata associated with one primitive in a retained feature. */
+struct ged_view_feature_primitive_metadata {
+    int primitive;
+    const struct ged_view_feature_metadata *metadata;
+    size_t metadata_count;
+};
+
 /** Renderer-neutral commands associated with retained line-set points. */
 enum ged_draw_view_line_command {
     GED_DRAW_VIEW_LINE_MOVE = 0,

@@ -151,6 +151,13 @@ GED_EXPORT extern void ged_view_context_free(struct ged_view_context *view);
 /** Attach @p view to the semantic scene host owned by @p gedp. */
 GED_EXPORT extern int ged_view_context_host_attach(struct ged *gedp, struct ged_view_context *view);
 
+/**
+ * Transfer @p view's serialized host-thread ownership to the calling thread.
+ * The previous owner must be quiescent, and no other thread may use the view
+ * until this call returns.  Stable view/reference identity is unchanged.
+ */
+GED_EXPORT extern int ged_view_context_host_thread_claim(struct ged_view_context *view);
+
 /** Add @p view to @p set without transferring view ownership. */
 GED_EXPORT extern int ged_view_set_context_add(struct ged_view_set *set, struct ged_view_context *view);
 

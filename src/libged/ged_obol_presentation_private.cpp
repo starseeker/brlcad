@@ -955,6 +955,35 @@ ged_obol_lod_compact_count(uint64_t value)
     return result;
 }
 
+static const char *
+ged_obol_lod_producer_stage_description(int stage)
+{
+    switch (stage) {
+	case BOBOL_LOD_PRODUCER_STAGE_ASSET_SERIALIZATION:
+	    return "Waiting for shared LoD asset";
+	case BOBOL_LOD_PRODUCER_STAGE_CACHE_LOOKUP:
+	    return "Checking LoD cache";
+	case BOBOL_LOD_PRODUCER_STAGE_SOURCE_PREPARATION:
+	    return "Preparing source geometry";
+	case BOBOL_LOD_PRODUCER_STAGE_COVERAGE_PREVIEW:
+	    return "Sampling object coverage";
+	case BOBOL_LOD_PRODUCER_STAGE_SOURCE_HASHING:
+	    return "Hashing source geometry";
+	case BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS:
+	    return "Analyzing object bounds";
+	case BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION:
+	    return "Classifying mesh faces";
+	case BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION:
+	    return "Building drawable mesh";
+	case BOBOL_LOD_PRODUCER_STAGE_SPATIAL_CONSTRUCTION:
+	    return "Building spatial LoD pages";
+	case BOBOL_LOD_PRODUCER_STAGE_CACHE_PERSISTENCE:
+	    return "Saving LoD cache";
+	default:
+	    return NULL;
+    }
+}
+
 static void
 ged_obol_faceplate_sync_lod_progress(
 			     GedObolFaceplatePublication &publication,
@@ -966,6 +995,16 @@ ged_obol_faceplate_sync_lod_progress(
     static constexpr int progressTrackSortOrder = 10;
     static constexpr int progressFillSortOrder = 11;
     static constexpr int progressLabelSortOrder = 12;
+    enum ged_view_lod_progress_presentation_mode presentation_mode =
+	GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED;
+    if (ged_view_lod_progress_presentation_mode_get(&presentation_mode,
+	    view_ctx) && presentation_mode !=
+	    GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED) {
+	publication.remove(track_name);
+	publication.remove(fill_name);
+	publication.remove(label_name);
+	return;
+    }
     BObolViewController *controller = publication.viewController();
     struct bv_lod_policy policy;
     bv_lod_policy_init(&policy);
@@ -1011,6 +1050,7 @@ ged_obol_faceplate_sync_lod_progress(
 	SIZE_MAX : status.pendingTasks + status.inFlight;
     const size_t pendingGeometry = pending > SIZE_MAX - status.queuedResults ?
 	SIZE_MAX : pending + status.queuedResults;
+    bool producerStageInTitle = false;
     const auto append_settling_detail = [&]() {
 	if (status.visibleTargetCount > 0) {
 	    const size_t represented = status.satisfiedPayloadCount >
@@ -1026,7 +1066,93 @@ ged_obol_faceplate_sync_lod_progress(
 	if (pendingGeometry > 0)
 	    bu_vls_printf(&text, "  %s geometry item%s pending",
 		ged_obol_lod_compact_count(pendingGeometry).c_str(),
-		pendingGeometry == 1 ? "" : "s");
+	    pendingGeometry == 1 ? "" : "s");
+    };
+    const auto append_proxy_summary = [&]() {
+	struct PipelineStage {
+	    size_t count;
+	    const char *description;
+	};
+	const PipelineStage stages[] = {
+	    {status.proxyReasons.sourcePreparationOccurrenceCount,
+		"source preparation"},
+	    {status.proxyReasons.visibilityPlanningOccurrenceCount,
+		"visibility planning"},
+	    {status.proxyReasons.geometryPreparationOccurrenceCount,
+		"mesh construction"},
+	    {status.proxyReasons.rendererPreparationOccurrenceCount,
+		"renderer preparation"},
+	    {status.proxyReasons.unclassifiedOccurrenceCount,
+		"proxy classification"}
+	};
+	if (!producerStageInTitle) {
+	    const char *producerStage =
+		ged_obol_lod_producer_stage_description(status.producerStage);
+	    if (producerStage) {
+		bu_vls_printf(&text, "  active stage: %s", producerStage);
+	    } else {
+		for (const PipelineStage &stage : stages) {
+		    if (!stage.count)
+			continue;
+		    bu_vls_printf(&text, "  active stage: %s",
+			stage.description);
+		    break;
+		}
+	    }
+	}
+	const size_t temporary =
+	    status.proxyReasons.temporaryStructuralOccurrenceCount();
+	if (temporary > 0)
+	    bu_vls_printf(&text, "  %s temporary box%s",
+		ged_obol_lod_compact_count(temporary).c_str(),
+		temporary == 1 ? "" : "es");
+	const size_t budgetLimited =
+	    status.proxyReasons.budgetLimitedStructuralOccurrenceCount();
+	if (budgetLimited > 0)
+	    bu_vls_printf(&text, "  %s budget-limited box%s",
+		ged_obol_lod_compact_count(budgetLimited).c_str(),
+		budgetLimited == 1 ? "" : "es");
+	const size_t failed =
+	    status.proxyReasons.terminalFailureOccurrenceCount;
+	if (failed > 0)
+	    bu_vls_printf(&text, "  %s failed box%s",
+		ged_obol_lod_compact_count(failed).c_str(),
+		failed == 1 ? "" : "es");
+	if (status.proxyReasons.intentionalSubpixelOccurrenceCount > 0)
+	    bu_vls_printf(&text, "  %s subpixel point%s",
+		ged_obol_lod_compact_count(status.proxyReasons.
+		    intentionalSubpixelOccurrenceCount).c_str(),
+		status.proxyReasons.intentionalSubpixelOccurrenceCount == 1 ?
+		    "" : "s");
+    };
+    const auto format_producer_stage = [&]() {
+	const char *operation =
+	    ged_obol_lod_producer_stage_description(status.producerStage);
+	if (!operation)
+	    return false;
+	producerStageInTitle = true;
+	color[0] = 96;
+	color[1] = 190;
+	color[2] = 255;
+	if (status.producerStageTotalUnits > 0) {
+	    const uint64_t completed = std::min(
+		status.producerStageCompletedUnits,
+		status.producerStageTotalUnits);
+	    const int stagePercent = static_cast<int>(std::floor(
+		100.0 * static_cast<double>(completed) /
+		static_cast<double>(status.producerStageTotalUnits) + 0.5));
+	    bu_vls_sprintf(&text, "%s %d%%  %s/%s units", operation,
+		stagePercent, ged_obol_lod_compact_count(completed).c_str(),
+		ged_obol_lod_compact_count(
+		    status.producerStageTotalUnits).c_str());
+	} else {
+	    bu_vls_sprintf(&text, "%s", operation);
+	}
+	if (status.activeProducerCount > 1)
+	    bu_vls_printf(&text, "  %s active producers",
+		ged_obol_lod_compact_count(
+		    status.activeProducerCount).c_str());
+	return true;
     };
     const auto format_renderer_preparation = [&]() {
 	if (!status.rendererPreparationPreparingTargetCount)
@@ -1202,7 +1328,9 @@ ged_obol_faceplate_sync_lod_progress(
 	    color[0] = 96;
 	    color[1] = 190;
 	    color[2] = 255;
-	    if (status.sourcePreparationTotalUnits > 0) {
+	    if (format_producer_stage()) {
+		break;
+	    } else if (status.sourcePreparationTotalUnits > 0) {
 		const uint64_t completed = std::min(
 		    status.sourcePreparationCompletedUnits,
 		    status.sourcePreparationTotalUnits);
@@ -1269,7 +1397,7 @@ ged_obol_faceplate_sync_lod_progress(
 	    break;
 	case BOBOL_LOD_CONVERGENCE_CALIBRATING:
 	    if (!format_renderer_preparation() && !format_capacity_search() &&
-		!format_finalization()) {
+		!format_producer_stage() && !format_finalization()) {
 		color[0] = 255;
 		color[1] = 170;
 		color[2] = 64;
@@ -1292,7 +1420,7 @@ ged_obol_faceplate_sync_lod_progress(
 	    break;
 	case BOBOL_LOD_CONVERGENCE_REFINING:
 	    if (!format_renderer_preparation() && !format_capacity_search() &&
-		!format_finalization()) {
+		!format_producer_stage() && !format_finalization()) {
 		const std::string primitives =
 		    ged_obol_lod_compact_count(displayedPrimitiveCount);
 		if (status.progressEstimateAvailable) {
@@ -1398,6 +1526,8 @@ ged_obol_faceplate_sync_lod_progress(
 	    bu_vls_sprintf(&text, "View status unavailable");
 	    break;
     }
+
+    append_proxy_summary();
 
     static constexpr uint64_t millisecondsPerSecond = 1000;
     static constexpr uint64_t secondsPerMinute = 60;

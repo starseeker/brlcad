@@ -44,6 +44,7 @@
 
 #include <string.h>
 
+#include "BObol/BDrawCache.h"
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
@@ -215,6 +216,10 @@ has_temporary_write_file(const std::filesystem::path &cache_dir)
 static bool
 reset_cache(const std::filesystem::path &cache_dir)
 {
+    /* GED draw setup may leave a process-wide cache context holding files in
+     * this directory after ged_close.  Close those handles before replacing
+     * the test cache, which is required on Windows. */
+    bobol_draw_cache_clear_all();
     std::error_code error;
     std::filesystem::remove_all(cache_dir, error);
     if (error) {
@@ -392,8 +397,10 @@ main(int argc, const char **argv)
 	    ret = 1;
     }
 
-    if (!ret)
+    if (!ret) {
+	bobol_draw_cache_clear_all();
 	std::filesystem::remove_all(test_dir, error);
+    }
     return ret;
 }
 
