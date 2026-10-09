@@ -327,11 +327,11 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
 	    (void)_autoview_obol_database_scene(gedp, view_ctx, factor, 0, 1);
 	/*
 	 * A deferred Obol root publishes monotonic partial coverage before its
-	 * exact whole-target bound.  Applying the current partial union here and
-	 * then fitting the exact union later produces two camera jumps from one
-	 * autoview command.  If a progressive source can accept the request,
-	 * defer the fit entirely; its exact-bound publication fulfills it once.
-	 * A settled/non-progressive scene follows the ordinary immediate path.
+	 * exact whole-target bound.  If a progressive source accepts the request,
+	 * it owns an immediate finite fit and throttled refits as that source union
+	 * grows; exact/terminal coverage retires the follow operation.  A user pan
+	 * or zoom cancels it.  A settled/non-progressive scene follows the ordinary
+	 * immediate path.
 	 */
     }
 

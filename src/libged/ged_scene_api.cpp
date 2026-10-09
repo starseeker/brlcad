@@ -997,10 +997,37 @@ ged_scene_occurrence_path_matches(const char *candidate, const char *target,
 
 
 struct ged_scene_occurrence_resolve_context {
+    struct ged *gedp;
     struct ged_scene_path_request request;
     int draw_mode;
     ged_scene_occurrence_ref result;
 };
+
+
+static int
+ged_scene_occurrence_candidate_resolve_cb(
+    const struct ged_draw_shape_candidate *candidate, void *client_data)
+{
+    struct ged_scene_occurrence_resolve_context *context =
+	static_cast<struct ged_scene_occurrence_resolve_context *>(client_data);
+    if (!context || !candidate ||
+	!ged_scene_occurrence_ref_is_null(context->result))
+	return 0;
+    if (candidate->draw_mode != context->draw_mode ||
+	!ged_scene_occurrence_path_matches(candidate->path,
+	    context->request.path,
+	    context->request.match == GED_SCENE_PATH_MATCH_SUBTREE))
+	return 1;
+
+    struct ged_scene_occurrence_candidate semantic;
+    semantic.path = candidate->path;
+    semantic.instance_key = candidate->instance_key;
+    semantic.draw_mode = static_cast<enum ged_scene_draw_mode>(
+	candidate->draw_mode);
+    context->result = ged_scene_occurrence_candidate_resolve(context->gedp,
+	&semantic);
+    return ged_scene_occurrence_ref_is_null(context->result) ? 1 : 0;
+}
 
 
 static int
@@ -1063,8 +1090,17 @@ ged_scene_occurrence_resolve(struct ged *gedp,
 
     /* Eager and non-compact draws already have addressable occurrences. */
     struct ged_scene_occurrence_resolve_context context = {
-	*request, draw_mode, GED_SCENE_OCCURRENCE_REF_NULL
+	gedp, *request, draw_mode, GED_SCENE_OCCURRENCE_REF_NULL
     };
+
+    /* The retained frontier is authoritative even before an offscreen/null
+     * display has published a compact source.  Resolve just the matching
+     * lightweight candidate; this creates no sibling occurrence records. */
+    (void)ged_draw_frontier_foreach_visible_candidate(gedp, request->view,
+	draw_mode, ged_scene_occurrence_candidate_resolve_cb, &context);
+    if (!ged_scene_occurrence_ref_is_null(context.result))
+	return context.result;
+
     (void)ged_scene_occurrences_visit(gedp,
 	ged_scene_occurrence_resolve_cb, &context);
     if (!ged_scene_occurrence_ref_is_null(context.result))

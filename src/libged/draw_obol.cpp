@@ -305,13 +305,13 @@ struct ged_obol_progressive_provider_data {
 	view_ctx(NULL),
 	pending_autoview(0),
 	pending_autoview_bounds_complete(0),
-	pending_autoview_width(0),
-	pending_autoview_height(0),
-	expected_autoview_size(0.0),
+	pending_autoview_have_applied_bounds(0),
+	pending_autoview_last_apply_microseconds(0),
 	autoview_factor(BV_AUTOVIEW_SCALE_DEFAULT),
 	deferred_refine_stage(0)
     {
-	VSETALL(expected_autoview_center, 0.0);
+	VSETALL(pending_autoview_applied_min, 0.0);
+	VSETALL(pending_autoview_applied_max, 0.0);
 	deferred_appearance = ged_draw_appearance_settings
 	    GED_DRAW_APPEARANCE_SETTINGS_INIT;
     }
@@ -322,13 +322,32 @@ struct ged_obol_progressive_provider_data {
     struct ged_view_context *view_ctx;
     int pending_autoview;
     int pending_autoview_bounds_complete;
-    /* Autoview has command-time viewport semantics.  The progressive
-     * realization may finish after a resize, but that must not make the
-     * deferred command frame a different extent than its synchronous peer. */
-    int pending_autoview_width;
-    int pending_autoview_height;
-    point_t expected_autoview_center;
-    fastf_t expected_autoview_size;
+    int pending_autoview_have_applied_bounds;
+    int64_t pending_autoview_last_apply_microseconds;
+    point_t pending_autoview_applied_min;
+    point_t pending_autoview_applied_max;
+    struct pending_autoview_target {
+	pending_autoview_target(void) :
+	    view_ctx(NULL), owner(0), width(0), height(0),
+	    expected_size(0.0)
+	{
+	    VSETALL(expected_center, 0.0);
+	}
+
+	/* The pointer is an address-only fallback for a context which has not
+	 * acquired a GED host identity.  It is never dereferenced unless it is
+	 * found in the current live view set. */
+	struct ged_view_context *view_ctx;
+	uint64_t owner;
+	/* Autoview has command-time viewport semantics.  The progressive
+	 * realization may finish after a resize, but that must not make the
+	 * deferred command frame a different extent than its synchronous peer. */
+	int width;
+	int height;
+	point_t expected_center;
+	fastf_t expected_size;
+    };
+    std::vector<pending_autoview_target> pending_autoview_targets;
     fastf_t autoview_factor;
     int deferred_refine_stage;
     struct ged_draw_appearance_settings deferred_appearance;
@@ -975,6 +994,22 @@ ged_obol_database_source_instance_key_for_mode(
 	     ged_obol_database_source_mode_key_marker, draw_mode);
     key += mode_buf;
     return key;
+}
+
+
+extern "C" int
+ged_draw_obol_database_source_instance_key_get(
+    struct ged_view_context *view_ctx, const char *path, int draw_mode,
+    struct bu_vls *out)
+{
+    if (!path || !path[0] || !out)
+	return 0;
+    const std::string key = ged_obol_database_source_instance_key_for_mode(
+	view_ctx, path, draw_mode);
+    if (key.empty())
+	return 0;
+    bu_vls_strcpy(out, key.c_str());
+    return 1;
 }
 
 static int
@@ -3647,15 +3682,28 @@ ged_draw_obol_controller(struct ged *gedp)
 }
 
 static void
-ged_obol_notify_source_inputs_changed(struct ged *gedp)
+ged_obol_notify_source_inputs_changed(struct ged *gedp,
+    BObolViewController *excluded_controller = NULL)
 {
+    BObolViewController *shared_controller = ged_draw_obol_controller(gedp);
+    if (shared_controller && shared_controller != excluded_controller)
+	shared_controller->notifyProgressiveSourceInputsChanged();
+
+    struct notification_context {
+	BObolViewController *shared;
+	BObolViewController *excluded;
+    } context = {shared_controller, excluded_controller};
     const auto notify_source_inputs = [](struct ged_view_context *,
-	BObolViewController *controller, void *) -> int {
-	if (controller)
+	BObolViewController *controller, void *userdata) -> int {
+	notification_context *context =
+	    static_cast<notification_context *>(userdata);
+	if (controller && controller != context->shared &&
+	    controller != context->excluded)
 	    controller->notifyProgressiveSourceInputsChanged();
 	return 1;
     };
-    ged_bobol_view_controllers_foreach(gedp, notify_source_inputs, NULL);
+    ged_bobol_view_controllers_foreach(gedp, notify_source_inputs,
+	&context);
 }
 
 extern "C" int
@@ -8384,20 +8432,69 @@ ged_draw_obol_database_source_expand_visible_children(
 	    max_children_per_source, 0, 1, status);
 }
 
+static void
+ged_obol_progressive_autoview_clear(
+    ged_obol_progressive_provider_data *data)
+{
+    if (!data)
+	return;
+    data->pending_autoview = 0;
+    data->pending_autoview_bounds_complete = 0;
+    data->pending_autoview_have_applied_bounds = 0;
+    data->pending_autoview_last_apply_microseconds = 0;
+    VSETALL(data->pending_autoview_applied_min, 0.0);
+    VSETALL(data->pending_autoview_applied_max, 0.0);
+    data->pending_autoview_targets.clear();
+}
+
 static int
-ged_obol_progressive_autoview_still_owns_frame(
+ged_obol_progressive_autoview_target_matches(
+    const ged_obol_progressive_provider_data::pending_autoview_target &target,
+    const struct ged_view_context *view_ctx)
+{
+    if (!view_ctx)
+	return 0;
+    const uint64_t owner = ged_view_context_reference_owner(view_ctx, 0);
+    return target.owner ? target.owner == owner : target.view_ctx == view_ctx;
+}
+
+static struct ged_view_context *
+ged_obol_progressive_autoview_live_view(
     const ged_obol_progressive_provider_data *data,
+    const ged_obol_progressive_provider_data::pending_autoview_target &target)
+{
+    if (!data || !data->gedp)
+	return NULL;
+
+    struct bu_ptbl *views = ged_view_set_views_ctx(data->gedp);
+    if (views) {
+	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
+	    struct ged_view_context *view_ctx =
+		(struct ged_view_context *)BU_PTBL_GET(views, i);
+	    if (ged_obol_progressive_autoview_target_matches(target,
+		    view_ctx))
+		return view_ctx;
+	}
+    }
+
+    /* A standalone active context may not have been inserted into a set. */
+    return ged_obol_progressive_autoview_target_matches(target,
+	data->view_ctx) ? data->view_ctx : NULL;
+}
+
+static int
+ged_obol_progressive_autoview_target_still_owns_frame(
+    const ged_obol_progressive_provider_data::pending_autoview_target &target,
     const struct bv *view)
 {
-    if (!data || !view)
+    if (!view)
 	return 0;
 
     point_t center;
     if (!bv_center_get(center, view) ||
-	!isfinite(data->expected_autoview_size) ||
+	!isfinite(target.expected_size) ||
 	!isfinite(bv_size_get(view)) ||
-	!NEAR_EQUAL(bv_size_get(view), data->expected_autoview_size,
-	    SMALL_FASTF))
+	!NEAR_EQUAL(bv_size_get(view), target.expected_size, SMALL_FASTF))
 	return 0;
 
     /*
@@ -8412,51 +8509,58 @@ ged_obol_progressive_autoview_still_owns_frame(
      */
     for (int axis = 0; axis < 3; axis++) {
 	if (!isfinite(center[axis]) ||
-	    !NEAR_EQUAL(center[axis],
-		data->expected_autoview_center[axis], SMALL_FASTF))
+	    !NEAR_EQUAL(center[axis], target.expected_center[axis],
+		SMALL_FASTF))
 	    return 0;
     }
     return 1;
 }
 
-static int
-ged_obol_progressive_autoview_apply(
+static void
+ged_obol_progressive_autoview_prune_targets(
     ged_obol_progressive_provider_data *data)
 {
-    if (!data || !data->gedp || !data->view_ctx ||
-	!data->pending_autoview ||
-	!data->pending_autoview_bounds_complete)
-	return 0;
+    if (!data || !data->pending_autoview)
+	return;
 
-    struct bv *view = ged_obol_bv(data->view_ctx);
-    if (!view) {
-	data->pending_autoview = 0;
-	data->pending_autoview_bounds_complete = 0;
-	return 0;
+    std::vector<ged_obol_progressive_provider_data::pending_autoview_target>
+	live_targets;
+    live_targets.reserve(data->pending_autoview_targets.size());
+    for (const ged_obol_progressive_provider_data::pending_autoview_target
+	&target : data->pending_autoview_targets) {
+	struct ged_view_context *view_ctx =
+	    ged_obol_progressive_autoview_live_view(data, target);
+	const struct bv *view = ged_obol_bv_const(view_ctx);
+	if (ged_obol_progressive_autoview_target_still_owns_frame(target,
+		view))
+	    live_targets.push_back(target);
     }
-    if (!ged_obol_progressive_autoview_still_owns_frame(data, view)) {
-	data->pending_autoview = 0;
-	data->pending_autoview_bounds_complete = 0;
-	return 0;
-    }
+    data->pending_autoview_targets.swap(live_targets);
+    if (data->pending_autoview_targets.empty())
+	ged_obol_progressive_autoview_clear(data);
+}
 
-    vect_t bmin;
-    vect_t bmax;
-    int empty = 1;
-	if (!ged_draw_obol_scene_database_autoview_bounds(data->gedp, &bmin,
-	&bmax, &empty, 0) || empty) {
+static int
+ged_obol_progressive_autoview_apply_target(
+    ged_obol_progressive_provider_data *data,
+    ged_obol_progressive_provider_data::pending_autoview_target &target,
+    const point_t bmin,
+    const point_t bmax)
+{
+    struct ged_view_context *view_ctx =
+	ged_obol_progressive_autoview_live_view(data, target);
+    struct bv *view = ged_obol_bv(view_ctx);
+    if (!view ||
+	!ged_obol_progressive_autoview_target_still_owns_frame(target, view))
 	return 0;
-	}
 
     /* bv_autoview_bounds includes the viewport aspect in its horizontal span.
      * Preserve the command-time aspect when realization completes after a
      * resize: normal resize behavior keeps the existing scale, and a deferred
      * autoview must do the same. */
-    const fastf_t command_aspect =
-	data->pending_autoview_width > 0 &&
-	data->pending_autoview_height > 0 ?
-	static_cast<fastf_t>(data->pending_autoview_width) /
-	static_cast<fastf_t>(data->pending_autoview_height) : 1.0;
+    const fastf_t command_aspect = target.width > 0 && target.height > 0 ?
+	static_cast<fastf_t>(target.width) /
+	static_cast<fastf_t>(target.height) : 1.0;
     const fastf_t current_aspect = bv_width_get(view) > 0 &&
 	bv_height_get(view) > 0 ?
 	static_cast<fastf_t>(bv_width_get(view)) /
@@ -8473,54 +8577,271 @@ ged_obol_progressive_autoview_apply(
 	scale = 2.0;
     scale *= command_span_factor / current_span_factor;
 
-    if (!bv_autoview_bounds(view, scale, bmin, bmax)) {
+    if (!bv_autoview_bounds(view, scale, bmin, bmax))
+	return 0;
+
+    /* This fit now owns the frame.  Refresh the cancellation snapshot after
+     * every provisional fit so later source-bound growth may continue to
+     * follow it, while a user pan or zoom still retires the target. */
+    target.expected_size = bv_size_get(view);
+    if (!bv_center_get(target.expected_center, view))
+	return 0;
+    bv_refresh_request(view, GED_VIEW_REFRESH_DRAW);
+
+    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
+    if (controller) {
+	(void)controller->syncCameraFromViewContext(view_ctx, TRUE);
+	controller->requestLodCapacityRender("ged-progressive-autoview");
+    }
+    return 1;
+}
+
+static int
+ged_obol_progressive_autoview_source_bounds(
+    ged_obol_progressive_provider_data *data,
+    point_t bmin,
+    point_t bmax,
+    int *exact_out)
+{
+    if (!data || !data->gedp || !data->view_ctx || !exact_out)
+	return 0;
+
+    BObolSceneController *scene =
+	ged_draw_obol_scene_controller(data->gedp);
+    if (!scene)
+	return 0;
+
+    VSETALL(bmin, INFINITY);
+    VSETALL(bmax, -INFINITY);
+    int visible_sources = 0;
+    int bounded_sources = 0;
+    int all_exact = 1;
+    const int source_count = scene->getDatabaseSourceCount();
+    for (int i = 0; i < source_count; i++) {
+	BObolDatabaseSourceSummary summary;
+	if (!scene->getDatabaseSourceSummary(i, summary) || !summary.valid ||
+	    !summary.visible ||
+	    !ged_obol_database_source_instance_in_scope(summary,
+		data->view_ctx))
+	    continue;
+	visible_sources++;
+	const bool finite_bounds = summary.sourceBoundsValid &&
+	    !summary.sourceBounds.isEmpty() &&
+	    isfinite(summary.sourceBounds.getMin()[0]) &&
+	    isfinite(summary.sourceBounds.getMin()[1]) &&
+	    isfinite(summary.sourceBounds.getMin()[2]) &&
+	    isfinite(summary.sourceBounds.getMax()[0]) &&
+	    isfinite(summary.sourceBounds.getMax()[1]) &&
+	    isfinite(summary.sourceBounds.getMax()[2]);
+	if (!finite_bounds) {
+	    all_exact = 0;
+	    continue;
+	}
+	point_t source_min;
+	point_t source_max;
+	VSET(source_min, summary.sourceBounds.getMin()[0],
+	    summary.sourceBounds.getMin()[1],
+	    summary.sourceBounds.getMin()[2]);
+	VSET(source_max, summary.sourceBounds.getMax()[0],
+	    summary.sourceBounds.getMax()[1],
+	    summary.sourceBounds.getMax()[2]);
+	VMIN(bmin, source_min);
+	VMAX(bmax, source_max);
+	bounded_sources++;
+	if (!summary.sourceBoundsExact)
+	    all_exact = 0;
+    }
+
+    *exact_out = visible_sources > 0 &&
+	bounded_sources == visible_sources && all_exact;
+    return bounded_sources > 0;
+}
+
+static int
+ged_obol_progressive_autoview_bounds_equal(
+    const point_t lhs_min,
+    const point_t lhs_max,
+    const point_t rhs_min,
+    const point_t rhs_max)
+{
+    for (int axis = 0; axis < 3; axis++) {
+	if (!NEAR_EQUAL(lhs_min[axis], rhs_min[axis], SMALL_FASTF) ||
+	    !NEAR_EQUAL(lhs_max[axis], rhs_max[axis], SMALL_FASTF))
+	    return 0;
+    }
+    return 1;
+}
+
+static int
+ged_obol_progressive_autoview_bounds_grew_materially(
+    const ged_obol_progressive_provider_data *data,
+    const point_t bmin,
+    const point_t bmax)
+{
+    if (!data || !data->pending_autoview_have_applied_bounds)
+	return 1;
+
+    fastf_t diagonal_squared = 0.0;
+    for (int axis = 0; axis < 3; axis++) {
+	const fastf_t span = data->pending_autoview_applied_max[axis] -
+	    data->pending_autoview_applied_min[axis];
+	diagonal_squared += span * span;
+    }
+    /* Compare against the last applied union, not the preceding producer
+     * batch.  Small leaf-local extensions therefore accumulate until they
+     * become visible, without turning a large stream into camera jitter. */
+    const fastf_t tolerance = std::max<fastf_t>(SMALL_FASTF,
+	std::sqrt(std::max<fastf_t>(0.0, diagonal_squared)) * 0.01);
+    for (int axis = 0; axis < 3; axis++) {
+	if (bmin[axis] < data->pending_autoview_applied_min[axis] - tolerance ||
+	    bmax[axis] > data->pending_autoview_applied_max[axis] + tolerance)
+	    return 1;
+    }
+    return 0;
+}
+
+static int
+ged_obol_progressive_autoview_apply(
+    ged_obol_progressive_provider_data *data)
+{
+    if (!data || !data->gedp || !data->view_ctx ||
+	!data->pending_autoview)
+	return 0;
+
+    ged_obol_progressive_autoview_prune_targets(data);
+    if (!data->pending_autoview)
+	return 0;
+
+    point_t bmin;
+    point_t bmax;
+    int exact = 0;
+    if (!ged_obol_progressive_autoview_source_bounds(data, bmin, bmax,
+	    &exact)) {
+	/* A terminal producer may have only a conservative scene-derived
+	 * overview.  It is still the best final frame, but display LoD changes
+	 * must never drive provisional camera following. */
+	if (!data->pending_autoview_bounds_complete)
+	    return 0;
+	int empty = 1;
+	if (!ged_draw_obol_scene_database_autoview_bounds(data->gedp, &bmin,
+		&bmax, &empty, 0) || empty)
+	    return 0;
+    }
+    if (exact)
+	data->pending_autoview_bounds_complete = 1;
+
+    const int bounds_equal = data->pending_autoview_have_applied_bounds &&
+	ged_obol_progressive_autoview_bounds_equal(
+	    data->pending_autoview_applied_min,
+	    data->pending_autoview_applied_max, bmin, bmax);
+    if (data->pending_autoview_bounds_complete && bounds_equal) {
+	/* The numerical frame already applied provisionally is now certified as
+	 * final.  Certification alone is not a camera mutation. */
+	ged_obol_progressive_autoview_clear(data);
 	return 0;
     }
-    bv_refresh_request(view, GED_VIEW_REFRESH_DRAW);
-    /*
-     * A drained overview covers the complete target even when its bound is
-     * conservative rather than semantically exact.  One successful fit
-     * fulfills the deferred request.  Chasing the later exact/tighter bound
-     * would produce the very second center/scale jump this one-shot contract
-     * exists to prevent.
-     */
-    data->pending_autoview = 0;
-    data->pending_autoview_bounds_complete = 0;
-    data->pending_autoview_width = 0;
-    data->pending_autoview_height = 0;
+
+    const int64_t now = bu_gettime();
+    static const int64_t minimum_follow_interval_microseconds = 100000;
+    if (!data->pending_autoview_bounds_complete &&
+	(!ged_obol_progressive_autoview_bounds_grew_materially(data,
+		bmin, bmax) ||
+	 (data->pending_autoview_last_apply_microseconds > 0 &&
+	  now >= data->pending_autoview_last_apply_microseconds &&
+	  now - data->pending_autoview_last_apply_microseconds <
+	      minimum_follow_interval_microseconds)))
+	return 0;
+
+    int adjusted = 0;
+    for (ged_obol_progressive_provider_data::pending_autoview_target
+	&target : data->pending_autoview_targets)
+	adjusted += ged_obol_progressive_autoview_apply_target(data, target,
+	    bmin, bmax);
+
+    if (adjusted > 0) {
+	VMOVE(data->pending_autoview_applied_min, bmin);
+	VMOVE(data->pending_autoview_applied_max, bmax);
+	data->pending_autoview_have_applied_bounds = 1;
+	data->pending_autoview_last_apply_microseconds = now;
+	/* Keep provisional targets armed.  Their refreshed center/scale
+	 * snapshots allow bounds growth to advance the automatic frame and let
+	 * an intervening user pan/zoom cancel it. */
+	if (data->pending_autoview_bounds_complete)
+	    ged_obol_progressive_autoview_clear(data);
+    }
+    return adjusted;
+}
+
+static int
+ged_obol_progressive_autoview_append_target(
+    ged_obol_progressive_provider_data *data,
+    struct ged_view_context *view_ctx)
+{
+    if (!data || !view_ctx)
+	return 0;
+    const struct bv *view = ged_obol_bv_const(view_ctx);
+    if (!view)
+	return 0;
+
+    ged_obol_progressive_provider_data::pending_autoview_target target;
+    target.view_ctx = view_ctx;
+    target.owner = ged_view_context_reference_owner(view_ctx, 0);
+    target.width = bv_width_get(view);
+    target.height = bv_height_get(view);
+    target.expected_size = bv_size_get(view);
+    if (!bv_center_get(target.expected_center, view))
+	return 0;
+
+    for (const ged_obol_progressive_provider_data::pending_autoview_target
+	&existing : data->pending_autoview_targets) {
+	if (ged_obol_progressive_autoview_target_matches(existing, view_ctx))
+	    return 1;
+    }
+    data->pending_autoview_targets.push_back(target);
     return 1;
 }
 
 static int
 ged_obol_progressive_autoview_arm(
-	ged_obol_progressive_provider_data *data,
-	fastf_t factor)
+    ged_obol_progressive_provider_data *data,
+    fastf_t factor,
+    int include_shared_views)
 {
-    if (!data || !data->view_ctx || data->deferred_refine_stage != 1 ||
-	!data->deferred_job)
+    if (!data || !data->gedp || !data->view_ctx ||
+	data->deferred_refine_stage != 1 || !data->deferred_job)
 	return 0;
 
-    const struct bv *view = ged_obol_bv_const(data->view_ctx);
-    if (!view)
-	return 0;
-
-    data->pending_autoview = 1;
-    data->pending_autoview_bounds_complete = 0;
-    data->pending_autoview_width = bv_width_get(view);
-    data->pending_autoview_height = bv_height_get(view);
-    if (!bv_center_get(data->expected_autoview_center, view)) {
-	data->pending_autoview = 0;
-	return 0;
+    ged_obol_progressive_autoview_clear(data);
+    if (include_shared_views &&
+	!ged_obol_view_scope_is_independent(data->view_ctx)) {
+	struct bu_ptbl *views = ged_view_set_views_ctx(data->gedp);
+	if (views) {
+	    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
+		struct ged_view_context *view_ctx =
+		    (struct ged_view_context *)BU_PTBL_GET(views, i);
+		if (view_ctx && !ged_obol_view_scope_is_independent(view_ctx))
+		    (void)ged_obol_progressive_autoview_append_target(data,
+			view_ctx);
+	    }
+	}
+	if (data->pending_autoview_targets.empty())
+	    (void)ged_obol_progressive_autoview_append_target(data,
+		data->view_ctx);
+    } else {
+	(void)ged_obol_progressive_autoview_append_target(data,
+	    data->view_ctx);
     }
-    data->expected_autoview_size = bv_size_get(view);
+
+    if (data->pending_autoview_targets.empty())
+	return 0;
+    data->pending_autoview = 1;
     data->autoview_factor = factor;
     return 1;
 }
 
-static void
-ged_obol_progressive_autoview_apply_exact_proxy_bounds(
+static int
+ged_obol_progressive_autoview_apply_source_bounds(
     struct ged *gedp, struct ged_view_context *view_ctx,
-    BObolViewController *controller,
     ged_obol_progressive_provider_data *data);
 
 extern "C" int
@@ -8540,15 +8861,15 @@ ged_draw_obol_progressive_autoview_follow(
 	static_cast<ged_obol_progressive_provider_data *>(
 	    controller->findProgressiveProviderData(
 		ged_obol_progressive_advance_provider));
-    if (!ged_obol_progressive_autoview_arm(data, factor))
+    if (!ged_obol_progressive_autoview_arm(data, factor, 0))
 	return 0;
     /* Exact retained source bounds are safe to use immediately.  Deferring
      * this otherwise-complete fit until a later worker tick makes an explicit
      * autoview appear to do nothing and needlessly introduces a camera jump.
      * Incomplete discovery remains deferred by the helper's all-sources
      * exactness check. */
-    ged_obol_progressive_autoview_apply_exact_proxy_bounds(gedp, view_ctx,
-	controller, data);
+    ged_obol_progressive_autoview_apply_source_bounds(gedp, view_ctx,
+	data);
     controller->markProgressiveWorkPending();
     return 1;
 }
@@ -9578,9 +9899,9 @@ ged_obol_drain_streamed_realizations(
 	    }
 	    /* Exact coverage is a producer-certified fact and the priority lane
 	     * coalesces to one current overview.  Publish that fact before draining
-	     * so this same provider tick can merge the final overview and fulfill
-	     * the one-shot autoview; waiting for full job adoption unnecessarily
-	     * left a 150k cold scene at its pre-fit camera for tens of seconds. */
+	     * so this same provider tick can finalize progressive autoview; waiting
+	     * for full job adoption unnecessarily left a 150k cold scene at its
+	     * pre-fit camera for tens of seconds. */
 	    bool coverageNotificationAllocationFailed = false;
     const size_t expectedCount = item->stream->getExpectedCount();
     try {
@@ -9865,13 +10186,7 @@ ged_obol_progressive_advance_provider(
     struct ged_view_context *view_ctx = data->view_ctx;
     (void)options;
 
-    if (data->pending_autoview) {
-	const struct bv *view = ged_obol_bv_const(view_ctx);
-	if (!ged_obol_progressive_autoview_still_owns_frame(data, view)) {
-	    data->pending_autoview = 0;
-	    data->pending_autoview_bounds_complete = 0;
-	}
-    }
+    ged_obol_progressive_autoview_prune_targets(data);
     /* There is one production progression: compact per-leaf boxes followed by
      * streamed view-appropriate geometry.  A quiet camera-scale transition
      * may add a retained CSG replacement pass, but it never clears the
@@ -9891,25 +10206,20 @@ ged_obol_progressive_advance_provider(
 	    options ? options->maxProviderItems : 0,
 	    options ? options->maxProviderMicroseconds : 0, &stream_more) ?
 	1 : 0;
-	/* A detached source publishes its exact coverage bound before its full
-	 * leaf/detail stream finishes.  Consume that owner-thread fact now: waiting
-	 * for job completion makes an explicit autoview visibly jump after the
-	 * user has already received a stable progressive presentation. */
+    int source_inputs_changed = refined;
+	/* Consume source-bound growth on the owner thread.  A cold source can
+	 * publish a useful partial union well before its exact coverage bound;
+	 * following that union gives immediate framing feedback during a long box
+	 * population while the helper keeps the final exact fit authoritative. */
 	if (data->pending_autoview) {
-	    const int wasPending = data->pending_autoview;
-	    ged_obol_progressive_autoview_apply_exact_proxy_bounds(
-		data->gedp, data->view_ctx, controller, data);
-	    if (wasPending && !data->pending_autoview) {
+	    if (ged_obol_progressive_autoview_apply_source_bounds(
+		    data->gedp, data->view_ctx, data)) {
 		refined = 1;
-		controller->syncCameraFromViewContext(data->view_ctx, TRUE);
 	    }
 	}
-    /* Producer completion certifies an immutable exact extent.  Coverage
-     * bounds are useful for a provisional box frontier, but they must never
-     * fulfill the same autoview request: doing so first frames a partial
-     * union and then visibly reframes the user when the final source bounds
-     * arrive.  The completed-job and explicitly verified exact-proxy paths
-     * below are the only fulfillment paths. */
+    /* Producer completion certifies the terminal extent.  Until that point,
+     * finite source-bound growth can supply throttled provisional fits; the
+     * completed-job and exact-proxy paths below retire the follow request. */
     for (std::vector<std::shared_ptr<ged_obol_deferred_realization_job>>::iterator
 	    it = data->pending_jobs.begin(); it != data->pending_jobs.end();) {
 	    const std::shared_ptr<ged_obol_deferred_realization_job> job = *it;
@@ -9934,8 +10244,10 @@ ged_obol_progressive_advance_provider(
 		continue;
 	    }
 	if (job_state == ged_obol_deferred_realization_job::COMPLETE) {
-	    refined += ged_obol_publish_deferred_realization(data,
-		    controller, job);
+	    const int published = ged_obol_publish_deferred_realization(data,
+		controller, job);
+	    refined += published;
+	    source_inputs_changed += published;
 	}
 	    it = data->pending_jobs.erase(it);
 	}
@@ -9952,8 +10264,10 @@ ged_obol_progressive_advance_provider(
 		has_pending_job = 1;
 	} else {
 	    if (jobState == ged_obol_deferred_realization_job::COMPLETE) {
-		refined += ged_obol_publish_deferred_realization(data,
-			controller, data->deferred_job);
+		const int published = ged_obol_publish_deferred_realization(data,
+		    controller, data->deferred_job);
+		refined += published;
+		source_inputs_changed += published;
 		/* Terminal adoption remains the fallback publication witness when
 		 * realization did not provide an exact nonempty coverage extent. */
 		if (data->pending_autoview)
@@ -9986,7 +10300,8 @@ ged_obol_progressive_advance_provider(
 	local_status.sourcePreparationTotalUnits);
 
     local_status.changed = refined > 0 ? 1 : 0;
-    local_status.sourceAvailabilityChanged = refined > 0 ? 1 : 0;
+    local_status.sourceAvailabilityChanged =
+	source_inputs_changed > 0 ? 1 : 0;
     local_status.hasMore = has_pending_job;
     local_status.inFlight = has_pending_job ? 1 : 0;
     if (has_pending_job && getenv("BOBOL_DRAW_TIMING_VERBOSE")) {
@@ -10001,7 +10316,6 @@ ged_obol_progressive_advance_provider(
     /* The deferred realization job streams leaf-local boxes/geometry onto the
      * root occurrence registry and atomically adopts the completed index. */
 	if (data->pending_autoview &&
-	    data->pending_autoview_bounds_complete &&
 	    ged_obol_progressive_autoview_apply(data)) {
 	    /*
 	     * Exact bounds may have been merged by the preceding provider tick,
@@ -10010,12 +10324,17 @@ ged_obol_progressive_advance_provider(
 	     * later mesh publication.
 	     */
 	    local_status.changed = 1;
-	    controller->syncCameraFromViewContext(view_ctx, TRUE);
 	}
 	if (!local_status.hasMore) {
-	    data->pending_autoview = 0;
-	    data->pending_autoview_bounds_complete = 0;
+	    ged_obol_progressive_autoview_clear(data);
 	}
+	/* Primary-scene streams are consumed by one endpoint provider but mutate
+	 * source journals shared by every attached view.  The current controller
+	 * accounts for the publication in its enclosing provider transition;
+	 * publish the same semantic edge to the shared controller and sibling
+	 * endpoints without nesting an external event into the current owner. */
+	if (source_inputs_changed > 0)
+	    ged_obol_notify_source_inputs_changed(data->gedp, controller);
 	/*
 	 * Report mutations and liveness to the controller; do not request a frame
 	 * here.  Provider pumping and scene presentation are separate contracts.
@@ -10027,7 +10346,7 @@ ged_obol_progressive_advance_provider(
 	 */
 	if (status)
 	    *status = local_status;
-	return (local_status.changed || local_status.hasMore) ? 1 : 0;
+    return (local_status.changed || local_status.hasMore) ? 1 : 0;
 }
 
 extern "C" int
@@ -11648,52 +11967,21 @@ ged_draw_obol_scene_sync_attached_transaction(
     return sync_ctx.changed ? 1 : 0;
 }
 
-static void
-ged_obol_progressive_autoview_apply_exact_proxy_bounds(
+static int
+ged_obol_progressive_autoview_apply_source_bounds(
     struct ged *gedp,
     struct ged_view_context *view_ctx,
-    BObolViewController *controller,
     ged_obol_progressive_provider_data *data)
 {
-    if (!gedp || !view_ctx || !controller || !data ||
+    if (!gedp || !view_ctx || !data ||
 	!data->pending_autoview)
-	return;
+	return 0;
 
-    BObolSceneController *scene = ged_draw_obol_scene_controller(gedp);
-    if (!scene)
-	return;
-
-    /* A cached root proxy is useful as an immediate frame only when every
-     * displayed source has an exact source bound.  Never frame a partial leaf
-     * union: doing so and reframing after discovery is the center/scale jump
-     * this transaction contract is designed to prevent. */
-    int visible_sources = 0;
-    const int source_count = scene->getDatabaseSourceCount();
-    for (int i = 0; i < source_count; i++) {
-	BObolDatabaseSourceSummary summary;
-	if (!scene->getDatabaseSourceSummary(i, summary) || !summary.valid ||
-	    !summary.visible ||
-	    !ged_obol_database_source_instance_in_scope(summary, view_ctx))
-	    continue;
-	visible_sources++;
-	if (!summary.sourceBoundsValid || !summary.sourceBoundsExact ||
-	    summary.sourceBounds.isEmpty() ||
-	    !isfinite(summary.sourceBounds.getMin()[0]) ||
-	    !isfinite(summary.sourceBounds.getMin()[1]) ||
-	    !isfinite(summary.sourceBounds.getMin()[2]) ||
-	    !isfinite(summary.sourceBounds.getMax()[0]) ||
-	    !isfinite(summary.sourceBounds.getMax()[1]) ||
-	    !isfinite(summary.sourceBounds.getMax()[2]))
-	    return;
-    }
-	if (!visible_sources)
-	return;
-
-    data->pending_autoview_bounds_complete = 1;
-	if (!ged_obol_progressive_autoview_apply(data))
-	return;
-    controller->syncCameraFromViewContext(view_ctx, TRUE);
-    controller->requestLodCapacityRender("ged-exact-root-proxy-autoview");
+    /* The common apply path accepts a finite partial source union, marks an
+     * all-exact union final, and rate-limits subsequent provisional fits.
+     * Keeping this helper at the producer boundary preserves the immediate
+     * exact-bounds fast path while also letting cold streams frame early. */
+    return ged_obol_progressive_autoview_apply(data);
 }
 
 static void
@@ -11744,8 +12032,7 @@ ged_obol_progressive_autoview_transaction(
 		ctx->txn->kind == GED_SCENE_REDUCER_TEARDOWN) {
 		ged_obol_retire_all_deferred_jobs(data);
 		ged_obol_cleanup_retired_jobs(data);
-		data->pending_autoview = 0;
-		data->pending_autoview_bounds_complete = 0;
+		ged_obol_progressive_autoview_clear(data);
 		data->deferred_refine_stage = 0;
 		data->deferred_paths.clear();
 		data->deferred_retarget_targets.clear();
@@ -11778,9 +12065,11 @@ ged_obol_progressive_autoview_transaction(
 	}
 	if (ctx->arm_autoview &&
 	    ged_obol_progressive_autoview_arm(data,
-		BV_AUTOVIEW_SCALE_DEFAULT))
-	    ged_obol_progressive_autoview_apply_exact_proxy_bounds(ctx->gedp,
-		view_ctx, controller, data);
+		BV_AUTOVIEW_SCALE_DEFAULT,
+		!ctx->txn->view ||
+		!ged_obol_view_scope_is_independent(ctx->txn->view)))
+	    ged_obol_progressive_autoview_apply_source_bounds(ctx->gedp,
+		view_ctx, data);
 	controller->markProgressiveWorkPending();
 	return 1;
     };

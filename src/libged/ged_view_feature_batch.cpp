@@ -31,6 +31,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -92,6 +93,16 @@ ged_view_feature_metadata_init(struct ged_view_feature_metadata *metadata)
     if (!metadata)
 	return;
     *metadata = {};
+}
+
+void
+ged_view_feature_primitive_metadata_init(
+    struct ged_view_feature_primitive_metadata *metadata)
+{
+    if (!metadata)
+	return;
+    *metadata = {};
+    metadata->primitive = -1;
 }
 
 struct ged_view_feature_staged_style {
@@ -1792,6 +1803,123 @@ ged_view_feature_batch_primitive_metadata_replace(
 				  GED_VIEW_FEATURE_BATCH_UPDATED, name,
 				  "primitiveMetadataReplace", NULL, handle);
     return 1;
+}
+
+static int
+ged_view_feature_batch_primitive_metadata_replace_all_obol(
+    struct ged_view_feature_batch *scene,
+    const char *name,
+    std::vector<BObolFeaturePrimitiveMetadata> metadata)
+{
+    if (!ged_obol_feature_batch_writable(scene, name,
+	    "primitiveMetadataReplaceAll"))
+	return 0;
+
+    BObolFeatureHandle handle =
+	scene->controller->features().findOwned(name,
+	    scene->scope == BObolFeatureScope::Local ?
+	    BOBOL_FEATURE_SCOPE_LOCAL : BOBOL_FEATURE_SCOPE_SHARED,
+	    &scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	ged_obol_feature_batch_notify(scene,
+	    GED_VIEW_FEATURE_BATCH_FAILED, name,
+	    "primitiveMetadataReplaceAll", "owned feature not found");
+	return 0;
+    }
+
+    if (!scene->controller->features().replacePrimitiveMetadata(handle,
+	    std::move(metadata))) {
+	scene->failed = 1;
+	ged_obol_feature_batch_notify(scene,
+	    GED_VIEW_FEATURE_BATCH_FAILED, name,
+	    "primitiveMetadataReplaceAll",
+	    "primitive metadata batch replace failed", handle);
+	return 0;
+    }
+
+    scene->changed++;
+    ged_obol_feature_batch_notify(scene,
+	GED_VIEW_FEATURE_BATCH_UPDATED, name,
+	"primitiveMetadataReplaceAll", NULL, handle);
+    return 1;
+}
+
+extern "C" int
+ged_view_feature_batch_primitive_metadata_replace_all(
+    struct ged_view_feature_batch *scene,
+    const char *name,
+    const struct ged_view_feature_primitive_metadata *metadata,
+    size_t primitive_count)
+{
+    if (!name) {
+	if (ged_obol_feature_batch_valid(scene)) {
+	    scene->failed = 1;
+	    ged_obol_feature_batch_notify(scene,
+		GED_VIEW_FEATURE_BATCH_FAILED, NULL,
+		"primitiveMetadataReplaceAll", "missing feature name");
+	}
+	return 0;
+    }
+    if (!ged_obol_feature_batch_valid(scene))
+	return 0;
+    if (primitive_count && !metadata) {
+	scene->failed = 1;
+	ged_obol_feature_batch_notify(scene,
+	    GED_VIEW_FEATURE_BATCH_FAILED, name,
+	    "primitiveMetadataReplaceAll", "missing primitive metadata");
+	return 0;
+    }
+
+    auto staged =
+	std::make_shared<std::vector<BObolFeaturePrimitiveMetadata>>();
+    staged->reserve(primitive_count);
+    std::unordered_set<int32_t> primitives;
+    primitives.reserve(primitive_count);
+    for (size_t i = 0; i < primitive_count; i++) {
+	const struct ged_view_feature_primitive_metadata &source = metadata[i];
+	if (source.primitive < 0 ||
+	    !primitives.insert(static_cast<int32_t>(source.primitive)).second ||
+	    (source.metadata_count && !source.metadata)) {
+	    scene->failed = 1;
+	    ged_obol_feature_batch_notify(scene,
+		GED_VIEW_FEATURE_BATCH_FAILED, name,
+		"primitiveMetadataReplaceAll",
+		"invalid or duplicate primitive metadata");
+	    return 0;
+	}
+
+	BObolFeaturePrimitiveMetadata item;
+	item.primitiveIndex = static_cast<int32_t>(source.primitive);
+	item.metadata.reserve(source.metadata_count);
+	for (size_t j = 0; j < source.metadata_count; j++) {
+	    if (!source.metadata[j].key || !source.metadata[j].key[0])
+		continue;
+	    BObolFeatureMetadata value;
+	    value.key = source.metadata[j].key;
+	    value.value = source.metadata[j].value ?
+		source.metadata[j].value : "";
+	    item.metadata.push_back(std::move(value));
+	}
+	if (!item.metadata.empty())
+	    staged->push_back(std::move(item));
+    }
+
+    const std::string staged_name(name);
+    if (!scene->committing) {
+	if (!ged_obol_feature_batch_writable(scene, name,
+		"primitiveMetadataReplaceAll"))
+	    return 0;
+	scene->operations.emplace_back(
+	    [staged_name, staged](struct ged_view_feature_batch *batch) {
+		return ged_view_feature_batch_primitive_metadata_replace_all_obol(
+		    batch, staged_name.c_str(), std::move(*staged));
+	    });
+	return 1;
+    }
+
+    return ged_view_feature_batch_primitive_metadata_replace_all_obol(
+	scene, staged_name.c_str(), std::move(*staged));
 }
 
 extern "C" int

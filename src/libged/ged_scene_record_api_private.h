@@ -88,10 +88,28 @@ ged_draw_foreach_visible_view_record(struct ged_view_context *view_ctx,
 				     ged_draw_view_db_object_record_cb cb,
 				     void *userdata);
 
+/**
+ * Converge deferred database-source publication before a deterministic
+ * renderer-neutral export.  Interactive queries should enumerate the
+ * currently available records directly instead of calling this routine.
+ */
+extern int
+ged_draw_view_context_prepare_export_payload(
+    struct ged_view_context *view_ctx);
+
 extern int
 ged_draw_view_db_object_record_foreach_segment(
     const struct ged_draw_view_db_object_record *rec,
     ged_draw_view_segment_cb cb,
+    void *userdata);
+
+/** Visit segments with the exact effective presentation retained by the
+ * scene backend.  This is the vector-export path; the geometry-only iterator
+ * remains available to topology and selection consumers. */
+extern int
+ged_draw_view_db_object_record_foreach_styled_segment(
+    const struct ged_draw_view_db_object_record *rec,
+    ged_draw_view_styled_segment_cb cb,
     void *userdata);
 
 extern int

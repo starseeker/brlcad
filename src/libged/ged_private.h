@@ -744,6 +744,12 @@ extern int ged_draw_frontier_source_rename(
 extern int ged_draw_frontier_foreach_root(
 	struct ged *gedp, struct ged_view_context *view_ctx, int mode,
 	ged_draw_frontier_root_cb callback, void *userdata);
+/* Enumerate visible database occurrences from retained draw intent.  This is
+ * deliberately an interaction-time query: it walks the database index but
+ * does not realize render geometry or manufacture sibling scene records. */
+extern int ged_draw_frontier_foreach_visible_candidate(
+	struct ged *gedp, struct ged_view_context *view_ctx, int mode,
+	ged_draw_shape_candidate_cb callback, void *userdata);
 extern int ged_draw_frontier_visibility_changes_foreach(
     struct ged *gedp, ged_draw_frontier_visibility_cb callback,
     void *userdata);

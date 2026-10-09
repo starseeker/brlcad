@@ -113,6 +113,7 @@ struct ged_draw_view_db_object_record {
     int selected;
     int visible;
     int line_style;
+    int line_width;
     unsigned char color[3];
     mat_t model_mat;
     point_t bounds_center;
@@ -123,6 +124,30 @@ struct ged_draw_view_db_object_record {
     uint64_t cache_identity;
     uint64_t source_identity;
     uintptr_t detail_token;
+};
+
+enum ged_draw_view_segment_geometry_role {
+    GED_DRAW_VIEW_SEGMENT_ROLE_UNKNOWN = 0,
+    GED_DRAW_VIEW_SEGMENT_ROLE_WIRE = 1,
+    GED_DRAW_VIEW_SEGMENT_ROLE_SURFACE_EDGE = 2,
+    GED_DRAW_VIEW_SEGMENT_ROLE_ANNOTATION = 3
+};
+
+/** Exact effective presentation for one renderer-neutral line segment. */
+struct ged_draw_view_segment_style {
+    uint16_t line_pattern;
+    uint16_t line_pattern_factor;
+    fastf_t line_width;
+    fastf_t transparency;
+    unsigned char color[3];
+};
+
+struct ged_draw_view_styled_segment {
+    point_t start;
+    point_t end;
+    size_t primitive_index;
+    enum ged_draw_view_segment_geometry_role geometry_role;
+    struct ged_draw_view_segment_style style;
 };
 
 struct ged_draw_view_annotation_summary {
@@ -260,6 +285,10 @@ typedef int (*ged_draw_view_db_object_record_cb)(
 
 typedef int (*ged_draw_view_segment_cb)(const point_t start,
 	const point_t end, void *client_data);
+
+typedef int (*ged_draw_view_styled_segment_cb)(
+	const struct ged_draw_view_styled_segment *segment,
+	void *client_data);
 
 typedef int (*ged_draw_view_point_cb)(const point_t point,
 	void *client_data);

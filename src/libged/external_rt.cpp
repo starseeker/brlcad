@@ -102,6 +102,16 @@ requested_dimensions(int argc, const char *argv[], int *width, int *height)
 }
 
 
+static void
+free_displayed_objects(std::vector<char *> &objects)
+{
+    for (char *object : objects)
+	if (object)
+	    bu_free(object, "ged who argv path");
+    objects.clear();
+}
+
+
 extern "C" GED_EXPORT int
 _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
 	const char *program, const char *callback_command)
@@ -153,7 +163,8 @@ _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
 	return BRLCAD_ERROR;
     }
 
-    if (!ged_who_argc(gedp)) {
+    const size_t displayed_object_count = ged_who_argc(gedp);
+    if (!displayed_object_count) {
 	bu_vls_printf(gedp->ged_result_str, "no objects displayed\n");
 	return BRLCAD_ERROR;
     }
@@ -273,11 +284,30 @@ _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
 	}
     }
 
+    int render_object_count = argc - object_arg;
+    const char **render_objects = &(argv[object_arg]);
+    std::vector<char *> displayed_objects;
+    if (!render_object_count) {
+	displayed_objects.resize(displayed_object_count + 1, NULL);
+	render_object_count = ged_who_argv(gedp, displayed_objects.data(),
+	    (const char **)(displayed_objects.data() + displayed_objects.size()));
+	render_objects = (const char **)displayed_objects.data();
+	if (!render_object_count) {
+	    if (using_ipc)
+		(void)bu_setenv(PKG_ADDR_ENVVAR, had_pkg_addr ?
+			saved_pkg_addr_value.c_str() : "", 1);
+	    free_displayed_objects(displayed_objects);
+	    bu_vls_printf(gedp->ged_result_str, "no objects displayed\n");
+	    return BRLCAD_ERROR;
+	}
+    }
+
     bu_log("%s: launching endpoint framebuffer renderer (ipc=%d size=%dx%d)\n",
 	program, using_ipc ? 1 : 0, width, height);
     const int ret = _ged_run_rt(gedp, (int)args.size(), child_argv.data(),
-	argc - object_arg, &(argv[object_arg]), 0,
+	render_object_count, render_objects, 0,
 	callback_command ? &child_pid : NULL, linger_callback, linger_data);
+    free_displayed_objects(displayed_objects);
 
     if (using_ipc)
 	(void)bu_setenv(PKG_ADDR_ENVVAR, had_pkg_addr ?
