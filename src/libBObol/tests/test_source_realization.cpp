@@ -996,6 +996,7 @@ shutdown_queued_probe(SoBRLDatabaseSource *, struct db_i *, int, uint32_t,
 }
 
 struct ShutdownObserver {
+    BObolSourceRealizationCoordinator *coordinator = nullptr;
     std::shared_ptr<BObolSourceRealizationJob> active;
     std::shared_ptr<BObolSourceRealizationJob> queued;
     std::shared_ptr<BObolSourceRealizationJob> retiring;
@@ -1012,35 +1013,12 @@ struct ShutdownObserver {
 
     ~ShutdownObserver()
     {
-	if (!active || !queued)
-	    return;
-	const bool retired = active->state() == BOBOL_SOURCE_REALIZATION_CANCELLED &&
-	    queued->state() == BOBOL_SOURCE_REALIZATION_CANCELLED &&
-	    observedCancellation.load(std::memory_order_acquire) &&
-	    queuedCompletions.load(std::memory_order_acquire) == 0 &&
-	    activeProbe.expired() && queuedProbe.expired() &&
-	    std::all_of(sourceLifetimes.begin(), sourceLifetimes.end(),
-		[](const std::shared_ptr<ItemLifetimeEvidence> &evidence) {
-		    return evidence->sourceReleased.load(std::memory_order_acquire);
-		});
-	/* Check before joining: coordinator shutdown must be the lifetime
-	 * barrier for a caller which already detached queued resources. */
-	const bool callerRetired = retiring && retiring->isTerminal() &&
-	    retiring->state() == BOBOL_SOURCE_REALIZATION_CANCELLED &&
-	    cleanupFinished.load(std::memory_order_acquire);
+	if (coordinator)
+	    coordinator->shutdown();
 	if (cancellationThread.joinable())
 	    cancellationThread.join();
-	const bool streamSurvived = completedStream && !completedStream->isCancelled();
 	if (completedStream)
 	    completedStream->requestCancel();
-	active.reset();
-	queued.reset();
-	if (!retired || !callerRetired || !streamSurvived ||
-	    !payloadReleased.load(std::memory_order_acquire) ||
-	    !activeProbe.expired() || !queuedProbe.expired()) {
-	    std::fprintf(stderr, "FAIL: source pool shutdown lost cancellation or callback retirement\n");
-	    std::_Exit(EXIT_FAILURE);
-	}
     }
 };
 
@@ -1064,12 +1042,10 @@ struct ShutdownQueueCleanupProbe {
 static int
 test_pool_shutdown(struct db_i *database)
 {
-    /* Retain interest across coordinator destruction; dropping local handles
-     * before main returns would test client cancellation instead of shutdown.
-     * The retained import probes cleanup during actual pool shutdown. */
-    static ShutdownObserver observer;
     BObolSourceRealizationCoordinator &coordinator =
 	BObolSourceRealizationCoordinator::global();
+    ShutdownObserver observer;
+    observer.coordinator = &coordinator;
     {
 	std::vector<BObolSourceRealizationRequest> completed(1);
 	if (!make_request(completed[0], database, warm_complete_probe, {}))
@@ -1161,6 +1137,34 @@ test_pool_shutdown(struct db_i *database)
     if (!wait_until([&]() { return observer.cleanupStarted.load(std::memory_order_acquire); },
 	std::chrono::seconds(2))) {
 	std::fprintf(stderr, "FAIL: queued cancellation did not enter caller-owned cleanup\n");
+	return 1;
+    }
+    activeProbe.reset();
+    queuedProbe.reset();
+
+    coordinator.shutdown();
+    if (observer.cancellationThread.joinable())
+	observer.cancellationThread.join();
+
+    const bool retired = observer.active && observer.queued &&
+	observer.active->state() == BOBOL_SOURCE_REALIZATION_CANCELLED &&
+	observer.queued->state() == BOBOL_SOURCE_REALIZATION_CANCELLED &&
+	observer.observedCancellation.load(std::memory_order_acquire) &&
+	observer.queuedCompletions.load(std::memory_order_acquire) == 0 &&
+	observer.activeProbe.expired() && observer.queuedProbe.expired() &&
+	std::all_of(observer.sourceLifetimes.begin(), observer.sourceLifetimes.end(),
+	    [](const std::shared_ptr<ItemLifetimeEvidence> &evidence) {
+		return evidence->sourceReleased.load(std::memory_order_acquire);
+	    });
+    const bool callerRetired = observer.retiring && observer.retiring->isTerminal() &&
+	observer.retiring->state() == BOBOL_SOURCE_REALIZATION_CANCELLED &&
+	observer.cleanupFinished.load(std::memory_order_acquire);
+    const bool streamSurvived = observer.completedStream &&
+	!observer.completedStream->isCancelled();
+    if (!retired || !callerRetired || !streamSurvived ||
+	!observer.payloadReleased.load(std::memory_order_acquire)) {
+	std::fprintf(stderr,
+	    "FAIL: source pool shutdown lost cancellation or callback retirement\n");
 	return 1;
     }
     return 0;
