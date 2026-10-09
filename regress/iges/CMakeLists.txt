@@ -66,6 +66,11 @@ if(TARGET g-iges AND TARGET iges-g AND TARGET asc2g AND TARGET mged AND TARGET t
         "-DMODEL=${CMAKE_SOURCE_DIR}/db/${model}.asc" "-DOBJECT=${object}"
         "-DENTITY_TYPE=${type}" "-DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/roundtrip-${label}"
         -P "${CMAKE_SOURCE_DIR}/src/libgcv/plugins/iges/tests/roundtrip.cmake")
+    # asc2g takes over a minute for this shared fixture and scales poorly when
+    # every round-trip test starts it at once.  Serialize only this test group;
+    # unrelated tests remain available to the parallel scheduler.
+    set_tests_properties(iges_roundtrip_${label} PROPERTIES
+      RESOURCE_LOCK iges_roundtrip_asc2g)
     list(APPEND iges_test_dirs "${CMAKE_CURRENT_BINARY_DIR}/roundtrip-${label}")
   endforeach()
   set_property(DIRECTORY APPEND PROPERTY ADDITIONAL_MAKE_CLEAN_FILES "${iges_test_dirs}")

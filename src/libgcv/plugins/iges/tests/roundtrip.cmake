@@ -5,7 +5,9 @@
 
 include("${CMAKE_CURRENT_LIST_DIR}/test_helpers.cmake")
 
-run_checked(asc2g "${ASC2G}" "${MODEL}" "${TEST_DIR}/source.g")
+set(IGES_ASC2G_TIMEOUT 300)
+run_checked_with_timeout(asc2g "${IGES_ASC2G_TIMEOUT}"
+  "${ASC2G}" "${MODEL}" "${TEST_DIR}/source.g")
 if(CASE STREQUAL "instances")
   # Keep the model's scaled, nested cube assembly.  Its half-space ground
   # and environment sphere are not part of this bounded CSG comparison.
