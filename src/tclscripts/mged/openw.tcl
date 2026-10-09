@@ -184,18 +184,6 @@ if {![info exists mged_default(lighting)]} {
     set mged_default(lighting) 1
 }
 
-proc mged_dm_supports {id setting} {
-    global mged_gui
-
-    if {[catch {winset $mged_gui($id,active_dm)}]} {
-	return 0
-    }
-    if {[catch {dm set $setting} value]} {
-	return 0
-    }
-    return [expr {$value eq "0" || $value eq "1"}]
-}
-
 if {![info exists mged_default(perspective_mode)]} {
     set mged_default(perspective_mode) 0
 }

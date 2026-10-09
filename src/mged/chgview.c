@@ -955,6 +955,7 @@ static char **path_parse(char *path);
 
 /* Callback data for f_ill's displayed-shape search via draw records. */
 struct _fill_data {
+    struct ged        *gedp;
     struct directory *dp;
     char            **path_piece;
     size_t            nm_pieces;
@@ -963,6 +964,67 @@ struct _fill_data {
     int               nmatch;
     ged_scene_occurrence_ref lastfound;
 };
+
+
+static int
+_fill_candidate_component_matches(const char *candidate, const char *requested)
+{
+    if (!candidate || !requested)
+	return 0;
+    if (BU_STR_EQUAL(candidate, requested))
+	return 1;
+    /* Database-index paths distinguish duplicate child instances with an
+     * internal @row suffix.  Traditional MGED paths name the database object
+     * and select duplicates by -i, so ignore that suffix for matching. */
+    const size_t requested_len = strlen(requested);
+    return bu_strncmp(candidate, requested, requested_len) == 0 &&
+	candidate[requested_len] == '@';
+}
+
+
+static int
+_fill_candidate_cb(const struct ged_scene_occurrence_candidate *candidate,
+	void *ud)
+{
+    struct _fill_data *d = (struct _fill_data *)ud;
+    if (!candidate || !candidate->path || !d || !d->gedp ||
+	(d->ri > 0 && d->nmatch >= d->ri))
+	return 1;
+
+    char **pieces = path_parse((char *)candidate->path);
+    if (!pieces)
+	return 1;
+    size_t piece_count = 0;
+    while (pieces[piece_count])
+	piece_count++;
+
+    int matched = piece_count > 0 &&
+	(!d->exact || piece_count == d->nm_pieces);
+    ssize_t ci = (ssize_t)piece_count - 1;
+    ssize_t qi = (ssize_t)d->nm_pieces - 1;
+    while (matched && ci >= 0 && qi >= 0) {
+	matched = _fill_candidate_component_matches(pieces[ci],
+	    d->path_piece[qi]);
+	ci--;
+	qi--;
+    }
+    if (qi >= 0 || (d->exact && ci >= 0))
+	matched = 0;
+
+    if (matched) {
+	ged_scene_occurrence_ref ref =
+	    ged_scene_occurrence_candidate_resolve(d->gedp, candidate);
+	if (!ged_scene_occurrence_ref_is_null(ref)) {
+	    d->lastfound = ref;
+	    d->nmatch++;
+	}
+    }
+
+    for (size_t i = 0; i < piece_count; i++)
+	bu_free(pieces[i], "f_ill candidate path component");
+    bu_free(pieces, "f_ill candidate path components");
+    return 1;
+}
 
 static int
 _fill_shape_cb(const struct ged_scene_occurrence_info *rec, void *ud)
@@ -1131,6 +1193,7 @@ f_ill(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 
     {
 	struct _fill_data fd;
+	fd.gedp = s->gedp;
 	fd.dp = dp;
 	fd.path_piece = path_piece;
 	fd.nm_pieces = nm_pieces;
@@ -1139,6 +1202,9 @@ f_ill(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	fd.nmatch = 0;
 	fd.lastfound = GED_SCENE_OCCURRENCE_REF_NULL;
 	ged_scene_occurrences_visit(s->gedp, _fill_shape_cb, &fd);
+	if (fd.nmatch == 0)
+	    ged_scene_occurrence_candidates_visit(s->gedp,
+		_fill_candidate_cb, &fd);
 	nmatch = fd.nmatch;
 	lastfound = fd.lastfound;
     }

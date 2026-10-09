@@ -27,6 +27,7 @@ PARTIAL1_PIX="${WORKDIR}/gsh_obol_ert_partial_1.pix"
 PARTIAL2_PIX="${WORKDIR}/gsh_obol_ert_partial_2.pix"
 FINAL_PIX="${WORKDIR}/gsh_obol_ert_final.pix"
 DIFF_PIX="${WORKDIR}/gsh_obol_ert_diff.pix"
+COMPLETION_WAIT_SECONDS=15
 
 rm -f "$PARTIAL0" "$PARTIAL1" "$PARTIAL2" "$FINAL" "$LOG"
 rm -f "$PARTIAL0_PIX" "$PARTIAL1_PIX" "$PARTIAL2_PIX" "$FINAL_PIX" "$DIFF_PIX"
@@ -47,12 +48,12 @@ delay 0 100000
 screengrab %s
 delay 0 150000
 screengrab %s
-delay 2 0
+delay %s 0
 screengrab %s
 ert -P 1 -H 16
 delay 0 100000
 quit
-' "$PARTIAL0" "$PARTIAL1" "$PARTIAL2" "$FINAL" | "$GSH" --new-cmds "$DB" > "$LOG" 2>&1
+' "$PARTIAL0" "$PARTIAL1" "$PARTIAL2" "$COMPLETION_WAIT_SECONDS" "$FINAL" | "$GSH" --new-cmds "$DB" > "$LOG" 2>&1
 
 if ! grep -q "rt: launching endpoint framebuffer renderer (ipc=1" "$LOG"; then
     echo "gsh Obol ert smoke did not use the Obol IPC framebuffer path" 1>&2

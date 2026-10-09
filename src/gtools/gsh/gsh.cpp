@@ -256,6 +256,34 @@ private:
 
 };
 
+/* Interactive gsh deliberately reads and executes commands on its blocking
+ * linenoise thread.  GED and its initial view are created first on main, so
+ * hand every attached view to the command thread before it begins mutation,
+ * and hand them back after that thread has joined for main-thread teardown. */
+static int
+gsh_claim_view_host_thread(struct ged *gedp)
+{
+    if (!gedp)
+	return 0;
+
+    int claimed = 1;
+    struct ged_view_context *active = ged_view_active_ctx(gedp);
+    if (active && !ged_view_context_host_thread_claim(active))
+	claimed = 0;
+
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    if (views) {
+	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
+	    struct ged_view_context *view_ctx =
+		(struct ged_view_context *)BU_PTBL_GET(views, i);
+	    if (view_ctx && view_ctx != active &&
+		!ged_view_context_host_thread_claim(view_ctx))
+		claimed = 0;
+	}
+    }
+    return claimed;
+}
+
 /* GSH has no native canvas.  Its endpoint must nevertheless use the standard
  * headless host factory so capture and progressive presentation have an
  * endpoint-owned rendering/context lifecycle. */
@@ -498,6 +526,12 @@ GshState::GshState()
 
 GshState::~GshState()
 {
+    /* The interactive command thread is joined before the last main-thread
+     * GshState owner is released.  Reclaim the views before endpoint/GED
+     * teardown so their owner-thread assertions remain meaningful. */
+    if (gedp)
+	(void)gsh_claim_view_host_thread(gedp);
+
     if (gedp)
 	ged_subprocesses_terminate(gedp);
 
@@ -749,6 +783,12 @@ g_cmdline(
     std::mutex &print_mutex
 )
 {
+    if (!gs || !gsh_claim_view_host_thread(gs->gedp)) {
+	bu_log("gsh: unable to transfer GED view ownership to the command thread\n");
+	thread_done = true;
+	return;
+    }
+
     // Reusable working containers for linenoise input processing
     struct bu_vls iline = BU_VLS_INIT_ZERO;
     std::vector<char *> tmp_av;

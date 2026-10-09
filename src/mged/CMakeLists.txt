@@ -174,14 +174,14 @@ if(BRLCAD_ENABLE_TCL)
 	    brlcad_add_test(NAME mged_obol_progressive_lod
 	      COMMAND ${SH_EXEC} "${CMAKE_CURRENT_SOURCE_DIR}/mged_obol_progressive_lod.sh"
 	      "$<TARGET_FILE:mged>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
-	      "${CMAKE_CURRENT_BINARY_DIR}")
+	      "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_COMMAND}")
 	    set_tests_properties(mged_obol_progressive_lod PROPERTIES TIMEOUT 120)
 	    set_property(TEST mged_obol_progressive_lod APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 
 	    brlcad_add_test(NAME mged_obol_edit_restore
 	      COMMAND ${SH_EXEC} "${CMAKE_CURRENT_SOURCE_DIR}/mged_obol_edit_restore.sh"
 	      "$<TARGET_FILE:mged>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
-	      "${CMAKE_CURRENT_BINARY_DIR}")
+	      "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_COMMAND}")
 	    set_tests_properties(mged_obol_edit_restore PROPERTIES
 	      TIMEOUT 90 SKIP_RETURN_CODE 125)
 	    set_property(TEST mged_obol_edit_restore APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
@@ -213,6 +213,7 @@ set(
   mged_obol_host_config.tcl
   mged_obol_progressive_lod.sh
   mged_obol_smoke.sh
+  mged_obol_test_helpers.sh
   mged_tkobol_attach_smoke.sh
   mged_tkobol_attach_smoke.tcl
   mged_tkobol_framebuffer_matrix.sh
