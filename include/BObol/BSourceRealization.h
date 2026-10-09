@@ -153,6 +153,11 @@ public:
     std::shared_ptr<BObolSourceRealizationJob> submit(
 	std::vector<BObolSourceRealizationRequest> &requests);
 
+    /** Stop accepting work, cancel queued and active jobs, and wait for all
+     * worker and caller-owned queue cleanup to finish.  Shutdown is
+     * idempotent; a stopped process-wide coordinator cannot be restarted. */
+    void shutdown(void);
+
     size_t workerCountForDiagnostics(void) const;
     size_t queuedItemCountForDiagnostics(void) const;
     size_t activeItemCountForDiagnostics(void) const;

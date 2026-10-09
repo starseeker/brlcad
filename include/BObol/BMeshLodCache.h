@@ -227,8 +227,8 @@ enum BObolMeshLodPreviewKind {
     /* A complete cumulative PoP prefix.  Its hierarchy metadata is valid for
      * normal mesh presentation, although durable cache work may continue. */
     BOBOL_MESH_LOD_PREVIEW_MESH_PREFIX = 1,
-    /* A bounded point representation stratified over the whole serialized
-     * source extent.  It is an overview representation, not a PoP cut: no
+    /* A bounded point representation stratified over the whole source
+     * extent.  It is an overview representation, not a PoP cut: no
      * face data or hierarchy-level conclusion may be inferred from it. */
     BOBOL_MESH_LOD_PREVIEW_COVERAGE_POINTS = 2
 };
@@ -275,6 +275,18 @@ typedef void (*BObolMeshLodSpatialPageCallback)(
  * synchronous refresh call and the callback must not re-enter this API. */
 typedef int (*BObolMeshLodCancellationCallback)(void *callback_data);
 
+/* Cold-cache construction reports its current finite work stage through this
+ * optional callback.  completed_units and total_units describe only the
+ * reported stage; total_units is zero when that stage has no truthful finite
+ * denominator.  Face classification may invoke the callback concurrently
+ * from bounded helper workers, so receivers must be thread safe and must not
+ * re-enter the mesh-cache API. */
+typedef void (*BObolMeshLodProgressCallback)(
+	int stage,
+	uint64_t completed_units,
+	uint64_t total_units,
+	void *callback_data);
+
 struct BObolMeshLodPreviewRequest {
     int requested_cut;
     float projected_pixel_diameter;
@@ -282,6 +294,11 @@ struct BObolMeshLodPreviewRequest {
     /* Select the bounded serialized spatial producer for a large cold source.
      * This is request policy, not an environment-controlled cache format. */
     int spatial_leaf_producer;
+    /* Request a bounded whole-object occupancy preview while a sufficiently
+     * large cold source is being prepared.  This is independent of the
+     * serialized spatial-page producer: ordinary native BoTs may publish the
+     * same explicitly typed preview before their canonical PoP prefix. */
+    int coverage_preview;
     /* The caller's already-discovered local-space source extent permits a
      * coverage preview to avoid a duplicate full vertex scan.  Durable cache
      * generation still validates and persists independently scanned bounds. */
@@ -295,10 +312,13 @@ struct BObolMeshLodPreviewRequest {
     void *spatial_page_data;
     BObolMeshLodCancellationCallback cancellation_callback;
     void *cancellation_data;
+    BObolMeshLodProgressCallback progress_callback;
+    void *progress_data;
 };
 
 #define BOBOL_MESH_LOD_PREVIEW_REQUEST_INIT \
-    { -1, 0.0f, 0.0f, 0, 0, VINIT_ZERO, VINIT_ZERO, NULL, NULL, NULL, NULL }
+    { -1, 0.0f, 0.0f, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, NULL, NULL, NULL, NULL, \
+      NULL, NULL }
 
 #define BOBOL_MESH_LOD_INFO_INIT { -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO }
 #define BOBOL_MESH_LOD_HIERARCHY_INFO_INIT { \
@@ -344,11 +364,12 @@ bobol_mesh_lod_cache_refresh(struct db_i *dbip,
 	struct BObolMeshLodCacheStatus *status);
 
 /* Generate a missing cache from bot when supplied, or import name from dbip
- * otherwise, and return its opened prefix.  For a multi-page mesh preview is
- * called once after global prefixes are classified but before page
- * construction and persistence complete.  preview_request carries the same
- * ordinal/screen-error demand used by ordinary warm selection; generation
- * clamps it to the hierarchy and a transient-memory ceiling.
+ * otherwise, and return its opened prefix.  For an eligible large cold mesh,
+ * preview may first receive a bounded whole-object coverage representation
+ * and later receive the canonical global prefix after classification but
+ * before page construction and persistence complete.  preview_request carries
+ * the same ordinal/screen-error demand used by ordinary warm selection;
+ * generation clamps it to the hierarchy and a transient-memory ceiling.
  */
 BOBOL_EXPORT struct BObolMeshLod *
 bobol_mesh_lod_cache_refresh_open(
