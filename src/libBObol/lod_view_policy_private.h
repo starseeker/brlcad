@@ -1360,6 +1360,28 @@ public:
 	    std::min(64.0, scale)));
     }
 
+    /* Convert retained renderer throughput into the amount of CAD work which
+     * the first frame of a new interaction should attempt.  The calibration
+     * survives quiet-view handoff, so applying it immediately avoids replaying
+     * a rich at-rest cut just to rediscover an already measured limit.  Leave
+     * ten percent for camera, command, and timing jitter not represented by
+     * the geometry-cost scalar. */
+    static size_t interactiveEntryRenderCostBudget(
+	long double calibratedRenderCostPerSecond, float targetFps)
+    {
+	if (!std::isfinite(calibratedRenderCostPerSecond) ||
+	    calibratedRenderCostPerSecond <= 0.0L ||
+	    !std::isfinite(targetFps) || targetFps <= 0.0f)
+	    return 0;
+	const long double budget = calibratedRenderCostPerSecond * 0.90L /
+	    static_cast<long double>(targetFps);
+	if (!std::isfinite(budget) || budget <= 0.0L)
+	    return 0;
+	if (budget >= static_cast<long double>(SIZE_MAX))
+	    return SIZE_MAX;
+	return std::max<size_t>(1, static_cast<size_t>(budget));
+    }
+
     /*
      * One pixel is the fast convergence contract, not necessarily the best
      * quiet terminal image.  A small scene can otherwise stop with visibly

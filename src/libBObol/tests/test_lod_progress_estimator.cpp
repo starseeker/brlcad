@@ -26,8 +26,8 @@ main(int argc, char **argv)
 
     Estimator finalizationEstimator;
     Estimator::Inputs finalizationInput;
-    finalizationInput.viewEpoch.set(1);
-    finalizationInput.policyEpoch.set(1);
+    finalizationInput.episodeRevision = 1;
+    finalizationInput.refinementTierEpoch.set(1);
     finalizationInput.observationMicroseconds = 1000000;
     finalizationInput.finalPresentationMicroseconds = 20000;
     const Estimator::Estimate finalizationEstimate =
@@ -42,9 +42,10 @@ main(int argc, char **argv)
 
     Estimator estimator;
     Estimator::Inputs input;
-    input.viewEpoch.set(1);
-    input.policyEpoch.set(1);
+    input.episodeRevision = 1;
+    input.refinementTierEpoch.set(1);
     input.observationMicroseconds = 1000000;
+    input.episodeStartMicroseconds = input.observationMicroseconds;
     input.finalPresentationMicroseconds = 100000;
     Estimator::WorkRank &discovery = input.rank(Estimator::Rank::DISCOVERY);
     discovery.present = true;
@@ -109,14 +110,152 @@ main(int argc, char **argv)
 	return 1;
     }
 
-    input.viewEpoch.set(2);
-    input.observationMicroseconds = 4000000;
+    /* A compact stream may publish a newer inventory revision while the
+     * source/view/policy episode remains unchanged.  A later transition time
+     * must not reset either the measured rate or the monotonic fraction. */
+    input.episodeStartMicroseconds = input.observationMicroseconds;
+    const Estimator::Estimate appended = estimator.evaluate(input);
+    if (!appended.available ||
+	std::fabs(appended.fraction - advanced.fraction) > 1.0e-6f ||
+	appended.remainingMilliseconds != advanced.remainingMilliseconds) {
+	std::fprintf(stderr,
+	    "append-only inventory restarted the progress episode\n");
+	return 1;
+    }
+
+    /* Loading a different source in the same camera/policy tuple is a new
+     * user-visible episode.  Append-only inventory publications deliberately
+     * retain this identity and therefore cannot restart the progress clock. */
+    input.episodeRevision = 2;
+    input.observationMicroseconds = 3500000;
+    input.episodeStartMicroseconds = input.observationMicroseconds;
     discovery.completed = 0;
     estimate = estimator.evaluate(input);
     if (!estimate.available || estimate.fraction > 1.0e-6f ||
 	estimate.remainingMilliseconds == 0) {
 	std::fprintf(stderr,
-	    "learned rate was not reusable in a new view epoch\n");
+	    "source inventory did not reset the progress episode\n");
+	return 1;
+    }
+
+    /* Visible-detail ETA is based on completed refinement cycles, not the
+     * transient rate at which worker results enter the publication queue. */
+    Estimator cycleEstimator;
+    Estimator::Inputs cycleInput;
+    cycleInput.episodeRevision = 10;
+    cycleInput.refinementTierEpoch.set(40);
+    cycleInput.episodeStartMicroseconds = 10000000;
+    cycleInput.observationMicroseconds = 10000000;
+    cycleInput.renderCompletionSerial = 100;
+    cycleInput.finalPresentationMicroseconds = 50000;
+    Estimator::WorkRank &visible = cycleInput.rank(
+	Estimator::Rank::VISIBLE_RESOLUTION);
+    visible.present = true;
+    visible.total = 1000;
+    visible.completed = 100;
+    if (cycleEstimator.evaluate(cycleInput).available) {
+	std::fprintf(stderr,
+	    "refinement forecast qualified without completed cycles\n");
+	return 1;
+    }
+
+    cycleInput.renderCompletionSerial = 101;
+    cycleInput.observationMicroseconds = 10100000;
+    visible.completed = 200;
+    if (cycleEstimator.evaluate(cycleInput).available) {
+	std::fprintf(stderr,
+	    "refinement forecast qualified after only one cycle\n");
+	return 1;
+    }
+    cycleInput.renderCompletionSerial = 102;
+    cycleInput.observationMicroseconds = 10220000;
+    visible.completed = 280;
+    if (cycleEstimator.evaluate(cycleInput).available) {
+	std::fprintf(stderr,
+	    "refinement forecast qualified after only two cycles\n");
+	return 1;
+    }
+    cycleInput.renderCompletionSerial = 103;
+    cycleInput.observationMicroseconds = 10370000;
+    visible.completed = 340;
+    estimate = cycleEstimator.evaluate(cycleInput);
+    if (!estimate.available || !estimate.refinementCycleBased ||
+	estimate.remainingRefinementCycles != 11 ||
+	estimate.remainingMilliseconds != 1272) {
+	std::fprintf(stderr,
+	    "refinement forecast did not preserve aggregate cycle throughput\n");
+	return 1;
+    }
+
+    /* Discovering more unresolved work, including between frame boundaries,
+     * immediately retracts the forecast. */
+    cycleInput.observationMicroseconds = 10380000;
+    visible.completed = 300;
+    if (cycleEstimator.evaluate(cycleInput).available) {
+	std::fprintf(stderr,
+	    "rising refinement frontier retained a stale forecast\n");
+	return 1;
+    }
+
+    cycleInput.renderCompletionSerial = 104;
+    cycleInput.observationMicroseconds = 10530000;
+    visible.completed = 360;
+    (void)cycleEstimator.evaluate(cycleInput);
+    cycleInput.renderCompletionSerial = 105;
+    cycleInput.observationMicroseconds = 10680000;
+    visible.completed = 420;
+    (void)cycleEstimator.evaluate(cycleInput);
+    cycleInput.renderCompletionSerial = 106;
+    cycleInput.observationMicroseconds = 10830000;
+    visible.completed = 470;
+    if (!cycleEstimator.evaluate(cycleInput).available) {
+	std::fprintf(stderr,
+	    "improving refinement cycles did not restore the forecast\n");
+	return 1;
+    }
+    cycleInput.renderCompletionSerial = 107;
+    cycleInput.observationMicroseconds = 10980000;
+    if (cycleEstimator.evaluate(cycleInput).available) {
+	std::fprintf(stderr,
+	    "flat refinement cycle retained a stale forecast\n");
+	return 1;
+    }
+
+    /* An internal quality tier keeps the episode clock, but its newly opened
+     * frontier must establish independent cycle evidence. */
+    cycleInput.refinementTierEpoch.advance();
+    cycleInput.renderCompletionSerial = 108;
+    cycleInput.observationMicroseconds = 11080000;
+    visible.completed = 520;
+    if (cycleEstimator.evaluate(cycleInput).available) {
+	std::fprintf(stderr,
+	    "new refinement tier reused predecessor cycle evidence\n");
+	return 1;
+    }
+    cycleInput.renderCompletionSerial = 109;
+    cycleInput.observationMicroseconds = 11180000;
+    visible.completed = 570;
+    (void)cycleEstimator.evaluate(cycleInput);
+    cycleInput.renderCompletionSerial = 110;
+    cycleInput.observationMicroseconds = 11280000;
+    visible.completed = 620;
+    (void)cycleEstimator.evaluate(cycleInput);
+    cycleInput.renderCompletionSerial = 111;
+    cycleInput.observationMicroseconds = 11380000;
+    visible.completed = 670;
+    estimate = cycleEstimator.evaluate(cycleInput);
+    if (!estimate.available || !estimate.refinementCycleBased ||
+	estimate.remainingRefinementCycles != 9 ||
+	estimate.remainingMilliseconds != 825 || estimate.fraction < 0.6f) {
+	std::fprintf(stderr,
+	    "new refinement tier did not preserve the enclosing episode clock\n");
+	return 1;
+    }
+
+    visible.total = 1100;
+    if (cycleEstimator.evaluate(cycleInput).available) {
+	std::fprintf(stderr,
+	    "changing refinement denominator retained a stale forecast\n");
 	return 1;
     }
     return 0;

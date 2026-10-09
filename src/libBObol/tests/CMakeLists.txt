@@ -37,8 +37,21 @@ else()
   set_tests_properties(libBObol_lod_service PROPERTIES TIMEOUT 30)
 endif()
 
+brlcad_addexec(test_bobol_lod_coverage_preview
+  "test_lod_coverage_preview.cpp;../lod_coverage_preview.cpp"
+  "libBObol;libbu;Obol::Obol" TEST ALL_CXX)
+target_include_directories(test_bobol_lod_coverage_preview PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/..)
+brlcad_add_test(NAME libBObol_lod_coverage_preview
+  COMMAND test_bobol_lod_coverage_preview)
+
+brlcad_addexec(test_bobol_lod_telemetry test_lod_telemetry.cpp
+  "libBObol;libwdb;libbu;Obol::Obol" TEST ALL_CXX)
+brlcad_add_test(NAME libBObol_lod_telemetry
+  COMMAND test_bobol_lod_telemetry)
+
 brlcad_addexec(test_bobol_lod_update_action
-  "test_lod_update_action.cpp;../retained_allocation_private.cpp;../lod_static_quality.cpp;../lod_presentation_policy.cpp"
+  "test_lod_update_action.cpp;../retained_allocation_private.cpp;../lod_static_quality.cpp;../lod_presentation_policy.cpp;../lod_admission_policy.cpp"
   "libBObol;libwdb;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
 brlcad_add_test(NAME libBObol_lod_update_action COMMAND test_bobol_lod_update_action)
 
@@ -97,7 +110,7 @@ brlcad_add_test(NAME libBObol_retained_allocation_oracle
   COMMAND test_bobol_retained_allocation_oracle)
 
 brlcad_addexec(test_bobol_lod_coordinator
-  "test_lod_coordinator.cpp;test_lod_admission_policy_header.cpp;test_lod_capacity_policy_header.cpp;test_lod_delivery_policy_header.cpp;test_lod_scene_evidence_header.cpp;test_lod_view_policy_header.cpp;../lod_admission_policy.cpp;../lod_presentation_policy.cpp;../lod_view_quality_history.cpp;../lod_static_quality.cpp"
+  "test_lod_coordinator.cpp;test_lod_admission_policy_header.cpp;test_lod_capacity_policy_header.cpp;test_lod_delivery_policy_header.cpp;test_lod_scene_evidence_header.cpp;test_lod_view_policy_header.cpp;../lod_admission_policy.cpp;../lod_presentation_policy.cpp;../lod_view_quality_history.cpp;../lod_static_quality.cpp;../parallel_budget_private.cpp"
   "libbu;Obol::Obol" TEST ALL_CXX)
 set_source_files_properties(
   test_lod_admission_policy_header.cpp
@@ -106,6 +119,7 @@ set_source_files_properties(
   test_lod_scene_evidence_header.cpp
   test_lod_view_policy_header.cpp
   ../lod_static_quality.cpp
+  ../parallel_budget_private.cpp
   PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 target_include_directories(test_bobol_lod_coordinator PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -288,6 +302,8 @@ set(_bobol_headless_tests
   libBObol_image_source
   libBObol_image_display
   libBObol_lod_realization
+  libBObol_lod_coverage_preview
+  libBObol_lod_telemetry
   libBObol_lod_service
   libBObol_lod_coordinator
   libBObol_lod_progress_estimator
@@ -324,6 +340,8 @@ endforeach()
 # intentionally smaller than the full headless suite so sanitizer failures map
 # to ownership, stale-handle, endpoint, or worker/publication boundaries.
 set(_bobol_sanitizer_tests
+  libBObol_lod_coverage_preview
+  libBObol_lod_telemetry
   libBObol_lod_service
   libBObol_lod_update_action
   libBObol_lod_source_evidence
@@ -350,6 +368,8 @@ endforeach()
 
 set(_bobol_sanitizer_targets
   test_bobol_model_conformance
+  test_bobol_lod_coverage_preview
+  test_bobol_lod_telemetry
   test_bobol_lod_service
   test_bobol_lod_update_action
   test_bobol_lod_source_evidence
@@ -380,6 +400,8 @@ cmakefiles(
   test_image_source.cpp
   test_lod_realization.cpp
   test_lod_coordinator.cpp
+  test_lod_coverage_preview.cpp
+  test_lod_telemetry.cpp
   test_lod_progress_estimator.cpp
   model_conformance_harness_private.h
   model_trace_refinement_checker_private.h

@@ -16,7 +16,7 @@
 #include <optional>
 
 /*
- * One submission cursor may be active while a complete successor rescan is
+ * One submission cursor may be active while a successor rescan is
  * owed.  Discovery can also pause the cursor while preserving that rescan
  * until a later inventory revision supplies more entries.  These four states
  * were formerly represented by two freely written booleans in three
@@ -53,6 +53,20 @@ public:
 
     void requestRescan(void)
     {
+	this->demandRescanValue = true;
+	this->stateValue = this->active() ?
+	    State::ACTIVE_RESCAN : State::IDLE_RESCAN;
+    }
+
+    /* Newly resident data can leave the current presentation below its
+     * already-known camera demand.  It needs a successor pass, but it does not
+     * invalidate the dense visibility/demand census which established that
+     * target.  Keep that distinction on the pass itself so a result arriving
+     * during a physical-demand pass cannot force the successor back through
+     * the complete source population.  A previously requested dense rescan
+     * remains the stronger obligation. */
+    void requestQualityRescan(void)
+    {
 	this->stateValue = this->active() ?
 	    State::ACTIVE_RESCAN : State::IDLE_RESCAN;
     }
@@ -60,6 +74,7 @@ public:
     void clearRescan(void)
     {
 	this->stateValue = this->active() ? State::ACTIVE : State::IDLE;
+	this->demandRescanValue = false;
     }
 
     void setRescanPending(bool pending)
@@ -76,18 +91,20 @@ public:
     void beginFresh(bool active = true)
     {
 	this->stateValue = active ? State::ACTIVE : State::IDLE;
+	this->demandRescanValue = false;
     }
 
     /* Discovery may finish a predecessor pass while compact inventory is
      * still open.  Once the producer closes, consume the preserved successor
      * obligation as the new active pass.  activate() is intentionally not
      * used here: ACTIVE_RESCAN means an active predecessor still owes a later
-     * full pass, whereas this transition starts that full pass itself. */
+     * pass, whereas this transition starts that successor itself. */
     bool beginPendingRescan(void)
     {
 	if (this->stateValue != State::IDLE_RESCAN)
 	    return false;
 	this->stateValue = State::ACTIVE;
+	this->demandRescanValue = false;
 	return true;
     }
 
@@ -97,6 +114,7 @@ public:
     void retire(void)
     {
 	this->stateValue = State::IDLE;
+	this->demandRescanValue = false;
     }
 
     bool active(void) const
@@ -111,6 +129,11 @@ public:
 	    this->stateValue == State::ACTIVE_RESCAN;
     }
 
+    bool demandRescanPending(void) const
+    {
+	return this->rescanPending() && this->demandRescanValue;
+    }
+
     State state(void) const
     {
 	return this->stateValue;
@@ -118,6 +141,7 @@ public:
 
 private:
     State stateValue = State::IDLE;
+    bool demandRescanValue = false;
 };
 
 /* A completed renderer presentation is useful capacity evidence only for the

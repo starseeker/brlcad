@@ -11,6 +11,8 @@
 #include "identity_counter_private.h"
 #include "lod_coordinator_private.h"
 #include "lod_control_private.h"
+#include "lod_progress_diagnostics_private.h"
+#include "parallel_budget_private.h"
 #include "presentation_preparation_private.h"
 #include "retained_allocation_private.h"
 #include "bu/app.h"
@@ -18,11 +20,16 @@
 #include <cstdio>
 #include <atomic>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <limits>
+#include <mutex>
+#include <thread>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 static_assert(sizeof(BObolLodViewEpoch) == sizeof(uint64_t),
     "typed LoD epochs must remain zero-overhead");
@@ -64,6 +71,138 @@ static_assert(!std::is_constructible<BObolLodAdmissionRevisionStamp,
     BObolLodViewEpoch, BObolLodPolicyEpoch,
     BObolLodCapacityEpoch>::value,
     "a visibility companion may not be omitted from an admission stamp");
+
+static int
+test_parallel_budget(void)
+{
+    const size_t limit = bobol_parallel_budget_limit();
+    if (!limit || limit > 8) {
+	std::fprintf(stderr, "FAIL: invalid process parallel budget %zu\n",
+	    limit);
+	return 1;
+    }
+
+    {
+	BObolParallelBudgetLease directHelpers;
+	if (directHelpers.tryAcquireHelpers(SIZE_MAX) != limit) {
+	    std::fprintf(stderr,
+		"FAIL: direct cache work could not use the process budget\n");
+	    return 1;
+	}
+	BObolParallelBudgetLease nestedHelpers;
+	if (nestedHelpers.tryAcquireHelpers(1) != 0) {
+	    std::fprintf(stderr,
+		"FAIL: helper admission exceeded the process budget\n");
+	    return 1;
+	}
+    }
+
+    {
+	BObolParallelBudgetLease firstProducer;
+	firstProducer.acquireOuter();
+	BObolParallelBudgetLease helpers;
+	const size_t expectedHelpers = limit > 2 ? limit - 2 : 0;
+	if (helpers.tryAcquireHelpers(SIZE_MAX) != expectedHelpers) {
+	    std::fprintf(stderr,
+		"FAIL: helper admission did not reserve the second producer lane\n");
+	    return 1;
+	}
+	if (limit > 1) {
+	    BObolParallelBudgetLease secondProducer;
+	    secondProducer.acquireOuter();
+	    BObolParallelBudgetLease saturatedHelpers;
+	    if (saturatedHelpers.tryAcquireHelpers(1) != 0) {
+		std::fprintf(stderr,
+		    "FAIL: nested helpers oversubscribed active producers\n");
+		return 1;
+	    }
+	}
+    }
+
+    BObolParallelBudgetLease released;
+    if (released.tryAcquireHelpers(SIZE_MAX) != limit) {
+	std::fprintf(stderr,
+	    "FAIL: process parallel budget lease did not release capacity\n");
+	return 1;
+    }
+    released.release();
+
+    /* Service-local dispatch priority is insufficient when workers from
+     * independent services are already queued at the process-wide gate.
+     * Saturate that gate, enqueue ordinary work first, then verify a preview
+     * waiter receives the single released slot. */
+    BObolParallelBudgetLease anchor;
+    anchor.acquireOuter();
+    BObolParallelBudgetLease fillerHelpers;
+    if (limit > 2 &&
+	fillerHelpers.tryAcquireHelpers(SIZE_MAX) != limit - 2) {
+	std::fprintf(stderr,
+	    "FAIL: could not saturate helper lanes for priority test\n");
+	return 1;
+    }
+    BObolParallelBudgetLease secondOuter;
+    if (limit > 1)
+	secondOuter.acquireOuter();
+
+    std::mutex orderMutex;
+    std::condition_variable orderChanged;
+    std::vector<int> order;
+    bool releaseWinner = false;
+    const auto contender = [&](int priority, int marker) {
+	BObolParallelBudgetLease lease;
+	lease.acquireOuter(priority);
+	std::unique_lock<std::mutex> lock(orderMutex);
+	order.push_back(marker);
+	orderChanged.notify_all();
+	orderChanged.wait(lock, [&]() { return releaseWinner; });
+    };
+    const auto waitForWaiters = [](size_t expected) {
+	const auto deadline = std::chrono::steady_clock::now() +
+	    std::chrono::seconds(5);
+	while (bobol_parallel_budget_waiting_outer_count() < expected &&
+	       std::chrono::steady_clock::now() < deadline)
+	    std::this_thread::yield();
+	return bobol_parallel_budget_waiting_outer_count() >= expected;
+    };
+
+    std::thread ordinary(contender, 0, 1);
+    const bool ordinaryQueued = waitForWaiters(1);
+    std::thread preview(contender, 1, 2);
+    const bool previewQueued = waitForWaiters(2);
+    if (limit > 1)
+	secondOuter.release();
+    else
+	anchor.release();
+
+    bool winnerObserved = false;
+    bool previewFirst = false;
+    {
+	std::unique_lock<std::mutex> lock(orderMutex);
+	winnerObserved = orderChanged.wait_for(lock, std::chrono::seconds(5),
+	    [&]() { return !order.empty(); });
+	previewFirst = winnerObserved && order.front() == 2;
+	if (!previewFirst) {
+	    releaseWinner = true;
+	    orderChanged.notify_all();
+	}
+    }
+    if (previewFirst) {
+	std::lock_guard<std::mutex> lock(orderMutex);
+	releaseWinner = true;
+	orderChanged.notify_all();
+    }
+    anchor.release();
+    fillerHelpers.release();
+    ordinary.join();
+    preview.join();
+    if (!ordinaryQueued || !previewQueued || !previewFirst ||
+	order.size() != 2 || order[0] != 2 || order[1] != 1) {
+	std::fprintf(stderr,
+	    "FAIL: process CPU gate did not preserve preview/FIFO priority\n");
+	return 1;
+    }
+    return 0;
+}
 
 static int
 test_identity_exhaustion_contract(void)
@@ -251,14 +390,14 @@ test_submission_pass(void)
     pass.activate();
     pass.setRescanPending(true);
     if (pass.state() != Pass::State::ACTIVE_RESCAN || !pass.active() ||
-	!pass.rescanPending()) {
+	!pass.rescanPending() || !pass.demandRescanPending()) {
 	std::fprintf(stderr, "FAIL: active submission rescan\n");
 	return 1;
     }
 
     pass.deactivate();
     if (pass.state() != Pass::State::IDLE_RESCAN || pass.active() ||
-	!pass.rescanPending()) {
+	!pass.rescanPending() || !pass.demandRescanPending()) {
 	std::fprintf(stderr, "FAIL: paused submission rescan\n");
 	return 1;
     }
@@ -268,10 +407,22 @@ test_submission_pass(void)
 	return 1;
     }
     if (pass.state() != Pass::State::ACTIVE || !pass.active() ||
-	pass.rescanPending()) {
+	pass.rescanPending() || pass.demandRescanPending()) {
 	std::fprintf(stderr, "FAIL: consumed submission rescan\n");
 	return 1;
     }
+
+    pass.requestQualityRescan();
+    if (!pass.rescanPending() || pass.demandRescanPending()) {
+	std::fprintf(stderr, "FAIL: quality rescan became dense demand\n");
+	return 1;
+    }
+    pass.requestRescan();
+    if (!pass.demandRescanPending()) {
+	std::fprintf(stderr, "FAIL: dense demand did not supersede quality rescan\n");
+	return 1;
+    }
+    pass.clearRescan();
 
     pass.requestRescan();
     if (pass.state() != Pass::State::ACTIVE_RESCAN || !pass.active() ||
@@ -1839,10 +1990,71 @@ test_coverage_policy(void)
      * A successor which is itself presentation-deferred retains the
      * obligation; the first complete ordinary demand census retires it. */
     policy.noteDemandDeferred();
+    Policy::ProviderWaitInputs providerWait;
+    providerWait.completedPass = true;
+    providerWait.providerPending = true;
+    providerWait.serviceIdle = true;
+    providerWait.resultDeliveryIdle = true;
+    if (!policy.shouldParkDemandCensusForProvider(providerWait)) {
+	std::fprintf(stderr, "FAIL: deferred demand did not select provider wait\n");
+	return 1;
+    }
+    using ProviderWaitMember = bool Policy::ProviderWaitInputs::*;
+    const ProviderWaitMember requiredWaitInputs[] = {
+	&Policy::ProviderWaitInputs::completedPass,
+	&Policy::ProviderWaitInputs::providerPending,
+	&Policy::ProviderWaitInputs::serviceIdle,
+	&Policy::ProviderWaitInputs::resultDeliveryIdle
+    };
+    for (ProviderWaitMember member : requiredWaitInputs) {
+	Policy::ProviderWaitInputs excluded = providerWait;
+	excluded.*member = false;
+	if (policy.shouldParkDemandCensusForProvider(excluded)) {
+	    std::fprintf(stderr,
+		"FAIL: incomplete provider-wait premise parked demand\n");
+	    return 1;
+	}
+    }
+    const ProviderWaitMember competingWaitInputs[] = {
+	&Policy::ProviderWaitInputs::passAdmittedWork,
+	&Policy::ProviderWaitInputs::passChangedCut,
+	&Policy::ProviderWaitInputs::passResidencyPending,
+	&Policy::ProviderWaitInputs::passBudgetBlocked,
+	&Policy::ProviderWaitInputs::rescanPending,
+	&Policy::ProviderWaitInputs::selectiveOwnerPending,
+	&Policy::ProviderWaitInputs::structuralOwnerPending,
+	&Policy::ProviderWaitInputs::retainedAllocationOwnerPending,
+	&Policy::ProviderWaitInputs::capacityOwnerPending,
+	&Policy::ProviderWaitInputs::presentationOwnerPending,
+	&Policy::ProviderWaitInputs::planningOwnerPending
+    };
+    for (ProviderWaitMember member : competingWaitInputs) {
+	Policy::ProviderWaitInputs excluded = providerWait;
+	excluded.*member = true;
+	if (policy.shouldParkDemandCensusForProvider(excluded)) {
+	    std::fprintf(stderr,
+		"FAIL: competing owner did not exclude provider wait\n");
+	    return 1;
+	}
+    }
     if (policy.completeDemandCensus() ||
 	!policy.demandCensusRequired() ||
+	!policy.parkDemandCensusForProvider() ||
+	policy.demandCensusRequired() ||
+	!policy.demandCensusProviderParked() ||
+	policy.parkDemandCensusForProvider() ||
+	policy.completeDemandCensus() ||
+	!policy.releaseProviderParkedDemandCensus() ||
+	!policy.demandCensusRequired() ||
+	policy.demandCensusProviderParked() ||
+	policy.releaseProviderParkedDemandCensus() ||
 	!policy.completeDemandCensus() || policy.demandCensusRequired()) {
 	std::fprintf(stderr, "FAIL: dense demand successor lifecycle\n");
+	return 1;
+    }
+    if (policy.shouldParkDemandCensusForProvider(providerWait)) {
+	std::fprintf(stderr,
+	    "FAIL: completed demand census retained provider wait\n");
 	return 1;
     }
 
@@ -1913,6 +2125,7 @@ test_coverage_policy(void)
     policy.reset();
     if (policy.active() || policy.coverageComplete() ||
 	policy.sawBoundedSource() || policy.hasCompleteVisibleCount() ||
+	policy.demandCensusProviderParked() ||
 	!policy.required() || policy.effectiveComplete() ||
 	policy.compactionAllowed()) {
 	std::fprintf(stderr, "FAIL: coverage reset\n");
@@ -2110,6 +2323,7 @@ static int
 test_source_profile_policy(void)
 {
     using Policy = BObolLodSourceProfilePolicy;
+    using ColdPolicy = BObolLodColdPreviewPolicy;
     static const uint64_t mebibyte = 1024ULL * 1024ULL;
     if (!Policy::safeMeshFirstPreview(
 	    true, 2249, 709, 12 * mebibyte, 2 * mebibyte, 709) ||
@@ -2147,6 +2361,145 @@ test_source_profile_policy(void)
 	Policy::admitTerminalMesh(
 	    true, true, false, true, true, 5000, 4000, 999)) {
 	std::fprintf(stderr, "FAIL: terminal mesh budget admission\n");
+	return 1;
+    }
+
+    ColdPolicy::Inputs cold;
+    cold.structuralCoverageOnly = true;
+    cold.boundedSource = true;
+    cold.quietView = true;
+    cold.ordinaryDensePass = true;
+    if (!ColdPolicy::candidateScanEnabled(cold) ||
+	ColdPolicy::admissionLimit(cold) != 1) {
+	std::fprintf(stderr,
+	    "FAIL: cold preview did not scan/admit the all-box bootstrap\n");
+	return 1;
+    }
+    cold.activeMeshOccurrenceCount = 1;
+    if (ColdPolicy::admissionLimit(cold) != 0) {
+	std::fprintf(stderr,
+	    "FAIL: cold preview bypassed an exhausted render budget\n");
+	return 1;
+    }
+    cold.remainingRenderCost = 1;
+    if (ColdPolicy::admissionLimit(cold) != 1) {
+	std::fprintf(stderr,
+	    "FAIL: cold preview rejected bounded remaining capacity\n");
+	return 1;
+    }
+
+    cold.serviceWorkerCount = 4;
+    if (ColdPolicy::admissionLimit(cold) != 2) {
+	std::fprintf(stderr,
+	    "FAIL: cold preview did not use bounded idle worker capacity\n");
+	return 1;
+    }
+    cold.activeServiceTasks = 1;
+    cold.activeProducerCount = 1;
+    if (ColdPolicy::admissionLimit(cold) != 1) {
+	std::fprintf(stderr,
+	    "FAIL: cold preview did not cap concurrent producers\n");
+	return 1;
+    }
+
+    /* A long-running producer must not strand the second preview lane.  A
+     * shared lease is represented by activeProducerCount and consumes one
+     * slot, but it is not a reason to suppress every other admission. */
+    cold.activeServiceTasks = 0;
+    if (ColdPolicy::admissionLimit(cold) != 1) {
+	std::fprintf(stderr,
+	    "FAIL: cold preview did not refill beside a shared producer\n");
+	return 1;
+    }
+    cold.activeProducerCount = 2;
+    if (ColdPolicy::admissionLimit(cold) != 0) {
+	std::fprintf(stderr,
+	    "FAIL: cold preview exceeded its active producer cap\n");
+	return 1;
+    }
+
+    cold.activeProducerCount = 0;
+    cold.activeServiceTasks = cold.serviceWorkerCount;
+    if (ColdPolicy::admissionLimit(cold) != 0) {
+	std::fprintf(stderr,
+	    "FAIL: cold preview ignored exhausted service workers\n");
+	return 1;
+    }
+    cold.activeServiceTasks = 0;
+    cold.resultPublicationPending = true;
+    if (!ColdPolicy::candidateScanEnabled(cold) ||
+	ColdPolicy::admissionLimit(cold) != 0) {
+	std::fprintf(stderr,
+	    "FAIL: cold preview did not drain publication before admitting "
+	    "producers\n");
+	return 1;
+    }
+    cold.resultPublicationPending = false;
+    cold.activeServiceTasks = 0;
+    cold.activeMeshOccurrenceCount =
+	ColdPolicy::maximumPreviewMeshOccurrences;
+    if (ColdPolicy::admissionLimit(cold) != 0) {
+	std::fprintf(stderr,
+	    "FAIL: cold preview exceeded its presentation cap\n");
+	return 1;
+    }
+    cold.activeMeshOccurrenceCount = 0;
+    cold.structuralCoverageOnly = false;
+
+    if (ColdPolicy::candidateScanEnabled(cold) ||
+	ColdPolicy::admissionLimit(cold) != 0) {
+	std::fprintf(stderr,
+	    "FAIL: cold preview escaped structural coverage\n");
+	return 1;
+    }
+
+    std::vector<ColdPolicy::Candidate> previewCandidates(4);
+    previewCandidates[0].entryIndex = 10;
+    previewCandidates[0].assetIdentity = 1001;
+    previewCandidates[0].sourcePopulation = 1000000;
+    previewCandidates[0].visualFootprint = 100.0;
+    previewCandidates[0].aggregateVisualFootprint = 100.0;
+    previewCandidates[1].entryIndex = 20;
+    previewCandidates[1].assetIdentity = 2002;
+    previewCandidates[1].sourcePopulation = 100;
+    previewCandidates[1].visualFootprint = 8.0;
+    previewCandidates[1].aggregateVisualFootprint = 8.0;
+    previewCandidates[2].entryIndex = 30;
+    previewCandidates[2].assetIdentity = 3003;
+    previewCandidates[2].sourcePopulation = 1000;
+    previewCandidates[2].visualFootprint = 5.0;
+    previewCandidates[2].aggregateVisualFootprint = 100.0;
+    previewCandidates[3].entryIndex = 11;
+    previewCandidates[3].assetIdentity = 1001;
+    previewCandidates[3].sourcePopulation = 1000000;
+    previewCandidates[3].visualFootprint = 90.0;
+    previewCandidates[3].aggregateVisualFootprint = 90.0;
+    std::vector<size_t> selected = ColdPolicy::selectCandidates(
+	previewCandidates, 1);
+    if (selected.size() != 1 ||
+	previewCandidates[selected[0]].entryIndex != 30) {
+	std::fprintf(stderr,
+	    "FAIL: sole cold preview producer did not select the latency-aware "
+	    "quick win\n");
+	return 1;
+    }
+    selected = ColdPolicy::selectCandidates(
+	previewCandidates, 2);
+    if (selected.size() != 2 ||
+	previewCandidates[selected[0]].entryIndex != 10 ||
+	previewCandidates[selected[1]].entryIndex != 30) {
+	std::fprintf(stderr,
+	    "FAIL: cold preview did not split hero and fanout-aware quick-win "
+	    "lanes\n");
+	return 1;
+    }
+    previewCandidates[2].emphasis = 1;
+    selected = ColdPolicy::selectCandidates(previewCandidates, 2);
+    if (selected.size() != 2 ||
+	previewCandidates[selected[0]].entryIndex != 30 ||
+	previewCandidates[selected[1]].entryIndex != 20) {
+	std::fprintf(stderr,
+	    "FAIL: cold preview hero emphasis or distinct quick-win ordering\n");
 	return 1;
     }
     return 0;
@@ -3161,6 +3514,179 @@ test_delivery_policy(void)
 }
 
 static int
+test_proxy_reason_diagnostics(void)
+{
+    using Classifier = BObolLodProxyReasonClassifier;
+    Classifier::Inputs inputs;
+    inputs.presentedSubpixelOccurrenceCount = 4;
+    inputs.presentedStructuralBoxCount = 12;
+    inputs.terminalProxyOccurrenceCount = 2;
+    inputs.terminalOccurrenceFailureCount = 1;
+    inputs.missingMeshBudgetBlockedCount = 3;
+    inputs.sourcePreparationPending = true;
+    inputs.visibilityPlanningPending = true;
+    inputs.geometryPreparationPending = true;
+    inputs.rendererPreparationPending = true;
+    BObolLodProxyReasonStatus status = Classifier::classify(inputs);
+    const uint32_t expectedMask =
+	BOBOL_LOD_PROXY_REASON_SOURCE_PREPARATION |
+	BOBOL_LOD_PROXY_REASON_INTENTIONAL_SUBPIXEL |
+	BOBOL_LOD_PROXY_REASON_FRAME_BUDGET |
+	BOBOL_LOD_PROXY_REASON_TERMINAL_FAILURE;
+    if (status.reasonMask != expectedMask ||
+	status.sourcePreparationOccurrenceCount != 6 ||
+	status.visibilityPlanningOccurrenceCount != 0 ||
+	status.geometryPreparationOccurrenceCount != 0 ||
+	status.rendererPreparationOccurrenceCount != 0 ||
+	status.intentionalSubpixelOccurrenceCount != 4 ||
+	status.frameBudgetOccurrenceCount != 5 ||
+	status.memoryBudgetOccurrenceCount != 0 ||
+	status.terminalFailureOccurrenceCount != 1 ||
+	status.unclassifiedOccurrenceCount != 0 ||
+	status.temporaryStructuralOccurrenceCount() != 6 ||
+	status.budgetLimitedStructuralOccurrenceCount() != 5) {
+	std::fprintf(stderr,
+	    "FAIL: proxy reasons did not partition specific and pipeline causes\n");
+	return 1;
+    }
+
+    const size_t classifiedStructural =
+	status.sourcePreparationOccurrenceCount +
+	status.visibilityPlanningOccurrenceCount +
+	status.geometryPreparationOccurrenceCount +
+	status.rendererPreparationOccurrenceCount +
+	status.frameBudgetOccurrenceCount +
+	status.memoryBudgetOccurrenceCount +
+	status.terminalFailureOccurrenceCount +
+	status.unclassifiedOccurrenceCount;
+    if (classifiedStructural != inputs.presentedStructuralBoxCount) {
+	std::fprintf(stderr,
+	    "FAIL: proxy reasons double-counted the structural population\n");
+	return 1;
+    }
+
+    inputs = Classifier::Inputs();
+    inputs.presentedStructuralBoxCount = 7;
+    inputs.visibilityPlanningPending = true;
+    inputs.geometryPreparationPending = true;
+    status = Classifier::classify(inputs);
+    if (status.reasonMask != BOBOL_LOD_PROXY_REASON_VISIBILITY_PLANNING ||
+	status.visibilityPlanningOccurrenceCount != 7) {
+	std::fprintf(stderr,
+	    "FAIL: proxy reasons lost pipeline-stage precedence\n");
+	return 1;
+    }
+
+    inputs = Classifier::Inputs();
+    inputs.presentedStructuralBoxCount = 5;
+    inputs.memoryBudgetLimited = true;
+    status = Classifier::classify(inputs);
+    if (status.reasonMask != BOBOL_LOD_PROXY_REASON_MEMORY_BUDGET ||
+	status.memoryBudgetOccurrenceCount != 5) {
+	std::fprintf(stderr, "FAIL: proxy memory constraint attribution\n");
+	return 1;
+    }
+
+    inputs = Classifier::Inputs();
+    inputs.presentedStructuralBoxCount = 3;
+    status = Classifier::classify(inputs);
+    if (status.reasonMask != BOBOL_LOD_PROXY_REASON_UNCLASSIFIED ||
+	status.unclassifiedOccurrenceCount != 3) {
+	std::fprintf(stderr, "FAIL: proxy unknown-cause accounting\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_lod_episode_milestones(void)
+{
+    BObolLodEpisodeTracker tracker;
+    BObolLodEpisodeTracker::Inputs inputs;
+    inputs.episodeRevision = 2;
+    inputs.episodeStartMicroseconds = 900000;
+    inputs.observationMicroseconds = 1000000;
+    inputs.hasLodState = true;
+    inputs.exactPresentation = true;
+    inputs.proxyPresented = true;
+    inputs.structuralProxyCount = 10;
+    BObolLodEpisodeStatus status = tracker.observe(inputs);
+    if (!status.firstProxyReached || status.firstProxyMilliseconds != 100 ||
+	status.structuralProxyBaselineCount != 0) {
+	std::fprintf(stderr, "FAIL: first proxy episode milestone\n");
+	return 1;
+    }
+
+    inputs.observationMicroseconds += 10000;
+    /* Append-only source publication may advance the admission inventory and
+     * refresh its transition timestamp, but it retains the diagnostic episode
+     * identity.  The tracker must remain anchored to the original source
+     * episode rather than restarting its milestones. */
+    inputs.episodeStartMicroseconds = inputs.observationMicroseconds;
+    inputs.populationComplete = true;
+    inputs.structuralProxyCount = 8;
+    status = tracker.observe(inputs);
+    if (status.structuralProxyBaselineCount != 10 ||
+	status.halfStructuralProxiesReplaced ||
+	status.elapsedMilliseconds != 110 ||
+	status.firstProxyMilliseconds != 100) {
+	std::fprintf(stderr, "FAIL: structural proxy episode baseline\n");
+	return 1;
+    }
+
+    inputs.observationMicroseconds += 15000;
+    inputs.meshPresented = true;
+    inputs.structuralProxyCount = 6;
+    status = tracker.observe(inputs);
+    if (!status.firstMeshReached || status.firstMeshMilliseconds != 125 ||
+	status.halfStructuralProxiesReplaced) {
+	std::fprintf(stderr, "FAIL: first mesh episode milestone\n");
+	return 1;
+    }
+
+    inputs.observationMicroseconds += 15000;
+    inputs.structuralProxyCount = 5;
+    status = tracker.observe(inputs);
+    if (!status.halfStructuralProxiesReplaced ||
+	status.halfStructuralProxyReplacementMilliseconds != 140) {
+	std::fprintf(stderr, "FAIL: half proxy replacement milestone\n");
+	return 1;
+    }
+
+    inputs.observationMicroseconds += 35000;
+    inputs.stableView = true;
+    status = tracker.observe(inputs);
+    if (!status.stableViewReached || status.stableViewMilliseconds != 175 ||
+	status.elapsedMilliseconds != 175) {
+	std::fprintf(stderr, "FAIL: stable view episode milestone\n");
+	return 1;
+    }
+
+    inputs.episodeRevision++;
+    inputs.observationMicroseconds += 25000;
+    inputs.episodeStartMicroseconds =
+	inputs.observationMicroseconds - 20000;
+    inputs.proxyPresented = false;
+    inputs.structuralProxyCount = 0;
+    inputs.stableView = false;
+    status = tracker.observe(inputs);
+    if (status.elapsedMilliseconds != 20 || status.firstProxyReached ||
+	!status.firstMeshReached || status.firstMeshMilliseconds != 20 ||
+	status.stableViewReached) {
+	std::fprintf(stderr, "FAIL: explicit episode milestone reset\n");
+	return 1;
+    }
+
+    inputs.hasLodState = false;
+    status = tracker.observe(inputs);
+    if (status.elapsedMilliseconds != 0 || status.firstMeshReached) {
+	std::fprintf(stderr, "FAIL: empty episode milestone reset\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
 test_convergence_policy(void)
 {
     using Policy = BObolLodConvergencePolicy;
@@ -3181,6 +3707,25 @@ test_convergence_policy(void)
 	decision.backgroundPending || decision.visualPending ||
 	decision.hasLodState) {
 	std::fprintf(stderr, "FAIL: empty convergence state\n");
+	return 1;
+    }
+
+    /* A window can enter its initial interaction/debounce epoch after an
+     * empty source provider retires.  The interaction, planning probe, and
+     * shared pump are not a scene and must not create a progress episode. */
+    input = baseInput();
+    input.interactive = true;
+    input.controlPending = true;
+    input.progressiveWorkPending = true;
+    decision = policy.evaluate(input);
+    if (decision.phase != Policy::Phase::IDLE ||
+	decision.fraction < 0.999f || decision.fraction > 1.001f ||
+	decision.terminal || decision.terminalError ||
+	decision.outcome != Policy::Outcome::ACTIVE || decision.viewReady ||
+	decision.backgroundPending || !decision.visualPending ||
+	decision.hasLodState) {
+	std::fprintf(stderr,
+	    "FAIL: empty interaction manufactured convergence state\n");
 	return 1;
     }
 
@@ -3282,7 +3827,7 @@ test_convergence_policy(void)
     input.sourcePreparationTotalUnits = 8;
     decision = policy.evaluate(input);
     if (decision.phase != Policy::Phase::PREPARING ||
-	decision.viewReady || !decision.visualPending ||
+	decision.viewReady || !decision.visualPending || !decision.hasLodState ||
 	decision.fraction < 0.487f || decision.fraction > 0.488f) {
 	std::fprintf(stderr, "FAIL: exact source preparation rank\n");
 	return 1;
@@ -3408,7 +3953,7 @@ test_convergence_policy(void)
     input.visibilityCensusComplete = true;
     decision = policy.evaluate(input);
     if (decision.phase != Policy::Phase::REFINING || decision.terminal ||
-	decision.viewReady || !decision.visualPending) {
+	decision.viewReady || !decision.visualPending || !decision.hasLodState) {
 	std::fprintf(stderr,
 	    "FAIL: named control obligation was misreported as terminal\n");
 	return 1;
@@ -4705,6 +5250,36 @@ test_admission_capacity(void)
 	return 1;
     }
 
+    /* A settled empty view has zero active render cost by definition, but a
+     * handoff still needs one exact retained-allocation certificate before it
+     * can release its temporary presentation limits. */
+    policy.reset();
+    cursor.reset();
+    policy.raiseCurrentBudget(200000);
+    policy.requestRetainedReallocation();
+    input = Policy::Inputs();
+    decision = apply_admission_plan(policy, cursor, input);
+    if (decision.retainedAdmission || cursor.retainedAdmission()) {
+	std::fprintf(stderr,
+	    "FAIL: unproven empty view acquired retained allocation\n");
+	return 1;
+    }
+
+    policy.reset();
+    cursor.reset();
+    policy.raiseCurrentBudget(200000);
+    policy.requestRetainedReallocation();
+    input = Policy::Inputs();
+    input.exactEmptyView = true;
+    decision = apply_admission_plan(policy, cursor, input);
+    if (!decision.retainedAdmission ||
+	decision.retainedAdmissionBudget != 200000 ||
+	!cursor.retainedAdmission()) {
+	std::fprintf(stderr,
+	    "FAIL: exact empty view could not certify retained allocation\n");
+	return 1;
+    }
+
     /* A global presentation ceiling can make the exact submitted frame look
      * cheaper than the richer retained population.  Its hard-deadline proof
      * must nevertheless force one full allocation at the demonstrated
@@ -5316,7 +5891,7 @@ test_admission_capacity(void)
 	policy.presentationFramePending() ||
 	BObolLodAdmissionPlanner::presentationPausesSubmission(
 	    false, false, policy.capacityAllocationPending(),
-	    policy.presentationFramePending(), true) ||
+	    policy.presentationFramePending(), false, true) ||
 	cursor.initialized()) {
 	std::fprintf(stderr,
 	    "FAIL: bounded capacity successor budget=%zu measured=%u\n",
@@ -5452,7 +6027,7 @@ test_admission_capacity(void)
 	barrierCandidatePolicy.currentBudget() != barrierCandidateBudget ||
 	BObolLodAdmissionPlanner::presentationPausesSubmission(
 	    false, false, barrierCandidatePolicy.capacityAllocationPending(),
-	    barrierCandidatePolicy.presentationFramePending(), true) ||
+	    barrierCandidatePolicy.presentationFramePending(), false, true) ||
 	barrierCandidateCursor.initialized()) {
 	std::fprintf(stderr,
 	    "FAIL: completed barrier did not release capacity candidate "
@@ -5529,7 +6104,7 @@ test_admission_capacity(void)
 	!presentationGuardPolicy.presentationFramePending() ||
 	!BObolLodAdmissionPlanner::presentationPausesSubmission(
 	    false, false, presentationGuardPolicy.capacityAllocationPending(),
-	    presentationGuardPolicy.presentationFramePending(), true) ||
+	    presentationGuardPolicy.presentationFramePending(), false, true) ||
 	presentationGuardPolicy.capacitySearch().phase() !=
 	    BObolLodCapacitySearchCertificate::Phase::PRESENTING ||
 	presentationGuardCursor.initialized()) {
@@ -6032,6 +6607,17 @@ test_quality_policy(void)
 	std::fprintf(stderr, "FAIL: interactive pixel-error policy\n");
 	return 1;
     }
+    if (Policy::interactiveEntryRenderCostBudget(6000000.0L, 60.0f) !=
+	    90000 ||
+	Policy::interactiveEntryRenderCostBudget(6000000.0L, 0.0f) != 0 ||
+	Policy::interactiveEntryRenderCostBudget(0.0L, 60.0f) != 0 ||
+	Policy::interactiveEntryRenderCostBudget(
+	    std::numeric_limits<long double>::infinity(), 60.0f) != 0 ||
+	Policy::interactiveEntryRenderCostBudget(
+	    6000000.0L, std::numeric_limits<float>::quiet_NaN()) != 0) {
+	std::fprintf(stderr, "FAIL: interactive entry render-cost budget\n");
+	return 1;
+    }
     const float error =
 	Policy::interactivePixelError(66666668ULL, 60.0f);
     if (error < 1.99f || error > 2.01f ||
@@ -6431,17 +7017,19 @@ test_quality_policy(void)
 	return 1;
     }
     if (!BObolLodAdmissionPlanner::presentationPausesSubmission(
-	    true, false, false, false, false) ||
+	    true, false, false, false, false, false) ||
 	!BObolLodAdmissionPlanner::presentationPausesSubmission(
-	    false, false, false, true, false) ||
+	    false, false, false, true, false, false) ||
 	!BObolLodAdmissionPlanner::presentationPausesSubmission(
-	    false, true, false, false, true) ||
+	    false, true, false, false, false, true) ||
+	!BObolLodAdmissionPlanner::presentationPausesSubmission(
+	    false, false, false, false, true, false) ||
 	BObolLodAdmissionPlanner::presentationPausesSubmission(
-	    false, true, false, false, false) ||
+	    false, true, false, false, false, false) ||
 	BObolLodAdmissionPlanner::presentationPausesSubmission(
-	    false, false, false, false, true) ||
+	    false, false, false, false, false, true) ||
 	BObolLodAdmissionPlanner::presentationPausesSubmission(
-	    false, true, true, false, true)) {
+	    false, true, true, false, false, true)) {
 	std::fprintf(stderr,
 	    "FAIL: presentation measurement did not own submission pause\n");
 	return 1;
@@ -6457,7 +7045,7 @@ test_quality_policy(void)
     producerInputs.stableCalibrationPending = true;
     producerInputs.stablePresentationAvailable = true;
     if (!BObolLodAdmissionPlanner::presentationPausesSubmission(
-	    false, true, false, false, true) ||
+	    false, true, false, false, false, true) ||
 	BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(
 	    producerInputs)) {
 	std::fprintf(stderr,
@@ -7367,7 +7955,7 @@ test_view_demand_policy(void)
     if (!policy.demandRefreshActive() ||
 	!policy.demandPassRequired(Policy::DemandPassInputs())) {
 	std::fprintf(stderr,
-	    "FAIL: explicit result-demand refresh did not arm a pass\n");
+	    "FAIL: explicit physical-demand refresh did not arm a pass\n");
 	return 1;
     }
     if (policy.completeDemandRefresh(false, false, false, false, false) ||
@@ -9221,19 +9809,230 @@ test_availability_and_publication(void)
 }
 
 static int
+test_provisional_allocation(void)
+{
+    using Inputs = BObolLodAvailabilityLedger::ProvisionalAllocationInputs;
+    BObolLodAvailabilityLedger availability;
+    Inputs inputs;
+    inputs.providerPending = true;
+    inputs.compactInventoryComplete = true;
+    inputs.serviceStreamIdle = true;
+    inputs.resultDeliveryIdle = true;
+    inputs.coverageCensusComplete = true;
+    inputs.demandCensusCurrent = true;
+    inputs.quietView = true;
+    inputs.activeMeshPopulation = 100;
+    inputs.inventoryRevision = 1;
+    inputs.availabilityRevision = 1;
+    inputs.visibilityRevision = 1;
+    inputs.viewRevision = 1;
+    inputs.policyRevision = 1;
+    inputs.nowMicroseconds = 100;
+
+    Inputs blocked = inputs;
+    blocked.providerPending = false;
+    if (availability.beginProvisionalAllocationIfReady(blocked)) {
+	std::fprintf(stderr,
+	    "FAIL: settled provider entered provisional allocation\n");
+	return 1;
+    }
+    blocked = inputs;
+    blocked.compactInventoryComplete = false;
+    if (availability.beginProvisionalAllocationIfReady(blocked)) {
+	std::fprintf(stderr,
+	    "FAIL: incomplete compact inventory entered provisional allocation\n");
+	return 1;
+    }
+    blocked = inputs;
+    blocked.serviceStreamIdle = false;
+    if (availability.beginProvisionalAllocationIfReady(blocked)) {
+	std::fprintf(stderr,
+	    "FAIL: active service stream entered provisional allocation\n");
+	return 1;
+    }
+    blocked = inputs;
+    blocked.resultDeliveryIdle = false;
+    if (availability.beginProvisionalAllocationIfReady(blocked)) {
+	std::fprintf(stderr,
+	    "FAIL: result publication entered provisional allocation\n");
+	return 1;
+    }
+    blocked = inputs;
+    blocked.coverageCensusComplete = false;
+    if (availability.beginProvisionalAllocationIfReady(blocked)) {
+	std::fprintf(stderr,
+	    "FAIL: incomplete coverage entered provisional allocation\n");
+	return 1;
+    }
+    blocked = inputs;
+    blocked.demandCensusCurrent = false;
+    if (availability.beginProvisionalAllocationIfReady(blocked)) {
+	std::fprintf(stderr,
+	    "FAIL: stale demand entered provisional allocation\n");
+	return 1;
+    }
+    blocked = inputs;
+    blocked.quietView = false;
+    if (availability.beginProvisionalAllocationIfReady(blocked)) {
+	std::fprintf(stderr,
+	    "FAIL: interactive view entered provisional allocation\n");
+	return 1;
+    }
+    blocked = inputs;
+    blocked.activeMeshPopulation = 0;
+    if (availability.beginProvisionalAllocationIfReady(blocked)) {
+	std::fprintf(stderr,
+	    "FAIL: empty mesh population entered provisional allocation\n");
+	return 1;
+    }
+
+    if (!availability.beginProvisionalAllocationIfReady(inputs) ||
+	!availability.provisionalAllocationAttempted() ||
+	availability.provisionalAllocationPopulation() != 100 ||
+	availability.beginProvisionalAllocationIfReady(inputs)) {
+	std::fprintf(stderr,
+	    "FAIL: first provisional allocation was not one-shot\n");
+	return 1;
+    }
+
+    const int64_t interval = BObolLodAvailabilityLedger::
+	provisionalAllocationIntervalMicroseconds();
+
+    /* A closed source can keep publishing immutable worker results after its
+     * source-availability epoch stops changing.  Population metadata alone is
+     * not evidence that any such result was accepted. */
+    inputs.providerPending = false;
+    inputs.activeMeshPopulation = 163;
+    inputs.nowMicroseconds = 100 + interval;
+    if (availability.beginProvisionalAllocationIfReady(inputs)) {
+	std::fprintf(stderr,
+	    "FAIL: closed provider accepted population without a resident edge\n");
+	return 1;
+    }
+
+    availability.noteResidentPopulationAdvanced(63);
+    inputs.residentPopulationRevision =
+	availability.residentPopulationRevision();
+    if (availability.beginProvisionalAllocationIfReady(inputs)) {
+	std::fprintf(stderr,
+	    "FAIL: insignificant resident growth retried allocation\n");
+	return 1;
+    }
+    availability.noteResidentPopulationAdvanced();
+    inputs.residentPopulationRevision =
+	availability.residentPopulationRevision();
+    inputs.activeMeshPopulation = 164;
+    inputs.nowMicroseconds--;
+    if (availability.beginProvisionalAllocationIfReady(inputs)) {
+	std::fprintf(stderr,
+	    "FAIL: provisional allocation ignored its retry interval\n");
+	return 1;
+    }
+    inputs.nowMicroseconds++;
+    inputs.residentGrowthPending = true;
+    inputs.residencyDrainActive = true;
+    if (!availability.beginProvisionalAllocationIfReady(inputs) ||
+	availability.provisionalAllocationPopulation() != 164) {
+	std::fprintf(stderr,
+	    "FAIL: active resident drain could not yield to a checkpoint\n");
+	return 1;
+    }
+
+    availability.completeProvisionalAllocation(inputs);
+    if (availability.provisionalAllocationAttempted() ||
+	availability.provisionalAllocationPopulation() != 164 ||
+	availability.beginProvisionalAllocationIfReady(inputs)) {
+	std::fprintf(stderr,
+	    "FAIL: completed allocation did not retain a quiet baseline\n");
+	return 1;
+    }
+
+    /* Source and presentation metadata cannot impersonate an accepted
+     * resident publication once the provider has closed. */
+    inputs.activeMeshPopulation = 1000;
+    inputs.nowMicroseconds += interval;
+    inputs.availabilityRevision = 2;
+    inputs.visibilityRevision++;
+    if (availability.beginProvisionalAllocationIfReady(inputs)) {
+	std::fprintf(stderr,
+	    "FAIL: metadata changes impersonated resident growth\n");
+	return 1;
+    }
+
+    availability.noteResidentPopulationAdvanced(81);
+    inputs.residentPopulationRevision =
+	availability.residentPopulationRevision();
+    inputs.activeMeshPopulation = 245;
+    if (availability.beginProvisionalAllocationIfReady(inputs)) {
+	std::fprintf(stderr,
+	    "FAIL: relative mesh-growth checkpoint fired early\n");
+	return 1;
+    }
+    availability.noteResidentPopulationAdvanced();
+    inputs.residentPopulationRevision =
+	availability.residentPopulationRevision();
+    inputs.activeMeshPopulation = 246;
+    if (!availability.beginProvisionalAllocationIfReady(inputs)) {
+	std::fprintf(stderr,
+	    "FAIL: relative mesh-growth checkpoint did not fire\n");
+	return 1;
+    }
+
+    availability.resetProvisionalAllocation();
+    if (availability.provisionalAllocationAttempted() ||
+	availability.provisionalAllocationPopulation() != 0 ||
+	availability.residentPopulationRevision() != 0) {
+	std::fprintf(stderr, "FAIL: provisional allocation reset\n");
+	return 1;
+    }
+    inputs = Inputs();
+    inputs.providerPending = true;
+    inputs.compactInventoryComplete = true;
+    inputs.serviceStreamIdle = true;
+    inputs.resultDeliveryIdle = true;
+    inputs.coverageCensusComplete = true;
+    inputs.demandCensusCurrent = true;
+    inputs.quietView = true;
+    inputs.activeMeshPopulation = 1;
+    inputs.nowMicroseconds = 1;
+    if (!availability.beginProvisionalAllocationIfReady(inputs)) {
+	std::fprintf(stderr,
+	    "FAIL: reset ledger did not admit a fresh provider checkpoint\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
 test_availability_growth(void)
 {
     BObolLodAvailabilityLedger availability;
-    if (!BObolLodAvailabilityScheduler::needsIndependentResidentGrowth(
-	    true, false) ||
-	BObolLodAvailabilityScheduler::needsIndependentResidentGrowth(
-	    true, true) ||
-	BObolLodAvailabilityScheduler::needsIndependentResidentGrowth(
-	    false, false) ||
-	BObolLodAvailabilityScheduler::needsIndependentResidentGrowth(
-	    false, true)) {
+    if (!BObolLodAvailabilityScheduler::residentAvailabilityAdvanced(
+	    false, false, -1, 0) ||
+	!BObolLodAvailabilityScheduler::residentAvailabilityAdvanced(
+	    true, false, 4, 4) ||
+	!BObolLodAvailabilityScheduler::residentAvailabilityAdvanced(
+	    true, true, 4, 5) ||
+	BObolLodAvailabilityScheduler::residentAvailabilityAdvanced(
+	    true, true, 4, 4) ||
+	BObolLodAvailabilityScheduler::residentAvailabilityAdvanced(
+	    true, true, 5, 4)) {
 	std::fprintf(stderr,
-	    "FAIL: capacity candidate did not retain suffix-result ownership\n");
+	    "FAIL: unchanged retained residency restarted growth\n");
+	return 1;
+    }
+    if (!BObolLodAvailabilityScheduler::needsIndependentResidentGrowth(
+	    true, false, true) ||
+	BObolLodAvailabilityScheduler::needsIndependentResidentGrowth(
+	    true, true, true) ||
+	BObolLodAvailabilityScheduler::needsIndependentResidentGrowth(
+	    false, false, true) ||
+	BObolLodAvailabilityScheduler::needsIndependentResidentGrowth(
+	    false, true, true) ||
+	BObolLodAvailabilityScheduler::needsIndependentResidentGrowth(
+	    true, false, false)) {
+	std::fprintf(stderr,
+	    "FAIL: capacity/empty-population resident-growth ownership\n");
 	return 1;
     }
     if (!BObolLodAvailabilityScheduler::
@@ -11105,6 +11904,8 @@ main(int argc, char **argv)
 {
     (void)argc;
     bu_setprogname(argv[0]);
+    if (test_parallel_budget())
+	return 1;
     if (test_identity_exhaustion_contract())
 	return 1;
     if (test_exact_sample_identity())
@@ -11167,6 +11968,10 @@ main(int argc, char **argv)
 	return 1;
     if (test_delivery_policy())
 	return 1;
+    if (test_proxy_reason_diagnostics())
+	return 1;
+    if (test_lod_episode_milestones())
+	return 1;
     if (test_convergence_policy())
 	return 1;
     if (test_availability_scheduler())
@@ -11194,6 +11999,8 @@ main(int argc, char **argv)
     if (test_view_quality_history())
 	return 1;
     if (test_availability_and_publication())
+	return 1;
+    if (test_provisional_allocation())
 	return 1;
     if (test_availability_growth())
 	return 1;
