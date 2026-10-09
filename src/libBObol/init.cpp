@@ -21,6 +21,7 @@
 #include "BObol/BImagePlane.h"
 #include "BObol/BImageSource.h"
 #include "BObol/BLineLayerOverlay.h"
+#include "BObol/BLodProgressOverlay.h"
 #include "BObol/BLodMeshShape.h"
 #include "BObol/BLodUpdateAction.h"
 #include "BObol/BMaterialObject.h"
@@ -66,6 +67,7 @@ bobol_init(SoDB::ContextManager *contextManager)
     SoBRLViewportImage::initClass();
     SoBRLImagePlane::initClass();
     SoBRLLineLayerOverlay::initClass();
+    SoBRLLodProgressOverlay::initClass();
     SoBRLMeshShape::initClass();
     SoBRLNavigationGizmo::initClass();
     SoBRLLodMeshShape::initClass();

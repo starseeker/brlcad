@@ -54,6 +54,7 @@ set(LIBBOBOL_ADVANCED_HEADERS
   BImagePlane.h
   BImageSource.h
   BLineLayerOverlay.h
+  BLodProgressOverlay.h
   BLodIdentifiers.h
   BLodMeshShape.h
   BLodRealization.h

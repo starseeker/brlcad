@@ -61,6 +61,7 @@
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BGrid.h"
 #include "BObol/BHUDLabelOverlay.h"
+#include "BObol/BLodProgressOverlay.h"
 #include "BObol/BLineLayerOverlay.h"
 #include "BObol/BViewController.h"
 #include "BObol/BViewLod.h"
@@ -980,6 +981,7 @@ qgcanvas_obol_node_has_drawable_content(SoNode *node)
     if (node->isOfType(SoBRLDatabaseSource::getClassTypeId()) ||
 	node->isOfType(SoBRLLineLayerOverlay::getClassTypeId()) ||
 	node->isOfType(SoBRLHUDLabelOverlay::getClassTypeId()) ||
+	node->isOfType(SoBRLLodProgressOverlay::getClassTypeId()) ||
 	node->isOfType(SoBRLGrid::getClassTypeId()) ||
 	node->isOfType(SoBRLAxes::getClassTypeId()) ||
 	node->isOfType(SoBRLADC::getClassTypeId()))

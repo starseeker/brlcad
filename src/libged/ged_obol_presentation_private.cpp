@@ -21,6 +21,7 @@
 #include "BObol/BImageSource.h"
 #include "BObol/BDisplayEndpoint.h"
 #include "BObol/BLodRealization.h"
+#include "BObol/BLodProgressOverlay.h"
 #include "BObol/BLodService.h"
 #include "BObol/BMeshShape.h"
 #include "BObol/BSceneController.h"
@@ -938,73 +939,31 @@ ged_obol_faceplate_sync_params(GedObolFaceplatePublication &publication,
     publication.replaceHudLabels(name, labels, style);
 }
 
-static std::string
-ged_obol_lod_compact_count(uint64_t value)
-{
-    struct bu_vls text = BU_VLS_INIT_ZERO;
-    if (value >= 1000000)
-	bu_vls_sprintf(&text, "%.1fM",
-	    static_cast<double>(value) / 1000000.0);
-    else if (value >= 1000)
-	bu_vls_sprintf(&text, "%.1fk",
-	    static_cast<double>(value) / 1000.0);
-    else
-	bu_vls_sprintf(&text, "%" PRIu64, value);
-    const std::string result = bu_vls_cstr(&text);
-    bu_vls_free(&text);
-    return result;
-}
-
-static const char *
-ged_obol_lod_producer_stage_description(int stage)
-{
-    switch (stage) {
-	case BOBOL_LOD_PRODUCER_STAGE_ASSET_SERIALIZATION:
-	    return "Waiting for shared LoD asset";
-	case BOBOL_LOD_PRODUCER_STAGE_CACHE_LOOKUP:
-	    return "Checking LoD cache";
-	case BOBOL_LOD_PRODUCER_STAGE_SOURCE_PREPARATION:
-	    return "Preparing source geometry";
-	case BOBOL_LOD_PRODUCER_STAGE_COVERAGE_PREVIEW:
-	    return "Sampling object coverage";
-	case BOBOL_LOD_PRODUCER_STAGE_SOURCE_HASHING:
-	    return "Hashing source geometry";
-	case BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS:
-	    return "Analyzing object bounds";
-	case BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION:
-	    return "Classifying mesh faces";
-	case BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION:
-	    return "Building drawable mesh";
-	case BOBOL_LOD_PRODUCER_STAGE_SPATIAL_CONSTRUCTION:
-	    return "Building spatial LoD pages";
-	case BOBOL_LOD_PRODUCER_STAGE_CACHE_PERSISTENCE:
-	    return "Saving LoD cache";
-	default:
-	    return NULL;
-    }
-}
-
 static void
 ged_obol_faceplate_sync_lod_progress(
 			     GedObolFaceplatePublication &publication,
 			     struct ged_view_context *view_ctx)
 {
+    static const char card_name[] = "_faceplate/lod_progress";
     static const char track_name[] = "_faceplate/lod_progress_track";
     static const char fill_name[] = "_faceplate/lod_progress_fill";
     static const char label_name[] = "_faceplate/lod_progress_label";
-    static constexpr int progressTrackSortOrder = 10;
-    static constexpr int progressFillSortOrder = 11;
-    static constexpr int progressLabelSortOrder = 12;
+    const auto remove_progress = [&]() {
+	publication.remove(card_name);
+	publication.remove(track_name);
+	publication.remove(fill_name);
+	publication.remove(label_name);
+    };
+
     enum ged_view_lod_progress_presentation_mode presentation_mode =
 	GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED;
     if (ged_view_lod_progress_presentation_mode_get(&presentation_mode,
 	    view_ctx) && presentation_mode !=
 	    GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED) {
-	publication.remove(track_name);
-	publication.remove(fill_name);
-	publication.remove(label_name);
+	remove_progress();
 	return;
     }
+
     BObolViewController *controller = publication.viewController();
     struct bv_lod_policy policy;
     bv_lod_policy_init(&policy);
@@ -1014,642 +973,35 @@ ged_obol_faceplate_sync_lod_progress(
     const bool enabled = attachment && policy.policy != BV_LOD_OFF &&
 	(policy.mesh_enabled || policy.csg_enabled);
     if (!enabled) {
-	/* Convergence telemetry may intentionally retain historical calibration
-	 * and resident-memory statistics across a policy transition.  It does not
-	 * make an inactive LoD system user-visible: remove all three retained HUD
-	 * records immediately when the view policy is disabled. */
-	publication.remove(track_name);
-	publication.remove(fill_name);
-	publication.remove(label_name);
+	remove_progress();
 	return;
     }
-    BObolLodConvergenceStatus status;
-    controller->getLodConvergenceStatus(status);
-    const BObolLodProgressDisplayStatus display =
-	status.progressDisplayStatus();
-    const size_t displayedPrimitiveCount =
-	status.presentedPrimitiveCountValid ?
-	status.presentedPrimitiveCount : status.activeFaces;
 
-    if (!display.visible) {
-	publication.remove(track_name);
-	publication.remove(fill_name);
-	publication.remove(label_name);
+    BObolLodConvergenceStatus convergence;
+    controller->getLodConvergenceStatus(convergence);
+    const BObolLodProgressPresentationStatus status =
+	convergence.progressPresentationStatus();
+    if (!status.visible) {
+	remove_progress();
 	return;
     }
-    const bool terminalReady = display.terminalReady;
 
-    int color[3] = {96, 220, 255};
-    struct bu_vls text = BU_VLS_INIT_ZERO;
-    const float displayFraction = status.progressEstimateAvailable ?
-	status.estimatedFraction : status.fraction;
-    const int percent = static_cast<int>(
-	std::floor(std::max(0.0f, std::min(1.0f, displayFraction)) *
-	    100.0f + 0.5f));
-    const size_t pending = status.pendingTasks > SIZE_MAX - status.inFlight ?
-	SIZE_MAX : status.pendingTasks + status.inFlight;
-    const size_t pendingGeometry = pending > SIZE_MAX - status.queuedResults ?
-	SIZE_MAX : pending + status.queuedResults;
-    bool producerStageInTitle = false;
-    const auto append_settling_detail = [&]() {
-	if (status.visibleTargetCount > 0) {
-	    const size_t represented = status.satisfiedPayloadCount >
-		    SIZE_MAX - status.presentedSubpixelOccurrenceCount ?
-		SIZE_MAX : status.satisfiedPayloadCount +
-		    status.presentedSubpixelOccurrenceCount;
-	    bu_vls_printf(&text, "  %s/%s targets resolved",
-		ged_obol_lod_compact_count(std::min(
-		    represented, status.visibleTargetCount)).c_str(),
-		ged_obol_lod_compact_count(
-		    status.visibleTargetCount).c_str());
-	}
-	if (pendingGeometry > 0)
-	    bu_vls_printf(&text, "  %s geometry item%s pending",
-		ged_obol_lod_compact_count(pendingGeometry).c_str(),
-	    pendingGeometry == 1 ? "" : "s");
-    };
-    const auto append_proxy_summary = [&]() {
-	struct PipelineStage {
-	    size_t count;
-	    const char *description;
-	};
-	const PipelineStage stages[] = {
-	    {status.proxyReasons.sourcePreparationOccurrenceCount,
-		"source preparation"},
-	    {status.proxyReasons.visibilityPlanningOccurrenceCount,
-		"visibility planning"},
-	    {status.proxyReasons.geometryPreparationOccurrenceCount,
-		"mesh construction"},
-	    {status.proxyReasons.rendererPreparationOccurrenceCount,
-		"renderer preparation"},
-	    {status.proxyReasons.unclassifiedOccurrenceCount,
-		"proxy classification"}
-	};
-	if (!producerStageInTitle) {
-	    const char *producerStage =
-		ged_obol_lod_producer_stage_description(status.producerStage);
-	    if (producerStage) {
-		bu_vls_printf(&text, "  active stage: %s", producerStage);
-	    } else {
-		for (const PipelineStage &stage : stages) {
-		    if (!stage.count)
-			continue;
-		    bu_vls_printf(&text, "  active stage: %s",
-			stage.description);
-		    break;
-		}
-	    }
-	}
-	const size_t temporary =
-	    status.proxyReasons.temporaryStructuralOccurrenceCount();
-	if (temporary > 0)
-	    bu_vls_printf(&text, "  %s temporary box%s",
-		ged_obol_lod_compact_count(temporary).c_str(),
-		temporary == 1 ? "" : "es");
-	const size_t budgetLimited =
-	    status.proxyReasons.budgetLimitedStructuralOccurrenceCount();
-	if (budgetLimited > 0)
-	    bu_vls_printf(&text, "  %s budget-limited box%s",
-		ged_obol_lod_compact_count(budgetLimited).c_str(),
-		budgetLimited == 1 ? "" : "es");
-	const size_t failed =
-	    status.proxyReasons.terminalFailureOccurrenceCount;
-	if (failed > 0)
-	    bu_vls_printf(&text, "  %s failed box%s",
-		ged_obol_lod_compact_count(failed).c_str(),
-		failed == 1 ? "" : "es");
-	if (status.proxyReasons.intentionalSubpixelOccurrenceCount > 0)
-	    bu_vls_printf(&text, "  %s subpixel point%s",
-		ged_obol_lod_compact_count(status.proxyReasons.
-		    intentionalSubpixelOccurrenceCount).c_str(),
-		status.proxyReasons.intentionalSubpixelOccurrenceCount == 1 ?
-		    "" : "s");
-    };
-    const auto format_producer_stage = [&]() {
-	const char *operation =
-	    ged_obol_lod_producer_stage_description(status.producerStage);
-	if (!operation)
-	    return false;
-	producerStageInTitle = true;
-	color[0] = 96;
-	color[1] = 190;
-	color[2] = 255;
-	if (status.producerStageTotalUnits > 0) {
-	    const uint64_t completed = std::min(
-		status.producerStageCompletedUnits,
-		status.producerStageTotalUnits);
-	    const int stagePercent = static_cast<int>(std::floor(
-		100.0 * static_cast<double>(completed) /
-		static_cast<double>(status.producerStageTotalUnits) + 0.5));
-	    bu_vls_sprintf(&text, "%s %d%%  %s/%s units", operation,
-		stagePercent, ged_obol_lod_compact_count(completed).c_str(),
-		ged_obol_lod_compact_count(
-		    status.producerStageTotalUnits).c_str());
-	} else {
-	    bu_vls_sprintf(&text, "%s", operation);
-	}
-	if (status.activeProducerCount > 1)
-	    bu_vls_printf(&text, "  %s active producers",
-		ged_obol_lod_compact_count(
-		    status.activeProducerCount).c_str());
-	return true;
-    };
-    const auto format_renderer_preparation = [&]() {
-	if (!status.rendererPreparationPreparingTargetCount)
-	    return false;
-	color[0] = 96;
-	color[1] = 190;
-	color[2] = 255;
-	if (status.rendererPreparationTotalUnits > 0) {
-	    const double preparationFraction =
-		static_cast<double>(
-		    std::min(status.rendererPreparationCompletedUnits,
-			status.rendererPreparationTotalUnits)) /
-		static_cast<double>(status.rendererPreparationTotalUnits);
-	    const int preparationPercent = static_cast<int>(std::floor(
-		preparationFraction * 100.0 + 0.5));
-	    const std::string completed = ged_obol_lod_compact_count(
-		status.rendererPreparationCompletedUnits);
-	    const std::string total = ged_obol_lod_compact_count(
-		status.rendererPreparationTotalUnits);
-	    if (status.progressEstimateAvailable) {
-		bu_vls_sprintf(&text,
-		    "Preparing renderer %d%%  view %d%%  %s/%s units",
-		    preparationPercent, percent, completed.c_str(),
-		    total.c_str());
-	    } else {
-		bu_vls_sprintf(&text, "Preparing renderer %d%%  %s/%s units",
-		    preparationPercent, completed.c_str(), total.c_str());
-	    }
-	} else {
-	    if (status.progressEstimateAvailable)
-		bu_vls_sprintf(&text, "Finalizing renderer  view %d%%", percent);
-	    else
-		bu_vls_sprintf(&text, "Finalizing renderer");
-	}
-	if (status.rendererPreparationPreparingTargetCount > 1)
-	    bu_vls_printf(&text, "  %s targets",
-		ged_obol_lod_compact_count(
-		    status.rendererPreparationPreparingTargetCount).c_str());
-	return true;
-    };
-    const auto format_capacity_search = [&]() {
-	if (status.capacitySearchPhase ==
-		BOBOL_LOD_CAPACITY_SEARCH_INACTIVE ||
-	    status.capacitySearchPhase ==
-		BOBOL_LOD_CAPACITY_SEARCH_TERMINAL ||
-	    status.capacitySearchMaximumCandidates == 0)
-	    return false;
-	color[0] = 255;
-	color[1] = 170;
-	color[2] = 64;
-	const char *goal = status.capacitySearchGoal ==
-		BOBOL_LOD_CAPACITY_SEARCH_STATIC ? "static" : "responsive";
-	const unsigned int probe = std::min(
-	    status.capacitySearchTotalMeasuredCandidates + 1,
-	    status.capacitySearchMaximumCandidates);
-	if (status.capacitySearchTotalUnits > 0) {
-	    const uint64_t completedUnits = std::min(
-		status.capacitySearchCompletedUnits,
-		status.capacitySearchTotalUnits);
-	    const int searchPercent = static_cast<int>(std::floor(
-		100.0 * static_cast<double>(completedUnits) /
-		static_cast<double>(status.capacitySearchTotalUnits) + 0.5));
-	    if (status.progressEstimateAvailable) {
-		bu_vls_sprintf(&text,
-		    "Tuning %s detail  search %d%%  view %d%%  probe %u/%u max",
-		    goal, searchPercent, percent, probe,
-		    status.capacitySearchMaximumCandidates);
-	    } else {
-		bu_vls_sprintf(&text,
-		    "Tuning %s detail  search %d%%  probe %u/%u max",
-		    goal, searchPercent, probe,
-		    status.capacitySearchMaximumCandidates);
-	    }
-	} else {
-	    if (status.progressEstimateAvailable) {
-		bu_vls_sprintf(&text,
-		    "Tuning %s detail  view %d%%  probe %u/%u max",
-		    goal, percent, probe,
-		    status.capacitySearchMaximumCandidates);
-	    } else {
-		bu_vls_sprintf(&text,
-		    "Tuning %s detail  probe %u/%u max", goal, probe,
-		    status.capacitySearchMaximumCandidates);
-	    }
-	}
-	if (status.capacitySearchPhase ==
-		BOBOL_LOD_CAPACITY_SEARCH_ALLOCATING) {
-	    bu_vls_printf(&text, "  allocating geometry");
-	} else if (status.capacitySearchPhase ==
-		BOBOL_LOD_CAPACITY_SEARCH_PRESENTING) {
-	    bu_vls_printf(&text, "  presenting");
-	} else if (status.capacitySearchPhase ==
-		BOBOL_LOD_CAPACITY_SEARCH_MEASURING) {
-	    const unsigned int completedSamples =
-		status.capacitySearchSampleLimit >
-			status.capacitySearchSamplesRemaining ?
-		status.capacitySearchSampleLimit -
-			status.capacitySearchSamplesRemaining : 0;
-	    bu_vls_printf(&text, "  sample %u/%u", completedSamples,
-		status.capacitySearchSampleLimit);
-	}
-	bu_vls_printf(&text, "  %s render primitives",
-	    ged_obol_lod_compact_count(displayedPrimitiveCount).c_str());
-	return true;
-    };
-    const auto format_finalization = [&]() {
-	/* Name the authoritative finalization owner regardless of the estimated
-	 * percentage.  One slow software frame may dominate the remaining wall
-	 * time and legitimately begin well before 99 percent.  Capacity search and
-	 * renderer preparation have exact ranks and are formatted above. */
-	color[0] = 255;
-	color[1] = 190;
-	color[2] = 72;
-	const char *operation = NULL;
-	switch (status.controlOwner) {
-	    case BOBOL_LOD_CONTROL_OWNER_INVENTORY:
-		operation = "Verifying visible geometry";
-		break;
-	    case BOBOL_LOD_CONTROL_OWNER_AVAILABILITY:
-		operation = "Loading final geometry";
-		break;
-	    case BOBOL_LOD_CONTROL_OWNER_PUBLICATION:
-		operation = "Publishing final detail";
-		break;
-	    case BOBOL_LOD_CONTROL_OWNER_PLANNING:
-		operation = status.capacitySearchPhase ==
-			BOBOL_LOD_CAPACITY_SEARCH_TERMINAL ?
-		    "Applying tuned detail" : "Allocating visible detail";
-		break;
-	    case BOBOL_LOD_CONTROL_OWNER_PRESENTATION:
-		operation = "Presenting final detail";
-		break;
-	    case BOBOL_LOD_CONTROL_OWNER_HANDOFF:
-		operation = "Finalizing stable view";
-		break;
-	    case BOBOL_LOD_CONTROL_OWNER_COMPACTION:
-		operation = "Optimizing retained detail";
-		break;
-	    default:
-		return false;
-	}
-	bu_vls_sprintf(&text, "%s  %s render primitives", operation,
-	    ged_obol_lod_compact_count(displayedPrimitiveCount).c_str());
-	append_settling_detail();
-	return true;
-    };
-    switch (status.phase) {
-	case BOBOL_LOD_CONVERGENCE_DISCOVERING:
-	    if (status.expectedLeafCount > status.availableLeafCount) {
-		/* The bar is whole-view convergence, not just leaf enumeration.
-		 * Say that explicitly: otherwise 65k/150k beside 18% looks like
-		 * broken arithmetic even though later mesh/refinement work owns the
-		 * remainder of the convergence scale. */
-		if (status.progressEstimateAvailable)
-		    bu_vls_sprintf(&text, "View %d%%  discovering", percent);
-		else
-		    bu_vls_sprintf(&text, "Discovering model");
-		bu_vls_printf(&text, "  %s/%s parts",
-		    ged_obol_lod_compact_count(
-			std::min(status.availableLeafCount,
-			    status.expectedLeafCount)).c_str(),
-		    ged_obol_lod_compact_count(
-			status.expectedLeafCount).c_str());
-	    } else {
-		bu_vls_sprintf(&text, "Discovering model");
-		if (status.availableLeafCount > 0)
-		    bu_vls_printf(&text, "  %s parts found",
-			ged_obol_lod_compact_count(
-			    status.availableLeafCount).c_str());
-	    }
-	    break;
-	case BOBOL_LOD_CONVERGENCE_PREPARING:
-	    color[0] = 96;
-	    color[1] = 190;
-	    color[2] = 255;
-	    if (format_producer_stage()) {
-		break;
-	    } else if (status.sourcePreparationTotalUnits > 0) {
-		const uint64_t completed = std::min(
-		    status.sourcePreparationCompletedUnits,
-		    status.sourcePreparationTotalUnits);
-		const int preparationPercent = static_cast<int>(std::floor(
-		    100.0 * static_cast<double>(completed) /
-		    static_cast<double>(status.sourcePreparationTotalUnits) +
-		    0.5));
-		const char *operation =
-		    completed < status.sourcePreparationTotalUnits ?
-			"Preparing geometry" : "Publishing geometry";
-		const std::string completedText =
-		    ged_obol_lod_compact_count(completed);
-		const std::string totalText = ged_obol_lod_compact_count(
-		    status.sourcePreparationTotalUnits);
-		if (status.progressEstimateAvailable) {
-		    bu_vls_sprintf(&text, "%s %s/%s (%d%%)  view %d%%",
-			operation, completedText.c_str(), totalText.c_str(),
-			preparationPercent, percent);
-		} else {
-		    bu_vls_sprintf(&text, "%s %s/%s (%d%%)", operation,
-			completedText.c_str(), totalText.c_str(),
-			preparationPercent);
-		}
-	    } else {
-		/* Coverage can begin before a producer has enumerated a finite
-		 * representation queue.  Report that state without manufacturing a
-		 * percentage or time estimate. */
-		bu_vls_sprintf(&text, "Preparing LoD data");
-	    }
-	    if (status.sourcePreparationTotalUnits == 0 &&
-		status.expectedLeafCount > 0) {
-		const size_t represented = status.activePayloadCount >
-			SIZE_MAX - status.presentedSubpixelOccurrenceCount ?
-		    SIZE_MAX : status.activePayloadCount +
-			status.presentedSubpixelOccurrenceCount;
-		bu_vls_printf(&text, "  %s/%s parts represented",
-		    ged_obol_lod_compact_count(std::min(
-			represented, status.expectedLeafCount)).c_str(),
-		    ged_obol_lod_compact_count(
-			status.expectedLeafCount).c_str());
-	    }
-	    if (status.sourcePreparationTotalUnits == 0 &&
-		status.sourcePreparationProviderCount > 0)
-		bu_vls_printf(&text, "  %s producer%s",
-		    ged_obol_lod_compact_count(
-			status.sourcePreparationProviderCount).c_str(),
-		    status.sourcePreparationProviderCount == 1 ? "" : "s");
-	    break;
-	case BOBOL_LOD_CONVERGENCE_INTERACTIVE:
-	    color[0] = 255;
-	    color[1] = 205;
-	    color[2] = 72;
-	    if (status.presentedPrimitiveCountValid)
-		bu_vls_sprintf(&text,
-		    "Interactive detail  %s render primitives",
-		    ged_obol_lod_compact_count(
-			status.presentedPrimitiveCount).c_str());
-	    else
-		/* The frame being assembled can establish this count only after
-		 * its HUD has already been traversed.  Omitting the stale retained
-		 * count is truthful and avoids an extra software-renderer frame just
-		 * to repaint telemetry. */
-		bu_vls_strcpy(&text, "Interactive detail");
-	    break;
-	case BOBOL_LOD_CONVERGENCE_CALIBRATING:
-	    if (!format_renderer_preparation() && !format_capacity_search() &&
-		!format_producer_stage() && !format_finalization()) {
-		color[0] = 255;
-		color[1] = 170;
-		color[2] = 64;
-		const std::string primitives =
-		    ged_obol_lod_compact_count(displayedPrimitiveCount);
-		if (status.progressEstimateAvailable) {
-		    bu_vls_sprintf(&text,
-			"Improving view %d%%  target %.0f FPS  %s render primitives",
-			percent,
-			static_cast<double>(controller->getLodStableTargetFps()),
-			primitives.c_str());
-		} else {
-		    bu_vls_sprintf(&text,
-			"Improving view  target %.0f FPS  %s render primitives",
-			static_cast<double>(controller->getLodStableTargetFps()),
-			primitives.c_str());
-		}
-		append_settling_detail();
-	    }
-	    break;
-	case BOBOL_LOD_CONVERGENCE_REFINING:
-	    if (!format_renderer_preparation() && !format_capacity_search() &&
-		!format_producer_stage() && !format_finalization()) {
-		const std::string primitives =
-		    ged_obol_lod_compact_count(displayedPrimitiveCount);
-		if (status.progressEstimateAvailable) {
-		    bu_vls_sprintf(&text,
-			"Improving view %d%%  target %.0f FPS  %s render primitives",
-			percent,
-			static_cast<double>(controller->getLodStableTargetFps()),
-			primitives.c_str());
-		} else {
-		    bu_vls_sprintf(&text,
-			"Improving view  target %.0f FPS  %s render primitives",
-			static_cast<double>(controller->getLodStableTargetFps()),
-			primitives.c_str());
-		}
-		append_settling_detail();
-	    }
-	    break;
-	case BOBOL_LOD_CONVERGENCE_BACKGROUND:
-	    color[0] = 112;
-	    color[1] = 235;
-	    color[2] = 135;
-	    /* The moving segment below reports indeterminate background work.  Call
-	     * the accepted framebuffer usable, not ready: pairing "ready" with a
-	     * visibly incomplete activity bar gives the two HUD elements conflicting
-	     * completion semantics. */
-	    if (pending > 0 || status.queuedCacheWrites > 0) {
-		bu_vls_sprintf(&text,
-		    "Building reusable LoD cache  view usable");
-		const size_t cacheTasks = pending > SIZE_MAX -
-		    status.queuedCacheWrites ? SIZE_MAX : pending +
-		    status.queuedCacheWrites;
-		bu_vls_printf(&text, "  %s background task%s",
-		    ged_obol_lod_compact_count(cacheTasks).c_str(),
-		    cacheTasks == 1 ? "" : "s");
-	    } else {
-		bu_vls_sprintf(&text,
-		    "Optimizing memory/cache  view usable");
-	    }
-	    if (status.residentMeshBytes > 0)
-		bu_vls_printf(&text, "  %.0f MB resident",
-		    static_cast<double>(status.residentMeshBytes) /
-			(1024.0 * 1024.0));
-	    if (status.gpuTrackedBufferBytes > 0)
-		bu_vls_printf(&text, "  %.0f MB GPU buffers",
-		    static_cast<double>(status.gpuTrackedBufferBytes) /
-			(1024.0 * 1024.0));
-	    break;
-	case BOBOL_LOD_CONVERGENCE_ERROR:
-	    color[0] = 255;
-	    color[1] = 90;
-	    color[2] = 80;
-	    bu_vls_sprintf(&text, "View incomplete  %u geometry error%s",
-		status.failedSourceCount,
-		status.failedSourceCount == 1 ? "" : "s");
-	    break;
-	case BOBOL_LOD_CONVERGENCE_IDLE:
-	    color[0] = 112;
-	    color[1] = 235;
-	    color[2] = 135;
-	    if (!terminalReady) {
-		color[0] = 255;
-		color[1] = 205;
-		color[2] = 72;
-		if (status.progressEstimateAvailable)
-		    bu_vls_sprintf(&text, "Finalizing view %d%%", percent);
-		else
-		    bu_vls_sprintf(&text, "Finalizing view");
-		break;
-	    }
-	    if (status.gpuMemoryPressure) {
-		color[0] = 255;
-		color[1] = 170;
-		color[2] = 64;
-		bu_vls_sprintf(&text,
-		    "View usable  GPU-memory-limited  %s render primitives",
-		    ged_obol_lod_compact_count(displayedPrimitiveCount).c_str());
-		if (status.gpuPressureProxyCount > 0)
-		    bu_vls_printf(&text, "  %s pressure proxies",
-			ged_obol_lod_compact_count(
-			    status.gpuPressureProxyCount).c_str());
-	    } else if (status.memoryLimited) {
-		color[0] = 255;
-		color[1] = 170;
-		color[2] = 64;
-		/* This boundary may be a transient task working-set cap rather
-		 * than retained-residency pressure.  Report the common fact without
-		 * incorrectly blaming renderer cadence. */
-		bu_vls_sprintf(&text,
-		    "View usable  memory-limited  %s render primitives",
-		    ged_obol_lod_compact_count(displayedPrimitiveCount).c_str());
-	    } else {
-		bu_vls_sprintf(&text,
-		    status.performanceLimited ?
-			"View usable  responsiveness-limited  %s render primitives" :
-			"View ready  %s render primitives",
-		    ged_obol_lod_compact_count(displayedPrimitiveCount).c_str());
-	    }
-	    break;
-	default:
-	    color[0] = 255;
-	    color[1] = 170;
-	    color[2] = 64;
-	    bu_vls_sprintf(&text, "View status unavailable");
-	    break;
-    }
+    SoBRLLodProgressOverlay *card = new SoBRLLodProgressOverlay;
+    card->ref();
+    card->setStatus(status);
+    card->rebuildGeometry();
+    BObolFeatureStyle style;
+    style.hasVisible = TRUE;
+    style.visible = TRUE;
+    style.hasSelectable = TRUE;
+    style.selectable = FALSE;
+    publication.replaceCustomNode(card_name, card, style);
+    card->unref();
 
-    append_proxy_summary();
-
-    static constexpr uint64_t millisecondsPerSecond = 1000;
-    static constexpr uint64_t secondsPerMinute = 60;
-    if (status.progressEstimateAvailable && !status.terminal &&
-	status.estimatedRemainingMilliseconds >= millisecondsPerSecond &&
-	status.phase != BOBOL_LOD_CONVERGENCE_INTERACTIVE &&
-	status.phase != BOBOL_LOD_CONVERGENCE_BACKGROUND &&
-	status.phase != BOBOL_LOD_CONVERGENCE_ERROR) {
-	const uint64_t remainingSeconds =
-	    (status.estimatedRemainingMilliseconds +
-		millisecondsPerSecond - 1) / millisecondsPerSecond;
-	if (remainingSeconds < secondsPerMinute) {
-	    bu_vls_printf(&text, "  about %" PRIu64 "s remaining",
-		remainingSeconds);
-	} else {
-	    bu_vls_printf(&text,
-		"  about %" PRIu64 "m %" PRIu64 "s remaining",
-		remainingSeconds / secondsPerMinute,
-		remainingSeconds % secondsPerMinute);
-	}
-    }
-
-    static constexpr fastf_t progressBottom = -0.58;
-    static constexpr fastf_t progressHeight = 1.16;
-    static constexpr fastf_t progressX = 0.965;
-    static constexpr fastf_t progressTerminalCapHalfWidth = 0.006;
-    static constexpr fastf_t progressMinimumVisibleFraction = 0.04;
-    const int track_color[3] = {72, 78, 86};
-    std::vector<SbVec3f> points;
-    std::vector<int32_t> commands;
-    points.reserve(4);
-    commands.reserve(4);
-    fastf_t fill_bottom = progressBottom;
-    const fastf_t boundedDisplayFraction = std::max(0.0f,
-	std::min(1.0f, displayFraction));
-    /* Keep a truthful numeric estimate while giving any observed progress a
-     * raster-visible affordance.  Without this floor, an early determinate
-     * estimate produced a subpixel line indistinguishable from a stalled
-     * gray track. */
-    const fastf_t visibleDisplayFraction = boundedDisplayFraction > 0.0f ?
-	std::max(progressMinimumVisibleFraction, boundedDisplayFraction) : 0.0f;
-    fastf_t fill_top = fill_bottom + progressHeight * visibleDisplayFraction;
-    /*
-     * A cold hierarchy does not know its final leaf cardinality until the
-     * database walk completes.  That is active, useful discovery work, but a
-     * determinate fraction would be fiction and the former zero-length fill
-     * made the HUD look stalled for the entire walk (about 24 seconds for the
-     * 150k stress scene).  Animate a bounded segment from observer time until
-     * a real denominator is available.  This is presentation-only state: it
-     * neither advances LoD work nor changes the camera/autoview contract.
-     */
-    const bool indeterminateProgress =
-	(!status.terminal && !status.progressEstimateAvailable) ||
-	(status.phase == BOBOL_LOD_CONVERGENCE_BACKGROUND &&
-	 (pending > 0 || status.queuedCacheWrites > 0));
-    if (indeterminateProgress) {
-	static constexpr uint64_t sweepSteps = 40;
-	static constexpr int64_t sweepIntervalMicroseconds = 100000;
-	const uint64_t step = static_cast<uint64_t>(
-	    bu_gettime() / sweepIntervalMicroseconds) % sweepSteps;
-	const fastf_t unit = step <= sweepSteps / 2 ?
-	    static_cast<fastf_t>(step) /
-		static_cast<fastf_t>(sweepSteps / 2) :
-	    static_cast<fastf_t>(sweepSteps - step) /
-		static_cast<fastf_t>(sweepSteps / 2);
-	static constexpr fastf_t indeterminateSegmentFraction = 0.20;
-	const fastf_t segment =
-	    indeterminateSegmentFraction * progressHeight;
-	fill_bottom = progressBottom + unit * (progressHeight - segment);
-	fill_top = fill_bottom + segment;
-    }
-
-    /* Keep the track and fill geometrically disjoint.  Each is a retained
-     * feature because its update cadence differs, and some GL endpoints may
-     * legitimately traverse the unchanged track after a changing fill.  A
-     * full-width background line could then obscure the narrower fill even
-     * with depth disabled.  The gray record therefore represents only the
-     * unfilled interval(s); at completion a short cap preserves the track's
-     * stable feature identity without covering the full colored bar. */
-    if (fill_bottom > progressBottom) {
-	ged_obol_faceplate_append_line(points, commands, view_ctx,
-	    progressX, progressBottom, progressX, fill_bottom);
-    }
-    const fastf_t progressTop = progressBottom + progressHeight;
-    if (fill_top < progressTop) {
-	ged_obol_faceplate_append_line(points, commands, view_ctx,
-	    progressX, fill_top, progressX, progressTop);
-    }
-    if (points.empty()) {
-	ged_obol_faceplate_append_line(points, commands, view_ctx,
-	    progressX - progressTerminalCapHalfWidth, progressTop,
-	    progressX + progressTerminalCapHalfWidth, progressTop);
-    }
-    BObolFeatureStyle track_style = ged_obol_faceplate_style(
-	track_color, 72, 78, 86, 9);
-    publication.replaceLines(track_name, points, commands, track_style,
-	progressTrackSortOrder);
-
-    points.clear();
-    commands.clear();
-    if (fill_top > fill_bottom) {
-	ged_obol_faceplate_append_line(points, commands, view_ctx,
-	    progressX, fill_bottom, progressX, fill_top);
-	BObolFeatureStyle fill_style = ged_obol_faceplate_style(
-	    color, 96, 220, 255, 7);
-	publication.replaceLines(fill_name, points, commands, fill_style,
-	    progressFillSortOrder);
-    } else {
-	publication.remove(fill_name);
-    }
-
-    std::vector<BObolLabel> labels;
-    labels.push_back(ged_obol_faceplate_label(view_ctx,
-	bu_vls_cstr(&text), 0.10, -0.70, color,
-	96, 220, 255, 12, 0));
-    BObolFeatureStyle label_style = ged_obol_faceplate_style(
-	color, 96, 220, 255, 1);
-    publication.replaceHudLabels(label_name, labels, label_style,
-	progressLabelSortOrder);
-    bu_vls_free(&text);
+    publication.remove(track_name);
+    publication.remove(fill_name);
+    publication.remove(label_name);
 }
-
 static void
 ged_obol_faceplate_sync_scale(GedObolFaceplatePublication &publication,
 			      struct ged_view_context *view_ctx)

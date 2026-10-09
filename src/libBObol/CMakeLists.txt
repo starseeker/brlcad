@@ -38,6 +38,7 @@ set(
   input.cpp
   init.cpp
   line_layer_overlay.cpp
+  lod_progress_overlay.cpp
   lod_admission_policy_private.h
   lod_control_private.h
   lod_capacity_policy_private.h
@@ -267,6 +268,7 @@ cmakefiles(
   input.cpp
   init.cpp
   line_layer_overlay.cpp
+  lod_progress_overlay.cpp
   lod_admission_policy_private.h
   lod_control_private.h
   lod_capacity_policy_private.h

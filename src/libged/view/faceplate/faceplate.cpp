@@ -177,6 +177,47 @@ _fp_cmd_adc(void *ds, int argc, const char **argv)
     return BRLCAD_ERROR;
 }
 
+static int
+_fp_cmd_lod(void *ds, int argc, const char **argv)
+{
+    const char *usage_string = "faceplate [options] lod [0|1]";
+    const char *purpose_string = "Enable or disable the LoD status line.";
+    if (_fp_cmd_msgs(ds, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+
+    argc--; argv++;
+
+    struct _ged_fp_info *gd = (struct _ged_fp_info *)ds;
+    struct ged *gedp = gd->gedp;
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    enum ged_view_lod_progress_presentation_mode mode =
+	GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED;
+    if (!ged_view_lod_progress_presentation_mode_get(&mode, view_ctx)) {
+	bu_vls_printf(gedp->ged_result_str,
+	    "active view has no LoD status presentation policy\n");
+	return BRLCAD_ERROR;
+    }
+
+    if (!argc) {
+	bu_vls_printf(gedp->ged_result_str, "%d",
+	    mode == GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED ? 1 : 0);
+	return BRLCAD_OK;
+    }
+
+    if (argc == 1) {
+	int enabled = 0;
+	if (!_fp_bool_argument(gedp, argv[0], &enabled))
+	    return BRLCAD_ERROR;
+	return ged_view_lod_progress_presentation_mode_set(view_ctx,
+	    enabled ? GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED :
+	    GED_VIEW_LOD_PROGRESS_PRESENTATION_NONE) ?
+	    BRLCAD_OK : BRLCAD_ERROR;
+    }
+
+    bu_vls_printf(gedp->ged_result_str, "Usage: %s\n", usage_string);
+    return BRLCAD_ERROR;
+}
+
 
 int
 _fp_cmd_center_dot(void *ds, int argc, const char **argv)
@@ -523,6 +564,7 @@ const struct bu_cmdtab _fp_cmds[] = {
     { "fb",              _fp_cmd_fb},
     { "grid",            _fp_cmd_grid},
     { "irect",           _fp_cmd_irect},
+    { "lod",             _fp_cmd_lod},
     { "model_axes",      _fp_cmd_model_axes},
     { "params",          _fp_cmd_params},
     { "scale",           _fp_cmd_scale},

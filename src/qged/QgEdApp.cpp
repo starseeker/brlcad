@@ -295,10 +295,9 @@ QgEdApp::QgEdApp(int &argc, char *argv[], const char *db_file, int swrast_mode,
 
     // Create the windows
     w = new QgEdMainWindow(canvas_type, quad_mode);
-    /* Production Qt paints progress without adding HUD geometry to the CAD
-     * traversal.  GUI replay deliberately retains the renderer-neutral form:
-     * its diagnostics inspect the published records and their exact geometry. */
-    w->setNativeLodProgressOverlay(!m_test_mode);
+    /* Keep LoD progress in the retained scene so every display host presents
+     * the same toolkit-neutral card. */
+    w->setNativeLodProgressOverlay(false);
 
     /* GED needs some information and methods from QGED - make
      * those assignment */
