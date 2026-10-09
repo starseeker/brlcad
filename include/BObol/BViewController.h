@@ -271,6 +271,85 @@ enum BObolLodConstraintEvidence {
     BOBOL_LOD_CONSTRAINT_TERMINAL_PROXY = 1u << 5
 };
 
+/** Why a proxy remains in the most recently completed exact CAD frame.
+ *
+ * The corresponding counters in BObolLodProxyReasonStatus are mutually
+ * exclusive.  Several bits may nevertheless be present because different
+ * occurrences can be waiting at different pipeline stages. */
+enum BObolLodProxyReason {
+    BOBOL_LOD_PROXY_REASON_NONE = 0,
+    BOBOL_LOD_PROXY_REASON_SOURCE_PREPARATION = 1u << 0,
+    BOBOL_LOD_PROXY_REASON_VISIBILITY_PLANNING = 1u << 1,
+    BOBOL_LOD_PROXY_REASON_GEOMETRY_PREPARATION = 1u << 2,
+    BOBOL_LOD_PROXY_REASON_RENDERER_PREPARATION = 1u << 3,
+    BOBOL_LOD_PROXY_REASON_INTENTIONAL_SUBPIXEL = 1u << 4,
+    BOBOL_LOD_PROXY_REASON_FRAME_BUDGET = 1u << 5,
+    BOBOL_LOD_PROXY_REASON_MEMORY_BUDGET = 1u << 6,
+    BOBOL_LOD_PROXY_REASON_TERMINAL_FAILURE = 1u << 7,
+    BOBOL_LOD_PROXY_REASON_UNCLASSIFIED = 1u << 8
+};
+
+/** Occurrence counts attributed to user-comprehensible proxy causes.
+ *
+ * Structural boxes with an occurrence-specific terminal or budget result are
+ * attributed first.  Remaining boxes are grouped under the earliest active
+ * global pipeline stage.  Those pipeline-stage counts describe the scene's
+ * current work, not occurrence-specific causality; clients should label them
+ * as an active stage and use the aggregate helpers below when describing the
+ * visible proxy population.  The individual counters remain a partition
+ * rather than a set of overlapping internal-state counters. */
+struct BOBOL_EXPORT BObolLodProxyReasonStatus {
+    uint32_t reasonMask = BOBOL_LOD_PROXY_REASON_NONE;
+    size_t sourcePreparationOccurrenceCount = 0;
+    size_t visibilityPlanningOccurrenceCount = 0;
+    size_t geometryPreparationOccurrenceCount = 0;
+    size_t rendererPreparationOccurrenceCount = 0;
+    size_t intentionalSubpixelOccurrenceCount = 0;
+    size_t frameBudgetOccurrenceCount = 0;
+    size_t memoryBudgetOccurrenceCount = 0;
+    size_t terminalFailureOccurrenceCount = 0;
+    size_t unclassifiedOccurrenceCount = 0;
+
+    /** Structural boxes which still have a foreground preparation or
+     * planning route.  This intentionally excludes terminal budget and
+     * failure representations. */
+    size_t temporaryStructuralOccurrenceCount(void) const
+    {
+	return sourcePreparationOccurrenceCount +
+	    visibilityPlanningOccurrenceCount +
+	    geometryPreparationOccurrenceCount +
+	    rendererPreparationOccurrenceCount +
+	    unclassifiedOccurrenceCount;
+    }
+
+    /** Structural boxes which are the best presentation admitted by the
+     * current frame or memory budget. */
+    size_t budgetLimitedStructuralOccurrenceCount(void) const
+    {
+	return frameBudgetOccurrenceCount + memoryBudgetOccurrenceCount;
+    }
+};
+
+/** Monotonic milestones for the current view/policy convergence episode.
+ *
+ * Durations are measured from the source, view, or policy transition which
+ * began the episode when that transition is known, and otherwise from its
+ * first observation.  The boolean accompanying each duration distinguishes a
+ * milestone reached at zero milliseconds from one which has not yet been
+ * observed. */
+struct BOBOL_EXPORT BObolLodEpisodeStatus {
+    uint64_t elapsedMilliseconds = 0;
+    SbBool firstProxyReached = FALSE;
+    uint64_t firstProxyMilliseconds = 0;
+    SbBool firstMeshReached = FALSE;
+    uint64_t firstMeshMilliseconds = 0;
+    size_t structuralProxyBaselineCount = 0;
+    SbBool halfStructuralProxiesReplaced = FALSE;
+    uint64_t halfStructuralProxyReplacementMilliseconds = 0;
+    SbBool stableViewReached = FALSE;
+    uint64_t stableViewMilliseconds = 0;
+};
+
 /** Current phase of the bounded renderer-capacity search. */
 enum BObolLodCapacitySearchPhase {
     BOBOL_LOD_CAPACITY_SEARCH_INACTIVE = 0,
@@ -324,11 +403,11 @@ struct BOBOL_EXPORT BObolLodProgressDisplayStatus {
 
 /** User-facing progress for one view epoch.
  *
- * The fraction is a cost-weighted estimate of progress toward the current
- * view's terminal, frame-rate-aware presentation.  Structural discovery,
- * initial useful representation, and detailed mesh resolution are distinct
- * work classes: one completed subpixel proxy must not hide a comparatively
- * expensive outstanding mesh.  A value of one never promises that every
+ * The fraction is an observed-time estimate of progress toward the current
+ * view's terminal, frame-rate-aware presentation.  Detailed mesh resolution
+ * is forecast only after several completed presentation cycles reduce one
+ * stable visible frontier; discovery, flat frames, and a new internal quality
+ * tier make it indeterminate again.  A value of one never promises that every
  * source triangle is resident.  Cache writes are reported separately because
  * they may continue after the visible view is ready. */
 struct BOBOL_EXPORT BObolLodConvergenceStatus {
@@ -356,6 +435,11 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     uint64_t visibilityRevision;
     uint64_t viewRevision;
     uint64_t policyRevision;
+    /** Identity of the user-visible source/view/policy convergence episode.
+     * Append-only source publication and internally selected static-quality
+     * tiers do not advance this value.  Presentation clients may therefore
+     * preserve one progress display across internal planning transactions. */
+    uint64_t episodeRevision;
     uint64_t capacityRevision;
     /** View-local retained CAD population revisions which complete the
      * allocation transaction identity beyond the six admission domains. */
@@ -397,6 +481,10 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     size_t satisfiedPayloadCount;
     size_t presentedSubpixelOccurrenceCount;
     size_t presentedStructuralBoxCount;
+    /** Diagnostic-only interpretation of the exact proxy population. */
+    BObolLodProxyReasonStatus proxyReasons;
+    /** Latched, presentation-oriented timing for this convergence episode. */
+    BObolLodEpisodeStatus episode;
     /** Visible occurrence-scoped OBBs installed only after an exact
      * renderer-capacity witness rejected their minimum mesh population. */
     size_t terminalProxyOccurrenceCount;
@@ -409,6 +497,40 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
      * generation.  Such a lease remains a result-delivery witness even when
      * this generation has no task counter of its own. */
     size_t sharedProducerLeases;
+    /** Exact current classification of service tasks which have not acquired
+     * a worker.  Submission-capacity flags explain why no additional cold
+     * producer can enter even when the pending-task counts are zero. */
+    size_t runnableQueuedTasks;
+    size_t dependencyBlockedTasks;
+    size_t transientMemoryBlockedTasks;
+    /** Service workers holding a selected task while waiting for the shared
+     * process-wide CPU execution budget. */
+    size_t cpuAdmissionWaitingTasks;
+    SbBool taskSubmissionCapacityBlocked;
+    SbBool resultSubmissionCapacityBlocked;
+    /** Earliest exact substage among active cold/warm mesh producers.  The
+     * unit counters aggregate only producerStage; producerStageMask records
+     * other simultaneously active stages. */
+    uint32_t producerStageMask;
+    int producerStage;
+    /** Active producer count for every exact stage.  Entry zero is the NONE
+     * sentinel.  Unlike producerStage, this does not hide concurrent later
+     * stages behind the earliest outstanding producer. */
+    size_t producerStageTaskCounts[BOBOL_LOD_PRODUCER_STAGE_COUNT];
+    size_t producerStageTaskCount;
+    size_t activeProducerCount;
+    uint64_t producerStageCompletedUnits;
+    uint64_t producerStageTotalUnits;
+    /** Queue/execution timing for the active generation.  These observations
+     * are diagnostic only and never participate in scheduling decisions. */
+    uint64_t oldestPendingTaskAgeMicroseconds;
+    uint64_t maximumProducerQueueWaitMicroseconds;
+    uint64_t maximumProducerElapsedMicroseconds;
+    uint64_t producerStageElapsedMicroseconds;
+    /** Source population represented by currently active mesh producers. */
+    uint64_t activeProducerSourceFaceCount;
+    uint64_t activeProducerSourcePointCount;
+    uint64_t activeProducerSourceByteCount;
     /** Aggregate exact-target retained-renderer preparation rank.  A stable
      * nonzero signature identifies one immutable work denominator. */
     uint64_t rendererPreparationTargetSignature;
@@ -426,10 +548,34 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
      * The value is meaningful only when presentedPrimitiveCountValid is true. */
     SbBool presentedPrimitiveCountValid;
     size_t presentedPrimitiveCount;
+    /** Total active triangle telemetry, including generated temporary
+     * coverage geometry. */
     size_t activeFaces;
+    /** Active triangles originating in source geometry. */
+    size_t activeSourceFaces;
+    /** Active occurrences with genuine source geometry.  This is the
+     * representation-neutral first-mesh witness used in wire modes as well
+     * as shaded modes. */
+    size_t sourceMeshOccurrenceCount;
+    /** Active occurrences which still include generated cold-start coverage
+     * geometry. */
+    size_t temporaryCoverageOccurrenceCount;
     size_t activeRenderCost;
     size_t renderCostBudget;
+    /** Retained motion throughput and the conservative renderer-only limit
+     * selected when the current interaction epoch began. */
+    double interactiveCalibratedRenderCostPerSecond;
+    size_t interactiveEntryRenderCostBudget;
+    int interactiveEntryProgressiveCutCeiling;
     size_t selectedPresentationCost;
+    /** Retained and completed-frame cost domains used to audit an allocation
+     * certificate.  Point aggregation and view culling can make the exact
+     * presented value smaller than the retained mesh population. */
+    size_t retainedRenderCost;
+    size_t allocationManagedRenderCost;
+    size_t allocationUnmanagedRenderCost;
+    size_t presentedRenderCost;
+    SbBool presentedRenderCostValid;
     size_t certifiedPresentationBudget;
     size_t pixelDemandPresentationCost;
     size_t requestedPresentationBudget;
@@ -445,6 +591,16 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     size_t pointProxyCandidateCount;
     size_t reachablePointProxyCandidateCount;
     size_t selectedPointProxyCount;
+    int progressiveCutCeiling;
+    int maximumActiveProgressiveCut;
+    int maximumNonAggregatedProgressiveCut;
+    SbBool maximumNonAggregatedProgressiveCutKnown;
+    SbBool allocationCertificateCurrent;
+    SbBool allocationCutsApplied;
+    size_t activeAllocationMismatchCount;
+    SbBool allocationPresentationRealized;
+    SbBool presentationFrameExact;
+    SbBool pointProxyProtectionClassified;
     size_t prominentCandidateCount;
     size_t prominentQualityFloorViolationCount;
     double maximumNormalizedVisualError;
@@ -492,8 +648,13 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
      * ranks instead of interpreting estimatedFraction as determinate
      * progress. */
     SbBool progressEstimateAvailable;
+    /** True when the estimate is based on several consecutive completed
+     * refinement frames.  remainingRefinementCycles is meaningful only in
+     * that case. */
+    SbBool progressEstimateRefinementCycleBased;
     float estimatedFraction;
     uint64_t estimatedRemainingMilliseconds;
+    uint64_t estimatedRemainingRefinementCycles;
     float fraction;
     /* terminal means the visible presentation has no remaining foreground
      * obligation.  viewReady includes a truthful constrained terminal view,
@@ -631,9 +792,33 @@ struct BOBOL_EXPORT BObolLodControlTraceState {
      * is distinct from convergence.presentedFrameSerial, which counts host
      * presentations whether or not they satisfy the CAD control contract. */
     uint64_t renderCompletionSerial;
+    /** Remaining deliberate presentation-to-refinement pacing delay.  This
+     * diagnostic clock is sampled with the transition endpoint and does not
+     * participate in control-state identity. */
+    uint64_t refinementCooldownRemainingMicroseconds;
+    /** Exact owner-thread submission state.  These diagnostic fields make a
+     * selective no-progress pass distinguishable from an idle cursor without
+     * recording database identities. */
+    size_t submissionDeltaTargetCount;
+    size_t submissionDeltaPlanCount;
+    size_t submissionDeltaEntryCount;
+    size_t structuralRepairFrontierCount;
+    size_t structuralRepairCoverageCostReservation;
+    size_t submissionPassMissingMeshBudgetBlockedCount;
+    unsigned int lastSubmissionVisitedMeshCount;
+    unsigned int lastSubmissionSubmittedTaskCount;
+    unsigned int lastSubmissionUpdatedCutCount;
+    unsigned int lastSubmissionSkippedMeshCount;
     uint64_t viewRevision;
     uint64_t policyRevision;
     SbBool interactionActive;
+    SbBool structuralRepairTerminalProxy;
+    SbBool structuralRepairPointRelaxation;
+    SbBool submissionPassAdmittedWork;
+    SbBool submissionPassCutAdvanced;
+    SbBool submissionPassRefinementPending;
+    SbBool submissionPassResidencyPending;
+    SbBool submissionPassBudgetBlocked;
 };
 
 /** One named production transition.  Both endpoints are retained so an

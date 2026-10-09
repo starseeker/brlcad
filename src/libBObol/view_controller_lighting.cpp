@@ -1212,6 +1212,8 @@ BObolViewController::getCamera(void) const
 void
 BObolViewController::setViewportRegion(const SbViewportRegion &region)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     this->publishViewportRegion(region, "viewport");
 }
 
@@ -1224,6 +1226,8 @@ BObolViewController::getViewportRegion(void) const
 void
 BObolViewController::setViewportSize(unsigned int width, unsigned int height)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     PreparedViewportPublication publication;
     this->prepareViewportSizePublication(width, height, "viewport-size",
 	publication);

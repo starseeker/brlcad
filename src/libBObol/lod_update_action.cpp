@@ -29,6 +29,7 @@ SoBRLLodUpdateAction::SoBRLLodUpdateAction(void) :
     viewState(NULL),
     matchedResultCount(0),
     appliedResultCount(0),
+    unchangedResultCount(0),
     rejectedResultCount(0),
     currentDemandRetryResultCount(0),
     unmatchedResultCount(0),
@@ -119,6 +120,12 @@ unsigned int
 SoBRLLodUpdateAction::getAppliedResultCount(void) const
 {
     return this->appliedResultCount;
+}
+
+unsigned int
+SoBRLLodUpdateAction::getUnchangedResultCount(void) const
+{
+    return this->unchangedResultCount;
 }
 
 unsigned int
@@ -226,6 +233,7 @@ SoBRLLodUpdateAction::beginTraversal(SoNode *node)
     this->matched.assign(this->results.size(), FALSE);
     this->matchedResultCount = 0;
     this->appliedResultCount = 0;
+    this->unchangedResultCount = 0;
     this->rejectedResultCount = 0;
     this->currentDemandRetryResultCount = 0;
     this->unmatchedResultCount = 0;
@@ -278,6 +286,9 @@ SoBRLLodUpdateAction::databaseSourceAction(SoAction *action, SoNode *node)
 	if (disposition ==
 	    BObolViewLodState::SourceResultDisposition::ACCEPTED)
 	    updateAction->appliedResultCount++;
+	else if (disposition ==
+	    BObolViewLodState::SourceResultDisposition::UNCHANGED)
+	    updateAction->unchangedResultCount++;
 	else {
 	    updateAction->rejectedResultCount++;
 	    if (disposition == BObolViewLodState::SourceResultDisposition::

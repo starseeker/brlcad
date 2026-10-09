@@ -729,6 +729,11 @@ BObolViewController::advanceProgressiveWork(
     }
     this->d->lodAvailabilityLedger.setProviderPendingCount(
 	providerPendingCount);
+    const bool providerSettledEdge =
+	priorProviderPendingCount > 0 && providerPendingCount == 0;
+    const bool releasedProviderParkedDemand =
+	(providerAvailabilityChanged || providerSettledEdge) &&
+	this->d->lodCoveragePolicy.releaseProviderParkedDemandCensus();
     if (providerAvailabilityChanged) {
 	/* The formal availability epoch advances when a producer publishes new
 	 * source representations, not merely when its pending count changes.
@@ -748,9 +753,19 @@ BObolViewController::advanceProgressiveWork(
      * to establish an exact completed-frame witness.  Without this edge the
      * host can correctly observe no more background work and go idle while
      * the last proven presentation still contains boxes. */
-    if (priorProviderPendingCount > 0 && providerPendingCount == 0 &&
-	!providerPresentationChanged)
+    if (providerSettledEdge && !providerPresentationChanged)
 	this->advanceStableLodReducerIfReady();
+    if (releasedProviderParkedDemand && providerSettledEdge &&
+	!this->d->lodStructuralRepair.active() &&
+	!this->d->lodSubmissionPass.active() && !this->isRenderRequested()) {
+	/* The terminal provider edge may reveal that the saved framebuffer is
+	 * not yet exact enough for structural reduction.  Restore the parked
+	 * dense census as the sole fallback owner in that case. */
+	this->d->rewindLodSubmissionCursor();
+	this->d->lodSubmissionPass.beginFresh();
+	this->d->resetRetainedPassAnnotations();
+	this->markProgressiveWorkPending();
+    }
     const uint64_t providerCompleted = this->beginRenderTiming();
     this->d->lastProgressiveProviderTimeNanoseconds =
 	providerCompleted > providerStarted ?
@@ -1092,6 +1107,7 @@ BObolViewController::advanceProgressiveWork(
 	    this->d->lodPointQualityPhase.presentationPending(),
 	    this->d->lodAdmissionEvidence.capacity().capacityAllocationPending(),
 	    this->d->lodAdmissionEvidence.capacity().presentationFramePending(),
+	    this->d->lodAdmissionEvidence.headroom().retryPending(),
 	    controller_has_cad_presentation(this->d->viewAttachment));
     publicationInputs.streamIdle =
 	!BObolLodProducerPolicy::canProduceGeometry(
@@ -1162,6 +1178,8 @@ BObolViewController::advanceProgressiveWork(
 	    this->d->lodAdmissionEvidence.capacity().capacityAllocationPending();
 	producerInputs.capacitySamplePending =
 	    this->d->lodAdmissionEvidence.capacity().presentationFramePending();
+	producerInputs.headroomProbePending =
+	    this->d->lodAdmissionEvidence.headroom().retryPending();
 	producerInputs.stablePresentationAvailable =
 	    controller_has_cad_presentation(this->d->viewAttachment);
 	producerInputs.providerPending = providerPendingCount > 0;
@@ -1218,7 +1236,16 @@ BObolViewController::advanceProgressiveWork(
 void
 BObolViewController::markProgressiveWorkPending(void)
 {
-    BObolLodControlTransitionScope controlTransition(this);
+    /* Result-ready and host-wakeup edges may arrive on a worker thread.  They
+     * must only publish the atomic event kind and the mutex-protected PUMP
+     * level: full transition capture walks Coin scene state and belongs to
+     * the owner thread.  The next owner-thread transition (or journal drain)
+     * records the pending producer edge.  Keeping this path tail-only after
+     * notifyFrameRequest() also lets endpoint teardown safely release an
+     * owned controller as soon as its in-flight callback has returned. */
+    this->d->lodControlPendingExternalEvent.store(
+	BOBOL_LOD_CONTROL_TRANSITION_PRODUCER_PROGRESS,
+	std::memory_order_release);
     this->publishProgressiveWorkPending();
 }
 
@@ -1363,10 +1390,14 @@ BObolViewController::synchronizeProgressiveWorkPending(void)
 		  this->d->lodResidentAdmissionRetryRevision &&
 	      viewState->hasRetriableMemoryLimitedPayload(
 		  residentAdmissionRevision)));
-	return this->d->lodControllerPumpPending(
-		   renderPending, generationWork.queuedResults != 0) ||
-	    this->d->lodAvailabilityLedger.providerPendingCount() > 0 ||
+	const bool controllerPending = this->d->lodControllerPumpPending(
+	    renderPending, generationWork.queuedResults != 0,
+	    viewState && viewState->hasCadPresentationAssemblies());
+	const size_t providerPending =
+	    this->d->lodAvailabilityLedger.providerPendingCount();
+	const bool pending = controllerPending || providerPending > 0 ||
 	    servicePending || sourceInputsPending || residentAdmissionPending;
+	return pending;
     };
 
     if (workPending()) {
