@@ -29,32 +29,19 @@ __BEGIN_DECLS
 
 struct imgstream_fb;
 
-/** Select which presentation layer owns the progressive-LoD indicator. */
-enum ged_view_lod_progress_presentation_mode {
-    /** Publish renderer-neutral retained records (the compatibility default). */
-    GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED = 0,
-    /** Suppress retained records because the attached host paints its own UI. */
-    GED_VIEW_LOD_PROGRESS_PRESENTATION_NATIVE_HOST = 1,
-    /** Suppress both retained and host-native progress presentation. */
-    GED_VIEW_LOD_PROGRESS_PRESENTATION_NONE = 2
-};
-
-/** Read the host-selected progressive-LoD presentation owner. */
+/** Read whether the retained progressive-LoD indicator is visible. */
 GED_EXPORT int
-ged_view_lod_progress_presentation_mode_get(
-	enum ged_view_lod_progress_presentation_mode *mode,
+ged_view_lod_progress_visible_get(int *visible,
 	const struct ged_view_context *view);
 
 /**
- * Select the progressive-LoD presentation owner for one hosted view.
+ * Select whether one hosted view publishes progressive-LoD presentation.
  *
- * Changing away from retained ownership atomically removes only the retained
- * LoD records.  Other faceplate features are unaffected.
+ * Disabling presentation atomically removes only the retained LoD records.
+ * Other faceplate features are unaffected.
  */
 GED_EXPORT int
-ged_view_lod_progress_presentation_mode_set(
-	struct ged_view_context *view,
-	enum ged_view_lod_progress_presentation_mode mode);
+ged_view_lod_progress_visible_set(struct ged_view_context *view, int visible);
 
 /** Ensure the hosted view has a GED-owned display attachment. */
 GED_EXPORT int

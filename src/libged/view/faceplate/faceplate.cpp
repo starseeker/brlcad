@@ -190,9 +190,8 @@ _fp_cmd_lod(void *ds, int argc, const char **argv)
     struct _ged_fp_info *gd = (struct _ged_fp_info *)ds;
     struct ged *gedp = gd->gedp;
     struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
-    enum ged_view_lod_progress_presentation_mode mode =
-	GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED;
-    if (!ged_view_lod_progress_presentation_mode_get(&mode, view_ctx)) {
+    int enabled = 1;
+    if (!ged_view_lod_progress_visible_get(&enabled, view_ctx)) {
 	bu_vls_printf(gedp->ged_result_str,
 	    "active view has no LoD status presentation policy\n");
 	return BRLCAD_ERROR;
@@ -200,17 +199,15 @@ _fp_cmd_lod(void *ds, int argc, const char **argv)
 
     if (!argc) {
 	bu_vls_printf(gedp->ged_result_str, "%d",
-	    mode == GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED ? 1 : 0);
+	    enabled);
 	return BRLCAD_OK;
     }
 
     if (argc == 1) {
-	int enabled = 0;
+	enabled = 0;
 	if (!_fp_bool_argument(gedp, argv[0], &enabled))
 	    return BRLCAD_ERROR;
-	return ged_view_lod_progress_presentation_mode_set(view_ctx,
-	    enabled ? GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED :
-	    GED_VIEW_LOD_PROGRESS_PRESENTATION_NONE) ?
+	return ged_view_lod_progress_visible_set(view_ctx, enabled) ?
 	    BRLCAD_OK : BRLCAD_ERROR;
     }
 

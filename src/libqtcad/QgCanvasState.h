@@ -36,22 +36,17 @@
 #include <atomic>
 #include <climits>
 #include <chrono>
-#include <cmath>
 #include <cstring>
 #include <exception>
 #include <optional>
 #include <utility>
 #include <vector>
 #include <QImage>
-#include <QColor>
-#include <QFontMetrics>
 #include <QOpenGLContext>
 #include <QOpenGLExtraFunctions>
 #include <QOpenGLFramebufferObject>
 #include <QOpenGLWidget>
-#include <QPainter>
 #include <QSize>
-#include <QString>
 #include <QTimer>
 #include <QWidget>
 
@@ -93,69 +88,6 @@ qgcanvas_flip_vertical(const QImage &image)
     return image.mirrored(false, true);
 #endif
 }
-
-struct QgLodProgressOverlayState {
-    bool visible = false;
-    bool determinate = false;
-    bool etaVisible = false;
-    bool refinementCycleBased = false;
-    bool terminalReady = false;
-    bool resourceLimited = false;
-    int percent = 0;
-    uint64_t estimatedRemainingMilliseconds = 0;
-    uint64_t remainingRefinementCycles = 0;
-    unsigned int animationStep = 0;
-    int displayClass = BOBOL_LOD_PROGRESS_DISPLAY_IDLE;
-    QString title;
-    QString detail;
-
-    bool operator==(const QgLodProgressOverlayState &other) const
-    {
-	return this->visible == other.visible &&
-	    this->determinate == other.determinate &&
-	    this->etaVisible == other.etaVisible &&
-	    this->refinementCycleBased == other.refinementCycleBased &&
-	    this->terminalReady == other.terminalReady &&
-	    this->resourceLimited == other.resourceLimited &&
-	    this->percent == other.percent &&
-	    this->estimatedRemainingMilliseconds ==
-		other.estimatedRemainingMilliseconds &&
-	    this->remainingRefinementCycles ==
-		other.remainingRefinementCycles &&
-	    this->animationStep == other.animationStep &&
-	    this->displayClass == other.displayClass &&
-	    this->title == other.title && this->detail == other.detail;
-    }
-
-    bool operator!=(const QgLodProgressOverlayState &other) const
-    {
-	return !(*this == other);
-    }
-};
-
-/* Presentation-only continuity for the native progress card.  Controller
- * convergence remains authoritative; this state smooths qualified estimates
- * and volatile diagnostics without carrying a percentage across a loss of
- * forecast confidence. */
-struct QgLodProgressPresentationState {
-    bool active = false;
-    bool determinateLatched = false;
-    bool etaVisible = false;
-    bool finalizing = false;
-    uint64_t episodeRevision = 0;
-    uint64_t lastElapsedMilliseconds = 0;
-    uint64_t etaConfidenceStartMilliseconds = 0;
-    uint64_t smoothedCompletionMilliseconds = 0;
-    uint64_t stableDetailUpdateMilliseconds = 0;
-    unsigned int consistentEtaSamples = 0;
-    int percentFloor = 0;
-    QString stableDetail;
-
-    void reset(void)
-    {
-	*this = QgLodProgressPresentationState();
-    }
-};
 
 /**
  * Plain-data struct that consolidates the private state shared between
@@ -206,10 +138,6 @@ struct QgCanvasState {
     bool   lod_progress_idle_tail_pending = false;
     std::atomic<bool> frame_request_dispatch_queued {false};
     BObolLodProgressDisplayStatus lod_progress_last_state;
-    QgLodProgressOverlayState lod_progress_overlay;
-    QgLodProgressPresentationState lod_progress_presentation;
-    bool lod_progress_overlay_dirty = false;
-    std::chrono::steady_clock::time_point lod_progress_overlay_last_request;
     bool   software_backend = false;
     QWidget *frame_request_widget = nullptr;
     SoOffscreenRenderer *offscreen_renderer = nullptr;
@@ -348,8 +276,6 @@ static inline void qgcanvas_queue_obol_progressive_update(
     QgCanvasState &s, QWidget *w);
 static inline bool qgcanvas_sync_obol_lod_progress(
     QgCanvasState &s, bool allowPeriodic = true);
-static inline void qgcanvas_request_lod_overlay_repaint(
-    QgCanvasState &s, QWidget *w, bool force = false);
 
 /* LoD completion may be reported by a worker thread after Qt's last paint.
  * Marshal the controller's frame request back to the canvas event loop so a
@@ -415,8 +341,7 @@ qgcanvas_obol_frame_requested(void *user_data, const char *UNUSED(reason))
 		w->repaint();
 	    else
 		w->update();
-	} else
-	    qgcanvas_request_lod_overlay_repaint(*s, w);
+	}
 	qgcanvas_queue_obol_progressive_update(*s, w);
     }, Qt::QueuedConnection);
 }
@@ -501,8 +426,7 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 		 * idle tail here used to strand both that request and a refinement
 		 * barrier waiting for the following completed frame. */
 		qgcanvas_queue_obol_progressive_update(s, w);
-	    } else
-		qgcanvas_request_lod_overlay_repaint(s, w, true);
+	    }
 	    return;
 	}
 
@@ -559,8 +483,7 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 		w->repaint();
 	    } else
 		w->update();
-	} else
-	    qgcanvas_request_lod_overlay_repaint(s, w);
+	}
 	/* A synchronous software paint may consume the last render request and
 	 * publish IDLE before returning here.  Arm the no-work tail from the
 	 * post-presentation snapshot, not the stale pre-paint work record. */
@@ -904,9 +827,6 @@ qgcanvas_destroy_obol(QgCanvasState &s, QWidget *w)
     s.presentation_staging_fbo = nullptr;
     s.last_completed_software_frame = QImage();
     s.last_presented_software_frame = QImage();
-    s.lod_progress_overlay = QgLodProgressOverlayState();
-    s.lod_progress_presentation.reset();
-    s.lod_progress_overlay_dirty = false;
     if (s.obol && s.obol->getRenderContextManager() ==
 	    qgcanvas_obol_context_manager(s.software_backend))
 	s.obol->setRenderContextManager(NULL);
@@ -942,11 +862,6 @@ qgcanvas_bind_obol_controller(QgCanvasState &s, QWidget *w,
     s.faceplate_sync_initialized = false;
     s.lod_progress_last_state = BObolLodProgressDisplayStatus();
     s.lod_progress_last_publish =
-	std::chrono::steady_clock::time_point();
-    s.lod_progress_overlay = QgLodProgressOverlayState();
-    s.lod_progress_presentation.reset();
-    s.lod_progress_overlay_dirty = true;
-    s.lod_progress_overlay_last_request =
 	std::chrono::steady_clock::time_point();
     /* A completed image belongs to its controller/scene identity.  Never
      * preserve pixels from the previous endpoint through a borrowed-controller
@@ -1183,765 +1098,12 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
     s.faceplate_sync_initialized = true;
 }
 
-static inline QString
-qgcanvas_lod_overlay_count(uint64_t value)
-{
-    if (value >= 1000000)
-	return QStringLiteral("%1M").arg(
-	    static_cast<double>(value) / 1000000.0, 0, 'f', 1);
-    if (value >= 1000)
-	return QStringLiteral("%1k").arg(
-	    static_cast<double>(value) / 1000.0, 0, 'f', 1);
-    return QString::number(static_cast<qulonglong>(value));
-}
-
-static inline QString
-qgcanvas_lod_overlay_duration(uint64_t microseconds)
-{
-    if (microseconds >= 1000000)
-	return QStringLiteral("%1 s").arg(
-	    static_cast<double>(microseconds) / 1000000.0, 0, 'f', 1);
-    if (microseconds >= 1000)
-	return QStringLiteral("%1 ms").arg(
-	    static_cast<double>(microseconds) / 1000.0, 0, 'f',
-	    microseconds < 10000 ? 1 : 0);
-    return QStringLiteral("<1 ms");
-}
-
-static inline QString
-qgcanvas_lod_overlay_bytes(uint64_t bytes)
-{
-    static constexpr double kibibyte = 1024.0;
-    static constexpr double mebibyte = 1024.0 * kibibyte;
-    static constexpr double gibibyte = 1024.0 * mebibyte;
-    if (bytes >= static_cast<uint64_t>(gibibyte))
-	return QStringLiteral("%1 GiB").arg(
-	    static_cast<double>(bytes) / gibibyte, 0, 'f', 1);
-    if (bytes >= static_cast<uint64_t>(mebibyte))
-	return QStringLiteral("%1 MiB").arg(
-	    static_cast<double>(bytes) / mebibyte, 0, 'f', 1);
-    if (bytes >= static_cast<uint64_t>(kibibyte))
-	return QStringLiteral("%1 KiB").arg(
-	    static_cast<double>(bytes) / kibibyte, 0, 'f', 1);
-    return QStringLiteral("%1 B").arg(static_cast<qulonglong>(bytes));
-}
-
-static inline QString
-qgcanvas_lod_producer_stage_short_title(int stage)
-{
-    switch (stage) {
-	case BOBOL_LOD_PRODUCER_STAGE_ASSET_SERIALIZATION:
-	    return QStringLiteral("waiting for shared asset");
-	case BOBOL_LOD_PRODUCER_STAGE_CACHE_LOOKUP:
-	    return QStringLiteral("checking cache");
-	case BOBOL_LOD_PRODUCER_STAGE_SOURCE_PREPARATION:
-	    return QStringLiteral("preparing source");
-	case BOBOL_LOD_PRODUCER_STAGE_COVERAGE_PREVIEW:
-	    return QStringLiteral("sampling coverage");
-	case BOBOL_LOD_PRODUCER_STAGE_SOURCE_HASHING:
-	    return QStringLiteral("hashing");
-	case BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS:
-	    return QStringLiteral("analyzing bounds");
-	case BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION:
-	    return QStringLiteral("classifying");
-	case BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION:
-	    return QStringLiteral("building meshes");
-	case BOBOL_LOD_PRODUCER_STAGE_SPATIAL_CONSTRUCTION:
-	    return QStringLiteral("building pages");
-	case BOBOL_LOD_PRODUCER_STAGE_CACHE_PERSISTENCE:
-	    return QStringLiteral("saving cache");
-	default:
-	    return QString();
-    }
-}
-
-static inline QgLodProgressOverlayState
-qgcanvas_lod_progress_overlay_state(
-    const BObolLodConvergenceStatus &status)
-{
-    QgLodProgressOverlayState result;
-    const BObolLodProgressDisplayStatus display =
-	status.progressDisplayStatus();
-    result.visible = display.visible != FALSE;
-    if (!result.visible)
-	return result;
-
-    result.terminalReady = display.terminalReady != FALSE;
-    result.resourceLimited = status.memoryLimited != FALSE ||
-	status.gpuMemoryPressure != FALSE;
-    result.displayClass = display.publicationClass;
-    const float fraction = status.progressEstimateAvailable ?
-	status.estimatedFraction : status.fraction;
-    result.percent = static_cast<int>(std::floor(
-	std::max(0.0f, std::min(1.0f, fraction)) * 100.0f + 0.5f));
-    result.determinate = status.progressEstimateAvailable != FALSE;
-    result.refinementCycleBased =
-	status.progressEstimateRefinementCycleBased != FALSE;
-    result.estimatedRemainingMilliseconds =
-	status.estimatedRemainingMilliseconds;
-    result.remainingRefinementCycles =
-	status.estimatedRemainingRefinementCycles;
-    static constexpr uint64_t animationIntervalMilliseconds = 100;
-    static constexpr unsigned int animationStepCount = 20;
-    result.animationStep = static_cast<unsigned int>(
-	(status.episode.elapsedMilliseconds / animationIntervalMilliseconds) %
-	animationStepCount);
-    if (status.terminalError || status.failedSourceCount > 0) {
-	result.title = QStringLiteral("Geometry preparation failed");
-    } else if (status.terminal &&
-	(status.memoryLimited || status.gpuMemoryPressure)) {
-	result.title = QStringLiteral("Detail limited by memory");
-    } else if (status.terminal && status.performanceLimited) {
-	result.title = QStringLiteral("Detail limited by frame budget");
-    } else if (status.episode.stableViewReached && !status.terminal) {
-	result.title = QStringLiteral("Finalizing view");
-    } else if (!status.episode.firstMeshReached && !status.terminal) {
-	result.title = QStringLiteral("Preparing geometry");
-	result.displayClass = BOBOL_LOD_PROGRESS_DISPLAY_PREPARING;
-    } else if (display.publicationClass ==
-	BOBOL_LOD_PROGRESS_DISPLAY_INTERACTIVE) {
-	result.title = QStringLiteral("Adjusting view detail");
-	result.displayClass = BOBOL_LOD_PROGRESS_DISPLAY_INTERACTIVE;
-    } else if (status.sourcePreparationPending ||
-	status.activeProducerCount > 0) {
-	result.title = QStringLiteral("Preparing geometry");
-	result.displayClass = BOBOL_LOD_PROGRESS_DISPLAY_PREPARING;
-    } else {
-	result.title = QStringLiteral("Refining visible detail");
-	result.displayClass = BOBOL_LOD_PROGRESS_DISPLAY_SETTLING;
-    }
-
-    const size_t temporaryProxyCount =
-	status.proxyReasons.temporaryStructuralOccurrenceCount();
-    const size_t budgetProxyCount =
-	status.proxyReasons.budgetLimitedStructuralOccurrenceCount();
-    const size_t failedProxyCount =
-	status.proxyReasons.terminalFailureOccurrenceCount;
-    const auto appendDetail = [&](const QString &text) {
-	if (text.isEmpty())
-	    return;
-	if (!result.detail.isEmpty())
-	    result.detail += QStringLiteral(" | ");
-	result.detail += text;
-    };
-    /* Put latency first so it survives elision on a narrow canvas.  Queue
-     * age means no worker has acquired that task; producer and stage time
-     * mean actual source work is in progress. */
-    if (status.oldestPendingTaskAgeMicroseconds > 0)
-	appendDetail(QStringLiteral("oldest queued %1").arg(
-	    qgcanvas_lod_overlay_duration(
-		status.oldestPendingTaskAgeMicroseconds)));
-    if (status.runnableQueuedTasks > 0)
-	appendDetail(QStringLiteral("%1 ready for worker").arg(
-	    qgcanvas_lod_overlay_count(status.runnableQueuedTasks)));
-    if (status.dependencyBlockedTasks > 0)
-	appendDetail(QStringLiteral("%1 waiting on prerequisites").arg(
-	    qgcanvas_lod_overlay_count(status.dependencyBlockedTasks)));
-    if (status.transientMemoryBlockedTasks > 0)
-	appendDetail(QStringLiteral("%1 waiting on transient memory").arg(
-	    qgcanvas_lod_overlay_count(status.transientMemoryBlockedTasks)));
-    if (status.cpuAdmissionWaitingTasks > 0)
-	appendDetail(QStringLiteral("%1 waiting for CPU").arg(
-	    qgcanvas_lod_overlay_count(status.cpuAdmissionWaitingTasks)));
-    if (status.taskSubmissionCapacityBlocked)
-	appendDetail(QStringLiteral("producer task slots full"));
-    if (status.resultSubmissionCapacityBlocked)
-	appendDetail(QStringLiteral("result queue slots full"));
-    if (status.sourcePreparationPending &&
-	status.sourcePreparationTotalUnits >
-	    status.sourcePreparationCompletedUnits) {
-	const uint64_t remaining = status.sourcePreparationTotalUnits -
-	    status.sourcePreparationCompletedUnits;
-	appendDetail(QStringLiteral("%1 source preparation%2 remaining")
-	    .arg(qgcanvas_lod_overlay_count(remaining))
-	    .arg(remaining == 1 ? QString() : QStringLiteral("s")));
-    }
-    if (status.activeProducerCount > 0 &&
-	status.producerStageElapsedMicroseconds > 0)
-	appendDetail(QStringLiteral("current stage %1").arg(
-	    qgcanvas_lod_overlay_duration(
-		status.producerStageElapsedMicroseconds)));
-    if (status.activeProducerCount > 0 &&
-	status.maximumProducerElapsedMicroseconds >
-	    status.producerStageElapsedMicroseconds &&
-	status.maximumProducerElapsedMicroseconds -
-	    status.producerStageElapsedMicroseconds > 100000)
-	appendDetail(QStringLiteral("active %1 total").arg(
-	    qgcanvas_lod_overlay_duration(
-		status.maximumProducerElapsedMicroseconds)));
-    if (status.maximumProducerQueueWaitMicroseconds >= 100000)
-	appendDetail(QStringLiteral("queued %1 before start").arg(
-	    qgcanvas_lod_overlay_duration(
-		status.maximumProducerQueueWaitMicroseconds)));
-    if (status.activeProducerSourceFaceCount > 0 ||
-	status.activeProducerSourcePointCount > 0 ||
-	status.activeProducerSourceByteCount > 0) {
-	QString sourceSize;
-	if (status.activeProducerSourceFaceCount > 0)
-	    sourceSize = QStringLiteral("%1 faces").arg(
-		qgcanvas_lod_overlay_count(
-		    status.activeProducerSourceFaceCount));
-	else if (status.activeProducerSourcePointCount > 0)
-	    sourceSize = QStringLiteral("%1 points").arg(
-		qgcanvas_lod_overlay_count(
-		    status.activeProducerSourcePointCount));
-	if (status.activeProducerSourceByteCount > 0) {
-	    if (!sourceSize.isEmpty())
-		sourceSize += QStringLiteral(", ");
-	    sourceSize += qgcanvas_lod_overlay_bytes(
-		status.activeProducerSourceByteCount);
-	}
-	appendDetail(QStringLiteral("source %1").arg(sourceSize));
-    }
-    if (status.producerStage != BOBOL_LOD_PRODUCER_STAGE_NONE) {
-	QString stageDistribution;
-	const int producerStageOrder[] = {
-	    BOBOL_LOD_PRODUCER_STAGE_ASSET_SERIALIZATION,
-	    BOBOL_LOD_PRODUCER_STAGE_CACHE_LOOKUP,
-	    BOBOL_LOD_PRODUCER_STAGE_SOURCE_PREPARATION,
-	    BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS,
-	    BOBOL_LOD_PRODUCER_STAGE_COVERAGE_PREVIEW,
-	    BOBOL_LOD_PRODUCER_STAGE_SOURCE_HASHING,
-	    BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION,
-	    BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION,
-	    BOBOL_LOD_PRODUCER_STAGE_SPATIAL_CONSTRUCTION,
-	    BOBOL_LOD_PRODUCER_STAGE_CACHE_PERSISTENCE
-	};
-	for (int stage : producerStageOrder) {
-	    const size_t count = status.producerStageTaskCounts[stage];
-	    if (!count)
-		continue;
-	    if (!stageDistribution.isEmpty())
-		stageDistribution += QStringLiteral(", ");
-	    stageDistribution += QStringLiteral("%1 %2")
-		.arg(static_cast<qulonglong>(count))
-		.arg(qgcanvas_lod_producer_stage_short_title(stage));
-	}
-	if (!stageDistribution.isEmpty())
-	    appendDetail(stageDistribution);
-	if (status.producerStageTotalUnits > 0) {
-	    const uint64_t completed = std::min(
-		status.producerStageCompletedUnits,
-		status.producerStageTotalUnits);
-	    const int stagePercent = static_cast<int>(std::floor(
-		100.0 * static_cast<double>(completed) /
-		static_cast<double>(status.producerStageTotalUnits) + 0.5));
-	    appendDetail(QStringLiteral("%1 %2% (%3/%4)")
-		.arg(qgcanvas_lod_producer_stage_short_title(
-		    status.producerStage))
-		.arg(stagePercent)
-		.arg(qgcanvas_lod_overlay_count(
-		    completed))
-		.arg(qgcanvas_lod_overlay_count(
-		    status.producerStageTotalUnits)));
-	}
-    }
-    const size_t unresolvedDetailCount = status.activePayloadCount >
-	status.satisfiedPayloadCount ?
-	status.activePayloadCount - status.satisfiedPayloadCount : 0;
-    if (!status.terminal && unresolvedDetailCount > 0 &&
-	status.renderCostBudget > 0 && status.retainedRenderCost > 0) {
-	const long double percent = 100.0L * static_cast<long double>(
-	    status.retainedRenderCost) /
-	    static_cast<long double>(status.renderCostBudget);
-	if (percent >= 95.0L) {
-	    const unsigned int rounded = static_cast<unsigned int>(
-		std::min<long double>(999.0L, std::floor(percent + 0.5L)));
-	    appendDetail(QStringLiteral("render budget %1% allocated").arg(
-		rounded));
-	}
-    }
-    if (status.temporaryCoverageOccurrenceCount > 0)
-	appendDetail(QStringLiteral("%1 temporary coverage %2").arg(
-	    qgcanvas_lod_overlay_count(
-		status.temporaryCoverageOccurrenceCount),
-	    status.temporaryCoverageOccurrenceCount == 1 ?
-		QStringLiteral("preview") : QStringLiteral("previews")));
-    if (status.activeSourceFaces > 0)
-	appendDetail(QStringLiteral("%1 source %2").arg(
-	    qgcanvas_lod_overlay_count(status.activeSourceFaces),
-	    status.activeSourceFaces == 1 ? QStringLiteral("triangle") :
-		QStringLiteral("triangles")));
-    else if (status.sourceMeshOccurrenceCount > 0)
-	appendDetail(QStringLiteral("%1 source %2").arg(
-	    qgcanvas_lod_overlay_count(status.sourceMeshOccurrenceCount),
-	    status.sourceMeshOccurrenceCount == 1 ? QStringLiteral("mesh") :
-		QStringLiteral("meshes")));
-    if (temporaryProxyCount > 0)
-	appendDetail(QStringLiteral("%1 %2").arg(
-	    qgcanvas_lod_overlay_count(temporaryProxyCount),
-	    temporaryProxyCount == 1 ? QStringLiteral("temporary box") :
-		QStringLiteral("temporary boxes")));
-    if (budgetProxyCount > 0)
-	appendDetail(QStringLiteral("%1 %2").arg(
-	    qgcanvas_lod_overlay_count(budgetProxyCount),
-	    budgetProxyCount == 1 ? QStringLiteral("budget-limited box") :
-		QStringLiteral("budget-limited boxes")));
-    if (failedProxyCount > 0)
-	appendDetail(QStringLiteral("%1 failed %2").arg(
-	    qgcanvas_lod_overlay_count(failedProxyCount),
-	    failedProxyCount == 1 ? QStringLiteral("box") :
-		QStringLiteral("boxes")));
-    const size_t subpixelProxyCount =
-	status.proxyReasons.intentionalSubpixelOccurrenceCount;
-    if (subpixelProxyCount > 0)
-	appendDetail(QStringLiteral("%1 subpixel %2").arg(
-	    qgcanvas_lod_overlay_count(subpixelProxyCount),
-	    subpixelProxyCount == 1 ? QStringLiteral("point") :
-		QStringLiteral("points")));
-    if (!status.episode.firstMeshReached && !status.terminal)
-	appendDetail(QStringLiteral("first mesh pending"));
-    if (status.failedSourceCount > 0)
-	appendDetail(QStringLiteral("%1 failed source%2")
-	    .arg(static_cast<qulonglong>(status.failedSourceCount))
-	    .arg(status.failedSourceCount == 1 ? QString() :
-		QStringLiteral("s")));
-    if (status.terminal &&
-	(status.memoryLimited || status.gpuMemoryPressure ||
-	 status.performanceLimited))
-	appendDetail(QStringLiteral("best available under current budget"));
-    if (status.episode.elapsedMilliseconds >= 1000)
-	appendDetail(QStringLiteral("%1 s elapsed").arg(
-	    static_cast<double>(status.episode.elapsedMilliseconds) / 1000.0,
-	    0, 'f', 1));
-    return result;
-}
-
-static inline QString
-qgcanvas_lod_eta_text(uint64_t milliseconds)
-{
-    static constexpr uint64_t millisecondsPerSecond = 1000;
-    static constexpr uint64_t secondsPerMinute = 60;
-    const uint64_t seconds = milliseconds / millisecondsPerSecond +
-	(milliseconds % millisecondsPerSecond != 0 ? 1 : 0);
-    if (seconds <= 5)
-	return QStringLiteral("under 5 s remaining");
-    if (seconds < secondsPerMinute) {
-	static constexpr uint64_t secondsPerBucket = 10;
-	const uint64_t rounded = ((seconds + secondsPerBucket / 2) /
-	    secondsPerBucket) * secondsPerBucket;
-	return QStringLiteral("about %1 s remaining").arg(
-	    static_cast<qulonglong>(std::max<uint64_t>(secondsPerBucket,
-		rounded)));
-    }
-    const uint64_t minutes = (seconds + secondsPerMinute / 2) /
-	secondsPerMinute;
-    return QStringLiteral("about %1 min remaining").arg(
-	static_cast<qulonglong>(std::max<uint64_t>(1, minutes)));
-}
-
-/* An ETA is intentionally unavailable while the visible frontier grows or a
- * completed frame fails to reduce it.  Preserve the useful exact facts in
- * that state instead of replacing them with an uninformative "estimating"
- * message.  These are current work counts, not a prediction, so they remain
- * truthful even when budget rebalancing makes the count non-monotonic. */
-static inline QString
-qgcanvas_lod_unestimated_work_text(
-    const BObolLodConvergenceStatus &status)
-{
-    if (status.sourcePreparationPending &&
-	status.sourcePreparationTotalUnits >
-	    status.sourcePreparationCompletedUnits) {
-	const uint64_t remaining = status.sourcePreparationTotalUnits -
-	    status.sourcePreparationCompletedUnits;
-	return QStringLiteral("%1 source preparation%2 remaining")
-	    .arg(qgcanvas_lod_overlay_count(remaining))
-	    .arg(remaining == 1 ? QString() : QStringLiteral("s"));
-    }
-
-    if (status.rendererPreparationRemainingUnits > 0)
-	return QStringLiteral("%1 renderer work units remaining").arg(
-	    qgcanvas_lod_overlay_count(
-		status.rendererPreparationRemainingUnits));
-
-    const size_t unresolved = status.activePayloadCount >
-	status.satisfiedPayloadCount ?
-	status.activePayloadCount - status.satisfiedPayloadCount : 0;
-    if (unresolved > 0)
-	return QStringLiteral("%1 visible item%2 still refining")
-	    .arg(qgcanvas_lod_overlay_count(unresolved))
-	    .arg(unresolved == 1 ? QString() : QStringLiteral("s"));
-
-    if (status.inFlight > 0)
-	return QStringLiteral("%1 geometry task%2 running")
-	    .arg(qgcanvas_lod_overlay_count(status.inFlight))
-	    .arg(status.inFlight == 1 ? QString() : QStringLiteral("s"));
-    if (status.queuedResults > 0)
-	return QStringLiteral("%1 completed result%2 awaiting publication")
-	    .arg(qgcanvas_lod_overlay_count(status.queuedResults))
-	    .arg(status.queuedResults == 1 ? QString() : QStringLiteral("s"));
-    if (status.pendingTasks > 0)
-	return QStringLiteral("%1 geometry task%2 queued")
-	    .arg(qgcanvas_lod_overlay_count(status.pendingTasks))
-	    .arg(status.pendingTasks == 1 ? QString() : QStringLiteral("s"));
-    if (status.queuedCacheWrites > 0)
-	return QStringLiteral("%1 cache write%2 pending")
-	    .arg(qgcanvas_lod_overlay_count(status.queuedCacheWrites))
-	    .arg(status.queuedCacheWrites == 1 ? QString() :
-		QStringLiteral("s"));
-    if (status.budgetCalibrationPending ||
-	status.pointProxyCalibrationPending ||
-	status.stablePointProxyCalibrationPending)
-	return QStringLiteral("Measuring the render budget");
-    if (status.residentGrowthReallocationPending)
-	return QStringLiteral("Rebalancing newly available detail");
-    if (status.stablePresentationHandoffPending)
-	return QStringLiteral("Reconciling the final presentation");
-    if (status.publicationFramePending)
-	return QStringLiteral("Publishing refined geometry");
-    if (status.refinementFramePending)
-	return QStringLiteral("Waiting for a refinement frame");
-    return QString();
-}
-
-static inline QgLodProgressOverlayState
-qgcanvas_stabilize_lod_progress_overlay(
-    QgLodProgressPresentationState &presentation,
-    const BObolLodConvergenceStatus &status,
-    QgLodProgressOverlayState overlay)
-{
-    const uint64_t elapsed = status.episode.elapsedMilliseconds;
-    const bool newEpisode = !presentation.active ||
-	presentation.episodeRevision != status.episodeRevision ||
-	elapsed < presentation.lastElapsedMilliseconds;
-    if (!overlay.visible) {
-	presentation.reset();
-	return overlay;
-    }
-    if (newEpisode) {
-	presentation.reset();
-	presentation.active = true;
-	presentation.episodeRevision = status.episodeRevision;
-    }
-    presentation.lastElapsedMilliseconds = elapsed;
-    const bool wasDeterminate = presentation.determinateLatched;
-
-    /* The estimator is exact about whether all work ranks are measurable, but
-     * that bit can legitimately drop for a few samples while control moves
-     * between otherwise continuous ranks.  Once an episode has a measured
-     * fraction, retain its monotonic floor and reserve the final five percent
-     * for exact presentation/certificate reconciliation. */
-    if (overlay.terminalReady) {
-	overlay.determinate = true;
-	overlay.percent = 100;
-	presentation.determinateLatched = true;
-	presentation.percentFloor = 100;
-    } else if (status.episode.stableViewReached) {
-	/* The first visually stable frame is an exact milestone even when the
-	 * remaining certificate/presentation work has no measurable rank.  Move
-	 * into the reserved final five percent instead of leaving a low or
-	 * indeterminate bar beside the "Finalizing view" title. */
-	static constexpr int minimumFinalizingPercent = 95;
-	static constexpr int maximumFinalizingPercent = 99;
-	const int candidate = overlay.determinate ? overlay.percent :
-	    minimumFinalizingPercent;
-	presentation.percentFloor = std::min(maximumFinalizingPercent,
-	    std::max(presentation.percentFloor,
-		std::max(minimumFinalizingPercent, candidate)));
-	overlay.determinate = true;
-	overlay.percent = presentation.percentFloor;
-	presentation.determinateLatched = true;
-    } else if (overlay.determinate) {
-	static constexpr int maximumUnstablePercent = 95;
-	overlay.percent = std::min(maximumUnstablePercent, overlay.percent);
-	presentation.percentFloor = std::max(
-	    presentation.percentFloor, overlay.percent);
-	overlay.percent = presentation.percentFloor;
-	presentation.determinateLatched = true;
-    } else {
-	/* An unqualified cycle forecast means the frontier is still changing or
-	 * completed frames have stopped improving.  Showing the predecessor's
-	 * percentage in that state looks authoritative while conveying no useful
-	 * progress, so return to honest indeterminate activity. */
-	presentation.determinateLatched = false;
-	presentation.percentFloor = 0;
-    }
-    if (overlay.determinate)
-	overlay.animationStep = 0;
-
-    /* Estimate a completion timestamp rather than smoothing the raw remaining
-     * duration.  A coherent estimate then counts down naturally.  Large target
-     * changes reset confidence instead of displaying an implausible jump from
-     * "under a second" to many seconds. */
-    static constexpr uint64_t etaMinimumConfidenceMilliseconds = 1500;
-    static constexpr uint64_t etaMinimumToleranceMilliseconds = 2000;
-    const bool etaSampleUsable = status.progressEstimateAvailable &&
-	status.estimatedRemainingMilliseconds > 0 &&
-	!status.terminal;
-    if (etaSampleUsable) {
-	const uint64_t remaining = status.estimatedRemainingMilliseconds;
-	const uint64_t candidateCompletion = remaining > UINT64_MAX - elapsed ?
-	    UINT64_MAX : elapsed + remaining;
-	if (!presentation.smoothedCompletionMilliseconds) {
-	    presentation.smoothedCompletionMilliseconds = candidateCompletion;
-	    presentation.etaConfidenceStartMilliseconds = elapsed;
-	    presentation.consistentEtaSamples = 1;
-	    presentation.etaVisible = false;
-	} else {
-	    const uint64_t priorCompletion =
-		presentation.smoothedCompletionMilliseconds;
-	    const uint64_t difference = candidateCompletion > priorCompletion ?
-		candidateCompletion - priorCompletion :
-		priorCompletion - candidateCompletion;
-	    const uint64_t priorRemaining = priorCompletion > elapsed ?
-		priorCompletion - elapsed : 0;
-	    const uint64_t tolerance = std::max(
-		etaMinimumToleranceMilliseconds, priorRemaining / 3);
-	    if (difference > tolerance) {
-		presentation.smoothedCompletionMilliseconds =
-		    candidateCompletion;
-		presentation.etaConfidenceStartMilliseconds = elapsed;
-		presentation.consistentEtaSamples = 1;
-		presentation.etaVisible = false;
-	    } else {
-		if (candidateCompletion >= priorCompletion)
-		    presentation.smoothedCompletionMilliseconds =
-			priorCompletion +
-			(candidateCompletion - priorCompletion) / 4;
-		else
-		    presentation.smoothedCompletionMilliseconds =
-			priorCompletion -
-			(priorCompletion - candidateCompletion) / 4;
-		if (presentation.consistentEtaSamples < UINT_MAX)
-		    presentation.consistentEtaSamples++;
-		presentation.etaVisible =
-		    presentation.consistentEtaSamples >= 3 &&
-		    elapsed >= presentation.etaConfidenceStartMilliseconds &&
-		    elapsed - presentation.etaConfidenceStartMilliseconds >=
-			etaMinimumConfidenceMilliseconds;
-	    }
-	}
-    } else {
-	presentation.etaVisible = false;
-	presentation.smoothedCompletionMilliseconds = 0;
-	presentation.consistentEtaSamples = 0;
-    }
-
-    overlay.etaVisible = presentation.etaVisible &&
-	presentation.smoothedCompletionMilliseconds > elapsed;
-    overlay.estimatedRemainingMilliseconds = overlay.etaVisible ?
-	presentation.smoothedCompletionMilliseconds - elapsed : 0;
-
-    const QString unestimatedWork =
-	qgcanvas_lod_unestimated_work_text(status);
-    const QString pendingEstimate = status.progressEstimateAvailable ?
-	QStringLiteral("estimating remaining time") : unestimatedWork;
-    QString progressDetail;
-    if (overlay.terminalReady) {
-	progressDetail = QStringLiteral("Stable");
-    } else if (overlay.determinate) {
-	progressDetail = QStringLiteral("%1%").arg(overlay.percent);
-	if (status.episode.stableViewReached || overlay.percent >= 95) {
-	    progressDetail += QStringLiteral(" | finalizing");
-	    if (overlay.etaVisible)
-		progressDetail += overlay.refinementCycleBased &&
-		    overlay.remainingRefinementCycles > 0 ?
-		    QStringLiteral(" | ~%1 refinement cycle%2, %3")
-			.arg(static_cast<qulonglong>(
-			    overlay.remainingRefinementCycles))
-			.arg(overlay.remainingRefinementCycles == 1 ?
-			    QString() : QStringLiteral("s"))
-			.arg(qgcanvas_lod_eta_text(
-			    overlay.estimatedRemainingMilliseconds)) :
-		    QStringLiteral(" | ") + qgcanvas_lod_eta_text(
-			overlay.estimatedRemainingMilliseconds);
-	    else
-		progressDetail += QStringLiteral(" | ") + pendingEstimate;
-	} else if (overlay.etaVisible)
-	    progressDetail += overlay.refinementCycleBased &&
-		overlay.remainingRefinementCycles > 0 ?
-		QStringLiteral(" | ~%1 refinement cycle%2, %3")
-		    .arg(static_cast<qulonglong>(
-			overlay.remainingRefinementCycles))
-		    .arg(overlay.remainingRefinementCycles == 1 ?
-			QString() : QStringLiteral("s"))
-		    .arg(qgcanvas_lod_eta_text(
-			overlay.estimatedRemainingMilliseconds)) :
-		QStringLiteral(" | ") + qgcanvas_lod_eta_text(
-		    overlay.estimatedRemainingMilliseconds);
-	else
-	    progressDetail += QStringLiteral(" | ") + pendingEstimate;
-    } else {
-	progressDetail = unestimatedWork;
-    }
-    if (!overlay.detail.isEmpty()) {
-	if (!progressDetail.isEmpty())
-	    progressDetail += QStringLiteral(" | ");
-	progressDetail += overlay.detail;
-    }
-
-    /* Keep volatile queue/stage diagnostics useful without changing the text
-     * on every 100 ms animation sample.  Terminal and episode transitions are
-     * published immediately. */
-    static constexpr uint64_t detailRefreshMilliseconds = 750;
-    const bool finalizingChanged = presentation.finalizing !=
-	(status.episode.stableViewReached != FALSE);
-    const bool refreshDetail = newEpisode ||
-	presentation.stableDetail.isEmpty() || overlay.terminalReady ||
-	status.terminalError || finalizingChanged ||
-	(etaSampleUsable && presentation.consistentEtaSamples == 1) ||
-	wasDeterminate != presentation.determinateLatched ||
-	elapsed < presentation.stableDetailUpdateMilliseconds ||
-	elapsed - presentation.stableDetailUpdateMilliseconds >=
-	    detailRefreshMilliseconds;
-    if (refreshDetail) {
-	presentation.stableDetail = progressDetail;
-	presentation.stableDetailUpdateMilliseconds = elapsed;
-    }
-    presentation.finalizing = status.episode.stableViewReached != FALSE;
-    overlay.detail = presentation.stableDetail;
-    return overlay;
-}
-
-static inline bool
-qgcanvas_native_lod_progress_selected(const QgCanvasState &s)
-{
-    if (!s.v)
-	return true;
-    struct ged_view_context *view_ctx = ged_view_context_from_bv(s.v);
-    if (!ged_view_context_owner(view_ctx))
-	return true;
-    enum ged_view_lod_progress_presentation_mode mode =
-	GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED;
-    return ged_view_lod_progress_presentation_mode_get(&mode, view_ctx) &&
-	mode == GED_VIEW_LOD_PROGRESS_PRESENTATION_NATIVE_HOST;
-}
-
-static inline void
-qgcanvas_request_lod_overlay_repaint(QgCanvasState &s, QWidget *w,
-	bool force)
-{
-    if (!w || !s.lod_progress_overlay_dirty)
-	return;
-    const std::chrono::steady_clock::time_point now =
-	std::chrono::steady_clock::now();
-    static constexpr std::chrono::milliseconds minimumInterval(100);
-    const bool urgent = force || !s.lod_progress_overlay.visible;
-    if (!urgent &&
-	s.lod_progress_overlay_last_request.time_since_epoch().count() != 0 &&
-	now - s.lod_progress_overlay_last_request < minimumInterval)
-	return;
-    s.lod_progress_overlay_last_request = now;
-    w->update();
-}
-
-static inline QColor
-qgcanvas_lod_overlay_color(const QgLodProgressOverlayState &overlay)
-{
-    /* A frame-budget-limited view is complete and usable even though its
-     * terminal notice remains visible.  Give that state the same green
-     * completion cue as the retained HUD so it cannot look like frozen
-     * orange refinement.  Resource limits remain warnings. */
-    if (overlay.terminalReady && !overlay.resourceLimited &&
-	overlay.displayClass == BOBOL_LOD_PROGRESS_DISPLAY_IDLE)
-	return QColor(112, 235, 135);
-
-    switch (overlay.displayClass) {
-	case BOBOL_LOD_PROGRESS_DISPLAY_PREPARING:
-	case BOBOL_LOD_PROGRESS_DISPLAY_DISCOVERING:
-	    return QColor(96, 190, 255);
-	case BOBOL_LOD_PROGRESS_DISPLAY_ERROR:
-	case BOBOL_LOD_PROGRESS_DISPLAY_TERMINAL_ERROR:
-	    return QColor(255, 90, 80);
-	case BOBOL_LOD_PROGRESS_DISPLAY_BACKGROUND:
-	    return QColor(112, 235, 135);
-	default:
-	    return QColor(255, 190, 72);
-    }
-}
-
-static inline void
-qgcanvas_paint_lod_progress_overlay(QgCanvasState &s, QWidget *w,
-	QPainter &painter)
-{
-    s.lod_progress_overlay_dirty = false;
-    const QgLodProgressOverlayState &overlay = s.lod_progress_overlay;
-    if (!w || !overlay.visible || !qgcanvas_native_lod_progress_selected(s))
-	return;
-
-    static constexpr int margin = 12;
-    static constexpr int horizontalPadding = 10;
-    static constexpr int verticalPadding = 7;
-    static constexpr int textGap = 3;
-    static constexpr int progressHeight = 4;
-    static constexpr int cornerRadius = 5;
-    static constexpr int preferredCardWidth = 320;
-    QFont titleFont = w->font();
-    titleFont.setBold(true);
-    QFont detailFont = w->font();
-    detailFont.setPointSizeF(std::max(7.0,
-	detailFont.pointSizeF() > 0.0 ? detailFont.pointSizeF() - 1.0 : 8.0));
-    const QFontMetrics titleMetrics(titleFont);
-    const QFontMetrics detailMetrics(detailFont);
-    const int maximumWidth = std::max(1, w->width() - 2 * margin);
-    const int boxWidth = std::min(maximumWidth,
-	preferredCardWidth);
-    const int boxHeight = 2 * verticalPadding + titleMetrics.height() +
-	textGap + detailMetrics.height() + textGap + progressHeight;
-    const QRectF box(margin, margin, boxWidth, boxHeight);
-    const QColor accent = qgcanvas_lod_overlay_color(overlay);
-
-    painter.save();
-    painter.resetTransform();
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(18, 22, 28, 220));
-    painter.drawRoundedRect(box, cornerRadius, cornerRadius);
-
-    const int availableTextWidth = std::max(1,
-	boxWidth - 2 * horizontalPadding);
-    painter.setFont(titleFont);
-    painter.setPen(QColor(245, 247, 250));
-    painter.drawText(margin + horizontalPadding,
-	margin + verticalPadding + titleMetrics.ascent(),
-	titleMetrics.elidedText(overlay.title, Qt::ElideRight,
-	    availableTextWidth));
-    int progressTop = margin + verticalPadding + titleMetrics.height();
-    painter.setFont(detailFont);
-    painter.setPen(QColor(205, 211, 219));
-    const int detailTop = progressTop + textGap;
-    painter.drawText(margin + horizontalPadding,
-	detailTop + detailMetrics.ascent(),
-	detailMetrics.elidedText(overlay.detail, Qt::ElideRight,
-	    availableTextWidth));
-    progressTop = detailTop + detailMetrics.height();
-    progressTop += textGap;
-    const QRectF track(margin + horizontalPadding, progressTop,
-	availableTextWidth, progressHeight);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(72, 78, 86));
-    painter.drawRoundedRect(track, progressHeight / 2.0,
-	progressHeight / 2.0);
-    QRectF fill = track;
-    if (overlay.determinate) {
-	fill.setWidth(track.width() *
-	    static_cast<qreal>(overlay.percent) / 100.0);
-    } else {
-	static constexpr qreal segmentFraction = 0.25;
-	static constexpr unsigned int halfSweep = 10;
-	const unsigned int step = overlay.animationStep <= halfSweep ?
-	    overlay.animationStep : 2 * halfSweep - overlay.animationStep;
-	const qreal offset = static_cast<qreal>(step) /
-	    static_cast<qreal>(halfSweep) *
-	    track.width() * (1.0 - segmentFraction);
-	fill.setLeft(track.left() + offset);
-	fill.setWidth(track.width() * segmentFraction);
-    }
-    if (fill.width() > 0.0) {
-	painter.setBrush(accent);
-	painter.drawRoundedRect(fill, progressHeight / 2.0,
-	    progressHeight / 2.0);
-    }
-    painter.restore();
-}
-
 /**
  * Synchronize LoD progress on state transitions and at a bounded cadence
- * while work is active.  A retained owner publishes scene records; a native
- * Qt owner only updates the lightweight widget overlay.  This helper is
- * deliberately usable both immediately before a presentation and after its
- * timing feedback.  The post-render call must permit state transitions only:
- * a periodic retained HUD mutation there would request its own next frame.
+ * while work is active.  This helper is deliberately usable both immediately
+ * before a presentation and after its timing feedback.  The post-render call
+ * must permit state transitions only: a periodic retained HUD mutation there
+ * would request its own next frame.
  */
 static inline bool
 qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
@@ -1957,14 +1119,6 @@ qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
     s.obol->getLodConvergenceStatus(lod_status);
     const BObolLodProgressDisplayStatus display =
 	lod_status.progressDisplayStatus();
-    const QgLodProgressOverlayState overlay =
-	qgcanvas_stabilize_lod_progress_overlay(
-	    s.lod_progress_presentation, lod_status,
-	    qgcanvas_lod_progress_overlay_state(lod_status));
-    if (overlay != s.lod_progress_overlay) {
-	s.lod_progress_overlay = overlay;
-	s.lod_progress_overlay_dirty = true;
-    }
     const bool lod_first =
 	s.lod_progress_last_publish.time_since_epoch().count() == 0;
     /* The host-work latch may clear one coordinator transition before the
@@ -1984,12 +1138,10 @@ qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
     s.lod_progress_last_publish = now;
     struct ged_view_context *view_ctx = ged_view_context_from_bv(s.v);
     struct ged *gedp = ged_view_context_owner(view_ctx);
-    enum ged_view_lod_progress_presentation_mode presentation_mode =
-	GED_VIEW_LOD_PROGRESS_PRESENTATION_NATIVE_HOST;
+    int progressVisible = 1;
     const bool retained = gedp &&
-	(!ged_view_lod_progress_presentation_mode_get(&presentation_mode,
-	    view_ctx) || presentation_mode ==
-	    GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED);
+	(!ged_view_lod_progress_visible_get(&progressVisible, view_ctx) ||
+	 progressVisible);
     if (retained)
 	(void)ged_view_lod_progress_sync(gedp, view_ctx);
     return retained;
@@ -2015,8 +1167,7 @@ qgcanvas_set_obol_pointer_interaction(
     if (qgcanvas_sync_obol_lod_progress(s, false)) {
 	qgcanvas_request_obol_render_if_idle(s, "lod-interaction-hud");
 	w->update();
-    } else
-	qgcanvas_request_lod_overlay_repaint(s, w, true);
+    }
     qgcanvas_queue_obol_progressive_update(s, w);
 }
 
@@ -2049,8 +1200,6 @@ qgcanvas_frame_complete(QgCanvasState &s, QWidget *w)
     if (s.obol->isRenderRequested() &&
 	(lod_publish || s.obol->hasPendingLodRefinementFrame()))
 	w->update();
-    else
-	qgcanvas_request_lod_overlay_repaint(s, w, true);
 
     /* Presenting a frame is itself a control transition.  The completed
      * timing sample may open capacity-search, handoff, or demand-rescan work

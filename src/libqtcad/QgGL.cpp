@@ -157,10 +157,6 @@ return;
     if (rendered)
 	qgcanvas_frame_complete(*d, this);
     qgcanvas_queue_obol_progressive_update(*d, this);
-    {
-	QPainter painter(this);
-	qgcanvas_paint_lod_progress_overlay(*d, this, painter);
-    }
     /*
      * A test recorder must observe the framebuffer already produced by this
      * paint.  QOpenGLWidget::grabFramebuffer() from frameSwapped can request

@@ -207,7 +207,6 @@ return;
 	{
 	    QPainter painter(this);
 	    painter.fillRect(e->rect(), Qt::black);
-	    qgcanvas_paint_lod_progress_overlay(*d, this, painter);
 	}
 	QImage black(qgcanvas_render_size(this), QImage::Format_RGBA8888);
 	black.fill(Qt::black);
@@ -236,7 +235,6 @@ return;
 	painter.translate(0, height());
 	painter.scale(1, -1);
 	painter.drawImage(QPoint(0, 0), image);
-	qgcanvas_paint_lod_progress_overlay(*d, this, painter);
     }
     d->last_presented_software_frame = image;
     d->presented_feature_revision = imageFeatureRevision;
@@ -257,11 +255,6 @@ return;
 	 * orientation to diagnostic observers. */
 	QImage presented = qgcanvas_flip_vertical(image);
 	presented.setDevicePixelRatio(devicePixelRatioF());
-	{
-	    QPainter presentedPainter(&presented);
-	    qgcanvas_paint_lod_progress_overlay(
-		*d, this, presentedPainter);
-	}
 	emit frame_presented(presented);
     }
 }

@@ -69,8 +69,7 @@ struct ged_view_host_record {
 	gedp(NULL),
 	display_endpoint(NULL),
 	owns_display_endpoint(0),
-	lod_progress_presentation_mode(
-	    GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED),
+	lod_progress_visible(1),
 	callbacks(NULL),
 	update_callback(NULL),
 	update_callback_data(NULL),
@@ -84,8 +83,7 @@ struct ged_view_host_record {
     struct ged *gedp;
     bobol_display_endpoint_t *display_endpoint;
     int owns_display_endpoint;
-    enum ged_view_lod_progress_presentation_mode
-	lod_progress_presentation_mode;
+    int lod_progress_visible;
     struct bu_ptbl *callbacks;
     ged_view_context_update_callback_t update_callback;
     void *update_callback_data;
@@ -880,34 +878,30 @@ ged_view_context_display_endpoint_ensure(struct ged_view_context *view_ctx)
 }
 
 extern "C" GED_EXPORT int
-ged_view_lod_progress_presentation_mode_get(
-	enum ged_view_lod_progress_presentation_mode *mode,
+ged_view_lod_progress_visible_get(int *visible,
 	const struct ged_view_context *view_ctx)
 {
     const struct ged_view_host_record *record =
 	ged_view_host_record_find(view_ctx);
-    if (!mode || !record)
+    if (!visible || !record)
 	return 0;
-    *mode = record->lod_progress_presentation_mode;
+    *visible = record->lod_progress_visible;
     return 1;
 }
 
 extern "C" GED_EXPORT int
-ged_view_lod_progress_presentation_mode_set(
-	struct ged_view_context *view_ctx,
-	enum ged_view_lod_progress_presentation_mode mode)
+ged_view_lod_progress_visible_set(struct ged_view_context *view_ctx,
+	int visible)
 {
     struct ged_view_host_record *record =
 	ged_view_host_record_find(view_ctx);
-    if (!record || mode < GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED ||
-	mode > GED_VIEW_LOD_PROGRESS_PRESENTATION_NONE)
+    if (!record || (visible != 0 && visible != 1))
 	return 0;
-    if (record->lod_progress_presentation_mode == mode)
+    if (record->lod_progress_visible == visible)
 	return 1;
 
-    const enum ged_view_lod_progress_presentation_mode previous =
-	record->lod_progress_presentation_mode;
-    record->lod_progress_presentation_mode = mode;
+    const int previous = record->lod_progress_visible;
+    record->lod_progress_visible = visible;
     BObolViewController *controller = ged_bobol_view_controller(view_ctx);
     if (!record->gedp || !controller)
 	return 1;
@@ -917,7 +911,7 @@ ged_view_lod_progress_presentation_mode_set(
     if (ged_view_lod_progress_sync(record->gedp, view_ctx) == BRLCAD_OK)
 	return 1;
 
-    record->lod_progress_presentation_mode = previous;
+    record->lod_progress_visible = previous;
     (void)ged_view_lod_progress_sync(record->gedp, view_ctx);
     return 0;
 }
