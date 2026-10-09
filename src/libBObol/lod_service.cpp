@@ -21,7 +21,9 @@
 #include "cad_publication_private.h"
 #include "draw_cache_private.h"
 #include "identity_counter_private.h"
+#include "lod_coverage_preview_private.h"
 #include "lod_coordinator_private.h"
+#include "parallel_budget_private.h"
 
 #include "raytrace.h"
 #include "rt/db_io.h"
@@ -208,6 +210,7 @@ BObolLodTask::clear(void)
     cacheWriteData = NULL;
     debugDelayMilliseconds = 0;
     estimatedWorkingSetBytes = 0;
+    dispatchClass = BOBOL_LOD_TASK_DISPATCH_NORMAL;
     publishResult = TRUE;
     writeCache = FALSE;
 }
@@ -1385,6 +1388,16 @@ bobol_mesh_lod_provider_free(void *userData)
 struct BObolLodWorkItem {
     uint64_t id;
     BObolLodTask task;
+    int64_t submittedMicroseconds = 0;
+    /* Only submitIfNotActive work has a mutable demand record.  Plain submit
+     * may intentionally enqueue several stages with one stable key, and must
+     * continue executing each stage against its own request. */
+    bool retargetActiveDemand = false;
+    /* Service-local admission is reserved when the worker dequeues the task.
+     * Preserve the exact charge so a later limit change or an oversized task
+     * cannot subtract bytes which this item never reserved. */
+    size_t reservedWorkingSetBytes = 0;
+    bool exceedsServiceWorkingSetLimit = false;
 };
 
 struct BObolLodCacheWriteItem {
@@ -1407,8 +1420,121 @@ struct BObolSharedProducer {
     uint64_t taskId = 0;
     uint64_t producerGeneration = 0;
     uint64_t publication = 0;
+    int64_t submittedMicroseconds = 0;
+    int64_t executionStartedMicroseconds = 0;
+    bool cpuAdmissionWaiting = false;
+    bool transientMemoryAdmissionWaiting = false;
     BObolSharedProducerState state = BObolSharedProducerState::BUILDING;
     std::unordered_map<uint64_t, BObolSharedProducerLease> leases;
+};
+
+/* Worker-owned progress is published without taking the service mutex.  A
+ * cold mesh producer holds its resident-asset mutex for most of realization,
+ * so acquiring the outer service lock from a cache callback would invert the
+ * service -> resident lock order.  The short record-local transition mutex
+ * makes each stage/timing snapshot coherent without entering that hierarchy. */
+struct BObolLodProducerProgressRecord {
+    uint64_t ownerGeneration = 0;
+    std::string activeKey;
+    int64_t taskStartedMicroseconds = 0;
+    uint64_t queueWaitMicroseconds = 0;
+    uint64_t sourceFaceCount = 0;
+    uint64_t sourcePointCount = 0;
+    uint64_t sourceByteCount = 0;
+    std::atomic<bool> active {true};
+    std::atomic<int> stage {BOBOL_LOD_PRODUCER_STAGE_NONE};
+    std::atomic<uint64_t> completedUnits {0};
+    std::atomic<uint64_t> totalUnits {0};
+    mutable std::mutex transitionMutex;
+    int64_t stageStartedMicroseconds = 0;
+
+    struct Snapshot {
+	SbBool active = FALSE;
+	int stage = BOBOL_LOD_PRODUCER_STAGE_NONE;
+	uint64_t completedUnits = 0;
+	uint64_t totalUnits = 0;
+	uint64_t queueWaitMicroseconds = 0;
+	uint64_t elapsedMicroseconds = 0;
+	uint64_t stageElapsedMicroseconds = 0;
+	uint64_t sourceFaceCount = 0;
+	uint64_t sourcePointCount = 0;
+	uint64_t sourceByteCount = 0;
+    };
+
+    static uint64_t elapsed(int64_t started, int64_t now)
+    {
+	return started > 0 && now > started ?
+	    static_cast<uint64_t>(now - started) : 0;
+    }
+
+    void publish(int nextStage, uint64_t completed, uint64_t total)
+    {
+	if (nextStage <= BOBOL_LOD_PRODUCER_STAGE_NONE ||
+	    nextStage >= BOBOL_LOD_PRODUCER_STAGE_COUNT)
+	    return;
+	if (total && completed > total)
+	    completed = total;
+	std::lock_guard<std::mutex> lock(this->transitionMutex);
+	const int current = stage.load(std::memory_order_acquire);
+	if (current != nextStage) {
+	    completedUnits.store(completed, std::memory_order_relaxed);
+	    totalUnits.store(total, std::memory_order_relaxed);
+	    stageStartedMicroseconds = bu_gettime();
+	    stage.store(nextStage, std::memory_order_release);
+	    return;
+	}
+	/* A bounded parallel classifier may finish ranges out of order.  Never
+	 * let a late callback move the visible counter backwards. */
+	totalUnits.store(total, std::memory_order_relaxed);
+	uint64_t observed = completedUnits.load(std::memory_order_relaxed);
+	while (observed < completed &&
+	       !completedUnits.compare_exchange_weak(observed, completed,
+		   std::memory_order_release, std::memory_order_relaxed)) {
+	}
+    }
+
+    void finish(void)
+    {
+	std::lock_guard<std::mutex> lock(this->transitionMutex);
+	active.store(false, std::memory_order_release);
+    }
+
+    Snapshot snapshot(int64_t now) const
+    {
+	Snapshot result;
+	std::lock_guard<std::mutex> lock(this->transitionMutex);
+	result.active = active.load(std::memory_order_acquire) ? TRUE : FALSE;
+	result.stage = stage.load(std::memory_order_acquire);
+	result.totalUnits = totalUnits.load(std::memory_order_relaxed);
+	result.completedUnits = std::min(
+	    result.totalUnits ? result.totalUnits : UINT64_MAX,
+	    completedUnits.load(std::memory_order_acquire));
+	result.queueWaitMicroseconds = queueWaitMicroseconds;
+	result.elapsedMicroseconds = elapsed(taskStartedMicroseconds, now);
+	result.stageElapsedMicroseconds = elapsed(stageStartedMicroseconds, now);
+	result.sourceFaceCount = sourceFaceCount;
+	result.sourcePointCount = sourcePointCount;
+	result.sourceByteCount = sourceByteCount;
+	return result;
+    }
+};
+
+class BObolLodProducerProgressScope {
+public:
+    explicit BObolLodProducerProgressScope(
+	const std::shared_ptr<BObolLodProducerProgressRecord> &value) :
+	record(value)
+    {
+    }
+
+    ~BObolLodProducerProgressScope()
+    {
+	if (record)
+	    record->finish();
+    }
+
+private:
+    std::shared_ptr<BObolLodProducerProgressRecord> record;
 };
 
 struct BObolLodResultSlotMapKey {
@@ -1452,6 +1578,31 @@ struct BObolLodResultSlotMapKeyHash {
 	combine(std::hash<int>()(key.drawMode));
 	combine(std::hash<int>()(key.resultKind));
 	combine(std::hash<int>()(key.proxyKind));
+	return hash;
+    }
+};
+
+/* An intermediate publication is owned by one active producer, regardless of
+ * whether successive callbacks describe temporary coverage, a growing
+ * spatial page set, or a global mesh prefix.  Keeping one deferred value per
+ * producer bounds lock-contention recovery without retaining every transient
+ * geometry snapshot. */
+struct BObolDeferredIntermediateKey {
+    uint64_t generation = 0;
+    std::string activeKey;
+
+    bool operator==(const BObolDeferredIntermediateKey &other) const
+    {
+	return generation == other.generation && activeKey == other.activeKey;
+    }
+};
+
+struct BObolDeferredIntermediateKeyHash {
+    size_t operator()(const BObolDeferredIntermediateKey &key) const
+    {
+	size_t hash = std::hash<std::string>()(key.activeKey);
+	hash ^= std::hash<uint64_t>()(key.generation) +
+	    static_cast<size_t>(0x9e3779b9U) + (hash << 6) + (hash >> 2);
 	return hash;
     }
 };
@@ -1801,6 +1952,8 @@ struct BObolResidentMeshCompactionWork {
  *   1. BObolLodServicePrivate::mutex (queue/generation/subscriber/service
  *      residency maps)
  *   2. BObolResidentMeshAsset::mutex (one retained asset)
+ *   3. BObolLodServicePrivate::residentMeshAdmissionMutex (short stable-byte
+ *      reservation accounting)
  *
  * Code which needs both must acquire them in that order.  Expensive provider,
  * cache, mesh-preparation, Coin/presentation, and subscriber callbacks execute
@@ -1811,9 +1964,15 @@ struct BObolResidentMeshCompactionWork {
  * Ownership:
  *   - pending/completed/cache queues and generation tables are pump/service
  *     mutex owned;
+ *   - deferred intermediate results are protected by
+ *     deferredIntermediateMutex.  No code may acquire the service mutex while
+ *     holding that mailbox lock; promotion takes service then mailbox;
  *   - realization callbacks and task-local payloads are worker owned;
  *   - diagnostic byte/count summaries used without the service lock are
  *     atomic;
+ *   - resident growth reservations are protected by the admission mutex.
+ *     It is a leaf lock: code holding it must not acquire either the service
+ *     or a resident-asset mutex;
  *   - resident mesh arrays are guarded by the resident mutex and published as
  *     immutable shared objects;
  *   - Coin nodes and fields are never mutated by this service and remain
@@ -1840,6 +1999,7 @@ struct BObolLodServicePrivate {
 	 */
 	maxActiveTasks(4096),
 	maxQueuedResults(2048),
+	maxDeferredIntermediateResults(1),
 	maxQueuedCacheWrites(2048),
 	maxActiveWorkingSetBytes(0),
 	maxResidentMeshBytes(0),
@@ -1847,6 +2007,8 @@ struct BObolLodServicePrivate {
 	residentMeshLimitBasisBytes(0),
 	activeWorkingSetBytes(0),
 	executingTasks(0),
+	cpuAdmissionWaitingTasks(0),
+	transientMemoryAdmissionWaitingTasks(0),
 	peakWorkingSetBytes(0),
 	peakExecutingTasks(0),
 	resultReservations(0),
@@ -1865,6 +2027,8 @@ struct BObolLodServicePrivate {
 	residentMeshGrowthReservationBytes(0),
 	residentMeshRevision(1),
 	residentMeshAdmissionRevision(1),
+	deferredIntermediateResultCount(0),
+	deferredIntermediateNotificationPending(false),
 	residentMeshCompactionsInFlight(0),
 	residentMeshCompactionResultCount(0),
 	residentMeshCompactionResultReservations(0),
@@ -1884,6 +2048,9 @@ struct BObolLodServicePrivate {
 
     BObolLodService *owner;
     mutable std::mutex mutex;
+    mutable std::mutex residentMeshAdmissionMutex;
+    mutable std::mutex deferredIntermediateMutex;
+    mutable std::mutex producerProgressMutex;
     std::condition_variable workerCv;
     std::condition_variable cacheWriterCv;
     std::condition_variable subscriberCv;
@@ -1899,6 +2066,7 @@ struct BObolLodServicePrivate {
     uint64_t activeGeneration;
     size_t maxActiveTasks;
     size_t maxQueuedResults;
+    std::atomic<size_t> maxDeferredIntermediateResults;
     size_t maxQueuedCacheWrites;
     size_t maxActiveWorkingSetBytes;
     size_t maxResidentMeshBytes;
@@ -1906,6 +2074,8 @@ struct BObolLodServicePrivate {
     size_t residentMeshLimitBasisBytes;
     size_t activeWorkingSetBytes;
     size_t executingTasks;
+    size_t cpuAdmissionWaitingTasks;
+    size_t transientMemoryAdmissionWaitingTasks;
     size_t peakWorkingSetBytes;
     size_t peakExecutingTasks;
     size_t resultReservations;
@@ -1914,8 +2084,8 @@ struct BObolLodServicePrivate {
     uint64_t coalescedResults;
     uint64_t coalescedCacheWrites;
     uint64_t discardedStaleResults;
-    uint64_t residentMeshCacheLoads;
-    uint64_t residentMeshHits;
+    std::atomic<uint64_t> residentMeshCacheLoads;
+    std::atomic<uint64_t> residentMeshHits;
     uint64_t residentMeshCompactions;
     uint64_t residentMeshEvictions;
     /* Updated only when a retained progressive buffer is published or
@@ -1930,16 +2100,22 @@ struct BObolLodServicePrivate {
      * this value from separate total/backing loads allowed a policy reader to
      * observe half of a concurrent accounting replacement. */
     std::atomic<size_t> residentMeshStableBytes;
-    /* Protected by mutex.  Workers reserve optional stable-prefix growth
-     * before loading so independent assets cannot all observe the same free
-     * capacity.  Minimum useful prefixes are permitted to exceed the soft
-     * target, but are still reserved and therefore constrain richer peers. */
+    /* Protected by residentMeshAdmissionMutex.  Workers reserve optional
+     * stable-prefix growth before loading so independent assets cannot all
+     * observe the same free capacity.  Minimum useful prefixes are permitted
+     * to exceed the soft target, but are still reserved and therefore
+     * constrain richer peers. */
     size_t residentMeshGrowthReservationBytes;
     std::atomic<uint64_t> residentMeshRevision;
     std::atomic<uint64_t> residentMeshAdmissionRevision;
     std::deque<BObolLodWorkItem> pending;
+    std::map<int, size_t> pendingDispatchCounts;
     std::map<int, size_t> pendingQualityCounts;
     std::list<BObolLodResult> results;
+    std::unordered_map<BObolDeferredIntermediateKey, BObolLodResult,
+	BObolDeferredIntermediateKeyHash> deferredIntermediateResults;
+    std::atomic<size_t> deferredIntermediateResultCount;
+    std::atomic<bool> deferredIntermediateNotificationPending;
     std::list<BObolLodCacheWriteItem> cacheWrites;
     std::unordered_map<BObolLodResultSlotMapKey,
 	std::list<BObolLodResult>::iterator,
@@ -1992,10 +2168,21 @@ struct BObolLodServicePrivate {
     std::deque<uint64_t> cancelledGenerationOrder;
     std::unordered_map<uint64_t, size_t> generationTaskCounts;
     std::unordered_map<uint64_t, size_t> generationPendingTaskCounts;
+    /* Exact enqueue timestamps make queue latency observable without an
+     * O(pending task count) scan on every GUI progress sample. */
+    std::unordered_map<uint64_t, std::multiset<int64_t>>
+	generationPendingTaskTimes;
     std::unordered_map<uint64_t, size_t> generationExecutingTaskCounts;
+    std::unordered_map<uint64_t, size_t>
+	generationCpuAdmissionWaitingTaskCounts;
+    std::unordered_map<uint64_t, size_t>
+	generationTransientMemoryAdmissionWaitingTaskCounts;
     std::unordered_map<uint64_t, size_t> generationDelayedTaskCounts;
     std::unordered_map<uint64_t, size_t> generationResultCounts;
     std::unordered_map<uint64_t, size_t> generationCacheWriteCounts;
+    uint64_t nextProducerProgressId = 1;
+    std::unordered_map<uint64_t,
+	std::shared_ptr<BObolLodProducerProgressRecord>> producerProgress;
     size_t inFlight;
     size_t cacheWriteInFlight;
     size_t delayedTasks;
@@ -2195,7 +2382,10 @@ public:
 		priorStableBytes :
 		estimateAtCut(floorCut);
 
-	std::lock_guard<std::mutex> lock(p->mutex);
+	/* Realization owns resident.mutex here.  Admission accounting has its own
+	 * leaf lock so a worker never waits for the outer service lock in the
+	 * inverse of the documented service -> resident order. */
+	std::lock_guard<std::mutex> lock(p->residentMeshAdmissionMutex);
 	decisionRevision =
 	    p->residentMeshAdmissionRevision.load(
 		std::memory_order_relaxed);
@@ -2243,11 +2433,14 @@ public:
     {
 	if (!p || !bytes)
 	    return;
-	std::lock_guard<std::mutex> lock(p->mutex);
-	p->residentMeshGrowthReservationBytes =
-	    bytes >= p->residentMeshGrowthReservationBytes ?
-		0 : p->residentMeshGrowthReservationBytes - bytes;
-	bytes = 0;
+	{
+	    std::lock_guard<std::mutex> lock(
+		p->residentMeshAdmissionMutex);
+	    p->residentMeshGrowthReservationBytes =
+		bytes >= p->residentMeshGrowthReservationBytes ?
+		    0 : p->residentMeshGrowthReservationBytes - bytes;
+	    bytes = 0;
+	}
 	p->workerCv.notify_all();
     }
 
@@ -2329,6 +2522,33 @@ lod_generation_count_add_unlocked(
 }
 
 static void
+lod_generation_pending_time_add_unlocked(BObolLodServicePrivate *p,
+	uint64_t generation, int64_t submittedMicroseconds)
+{
+    if (!p || !generation || submittedMicroseconds <= 0)
+	return;
+    p->generationPendingTaskTimes[generation].insert(
+	submittedMicroseconds);
+}
+
+static void
+lod_generation_pending_time_remove_unlocked(BObolLodServicePrivate *p,
+	uint64_t generation, int64_t submittedMicroseconds)
+{
+    if (!p || !generation || submittedMicroseconds <= 0)
+	return;
+    auto generationTimes = p->generationPendingTaskTimes.find(generation);
+    if (generationTimes == p->generationPendingTaskTimes.end())
+	return;
+    const auto timestamp = generationTimes->second.find(
+	submittedMicroseconds);
+    if (timestamp != generationTimes->second.end())
+	generationTimes->second.erase(timestamp);
+    if (generationTimes->second.empty())
+	p->generationPendingTaskTimes.erase(generationTimes);
+}
+
+static void
 lod_generation_count_remove_unlocked(
     std::unordered_map<uint64_t, size_t> &counts, uint64_t generation)
 {
@@ -2399,6 +2619,84 @@ lod_request_active_key(const BObolLodRequest &request)
     return key;
 }
 
+/* Set by the worker around one realize() call.  Direct provider invocations
+ * leave these zero and are correctly reported as having no scheduler wait. */
+static thread_local int64_t lod_task_submitted_microseconds = 0;
+static thread_local int64_t lod_task_started_microseconds = 0;
+
+static std::shared_ptr<BObolLodProducerProgressRecord>
+lod_producer_progress_begin(BObolLodServicePrivate *p,
+	uint64_t generation, const BObolLodRequest &request)
+{
+    if (!p || !generation)
+	return std::shared_ptr<BObolLodProducerProgressRecord>();
+    try {
+	std::shared_ptr<BObolLodProducerProgressRecord> record =
+	    std::make_shared<BObolLodProducerProgressRecord>();
+	record->ownerGeneration = generation;
+	record->activeKey = lod_request_active_key(request).getString();
+	const int64_t now = std::max<int64_t>(1, bu_gettime());
+	record->taskStartedMicroseconds =
+	    lod_task_started_microseconds > 0 ?
+		lod_task_started_microseconds : now;
+	record->queueWaitMicroseconds =
+	    lod_task_submitted_microseconds > 0 &&
+	    record->taskStartedMicroseconds > lod_task_submitted_microseconds ?
+		static_cast<uint64_t>(record->taskStartedMicroseconds -
+		    lod_task_submitted_microseconds) : 0;
+	record->sourceFaceCount = request.sourceCounts.faceCount;
+	record->sourcePointCount = request.sourceCounts.pointCount;
+	record->sourceByteCount = request.sourceCounts.byteCount;
+	record->publish(BOBOL_LOD_PRODUCER_STAGE_ASSET_SERIALIZATION, 0, 0);
+	std::lock_guard<std::mutex> lock(p->producerProgressMutex);
+	const uint64_t id = bobol_nonzero_identity_take(
+	    p->nextProducerProgressId);
+	p->producerProgress.emplace(id, record);
+	return record;
+    } catch (const std::bad_alloc &) {
+	/* Diagnostics must never make an otherwise admissible mesh fail. */
+	return std::shared_ptr<BObolLodProducerProgressRecord>();
+    }
+}
+
+/* Public stage values are stable diagnostics, not an execution-order
+ * encoding.  Later stages were appended for ABI compatibility, so rank them
+ * by execution order when choosing the one stage summarized by a progress
+ * bar. */
+static int
+lod_producer_stage_display_priority(int stage)
+{
+    switch (stage) {
+	case BOBOL_LOD_PRODUCER_STAGE_ASSET_SERIALIZATION: return 0;
+	case BOBOL_LOD_PRODUCER_STAGE_CACHE_LOOKUP: return 1;
+	case BOBOL_LOD_PRODUCER_STAGE_SOURCE_PREPARATION: return 2;
+	case BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS: return 3;
+	case BOBOL_LOD_PRODUCER_STAGE_COVERAGE_PREVIEW: return 4;
+	case BOBOL_LOD_PRODUCER_STAGE_SOURCE_HASHING: return 5;
+	case BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION: return 6;
+	case BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION: return 7;
+	case BOBOL_LOD_PRODUCER_STAGE_SPATIAL_CONSTRUCTION: return 8;
+	case BOBOL_LOD_PRODUCER_STAGE_CACHE_PERSISTENCE: return 9;
+	default: return INT_MAX;
+    }
+}
+
+static void
+lod_producer_progress_prune(BObolLodServicePrivate *p)
+{
+    if (!p)
+	return;
+    std::lock_guard<std::mutex> lock(p->producerProgressMutex);
+    for (auto it = p->producerProgress.begin();
+	 it != p->producerProgress.end();) {
+	if (!it->second ||
+	    !it->second->active.load(std::memory_order_acquire))
+	    it = p->producerProgress.erase(it);
+	else
+	    ++it;
+    }
+}
+
 static SbBool
 lod_active_request_key_recorded_unlocked(const BObolLodServicePrivate *p,
 	const SbString &key)
@@ -2457,6 +2755,16 @@ lod_shared_producer_record_lease_unlocked(BObolLodServicePrivate *p,
     auto found = producer->leases.find(generation);
     if (found != producer->leases.end() &&
 	lod_request_demand_is_older(request, found->second.demand))
+	return TRUE;
+
+    /* One generation owns one producer payload.  Other occurrences of the
+     * same asset are consumers which the next owner-thread pass binds from
+     * that resident asset; they must not steal the producer's result slot.
+     * The same occurrence, however, may be revisited under a newer camera or
+     * policy epoch while the task is still queued, and that demand must
+     * replace its obsolete predecessor. */
+    if (found != producer->leases.end() &&
+	request.occurrenceKey != found->second.demand.occurrenceKey)
 	return TRUE;
 
     if (found == producer->leases.end()) {
@@ -2837,10 +3145,26 @@ lod_pending_quality_remove(BObolLodServicePrivate *p, int qualityTier)
 	p->pendingQualityCounts.erase(found);
 }
 
+static void
+lod_pending_dispatch_remove(BObolLodServicePrivate *p, int dispatchClass)
+{
+    const auto found = p->pendingDispatchCounts.find(dispatchClass);
+    if (found == p->pendingDispatchCounts.end())
+	return;
+    if (found->second > 1)
+	--found->second;
+    else
+	p->pendingDispatchCounts.erase(found);
+}
+
 static std::deque<BObolLodWorkItem>::iterator
 lod_find_ready_task(BObolLodServicePrivate *p)
 {
-    /* Prefer the coarsest ready task (lowest quality tier) so the cheap proxy /
+    /* First-visible previews are latency work: let them pass queued ordinary
+     * refinement without changing request identity or pretending they are a
+     * coarser quality tier.  Dependencies and working-set admission are still
+     * tested before a candidate can run.  Within one dispatch class, prefer
+     * the coarsest ready task (lowest quality tier) so the cheap proxy /
      * bounding-box stages for the whole scene drain ahead of the expensive mesh
      * stages.  Plain FIFO selection picks an object's mesh task (which became
      * ready as soon as its own proxies finished) before a later object's proxy,
@@ -2858,7 +3182,10 @@ lod_find_ready_task(BObolLodServicePrivate *p)
      * original global tier preference; mixed/blocked queues take the complete
      * correctness path below.
      */
-    if (!p->pending.empty() && !p->pendingQualityCounts.empty() &&
+    if (!p->pending.empty() && !p->pendingDispatchCounts.empty() &&
+	p->pending.front().task.dispatchClass ==
+	    p->pendingDispatchCounts.rbegin()->first &&
+	!p->pendingQualityCounts.empty() &&
 	p->pending.front().task.request.qualityTier ==
 	    p->pendingQualityCounts.begin()->first &&
 	lod_task_dependencies_ready(p, p->pending.front().task) &&
@@ -2872,16 +3199,198 @@ lod_find_ready_task(BObolLodServicePrivate *p)
 	if (!lod_task_working_set_available(p, it->task))
 	    continue;
 	if (best == p->pending.end() ||
-	    it->task.request.qualityTier < best->task.request.qualityTier)
+	    it->task.dispatchClass > best->task.dispatchClass ||
+	    (it->task.dispatchClass == best->task.dispatchClass &&
+	     it->task.request.qualityTier < best->task.request.qualityTier))
 	    best = it;
     }
 
     return best;
 }
 
+/* Provider callbacks intentionally do not receive scheduler-private work-item
+ * metadata.  A worker-local timing scope bridges only the enqueue/start times
+ * needed when a mesh provider opens its diagnostic progress record. */
+class BObolLodTaskTimingScope {
+public:
+    explicit BObolLodTaskTimingScope(int64_t submittedMicroseconds) :
+	priorSubmitted(lod_task_submitted_microseconds),
+	priorStarted(lod_task_started_microseconds)
+    {
+	lod_task_submitted_microseconds = submittedMicroseconds;
+	lod_task_started_microseconds = 0;
+    }
+
+    void markStarted(void)
+    {
+	lod_task_started_microseconds = std::max<int64_t>(1, bu_gettime());
+    }
+
+    ~BObolLodTaskTimingScope()
+    {
+	lod_task_submitted_microseconds = priorSubmitted;
+	lod_task_started_microseconds = priorStarted;
+    }
+
+private:
+    int64_t priorSubmitted;
+    int64_t priorStarted;
+};
+
+/* A service worker has selected this task, but useful provider execution does
+ * not begin until the process-wide CPU gate admits it.  Keep that interval
+ * explicit: counting it as producer execution hid cross-service contention
+ * and made the progress overlay diagnose a stalled mesh build. */
+class BObolCpuAdmissionWaitScope {
+public:
+    BObolCpuAdmissionWaitScope(BObolLodServicePrivate *service,
+	const BObolLodWorkItem &work) : p(service), item(work)
+    {
+	if (!p)
+	    return;
+	std::lock_guard<std::mutex> lock(p->mutex);
+	p->cpuAdmissionWaitingTasks++;
+	lod_generation_count_add_unlocked(
+	    p->generationCpuAdmissionWaitingTaskCounts,
+	    item.task.generation);
+	BObolSharedProducer *shared = lod_shared_producer_unlocked(
+	    p, lod_request_active_key(item.task.request));
+	if (shared && shared->taskId == item.id)
+	    shared->cpuAdmissionWaiting = true;
+	active = true;
+    }
+
+    ~BObolCpuAdmissionWaitScope(void)
+    {
+	finish(false);
+    }
+
+    void admitted(void)
+    {
+	finish(true);
+    }
+
+private:
+    void finish(bool admitted)
+    {
+	if (!active || !p)
+	    return;
+	std::lock_guard<std::mutex> lock(p->mutex);
+	if (p->cpuAdmissionWaitingTasks > 0)
+	    p->cpuAdmissionWaitingTasks--;
+	lod_generation_count_remove_unlocked(
+	    p->generationCpuAdmissionWaitingTaskCounts,
+	    item.task.generation);
+	BObolSharedProducer *shared = lod_shared_producer_unlocked(
+	    p, lod_request_active_key(item.task.request));
+	if (shared && shared->taskId == item.id) {
+	    shared->cpuAdmissionWaiting = false;
+	    if (admitted)
+		shared->executionStartedMicroseconds =
+		    std::max<int64_t>(1, bu_gettime());
+	}
+	active = false;
+    }
+
+    BObolLodServicePrivate *p = NULL;
+    const BObolLodWorkItem &item;
+    bool active = false;
+};
+
+/* A task which has passed the service-local byte check can still lose the
+ * race for the process-wide transient-memory allowance.  Keep that wait
+ * distinct from useful provider execution and from pending-queue pressure so
+ * a cold view can explain why its first mesh has not started. */
+class BObolTransientMemoryAdmissionWaitScope {
+public:
+    BObolTransientMemoryAdmissionWaitScope(BObolLodServicePrivate *service,
+	const BObolLodWorkItem *work, size_t estimatedBytes) :
+	p(service), item(work)
+    {
+	if (!p || !estimatedBytes)
+	    return;
+	std::lock_guard<std::mutex> lock(p->mutex);
+	p->transientMemoryAdmissionWaitingTasks++;
+	if (item) {
+	    lod_generation_count_add_unlocked(
+		p->generationTransientMemoryAdmissionWaitingTaskCounts,
+		item->task.generation);
+	    BObolSharedProducer *shared = lod_shared_producer_unlocked(
+		p, lod_request_active_key(item->task.request));
+	    if (shared && shared->taskId == item->id)
+		shared->transientMemoryAdmissionWaiting = true;
+	}
+	active = true;
+    }
+
+    ~BObolTransientMemoryAdmissionWaitScope(void)
+    {
+	finish();
+    }
+
+    void admitted(void)
+    {
+	finish();
+    }
+
+private:
+    void finish(void)
+    {
+	if (!active || !p)
+	    return;
+	std::lock_guard<std::mutex> lock(p->mutex);
+	if (p->transientMemoryAdmissionWaitingTasks > 0)
+	    p->transientMemoryAdmissionWaitingTasks--;
+	if (item) {
+	    lod_generation_count_remove_unlocked(
+		p->generationTransientMemoryAdmissionWaitingTaskCounts,
+		item->task.generation);
+	    BObolSharedProducer *shared = lod_shared_producer_unlocked(
+		p, lod_request_active_key(item->task.request));
+	    if (shared && shared->taskId == item->id)
+		shared->transientMemoryAdmissionWaiting = false;
+	}
+	active = false;
+    }
+
+    BObolLodServicePrivate *p = NULL;
+    const BObolLodWorkItem *item = NULL;
+    bool active = false;
+};
+
+class BObolWorkingSetLease {
+public:
+    ~BObolWorkingSetLease(void)
+    {
+	if (bytes)
+	    bobol_lod_working_set_release(bytes);
+    }
+
+    SbBool acquire(size_t estimatedBytes)
+    {
+	if (!estimatedBytes)
+	    return TRUE;
+	if (!bobol_lod_working_set_acquire(estimatedBytes))
+	    return FALSE;
+	bytes = estimatedBytes;
+	return TRUE;
+    }
+
+private:
+    size_t bytes = 0;
+};
+
+static BObolSharedProducer *
+lod_shared_producer_for_task_unlocked(BObolLodServicePrivate *p,
+	uint64_t taskId);
+
 static BObolLodResult
-lod_execute_task(BObolLodServicePrivate *p, const BObolLodTask &task)
+lod_execute_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
+	BObolParallelBudgetLease &cpuBudget,
+	BObolWorkingSetLease &workingSet)
 {
+    const BObolLodTask &task = item.task;
+    BObolLodTaskTimingScope timing(item.submittedMicroseconds);
     if (lod_producer_cancelled_or_stopping(
 	    p, task.generation, task.request))
 	return lod_service_status_result(task, BOBOL_LOD_PROVIDER_CANCELLED,
@@ -2895,7 +3404,63 @@ lod_execute_task(BObolLodServicePrivate *p, const BObolLodTask &task)
 	return lod_service_status_result(task, BOBOL_LOD_PROVIDER_ERROR,
 					 "LoD task has no realization callback");
 
-    BObolLodResult result = (*task.realize)(task.request, task.realizeData);
+    /* Every source and LoD path acquires process CPU before transient memory.
+     * A reversed pair here can deadlock with source realization, whose outer
+     * CPU lease covers coverage/detail workers that acquire transient memory.
+     * The cancellable debug delay remains outside both reservations. */
+    BObolCpuAdmissionWaitScope cpuWait(p, item);
+    cpuBudget.acquireOuter(task.dispatchClass);
+    cpuWait.admitted();
+
+    const size_t estimatedBytes = lod_task_estimated_working_set_bytes(task);
+    if (item.exceedsServiceWorkingSetLimit)
+	return lod_service_status_result(task, BOBOL_LOD_PROVIDER_ERROR,
+	    "LoD task exceeds service transient working-set limit");
+    BObolTransientMemoryAdmissionWaitScope memoryWait(p, &item,
+	estimatedBytes);
+    const SbBool admitted = workingSet.acquire(estimatedBytes);
+    memoryWait.admitted();
+    if (!admitted)
+	return lod_service_status_result(task, BOBOL_LOD_PROVIDER_ERROR,
+	    "LoD task exceeds process transient working-set limit");
+
+    timing.markStarted();
+    if (lod_producer_cancelled_or_stopping(
+	    p, task.generation, task.request))
+	return lod_service_status_result(task, BOBOL_LOD_PROVIDER_CANCELLED,
+					 "LoD task generation cancelled");
+
+    /* Queue age is not demand identity.  A bounded 50k-occurrence scan can
+     * leave otherwise cheap tasks queued for many seconds while wheel input
+     * advances the camera epoch.  Active-key coalescing records the newest
+     * demand, so snapshot it immediately before provider execution.  Cold
+     * providers then perform their expensive source work once and construct
+     * the view-local result for the newest known occurrence demand instead
+     * of completing an obsolete request which the owner must discard.
+     *
+     * Shared producers retain one payload owner per generation.  Sibling
+     * occurrences are deliberately replay consumers and therefore never
+     * replace that owner's request in the lease table. */
+    BObolLodRequest executionRequest = task.request;
+    {
+	std::lock_guard<std::mutex> lock(p->mutex);
+	const SbString activeKey = lod_request_active_key(task.request);
+	const BObolSharedProducer *producer =
+	    lod_shared_producer_for_task_unlocked(p, item.id);
+	if (producer) {
+	    const auto lease = producer->leases.find(task.generation);
+	    if (lease != producer->leases.end())
+		executionRequest = lease->second.demand;
+	} else if (item.retargetActiveDemand) {
+	    const auto latest = p->latestActiveRequests.find(
+		activeKey.getString());
+	    if (latest != p->latestActiveRequests.end())
+		executionRequest = latest->second;
+	}
+    }
+
+    BObolLodResult result = (*task.realize)(
+	executionRequest, task.realizeData);
 
     if (lod_producer_cancelled_or_stopping(
 	    p, task.generation, task.request))
@@ -3095,6 +3660,228 @@ lod_shared_producer_publish_unlocked(BObolSharedProducer &producer,
     return lod_shared_pending_replay_count_unlocked(producer) ? TRUE : FALSE;
 }
 
+enum class BObolIntermediatePublishStatus {
+    REJECTED,
+    PUBLISHED,
+    CAPACITY_BLOCKED
+};
+
+static BObolDeferredIntermediateKey
+lod_deferred_intermediate_key(uint64_t generation,
+    const BObolLodRequest &request)
+{
+    BObolDeferredIntermediateKey key;
+    key.generation = generation;
+    key.activeKey = lod_request_active_key(request).getString();
+    return key;
+}
+
+/* Take ownership without acquiring the service mutex.  Preview callbacks may
+ * hold a resident-asset mutex, so waiting for the outer service lock here
+ * would invert the documented lock order.  Success means the latest preview
+ * is durably retained for promotion, not necessarily that it is already in
+ * the presentation result queue. */
+static bool
+lod_defer_intermediate_result(BObolLodServicePrivate *p,
+    uint64_t generation, BObolLodResult &&result)
+{
+    if (!p || !generation)
+	return false;
+    BObolDeferredIntermediateKey key = lod_deferred_intermediate_key(
+	generation, result.request);
+    if (key.activeKey.empty())
+	return false;
+    result.generation = generation;
+
+    BObolLodResult retired;
+    bool accepted = false;
+    try {
+	std::lock_guard<std::mutex> lock(p->deferredIntermediateMutex);
+	const auto found = p->deferredIntermediateResults.find(key);
+	if (found != p->deferredIntermediateResults.end()) {
+	    if (lod_result_supersedes(result, found->second)) {
+		retired = std::move(found->second);
+		found->second = std::move(result);
+	    }
+	    accepted = true;
+	} else if (p->deferredIntermediateResults.size() <
+		p->maxDeferredIntermediateResults.load(
+		    std::memory_order_relaxed)) {
+	    p->deferredIntermediateResults.emplace(
+		std::move(key), std::move(result));
+	    p->deferredIntermediateResultCount.store(
+		p->deferredIntermediateResults.size(),
+		std::memory_order_release);
+	    accepted = true;
+	}
+    } catch (const std::bad_alloc &) {
+	return false;
+    }
+    return accepted;
+}
+
+/* A capacity-blocked value came from an earlier mailbox snapshot.  If its
+ * producer published again while that snapshot was being validated, the
+ * value now in the mailbox is necessarily newer and must win even when its
+ * demand revisions compare equal. */
+static void
+lod_restore_capacity_blocked_intermediate(BObolLodServicePrivate *p,
+    BObolLodResult &&result)
+{
+    if (!p || !result.generation)
+	return;
+    BObolDeferredIntermediateKey key = lod_deferred_intermediate_key(
+	result.generation, result.request);
+    if (key.activeKey.empty())
+	return;
+    try {
+	std::lock_guard<std::mutex> lock(p->deferredIntermediateMutex);
+	if (p->deferredIntermediateResults.find(key) !=
+		p->deferredIntermediateResults.end() ||
+	    p->deferredIntermediateResults.size() >=
+		p->maxDeferredIntermediateResults.load(
+		    std::memory_order_relaxed))
+	    return;
+	p->deferredIntermediateResults.emplace(
+	    std::move(key), std::move(result));
+	p->deferredIntermediateResultCount.store(
+	    p->deferredIntermediateResults.size(),
+	    std::memory_order_release);
+    } catch (const std::bad_alloc &) {
+	/* The ordinary final task result remains authoritative. */
+    }
+}
+
+/* Validate and publish one mailbox value while the service mutex is held.
+ * CAPACITY_BLOCKED leaves result intact so the caller can return it to the
+ * bounded mailbox after dropping the service lock. */
+static BObolIntermediatePublishStatus
+lod_publish_intermediate_result_unlocked(BObolLodServicePrivate *p,
+    uint64_t generation, BObolLodResult &result, SbBool &notifyResultReady)
+{
+    const SbString activeKey = lod_request_active_key(result.request);
+    BObolSharedProducer *shared = lod_shared_producer_unlocked(p, activeKey);
+    if (p->stopping ||
+	lod_producer_cancelled_unlocked(p, generation, result.request) ||
+	lod_generation_count_unlocked(
+	    p->generationExecutingTaskCounts, generation) == 0 ||
+	(!lod_active_request_key_recorded_unlocked(p, activeKey) &&
+	 !(shared && !shared->leases.empty())))
+	return BObolIntermediatePublishStatus::REJECTED;
+
+    if (shared) {
+	const auto owner = shared->leases.find(generation);
+	if (owner != shared->leases.end())
+	    lod_normalize_result(result, owner->second.demand);
+	else
+	    lod_normalize_result(result, result.request);
+    } else {
+	lod_normalize_result(result, result.request);
+    }
+    result.generation = generation;
+    const SbBool queueOwnerPayload = !shared ||
+	shared->leases.find(generation) != shared->leases.end();
+
+    if (queueOwnerPayload) {
+	const BObolLodResultSlotMapKey slot =
+	    lod_result_slot_map_key(result);
+	const auto existing = p->resultSlots.find(slot);
+	if (existing != p->resultSlots.end()) {
+	    if (lod_result_supersedes(result, *existing->second)) {
+		const SbString oldRequestKey = lod_request_active_key(
+		    existing->second->request);
+		const SbString newRequestKey = lod_request_active_key(
+		    result.request);
+		if (oldRequestKey != newRequestKey) {
+		    lod_queued_result_request_key_remove_unlocked(
+			p, existing->second->request);
+		    lod_queued_result_request_key_add_unlocked(
+			p, result.request);
+		}
+		*existing->second = std::move(result);
+	    }
+	    p->coalescedResults++;
+	} else {
+	    if (p->results.size() >= p->maxQueuedResults)
+		return BObolIntermediatePublishStatus::CAPACITY_BLOCKED;
+	    notifyResultReady = lod_generation_count_unlocked(
+		p->generationResultCounts, generation) == 0 ? TRUE :
+		    notifyResultReady;
+	    lod_queued_result_request_key_add_unlocked(p, result.request);
+	    p->results.push_back(std::move(result));
+	    p->resultSlots.emplace(slot, std::prev(p->results.end()));
+	    lod_generation_count_add_unlocked(
+		p->generationResultCounts, generation);
+	}
+    }
+    if (shared && lod_shared_producer_publish_unlocked(
+	    *shared, FALSE, queueOwnerPayload))
+	notifyResultReady = TRUE;
+    return BObolIntermediatePublishStatus::PUBLISHED;
+}
+
+/* Promote all currently deferred values.  A provider uses the try-lock form;
+ * worker and presentation threads use the blocking form only when they hold
+ * no resident asset.  Subscriber notification is handed to a safe service
+ * worker rather than invoked from a possibly resident-locked callback. */
+static bool
+lod_promote_deferred_intermediate_results(BObolLodServicePrivate *p,
+    bool waitForServiceLock, bool dispatchNotification)
+{
+    if (!p)
+	return false;
+
+    const auto dispatchPending = [p, dispatchNotification]() {
+	if (!dispatchNotification ||
+	    !p->deferredIntermediateNotificationPending.exchange(
+		false, std::memory_order_acq_rel))
+	    return;
+	lod_notify_result_ready(p);
+    };
+    if (!p->deferredIntermediateResultCount.load(std::memory_order_acquire)) {
+	dispatchPending();
+	return true;
+    }
+
+    std::unique_lock<std::mutex> serviceLock(p->mutex, std::defer_lock);
+    if (waitForServiceLock) {
+	serviceLock.lock();
+    } else if (!serviceLock.try_lock()) {
+	return false;
+    }
+
+    std::unordered_map<BObolDeferredIntermediateKey, BObolLodResult,
+	BObolDeferredIntermediateKeyHash> pending;
+    {
+	std::lock_guard<std::mutex> mailboxLock(
+	    p->deferredIntermediateMutex);
+	pending.swap(p->deferredIntermediateResults);
+	p->deferredIntermediateResultCount.store(0,
+	    std::memory_order_release);
+    }
+
+    SbBool notifyResultReady = FALSE;
+    std::vector<BObolLodResult> capacityBlocked;
+    capacityBlocked.reserve(pending.size());
+    for (auto &entry : pending) {
+	BObolIntermediatePublishStatus status =
+	    lod_publish_intermediate_result_unlocked(
+		p, entry.first.generation, entry.second,
+		notifyResultReady);
+	if (status == BObolIntermediatePublishStatus::CAPACITY_BLOCKED)
+	    capacityBlocked.push_back(std::move(entry.second));
+    }
+    serviceLock.unlock();
+
+    for (BObolLodResult &blocked : capacityBlocked)
+	lod_restore_capacity_blocked_intermediate(p, std::move(blocked));
+    if (notifyResultReady)
+	p->deferredIntermediateNotificationPending.store(
+	    true, std::memory_order_release);
+    dispatchPending();
+    return true;
+}
+
 static BObolLodResult
 lod_shared_producer_replay_result(uint64_t generation,
 	const BObolLodRequest &request)
@@ -3159,6 +3946,10 @@ static void
 lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 		BObolLodResult &&result)
 {
+    /* The provider has returned and therefore owns no resident-asset lock.
+     * Give any callback-deferred preview one final promotion opportunity
+     * before its authoritative completion is coalesced into the same queue. */
+    (void)lod_promote_deferred_intermediate_results(p, true, false);
     SbBool notifyResultReady = FALSE;
     BObolLodResult completedResult = std::move(result);
     completedResult.generation = item.task.generation;
@@ -3200,11 +3991,10 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 	    p->executingTasks--;
 	lod_generation_count_remove_unlocked(
 	    p->generationExecutingTaskCounts, item.task.generation);
-	const size_t workingBytes =
-	    lod_task_estimated_working_set_bytes(item.task);
 	p->activeWorkingSetBytes =
-	    workingBytes >= p->activeWorkingSetBytes ?
-	    0 : p->activeWorkingSetBytes - workingBytes;
+	    item.reservedWorkingSetBytes >= p->activeWorkingSetBytes ?
+	    0 : p->activeWorkingSetBytes - item.reservedWorkingSetBytes;
+	lod_producer_progress_prune(p);
 	lod_active_request_key_remove_unlocked(p, activeKey);
 
 	if (item.task.publishResult) {
@@ -3315,11 +4105,11 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 	    lod_shared_producer_retire_if_unowned_unlocked(p, sharedEntry);
     }
 
-    bobol_lod_working_set_release(
-	lod_task_estimated_working_set_bytes(item.task));
     p->workerCv.notify_all();
     p->cacheWriterCv.notify_one();
-    if (notifyResultReady)
+    if (notifyResultReady ||
+	p->deferredIntermediateNotificationPending.exchange(
+	    false, std::memory_order_acq_rel))
 	lod_notify_result_ready(p);
 }
 
@@ -3791,17 +4581,35 @@ lod_worker_loop(BObolLodServicePrivate *p)
     bu_nice_set(5);
 
     for (;;) {
+	/* A producer which could not acquire the service lock left its newest
+	 * immutable preview in the side mailbox.  An idle peer promotes and
+	 * announces it without extending the inverted resident-lock interval. */
+	(void)lod_promote_deferred_intermediate_results(p, true, true);
 	BObolLodWorkItem item;
 	BObolResidentMeshCompactionWork compaction;
 	SbBool runCompaction = FALSE;
+	SbBool dispatchDeferred = FALSE;
 
 	{
 	    std::unique_lock<std::mutex> lock(p->mutex);
 
-	    std::deque<BObolLodWorkItem>::iterator ready;
+	    std::deque<BObolLodWorkItem>::iterator ready = p->pending.end();
 	    for (;;) {
 		if (p->stopping)
 		    return;
+		/* A full presentation queue leaves a capacity-blocked preview in
+		 * the mailbox.  Do not spin retrying it until a drain wakes us;
+		 * pending subscriber notification does not consume queue space. */
+		const bool deferredCapacityAvailable =
+		    p->results.size() < p->maxQueuedResults;
+		if ((deferredCapacityAvailable &&
+		     p->deferredIntermediateResultCount.load(
+			 std::memory_order_acquire)) ||
+		    p->deferredIntermediateNotificationPending.load(
+			std::memory_order_acquire)) {
+		    dispatchDeferred = TRUE;
+		    break;
+		}
 		ready = lod_find_ready_task(p);
 		if (ready != p->pending.end())
 		    break;
@@ -3813,71 +4621,81 @@ lod_worker_loop(BObolLodServicePrivate *p)
 		p->workerCv.wait(lock);
 	    }
 
-	    if (runCompaction) {
+	    if (dispatchDeferred) {
+		/* No queue item was selected.  Promote outside the service lock. */
+	    } else if (runCompaction) {
 		/* Counters and reservations were installed by the take helper. */
 	    } else {
-	    const int qualityTier = ready->task.request.qualityTier;
-		    item = std::move(*ready);
-		    p->pending.erase(ready);
-		    lod_generation_count_remove_unlocked(
-			p->generationPendingTaskCounts,
-			item.task.generation);
-		    lod_generation_count_add_unlocked(
-			p->generationExecutingTaskCounts,
-			item.task.generation);
-		    lod_pending_quality_remove(p, qualityTier);
-	    const size_t workingBytes =
-		lod_task_estimated_working_set_bytes(item.task);
-	    /* Let a known-over-limit task leave the queue and publish an explicit
-	     * terminal constraint below.  Charging it to the active tally would
-	     * falsely report an impossible reservation and can block unrelated
-	     * affordable work while no provider has started. */
-	    const bool exceedsServiceLimit =
-		p->maxActiveWorkingSetBytes != SIZE_MAX &&
-		workingBytes > p->maxActiveWorkingSetBytes;
-	    const size_t accountedBytes = exceedsServiceLimit ? 0 : workingBytes;
-	    p->activeWorkingSetBytes =
-		accountedBytes > SIZE_MAX - p->activeWorkingSetBytes ?
-		SIZE_MAX : p->activeWorkingSetBytes + accountedBytes;
-	    p->executingTasks++;
-	    p->peakWorkingSetBytes = std::max(
-		p->peakWorkingSetBytes, p->activeWorkingSetBytes);
-	    p->peakExecutingTasks = std::max(
-		p->peakExecutingTasks, p->executingTasks);
+		const int qualityTier = ready->task.request.qualityTier;
+		const int dispatchClass = ready->task.dispatchClass;
+		item = std::move(*ready);
+		p->pending.erase(ready);
+		lod_generation_count_remove_unlocked(
+		    p->generationPendingTaskCounts,
+		    item.task.generation);
+		lod_generation_pending_time_remove_unlocked(
+		    p, item.task.generation,
+		    item.submittedMicroseconds);
+		lod_generation_count_add_unlocked(
+		    p->generationExecutingTaskCounts,
+		    item.task.generation);
+		lod_pending_quality_remove(p, qualityTier);
+		lod_pending_dispatch_remove(p, dispatchClass);
+		const size_t workingBytes =
+		    lod_task_estimated_working_set_bytes(item.task);
+		/* Let a known-over-limit task leave the queue and publish an explicit
+		 * terminal constraint below.  Charging it to the active tally would
+		 * falsely report an impossible reservation and can block unrelated
+		 * affordable work while no provider has started. */
+		const bool exceedsServiceLimit =
+		    p->maxActiveWorkingSetBytes != SIZE_MAX &&
+		    workingBytes > p->maxActiveWorkingSetBytes;
+		const size_t accountedBytes = exceedsServiceLimit ? 0 : workingBytes;
+		item.exceedsServiceWorkingSetLimit = exceedsServiceLimit;
+		item.reservedWorkingSetBytes = accountedBytes;
+		p->activeWorkingSetBytes =
+		    accountedBytes > SIZE_MAX - p->activeWorkingSetBytes ?
+		    SIZE_MAX : p->activeWorkingSetBytes + accountedBytes;
+		p->executingTasks++;
+		p->peakWorkingSetBytes = std::max(
+		    p->peakWorkingSetBytes, p->activeWorkingSetBytes);
+		p->peakExecutingTasks = std::max(
+		    p->peakExecutingTasks, p->executingTasks);
 	    }
 	}
+	if (dispatchDeferred)
+	    continue;
 
 	if (runCompaction) {
-	    const SbBool admitted = bobol_lod_working_set_acquire(
+	    /* Match source and ordinary LoD execution: never retain transient
+	     * memory while waiting for the process CPU gate. */
+	    BObolParallelBudgetLease cpuBudget;
+	    cpuBudget.acquireOuter();
+	    BObolTransientMemoryAdmissionWaitScope memoryWait(
+		p, NULL, compaction.estimatedWorkingSetBytes);
+	    BObolWorkingSetLease workingSet;
+	    const SbBool admitted = workingSet.acquire(
 		compaction.estimatedWorkingSetBytes);
+	    memoryWait.admitted();
 	    BObolLodResidentCompaction result;
 	    if (admitted)
 		result = lod_execute_resident_compaction(p, compaction);
 	    lod_finish_resident_compaction(
 		p, compaction, std::move(result));
-	    if (admitted)
-		bobol_lod_working_set_release(
-		    compaction.estimatedWorkingSetBytes);
 	    continue;
 	}
 
-	const size_t estimatedBytes =
-	    lod_task_estimated_working_set_bytes(item.task);
-	const bool exceedsServiceLimit =
-	    p->maxActiveWorkingSetBytes != SIZE_MAX &&
-	    estimatedBytes > p->maxActiveWorkingSetBytes;
-	const SbBool admitted = !exceedsServiceLimit &&
-	    bobol_lod_working_set_acquire(estimatedBytes);
-	BObolLodResult result = admitted ?
-	    lod_execute_task(p, item.task) :
-	    lod_service_status_result(item.task, BOBOL_LOD_PROVIDER_ERROR,
-		exceedsServiceLimit ?
-		"LoD task exceeds service transient working-set limit" :
-		"LoD task exceeds process transient working-set limit");
+	/* Keep the transient reservation through result publication and provider
+	 * payload cleanup, matching its estimate's complete task lifetime.  CPU
+	 * admission only covers provider execution; queue bookkeeping is short and
+	 * must not occupy a scarce background execution slot. */
+	BObolParallelBudgetLease cpuBudget;
+	BObolWorkingSetLease workingSet;
+	BObolLodResult result = lod_execute_task(
+	    p, item, cpuBudget, workingSet);
+	cpuBudget.release();
 	lod_finish_task(p, item, std::move(result));
 	lod_task_free_realize_data(item.task);
-	if (admitted)
-	    bobol_lod_working_set_release(estimatedBytes);
     }
 }
 
@@ -3915,8 +4733,13 @@ lod_cache_writer_loop(BObolLodServicePrivate *p)
 	 * writer.  A callback already in progress remains intentionally
 	 * non-preemptible. */
 	if (item.write && !lod_producer_cancelled_or_stopping(
-		p, item.result.generation, item.result.request))
-	    (*item.write)(item.result, item.writeData);
+		p, item.result.generation, item.result.request)) {
+	    BObolParallelBudgetLease cpuBudget;
+	    cpuBudget.acquireOuter();
+	    if (!lod_producer_cancelled_or_stopping(
+		    p, item.result.generation, item.result.request))
+		(*item.write)(item.result, item.writeData);
+	}
 
 	{
 	    std::lock_guard<std::mutex> lock(p->mutex);
@@ -3957,6 +4780,10 @@ BObolLodService::start(size_t workerCount, SbBool startCacheWriter)
 	this->p->cacheWriterEnabled = startCacheWriter ? TRUE : FALSE;
 	this->p->peakWorkingSetBytes = 0;
 	this->p->peakExecutingTasks = 0;
+	this->p->maxDeferredIntermediateResults.store(
+	    std::max<size_t>(1, std::min(
+		this->p->maxQueuedResults, workerCount)),
+	    std::memory_order_relaxed);
 	this->p->running = TRUE;
     }
 
@@ -3988,6 +4815,10 @@ BObolLodService::ensureWorkerCount(size_t workerCount)
 	while (this->p->workers.size() < workerCount)
 	    this->p->workers.push_back(
 		std::thread(lod_worker_loop, this->p));
+	this->p->maxDeferredIntermediateResults.store(
+	    std::max<size_t>(1, std::min(
+		this->p->maxQueuedResults, this->p->workers.size())),
+	    std::memory_order_relaxed);
     } catch (...) {
 	return FALSE;
     }
@@ -4009,6 +4840,8 @@ BObolLodService::stop(void)
 	    !this->p->cacheWriter.joinable())
 	    return;
 	this->p->stopping = TRUE;
+	this->p->deferredIntermediateNotificationPending.store(
+	    false, std::memory_order_release);
     }
     this->p->workerCv.notify_all();
 
@@ -4019,12 +4852,25 @@ BObolLodService::stop(void)
     }
 
     {
+	std::lock_guard<std::mutex> lock(
+	    this->p->deferredIntermediateMutex);
+	this->p->deferredIntermediateResults.clear();
+	this->p->deferredIntermediateResultCount.store(
+	    0, std::memory_order_release);
+	this->p->deferredIntermediateNotificationPending.store(
+	    false, std::memory_order_release);
+    }
+
+    {
 	std::lock_guard<std::mutex> lock(this->p->mutex);
 	pending.swap(this->p->pending);
+	this->p->pendingDispatchCounts.clear();
 	this->p->pendingQualityCounts.clear();
 	this->p->inFlight = 0;
 	this->p->activeWorkingSetBytes = 0;
 	this->p->executingTasks = 0;
+	this->p->cpuAdmissionWaitingTasks = 0;
+	this->p->transientMemoryAdmissionWaitingTasks = 0;
 	this->p->resultReservations = 0;
 	this->p->cacheWriteReservations = 0;
 	this->p->activeRequestKeyCounts.clear();
@@ -4055,10 +4901,19 @@ BObolLodService::stop(void)
 	this->p->cancelledGenerationOrder.clear();
 	this->p->generationTaskCounts.clear();
 	this->p->generationPendingTaskCounts.clear();
+	this->p->generationPendingTaskTimes.clear();
 	this->p->generationExecutingTaskCounts.clear();
+	this->p->generationCpuAdmissionWaitingTaskCounts.clear();
+	this->p->generationTransientMemoryAdmissionWaitingTaskCounts.clear();
 	this->p->generationDelayedTaskCounts.clear();
 	this->p->generationResultCounts.clear();
 	this->p->generationCacheWriteCounts.clear();
+	{
+	    std::lock_guard<std::mutex> progressLock(
+		this->p->producerProgressMutex);
+	    this->p->producerProgress.clear();
+	    this->p->nextProducerProgressId = 1;
+	}
 	this->p->residentMeshConsumerDemands.clear();
 	this->p->residentMeshOrder.clear();
 	this->p->residentMeshCompactionWork.clear();
@@ -4075,7 +4930,11 @@ BObolLodService::stop(void)
 	    0, std::memory_order_relaxed);
 	this->p->residentMeshStableBytes.store(
 	    0, std::memory_order_relaxed);
-	this->p->residentMeshGrowthReservationBytes = 0;
+	{
+	    std::lock_guard<std::mutex> admissionLock(
+		this->p->residentMeshAdmissionMutex);
+	    this->p->residentMeshGrowthReservationBytes = 0;
+	}
 	lod_resident_mesh_revision_advance(
 	    this->p->residentMeshAdmissionRevision);
 	this->p->activeGeneration = 0;
@@ -4245,6 +5104,7 @@ struct BObolColdMeshPreviewContext {
     uint32_t publishedSourceEntryIndex = UINT32_MAX;
     SbBool spatialLeafProducer = FALSE;
     SbBool spatialCoverageAdmitted = FALSE;
+    std::shared_ptr<BObolLodProducerProgressRecord> progress;
 };
 
 static void
@@ -4253,7 +5113,14 @@ lod_cold_preview_refresh_demand(BObolColdMeshPreviewContext *context)
     if (!context || !context->serviceState)
 	return;
     const SbString key = lod_request_active_key(context->request);
-    std::lock_guard<std::mutex> lock(context->serviceState->mutex);
+    /* Cache callbacks run while the producer owns resident.mutex.  A demand
+     * refresh is opportunistic, so never wait for the outer service lock in
+     * the inverse direction.  The next page callback (or final result
+     * normalization) observes any update missed by this probe. */
+    std::unique_lock<std::mutex> lock(
+	context->serviceState->mutex, std::try_to_lock);
+    if (!lock.owns_lock())
+	return;
     const BObolSharedProducer *producer = lod_shared_producer_unlocked(
 	context->serviceState, key);
     if (producer) {
@@ -4298,23 +5165,6 @@ lod_cold_preview_note_published(BObolColdMeshPreviewContext *context)
  * feedback, then amortize later publication into bounded waves. */
 static constexpr size_t lod_cold_spatial_publication_page_batch = 8;
 
-static BObolLodCounts
-lod_cad_geometry_counts(const Obol::PartGeometry &geometry)
-{
-    BObolLodCounts counts;
-    if (geometry.shaded) {
-	counts.faceCount = geometry.shaded->indices.size() / 3u;
-	counts.pointCount = geometry.shaded->positions.size();
-	counts.originalPointCount = counts.pointCount;
-	counts.normalCount = geometry.shaded->normals.size();
-    }
-    if (geometry.wire)
-	counts.lineCount = geometry.wire->segmentCount();
-    if (geometry.points)
-	counts.pointCount += geometry.points->positions.size();
-    return counts;
-}
-
 static void
 lod_counts_accumulate(BObolLodCounts &total,
     const BObolLodCounts &addition)
@@ -4345,7 +5195,7 @@ lod_use_limited_spatial_layers(BObolLodResult &result,
 	result.residentCut = std::max(result.residentCut, layer.activeCut);
 	if (layer.geometry)
 	    lod_counts_accumulate(result.counts,
-		lod_cad_geometry_counts(*layer.geometry));
+		bobol_cad_geometry_counts(*layer.geometry));
     }
 }
 
@@ -4354,9 +5204,29 @@ lod_cold_mesh_preview_cancelled(void *callbackData)
 {
     const BObolColdMeshPreviewContext *context =
 	static_cast<const BObolColdMeshPreviewContext *>(callbackData);
-    return !context || !context->service || !context->generation ||
-	context->service->isProducerCancelled(
+    if (!context || !context->serviceState || !context->generation)
+	return 1;
+    /* This callback also runs below resident.mutex.  Missing one cancellation
+     * observation is safe and bounded by the producer's next callback; a
+     * blocking service-lock acquisition here can instead stop both the
+     * producer and its owner-thread progress pump. */
+    std::unique_lock<std::mutex> lock(
+	context->serviceState->mutex, std::try_to_lock);
+    if (!lock.owns_lock())
+	return 0;
+    return context->serviceState->stopping ||
+	lod_producer_cancelled_unlocked(context->serviceState,
 	    context->generation, context->request) ? 1 : 0;
+}
+
+static void
+lod_cold_mesh_progress(int stage, uint64_t completedUnits,
+	uint64_t totalUnits, void *callbackData)
+{
+    BObolColdMeshPreviewContext *context =
+	static_cast<BObolColdMeshPreviewContext *>(callbackData);
+    if (context && context->progress)
+	context->progress->publish(stage, completedUnits, totalUnits);
 }
 
 static size_t
@@ -4373,159 +5243,6 @@ lod_cold_preview_render_cost(
     counts.pointCount = hierarchy.cuts[cut].point_count;
     counts.normalCount = hierarchy.has_normals ? counts.pointCount : 0;
     return bobol_lod_render_cost_units(counts, drawMode, 1);
-}
-
-static std::shared_ptr<const Obol::PartGeometry>
-lod_cold_coverage_voxel_geometry(const struct BObolMeshLodData &data,
-	const SbBox3f &bounds, int drawMode)
-{
-    if (!data.points || !data.point_count)
-	return std::shared_ptr<const Obol::PartGeometry>();
-    std::shared_ptr<Obol::PartGeometryBuilder> geometry(
-	new Obol::PartGeometryBuilder);
-    constexpr size_t cellAxis = BOBOL_MESH_LOD_COVERAGE_PREVIEW_CELL_AXIS;
-    constexpr size_t cellCount = cellAxis * cellAxis * cellAxis;
-    std::array<bool, cellCount> occupied = {};
-    const SbVec3f sourceMinimum(static_cast<float>(data.bmin[X]),
-	static_cast<float>(data.bmin[Y]), static_cast<float>(data.bmin[Z]));
-    const SbVec3f sourceMaximum(static_cast<float>(data.bmax[X]),
-	static_cast<float>(data.bmax[Y]), static_cast<float>(data.bmax[Z]));
-    const SbVec3f sourceExtent = sourceMaximum - sourceMinimum;
-    if (sourceExtent[0] <= 0.0f || sourceExtent[1] <= 0.0f ||
-	sourceExtent[2] <= 0.0f)
-	return std::shared_ptr<const Obol::PartGeometry>();
-
-    const auto cellCoordinate = [&sourceMinimum, &sourceExtent, cellAxis](
-	const SbVec3f &point, size_t axis) {
-	const float normalized = (point[axis] - sourceMinimum[axis]) /
-	    sourceExtent[axis];
-	return static_cast<size_t>(std::max(0.0f, std::min(
-	    static_cast<float>(cellAxis - 1),
-	    normalized * static_cast<float>(cellAxis))));
-    };
-    for (size_t index = 0; index < data.point_count; ++index) {
-	const point_t &point = data.points[index];
-	const SbVec3f value(static_cast<float>(point[X]),
-	    static_cast<float>(point[Y]), static_cast<float>(point[Z]));
-	const size_t x = cellCoordinate(value, X);
-	const size_t y = cellCoordinate(value, Y);
-	const size_t z = cellCoordinate(value, Z);
-	occupied[x + cellAxis * (y + cellAxis * z)] = true;
-    }
-
-    const bool wire = drawMode == BOBOL_LOD_DRAW_WIRE ||
-	drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
-    const bool shaded = drawMode != BOBOL_LOD_DRAW_WIRE;
-    Obol::WireRep wireRep;
-    Obol::TriMesh mesh;
-    wireRep.bounds.setBounds(sourceMinimum, sourceMaximum);
-    mesh.bounds = wireRep.bounds;
-    std::unordered_set<uint32_t> wireEdges;
-    if (wire)
-	wireEdges.reserve(cellCount * 3u);
-    const int faceAxes[6] = {X, X, Y, Y, Z, Z};
-    const int faceDirections[6] = {-1, 1, -1, 1, -1, 1};
-    const uint8_t faceCorners[6][4] = {
-	{0, 4, 6, 2}, {1, 3, 7, 5}, {0, 1, 5, 4},
-	{2, 6, 7, 3}, {0, 2, 3, 1}, {4, 5, 7, 6}
-    };
-    uint32_t edgeId = 0;
-    for (size_t z = 0; z < cellAxis; ++z) {
-	for (size_t y = 0; y < cellAxis; ++y) {
-	    for (size_t x = 0; x < cellAxis; ++x) {
-		if (!occupied[x + cellAxis * (y + cellAxis * z)])
-		    continue;
-		const SbVec3f cellMinimum = sourceMinimum + SbVec3f(
-		    sourceExtent[0] * static_cast<float>(x) / cellAxis,
-		    sourceExtent[1] * static_cast<float>(y) / cellAxis,
-		    sourceExtent[2] * static_cast<float>(z) / cellAxis);
-		const SbVec3f cellMaximum = sourceMinimum + SbVec3f(
-		    sourceExtent[0] * static_cast<float>(x + 1) / cellAxis,
-		    sourceExtent[1] * static_cast<float>(y + 1) / cellAxis,
-		    sourceExtent[2] * static_cast<float>(z + 1) / cellAxis);
-		const SbVec3f corners[8] = {
-		    SbVec3f(cellMinimum[0], cellMinimum[1], cellMinimum[2]),
-		    SbVec3f(cellMaximum[0], cellMinimum[1], cellMinimum[2]),
-		    SbVec3f(cellMinimum[0], cellMaximum[1], cellMinimum[2]),
-		    SbVec3f(cellMaximum[0], cellMaximum[1], cellMinimum[2]),
-		    SbVec3f(cellMinimum[0], cellMinimum[1], cellMaximum[2]),
-		    SbVec3f(cellMaximum[0], cellMinimum[1], cellMaximum[2]),
-		    SbVec3f(cellMinimum[0], cellMaximum[1], cellMaximum[2]),
-		    SbVec3f(cellMaximum[0], cellMaximum[1], cellMaximum[2])
-		};
-		for (size_t face = 0; face < 6; ++face) {
-		    size_t neighbor[3] = {x, y, z};
-		    const size_t axis = static_cast<size_t>(faceAxes[face]);
-		    const int direction = faceDirections[face];
-		    if ((direction < 0 && neighbor[axis] > 0) ||
-			(direction > 0 && neighbor[axis] + 1 < cellAxis)) {
-			neighbor[axis] = static_cast<size_t>(
-			    static_cast<int>(neighbor[axis]) + direction);
-			if (occupied[neighbor[X] + cellAxis *
-			    (neighbor[Y] + cellAxis * neighbor[Z])])
-			    continue;
-		    }
-		    const uint8_t *faceCorner = faceCorners[face];
-		    if (shaded) {
-			const uint32_t first = static_cast<uint32_t>(
-			    mesh.positions.size());
-			for (size_t corner = 0; corner < 4; ++corner)
-			    mesh.positions.push_back(corners[faceCorner[corner]]);
-			mesh.indices.insert(mesh.indices.end(), {
-			    first, first + 1, first + 2,
-			    first, first + 2, first + 3
-			});
-		    }
-		    if (wire) {
-			for (size_t corner = 0; corner < 4; ++corner) {
-			    const uint8_t firstCorner =
-				faceCorner[corner];
-			    const uint8_t secondCorner =
-				faceCorner[(corner + 1) % 4];
-			    const uint8_t changedAxis =
-				firstCorner ^ secondCorner;
-			    const size_t edgeAxis = changedAxis == 1 ? X :
-				changedAxis == 2 ? Y : Z;
-			    const size_t gridX = x +
-				std::min<size_t>(firstCorner & 1u,
-				    secondCorner & 1u);
-			    const size_t gridY = y +
-				std::min<size_t>((firstCorner >> 1u) & 1u,
-				    (secondCorner >> 1u) & 1u);
-			    const size_t gridZ = z +
-				std::min<size_t>((firstCorner >> 2u) & 1u,
-				    (secondCorner >> 2u) & 1u);
-			    const size_t gridAxis = cellAxis + 1u;
-			    const uint32_t edgeKey = static_cast<uint32_t>(
-				edgeAxis + 3u * (gridX + gridAxis *
-				    (gridY + gridAxis * gridZ)));
-			    /* Adjacent surface faces share this exact grid edge.
-			     * Retaining it once preserves the outline without
-			     * spending first-frame budget on duplicate segments. */
-			    if (!wireEdges.insert(edgeKey).second)
-				continue;
-			    wireRep.segmentPoints.push_back(
-				corners[firstCorner]);
-			    wireRep.segmentPoints.push_back(
-				corners[secondCorner]);
-			    wireRep.segmentIds.push_back(edgeId++);
-			}
-		    }
-		}
-	    }
-	}
-    }
-    if (mesh.indices.empty() && wireRep.segmentPoints.empty())
-	return std::shared_ptr<const Obol::PartGeometry>();
-    if (!mesh.indices.empty())
-	geometry->shaded = std::move(mesh);
-    if (!wireRep.segmentPoints.empty())
-	geometry->wire = std::move(wireRep);
-    if (!bounds.isEmpty())
-	geometry->conservativeBounds = bounds;
-    geometry->subpixelProxyEligible = true;
-    return bobol_cad_build_geometry(
-	std::move(*geometry), "cold coverage preview");
 }
 
 static void
@@ -4547,18 +5264,17 @@ lod_publish_cold_coverage_preview(
 		static_cast<float>(data->bmax[Z]))) : context->request.bounds;
     const int coverageDrawMode = context->spatialLeafProducer ?
 	BOBOL_LOD_DRAW_WIRE : context->request.drawMode;
+    BObolLodCoveragePreviewBuild preview;
+    if (!bobol_lod_build_coverage_preview(*data, bounds, coverageDrawMode,
+	    context->renderCostAllowance, preview))
+        return;
     std::shared_ptr<const Obol::PartGeometry> geometry =
-	lod_cold_coverage_voxel_geometry(*data, bounds,
-	    coverageDrawMode);
+	bobol_cad_build_geometry(std::move(preview.geometry),
+	    "cold coverage preview");
     if (!geometry)
 	return;
-    const BObolLodCounts coverageCounts =
-	lod_cad_geometry_counts(*geometry);
-    const size_t coverageCost = bobol_lod_render_cost_units(
-	coverageCounts, coverageDrawMode, 1);
-    if (context->spatialLeafProducer &&
-	coverageCost > context->renderCostAllowance)
-	return;
+    const BObolLodCounts coverageCounts = preview.counts;
+    const size_t coverageCost = preview.renderCost;
 
     BObolLodResult result;
     result.request = context->request;
@@ -4579,21 +5295,32 @@ lod_publish_cold_coverage_preview(
      * identifies an immutable direct PartGeometry handoff without suggesting
      * that it is a PoP resident-cut revision. */
     result.preparedCadGeometryRevision = 1;
+    BObolLodPresentationLayer coverageLayer;
+    coverageLayer.layerKey = "coverage";
+    coverageLayer.geometry = geometry;
+    coverageLayer.geometryRevision = 1;
+    coverageLayer.coverage = TRUE;
+    /* Keep the direct prepared handle for legacy/noncompact consumers, but
+     * always carry the semantic layer marker as well.  Without it, ordinary
+     * cold previews are indistinguishable from genuine source triangles in
+     * convergence diagnostics. */
+    result.presentationLayers.push_back(coverageLayer);
     if (context->spatialLeafProducer) {
-	BObolLodPresentationLayer layer;
-	layer.layerKey = "coverage";
-	layer.geometry = std::move(geometry);
-	layer.geometryRevision = 1;
-	layer.coverage = TRUE;
 	context->presentationLayers.clear();
-	context->presentationLayers.push_back(layer);
+	context->presentationLayers.push_back(coverageLayer);
 	context->presentationRenderCost = coverageCost;
 	context->publishedPageCount = 0;
 	context->spatialCoverageAdmitted = TRUE;
-	result.presentationLayers = context->presentationLayers;
     }
     result.terminal = FALSE;
-    result.diagnostic = "cold spatial coverage-voxel preview";
+    std::string diagnostic("cold temporary coverage preview: ");
+    if (preview.pointFallback) {
+	diagnostic += "points";
+    } else {
+	diagnostic += std::to_string(preview.cellAxis);
+	diagnostic += "^3 voxels";
+    }
+    result.diagnostic = diagnostic.c_str();
     result.canonicalizePayload();
     if (!result.payloadIsConsistent())
 	return;
@@ -4602,8 +5329,12 @@ lod_publish_cold_coverage_preview(
     if (published)
 	lod_cold_preview_note_published(context);
     if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
-	bu_log("[obol-timing] cold coverage-voxel preview: points=%zu "
-	       "published=%d\n", data->point_count, published ? 1 : 0);
+	bu_log("[obol-timing] cold coverage preview: source_points=%zu "
+	       "representation=%s grid=%zu cost=%zu allowance=%zu "
+	       "published=%d\n", data->point_count,
+	       preview.pointFallback ? "points" : "voxels",
+	       preview.cellAxis, coverageCost, context->renderCostAllowance,
+	       published ? 1 : 0);
 }
 
 static void
@@ -4631,7 +5362,7 @@ lod_publish_cold_spatial_layers(
     for (const BObolLodPresentationLayer &publishedLayer :
 	 context->presentationLayers)
 	lod_counts_accumulate(result.counts,
-	    lod_cad_geometry_counts(*publishedLayer.geometry));
+	    bobol_cad_geometry_counts(*publishedLayer.geometry));
     result.presentationLayers = context->presentationLayers;
     result.terminal = FALSE;
     result.diagnostic = diagnostic ? diagnostic :
@@ -4670,8 +5401,7 @@ lod_publish_cold_spatial_page_impl(
     if (!context || !context->service || !context->generation || !page ||
 	!cacheKey || !context->spatialLeafProducer ||
 	!context->spatialCoverageAdmitted ||
-	context->service->isProducerCancelled(
-	    context->generation, context->request) ||
+	lod_cold_mesh_preview_cancelled(context) ||
 	page->cut < page->hierarchy.min_cut ||
 	page->cut > page->hierarchy.max_cut || !page->data.faces ||
 	!page->data.points_orig || !page->data.face_count ||
@@ -5032,7 +5762,16 @@ BObolLodService::realizeResidentMeshLod(
 	(void)bobol_atomic_identity_advance(resident->useRevision);
     }
 
+    /* Publish before acquiring the resident lock.  Cache generation and
+     * prefix publication deliberately serialize per asset, and on a cold
+     * start that wait can otherwise look like an idle or stalled worker. */
+    const std::shared_ptr<BObolLodProducerProgressRecord> producerProgress =
+	lod_producer_progress_begin(this->p, provider.generation, request);
+    BObolLodProducerProgressScope producerProgressScope(producerProgress);
     std::lock_guard<std::mutex> residentLock(resident->mutex);
+    if (producerProgress)
+	producerProgress->publish(
+	    BOBOL_LOD_PRODUCER_STAGE_CACHE_LOOKUP, 0, 1);
     if (resident->databaseIdentity != databaseIdentity ||
 	resident->name != name)
 	return lod_provider_status_result(request, BOBOL_LOD_PROVIDER_STALE,
@@ -5054,6 +5793,7 @@ BObolLodService::realizeResidentMeshLod(
 	previewContext.request = request;
 	previewContext.assetKey = assetKey;
 	previewContext.progressiveMesh = resident->mesh;
+	previewContext.progress = producerProgress;
 	previewContext.renderCostAllowance =
 	    provider.initialRefinementCostBudget;
 	struct BObolMeshLodPreviewRequest previewRequest =
@@ -5064,9 +5804,15 @@ BObolLodService::realizeResidentMeshLod(
 	previewRequest.target_pixel_error = request.targetPixelError;
 	previewRequest.cancellation_callback = lod_cold_mesh_preview_cancelled;
 	previewRequest.cancellation_data = &previewContext;
+	previewRequest.progress_callback = lod_cold_mesh_progress;
+	previewRequest.progress_data = &previewContext;
 	const bool spatialLeafProducer =
 	    provider.useSerializedSpatialSource ? true : false;
 	previewRequest.spatial_leaf_producer = spatialLeafProducer ? 1 : 0;
+	/* The producer applies the large-source threshold using its authoritative
+	 * face count.  Keeping this an explicit request prevents utility/cache API
+	 * callers from acquiring presentation behavior they did not ask for. */
+	previewRequest.coverage_preview = 1;
 	previewContext.spatialLeafProducer =
 	    spatialLeafProducer ? TRUE : FALSE;
 	if (spatialLeafProducer) {
@@ -5089,7 +5835,13 @@ BObolLodService::realizeResidentMeshLod(
 	if (!resident->lod && !exactVariant)
 	    resident->lod = bobol_mesh_lod_get_named_cached_prefix(
 		dbip, name);
+	if (producerProgress)
+	    producerProgress->publish(
+		BOBOL_LOD_PRODUCER_STAGE_CACHE_LOOKUP, 1, 1);
 	if (!resident->lod && exactVariant && provider.generateBrepVariant) {
+	    if (producerProgress)
+		producerProgress->publish(
+		    BOBOL_LOD_PRODUCER_STAGE_SOURCE_PREPARATION, 0, 1);
 	    const int64_t variantStarted = bu_gettime();
 	    struct bg_tess_tol ttol = BG_TESS_TOL_INIT_TOL;
 	    ttol.abs = std::max(0.0, provider.brepTessellationAbsTol);
@@ -5123,6 +5875,9 @@ BObolLodService::realizeResidentMeshLod(
 		       static_cast<double>(bu_gettime() - variantStarted) /
 			   1000.0,
 		       resident->lod ? "ready" : "failed");
+	    if (producerProgress)
+		producerProgress->publish(
+		    BOBOL_LOD_PRODUCER_STAGE_SOURCE_PREPARATION, 1, 1);
 	}
 	if (resident->lod) {
 	    struct directory *assetDirectory = db_lookup(dbip, name,
@@ -5163,6 +5918,9 @@ BObolLodService::realizeResidentMeshLod(
 		    (!request.sourceCounts.pointCount ||
 		     request.sourceCounts.pointCount == stagedPointCount);
 		int refreshResult = BRLCAD_ERROR;
+		if (producerProgress)
+		    producerProgress->publish(
+			BOBOL_LOD_PRODUCER_STAGE_SOURCE_PREPARATION, 0, 1);
 		if (stagedMatches && staged->bot) {
 		    resident->lod =
 			bobol_mesh_lod_cache_refresh_open(
@@ -5210,6 +5968,11 @@ BObolLodService::realizeResidentMeshLod(
 			BOBOL_LOD_PROVIDER_CACHE_MISS,
 			"resident mesh provider has no exact staged variant");
 		}
+		if (producerProgress &&
+		    producerProgress->stage.load(std::memory_order_acquire) ==
+			BOBOL_LOD_PRODUCER_STAGE_SOURCE_PREPARATION)
+		    producerProgress->publish(
+			BOBOL_LOD_PRODUCER_STAGE_SOURCE_PREPARATION, 1, 1);
 		if (refreshResult != BRLCAD_OK)
 		    return lod_provider_status_result(request,
 			BOBOL_LOD_PROVIDER_CACHE_MISS,
@@ -5242,6 +6005,11 @@ BObolLodService::realizeResidentMeshLod(
 		    BOBOL_LOD_PROVIDER_CACHE_MISS,
 		"resident mesh provider has no cache payload");
     }
+	if (producerProgress &&
+	    producerProgress->stage.load(std::memory_order_acquire) ==
+		BOBOL_LOD_PRODUCER_STAGE_CACHE_LOOKUP)
+	    producerProgress->publish(
+		BOBOL_LOD_PRODUCER_STAGE_CACHE_LOOKUP, 1, 1);
 
     struct BObolMeshLodHierarchyInfo hierarchy =
 	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
@@ -5284,44 +6052,64 @@ BObolLodService::realizeResidentMeshLod(
 		"resident mesh provider received an invalid chunk set");
     }
     if (chunked && requiredChunks.empty()) {
+	BObolLodResult result;
+	result.request = request;
+	result.request.requiredChunks.clear();
+	result.cacheKey = bobol_lod_cache_key(request);
+	result.geometry.kind = BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE;
+	result.geometry.providerId = request.providerId;
+	result.geometry.providerVersion = request.providerVersion;
+	result.geometry.cacheKey = assetKey;
+	result.geometry.providerToken =
+	    bobol_mesh_lod_cache_key_get(resident->lod);
+	result.resultKind = BOBOL_LOD_RESULT_MESH;
+	result.qualityTier = request.qualityTier;
+	result.providerStatus = BOBOL_LOD_PROVIDER_READY;
+	result.bounds = request.bounds;
+	result.resolvedCut = requestedCut;
+	result.hasNormals = hierarchy.has_normals ? TRUE : FALSE;
+	result.shadedCullBackfaces =
+	    hierarchy.shaded_cull_backfaces ? TRUE : FALSE;
+	result.terminal = TRUE;
 	if (sourceLimited && !resident->limitedSpatialLayers.empty()) {
-	    BObolLodResult result;
-	    result.request = request;
-	    result.cacheKey = bobol_lod_cache_key(request);
-	    result.geometry.kind = BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE;
-	    result.geometry.providerId = request.providerId;
-	    result.geometry.providerVersion = request.providerVersion;
-	    result.geometry.cacheKey = assetKey;
-	    result.geometry.providerToken =
-		bobol_mesh_lod_cache_key_get(resident->lod);
-	    result.resultKind = BOBOL_LOD_RESULT_MESH;
-	    result.qualityTier = request.qualityTier;
-	    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
-	    result.bounds = request.bounds;
-	    result.resolvedCut = requestedCut;
 	    result.residentCut = hierarchy.resident_cut;
-	    result.hasNormals = hierarchy.has_normals ? TRUE : FALSE;
-	    result.shadedCullBackfaces =
-		hierarchy.shaded_cull_backfaces ? TRUE : FALSE;
 	    result.memoryLimited = TRUE;
-	    result.terminal = TRUE;
 	    result.diagnostic =
 		"bounded spatial coverage retained; no resident page is visible";
 	    lod_use_limited_spatial_layers(
 		result, resident->limitedSpatialLayers);
-	    result.presentationAdmissionCertified =
-		provider.presentationAdmissionCertified;
-	    result.presentationAdmissionViewRevision =
-		provider.presentationAdmissionViewRevision;
-	    result.presentationAdmissionPolicyRevision =
-		provider.presentationAdmissionPolicyRevision;
-	    result.presentationAdmissionCut = result.geometry.activeCut;
-	    result.canonicalizePayload();
-	    return result;
+	} else if (resident->mesh && resident->mesh->isValid() &&
+	    resident->mesh->hasSpatialClusters()) {
+	    /* An empty visible-page set is an exact view-local population.  It is
+	     * not cancellation: returning CANCELLED asks authentication to replay
+	     * the same current demand forever.  Reuse the retained hierarchy as
+	     * proof that this is a spatial asset, but publish no renderer layers
+	     * and charge no triangles. */
+	    result.progressiveMesh = resident->mesh;
+	    result.geometry.activeCut = requestedCut;
+	    result.residentCut = resident->mesh->residentCut();
+	    result.bounds = resident->mesh->bounds();
+	    result.counts.clear();
+	    result.presentationLayers.clear();
+	    result.diagnostic = "view-local spatial page demand is empty";
+	} else {
+	    /* A cold asset without a retained spatial generation cannot yet prove
+	     * the empty-page interpretation.  Make the exceptional condition
+	     * terminal for this exact demand rather than reporting cancellation,
+	     * whose retry disposition has no state change capable of succeeding. */
+	    return lod_provider_status_result(request,
+		BOBOL_LOD_PROVIDER_ERROR,
+		"resident mesh provider cannot certify empty spatial demand");
 	}
-	return lod_provider_status_result(request,
-	    BOBOL_LOD_PROVIDER_CANCELLED,
-	    "resident mesh provider has no visible chunks");
+	result.presentationAdmissionCertified =
+	    provider.presentationAdmissionCertified;
+	result.presentationAdmissionViewRevision =
+	    provider.presentationAdmissionViewRevision;
+	result.presentationAdmissionPolicyRevision =
+	    provider.presentationAdmissionPolicyRevision;
+	result.presentationAdmissionCut = result.geometry.activeCut;
+	result.canonicalizePayload();
+	return result;
     }
     resident->publishedMinimumCut.store(
 	hierarchy.min_cut, std::memory_order_relaxed);
@@ -5447,6 +6235,10 @@ BObolLodService::realizeResidentMeshLod(
     const bool loadNeeded =
 	provider.resetExisting || !retainedTargetDrawable ||
 	(publishedCut >= 0 && loadTarget != publishedCut);
+	if (producerProgress && loadNeeded)
+	    producerProgress->publish(
+		BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION, 0,
+		1);
     int64_t prefixLoadMicroseconds = 0;
     int64_t generationBuildMicroseconds = 0;
     int64_t preparedGeometryMicroseconds = 0;
@@ -5565,14 +6357,18 @@ BObolLodService::realizeResidentMeshLod(
 		0, bu_gettime() - generationBuildStarted);
 	}
 	if (publishedCut < residentCut) {
-	    std::lock_guard<std::mutex> lock(this->p->mutex);
-	    this->p->residentMeshCacheLoads++;
+	    this->p->residentMeshCacheLoads.fetch_add(
+		1, std::memory_order_relaxed);
 	}
     } else {
-	std::lock_guard<std::mutex> lock(this->p->mutex);
-	this->p->residentMeshHits++;
+	this->p->residentMeshHits.fetch_add(
+	    1, std::memory_order_relaxed);
 	populateInfoFromRetainedMesh();
     }
+	if (producerProgress && loadNeeded)
+	    producerProgress->publish(
+		BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION,
+		1, 1);
     resident->publishedResidentCut.store(
 	residentCut, std::memory_order_relaxed);
 
@@ -5941,22 +6737,29 @@ BObolLodService::scheduleResidentMeshCompaction(
 			    found->second, demand->second.cut);
 		}
 	    }
-	    const SbBool evict =
-		!demanded &&
-		this->p->maxResidentMeshBytes != SIZE_MAX &&
-		current.planningProjectedResidentBytes >
-		    this->p->maxResidentMeshBytes ? TRUE : FALSE;
 	    const SbBool residentMemoryPressure =
 		this->p->maxResidentMeshBytes != SIZE_MAX &&
 		current.planningProjectedResidentBytes >
 		    this->p->maxResidentMeshBytes ? TRUE : FALSE;
-	    const int targetCut = aggregate.cut < 0 ?
+	    const SbBool evict =
+		!demanded && residentMemoryPressure ? TRUE : FALSE;
+	    const int demandedCut = aggregate.cut < 0 ?
 		minimumCut : std::max(minimumCut, aggregate.cut);
+	    /* Resident geometry is also the latency cache for a later camera
+	     * expansion.  Presentation demand may choose a cheaper active cut,
+	     * but only actual capacity pressure authorizes shortening the shared
+	     * immutable prefix.  Backing arrays remain independently reclaimable
+	     * below because they can be re-read without rebuilding that prefix. */
+	    const int targetCut = residentMemoryPressure ?
+		demandedCut : residentCut;
 	    std::vector<BObolLodChunkCut> residentChunkCuts;
 	    if (resident->mesh)
 		resident->mesh->residentChunkCuts(residentChunkCuts);
 	    std::vector<BObolLodChunkCut> targetChunkCuts;
 	    if (!residentChunkCuts.empty()) {
+		if (!residentMemoryPressure) {
+		    targetChunkCuts = residentChunkCuts;
+		} else {
 		/* A resident-memory trim is admissible only after every currently
 		 * demanded page has reached its requested cut.  Provider growth owns
 		 * missing pages and suffixes.  Compacting the intersection while that
@@ -5978,15 +6781,9 @@ BObolLodService::scheduleResidentMeshCompaction(
 		    }
 		}
 		/* Compaction can only discard or shorten resident pages; a provider
-		 * request performs growth.  Preserve independently richer pages where
-		 * at least one consumer asks for them, and retain every other page that
-		 * has already been seen at its minimum useful cut.  The latter is the
-		 * leaf's coverage floor: after a close view has settled, widening the
-		 * camera can immediately draw the newly revealed surface coarsely while
-		 * richer page prefixes are fetched.  Dropping those pages completely
-		 * made the old close-view subset appear as large top/bottom cutouts
-		 * during zoom-out.  Assets absent from all consumers may still be fully
-		 * evicted below when the explicit resident-memory limit requires it. */
+		 * request performs growth.  Under pressure, preserve independently
+		 * demanded pages and keep every previously seen page at a recognizable
+		 * coverage floor until an entirely undemanded asset must be evicted. */
 		if (!demanded) {
 		    for (const BObolLodChunkCut &residentChunk :
 			residentChunkCuts)
@@ -6000,15 +6797,7 @@ BObolLodService::scheduleResidentMeshCompaction(
 			aggregateChunkCuts[residentChunk.chunkId] =
 			    residentChunk.cut;
 		} else {
-		    /* Healthy resident memory is also a latency cache.  Preserve the
-		     * last useful prefix of an off-screen page so ordinary zoom-out can
-		     * immediately reuse the previously presented representation.  Only
-		     * actual memory pressure authorizes reducing that page to a compact
-		     * coverage floor.  Applying the floor unconditionally made every
-		     * zoom-out reset a large leaf to a visibly blocky common cut even
-		     * though its richer data had already been loaded and admitted.
-		     *
-		     * The pressure floor is intentionally richer than the mathematical
+		    /* The pressure floor is intentionally richer than the mathematical
 		     * minimum, whose isolated spatial cells may be slab-like rather than
 		     * a recognizable whole-surface approximation. */
 		    static const double pressureCoverageReferencePixels = 128.0;
@@ -6020,9 +6809,8 @@ BObolLodService::scheduleResidentMeshCompaction(
 			coverageFloorCut < 0 ? minimumCut : coverageFloorCut);
 		    for (const BObolLodChunkCut &residentChunk :
 			residentChunkCuts) {
-			const int retainedCut = residentMemoryPressure ?
-			    std::min(residentChunk.cut, coverageFloorCut) :
-			    residentChunk.cut;
+			const int retainedCut =
+			    std::min(residentChunk.cut, coverageFloorCut);
 			aggregateChunkCuts.emplace(
 			    residentChunk.chunkId, retainedCut);
 		    }
@@ -6067,6 +6855,7 @@ BObolLodService::scheduleResidentMeshCompaction(
 		 * visibility withdrawal should remove the demand instead. */
 		if (targetChunkCuts.empty())
 		    targetChunkCuts = residentChunkCuts;
+		}
 	    }
 	    const SbBool workingSetChanged = !residentChunkCuts.empty() ?
 		residentChunkCuts != targetChunkCuts : targetCut < residentCut;
@@ -6298,6 +7087,8 @@ BObolLodService::cancelGeneration(uint64_t generation)
 		this->p->inFlight--;
 	    lod_generation_count_remove_unlocked(
 		this->p->generationPendingTaskCounts, taskGeneration);
+	    lod_generation_pending_time_remove_unlocked(
+		this->p, taskGeneration, it->submittedMicroseconds);
 	    lod_generation_task_finished_unlocked(
 		this->p, taskGeneration);
 	    if (it->task.publishResult && this->p->resultReservations > 0)
@@ -6309,6 +7100,8 @@ BObolLodService::cancelGeneration(uint64_t generation)
 		lod_request_active_key(it->task.request));
 	    lod_pending_quality_remove(
 		this->p, it->task.request.qualityTier);
+	    lod_pending_dispatch_remove(
+		this->p, it->task.dispatchClass);
 	    cancelled.push_back(std::move(*it));
 	    it = this->p->pending.erase(it);
 	    const auto producerKey =
@@ -6395,6 +7188,10 @@ BObolLodService::setQueueLimits(size_t maxActiveTasks,
     std::lock_guard<std::mutex> lock(this->p->mutex);
     this->p->maxActiveTasks = maxActiveTasks > 0 ? maxActiveTasks : 1;
     this->p->maxQueuedResults = maxQueuedResults > 0 ? maxQueuedResults : 1;
+    this->p->maxDeferredIntermediateResults.store(
+	std::max<size_t>(1, std::min(this->p->maxQueuedResults,
+	    this->p->workers.empty() ? static_cast<size_t>(1) :
+		this->p->workers.size())), std::memory_order_relaxed);
     this->p->maxQueuedCacheWrites =
 	maxQueuedCacheWrites > 0 ? maxQueuedCacheWrites : 1;
 }
@@ -6434,6 +7231,8 @@ BObolLodService::setResidentMeshLimit(size_t maxResidentBytes)
 {
     {
 	std::lock_guard<std::mutex> lock(this->p->mutex);
+	std::lock_guard<std::mutex> admissionLock(
+	    this->p->residentMeshAdmissionMutex);
 	const size_t prior = this->p->maxResidentMeshBytes;
 	const size_t next = maxResidentBytes > 0 ?
 	    maxResidentBytes : lod_default_resident_mesh_limit();
@@ -6474,6 +7273,8 @@ BObolLodService::setResidentMeshAvailableMemoryPercent(
 	SIZE_MAX : std::max<size_t>(1, static_cast<size_t>(scaled));
     {
 	std::lock_guard<std::mutex> lock(this->p->mutex);
+	std::lock_guard<std::mutex> admissionLock(
+	    this->p->residentMeshAdmissionMutex);
 	const size_t prior = this->p->maxResidentMeshBytes;
 	this->p->maxResidentMeshBytes = next;
 	this->p->residentMeshLimitPercent = availableMemoryPercent;
@@ -6560,6 +7361,8 @@ lod_service_submit_task_unlocked(BObolLodServicePrivate *p,
     BObolLodWorkItem item;
     item.id = bobol_nonzero_identity_take(p->nextTaskId);
     item.task = task;
+    item.submittedMicroseconds = std::max<int64_t>(1, bu_gettime());
+    item.retargetActiveDemand = skipActiveDuplicate ? true : false;
     if (item.task.generation == 0) {
 	if (p->activeGeneration == 0) {
 	    bobol_identity_advance(p->nextGeneration);
@@ -6595,7 +7398,10 @@ lod_service_submit_task_unlocked(BObolLodServicePrivate *p,
     const SbBool reserveCacheWrite =
 	p->cacheWriterEnabled && item.task.writeCache && item.task.cacheWrite;
     const int qualityTier = item.task.request.qualityTier;
+    const int dispatchClass = item.task.dispatchClass;
+    const int64_t submittedMicroseconds = item.submittedMicroseconds;
     p->pending.push_back(std::move(item));
+    p->pendingDispatchCounts[dispatchClass]++;
     p->pendingQualityCounts[qualityTier]++;
     p->activeRequestKeyCounts[activeKey.getString()]++;
     if (skipActiveDuplicate && publishResult &&
@@ -6604,6 +7410,7 @@ lod_service_submit_task_unlocked(BObolLodServicePrivate *p,
 	BObolSharedProducer producer;
 	producer.taskId = id;
 	producer.producerGeneration = generation;
+	producer.submittedMicroseconds = submittedMicroseconds;
 	BObolSharedProducerLease lease;
 	lease.demand = task.request;
 	producer.leases.emplace(generation, std::move(lease));
@@ -6614,6 +7421,8 @@ lod_service_submit_task_unlocked(BObolLodServicePrivate *p,
 	p, activeKey, task.request, generation);
     p->generationTaskCounts[generation]++;
     p->generationPendingTaskCounts[generation]++;
+    lod_generation_pending_time_add_unlocked(
+	p, generation, submittedMicroseconds);
     p->taskGenerations[id] = generation;
     if (publishResult)
 	p->resultReservations++;
@@ -6660,88 +7469,16 @@ SbBool
 BObolLodService::tryPublishIntermediateResult(
     uint64_t generation, BObolLodResult &&result)
 {
-    if (!generation)
+    if (!generation || !lod_defer_intermediate_result(
+	    this->p, generation, std::move(result)))
 	return FALSE;
 
-    BObolLodTask task;
-    task.generation = generation;
-    task.request = result.request;
-
-    SbBool notifyResultReady = FALSE;
-    {
-	/* Providers may hold a resident-asset lock here.  Never wait while
-	 * acquiring the outer service lock: a busy queue merely loses this
-	 * optional preview and the authoritative final result still follows. */
-	std::unique_lock<std::mutex> lock(
-	    this->p->mutex, std::try_to_lock);
-	if (!lock.owns_lock())
-	    return FALSE;
-	const SbString activeKey = lod_request_active_key(task.request);
-	BObolSharedProducer *shared = lod_shared_producer_unlocked(
-	    this->p, activeKey);
-	if (this->p->stopping ||
-	    lod_producer_cancelled_unlocked(
-		this->p, generation, task.request) ||
-	    lod_generation_count_unlocked(
-		this->p->generationExecutingTaskCounts, generation) == 0 ||
-	    (!lod_active_request_key_recorded_unlocked(this->p, activeKey) &&
-	     !(shared && !shared->leases.empty())))
-	    return FALSE;
-
-	if (shared) {
-	    const auto owner = shared->leases.find(generation);
-	    if (owner != shared->leases.end())
-		lod_normalize_result(result, owner->second.demand);
-	    else
-		lod_normalize_result(result, task.request);
-	} else {
-	    lod_normalize_result(result, task.request);
-	}
-	result.generation = generation;
-	const SbBool queueOwnerPayload = !shared ||
-	    shared->leases.find(generation) != shared->leases.end();
-
-	if (queueOwnerPayload) {
-	    const BObolLodResultSlotMapKey slot =
-		lod_result_slot_map_key(result);
-	    const auto existing = this->p->resultSlots.find(slot);
-	    if (existing != this->p->resultSlots.end()) {
-		if (lod_result_supersedes(result, *existing->second)) {
-		    const SbString oldRequestKey = lod_request_active_key(
-			existing->second->request);
-		    const SbString newRequestKey = lod_request_active_key(
-			result.request);
-		    if (oldRequestKey != newRequestKey) {
-			lod_queued_result_request_key_remove_unlocked(
-			    this->p, existing->second->request);
-			lod_queued_result_request_key_add_unlocked(
-			    this->p, result.request);
-		    }
-		    *existing->second = std::move(result);
-		}
-		this->p->coalescedResults++;
-	    } else {
-		if (this->p->results.size() >= this->p->maxQueuedResults)
-		    return FALSE;
-		notifyResultReady = lod_generation_count_unlocked(
-		    this->p->generationResultCounts, generation) == 0 ?
-		    TRUE : FALSE;
-		lod_queued_result_request_key_add_unlocked(
-		    this->p, result.request);
-		this->p->results.push_back(std::move(result));
-		this->p->resultSlots.emplace(
-		    slot, std::prev(this->p->results.end()));
-		lod_generation_count_add_unlocked(
-		    this->p->generationResultCounts, generation);
-	    }
-	}
-	if (shared && lod_shared_producer_publish_unlocked(
-		*shared, FALSE, queueOwnerPayload))
-	    notifyResultReady = TRUE;
-    }
-
-    if (notifyResultReady)
-	lod_notify_result_ready(this->p);
+    /* Opportunistically publish without waiting for the outer lock.  If it is
+     * busy, the mailbox remains authoritative and an idle worker or the next
+     * presentation drain will promote it. */
+    (void)lod_promote_deferred_intermediate_results(
+	this->p, false, false);
+    this->p->workerCv.notify_all();
     return TRUE;
 }
 
@@ -6953,7 +7690,9 @@ BObolLodService::drainResults(std::vector<BObolLodResult> &results,
 				size_t maxResults,
 				size_t maxEstimatedBytes)
 {
-
+    this->p->deferredIntermediateNotificationPending.store(
+	false, std::memory_order_release);
+    (void)lod_promote_deferred_intermediate_results(this->p, true, false);
     size_t count = 0;
     size_t estimatedBytes = 0;
     std::lock_guard<std::mutex> lock(this->p->mutex);
@@ -6986,6 +7725,8 @@ BObolLodService::drainResults(std::vector<BObolLodResult> &results,
     count += lod_drain_shared_replays_unlocked(
 	this->p, results, BObolSharedReplayFilter::ANY, 0, NULL,
 	replayLimit);
+    if (count)
+	this->p->workerCv.notify_all();
 
     return count;
 }
@@ -6998,6 +7739,9 @@ BObolLodService::drainGenerationResults(
     if (generation == 0)
 	return 0;
 
+    this->p->deferredIntermediateNotificationPending.store(
+	false, std::memory_order_release);
+    (void)lod_promote_deferred_intermediate_results(this->p, true, false);
     size_t count = 0;
     size_t estimatedBytes = 0;
     std::lock_guard<std::mutex> lock(this->p->mutex);
@@ -7035,6 +7779,8 @@ BObolLodService::drainGenerationResults(
     count += lod_drain_shared_replays_unlocked(
 	this->p, results, BObolSharedReplayFilter::GENERATION, generation,
 	NULL, replayLimit);
+    if (count)
+	this->p->workerCv.notify_all();
 
     return count;
 }
@@ -7048,6 +7794,9 @@ BObolLodService::drainMatchingResults(
     if (requests.empty())
 	return 0;
 
+    this->p->deferredIntermediateNotificationPending.store(
+	false, std::memory_order_release);
+    (void)lod_promote_deferred_intermediate_results(this->p, true, false);
     size_t count = 0;
     std::lock_guard<std::mutex> lock(this->p->mutex);
 
@@ -7083,6 +7832,8 @@ BObolLodService::drainMatchingResults(
     count += lod_drain_shared_replays_unlocked(
 	this->p, results, BObolSharedReplayFilter::MATCHING, 0, &requests,
 	replayLimit);
+    if (count)
+	this->p->workerCv.notify_all();
 
     return count;
 }
@@ -7150,6 +7901,9 @@ lod_service_queued_result_count_unlocked(const BObolLodServicePrivate *service)
 	    producer.second);
 	count = pending > SIZE_MAX - count ? SIZE_MAX : count + pending;
     }
+    const size_t deferred = service->deferredIntermediateResultCount.load(
+	std::memory_order_acquire);
+    count = deferred > SIZE_MAX - count ? SIZE_MAX : count + deferred;
     return count;
 }
 
@@ -7192,6 +7946,16 @@ lod_service_generation_queued_result_count_unlocked(
 	    producer.second, generation);
 	count = pending > SIZE_MAX - count ? SIZE_MAX : count + pending;
     }
+    {
+	/* Callers hold the service mutex, preserving service-then-mailbox order. */
+	std::lock_guard<std::mutex> lock(
+	    service->deferredIntermediateMutex);
+	for (const auto &entry : service->deferredIntermediateResults) {
+	    if (entry.first.generation != generation)
+		continue;
+	    count = count == SIZE_MAX ? SIZE_MAX : count + 1;
+	}
+    }
     return count;
 }
 
@@ -7225,6 +7989,9 @@ BObolLodService::workStatus(void) const
     status.stopping = this->p->stopping;
     status.pendingTasks = this->p->pending.size();
     status.executingTasks = this->p->executingTasks;
+    status.cpuAdmissionWaitingTasks = this->p->cpuAdmissionWaitingTasks;
+    status.transientMemoryAdmissionWaitingTasks =
+	this->p->transientMemoryAdmissionWaitingTasks;
     status.inFlightTasks = this->p->inFlight;
     status.resultReservations = this->p->resultReservations;
     status.cacheWriteReservations = this->p->cacheWriteReservations;
@@ -7293,6 +8060,12 @@ BObolLodService::generationWorkStatus(uint64_t generation) const
 	this->p->generationPendingTaskCounts, generation);
     status.executingTasks = lod_generation_count_unlocked(
 	this->p->generationExecutingTaskCounts, generation);
+    status.cpuAdmissionWaitingTasks = lod_generation_count_unlocked(
+	this->p->generationCpuAdmissionWaitingTaskCounts, generation);
+    status.transientMemoryAdmissionWaitingTasks =
+	lod_generation_count_unlocked(
+	    this->p->generationTransientMemoryAdmissionWaitingTaskCounts,
+	    generation);
     status.delayedTasks = lod_generation_count_unlocked(
 	this->p->generationDelayedTaskCounts, generation);
     status.queuedResults =
@@ -7302,6 +8075,161 @@ BObolLodService::generationWorkStatus(uint64_t generation) const
 	this->p->generationCacheWriteCounts, generation);
     status.sharedProducerLeases =
 	lod_service_generation_lease_count_unlocked(this->p, generation);
+    const int64_t observationMicroseconds = bu_gettime();
+    int64_t oldestPendingMicroseconds = 0;
+    const auto pendingTimes =
+	this->p->generationPendingTaskTimes.find(generation);
+    if (pendingTimes != this->p->generationPendingTaskTimes.end() &&
+	!pendingTimes->second.empty())
+	oldestPendingMicroseconds = *pendingTimes->second.begin();
+    /* A shared producer may have been submitted by an older generation.  Its
+     * current consumer still needs to see that queue delay even though the
+     * physical task belongs to the original owner. */
+    for (const auto &producer : this->p->sharedProducers) {
+	if (producer.second.state != BObolSharedProducerState::BUILDING ||
+	    producer.second.leases.find(generation) ==
+		producer.second.leases.end())
+	    continue;
+	if (producer.second.executionStartedMicroseconds == 0) {
+	    const int64_t submitted = producer.second.submittedMicroseconds;
+	    if (submitted > 0 && (!oldestPendingMicroseconds ||
+		    submitted < oldestPendingMicroseconds))
+		oldestPendingMicroseconds = submitted;
+	    if (producer.second.cpuAdmissionWaiting &&
+		producer.second.producerGeneration != generation &&
+		status.cpuAdmissionWaitingTasks != SIZE_MAX)
+		status.cpuAdmissionWaitingTasks++;
+	}
+	if (producer.second.transientMemoryAdmissionWaiting &&
+	    producer.second.producerGeneration != generation &&
+	    status.transientMemoryAdmissionWaitingTasks != SIZE_MAX)
+	    status.transientMemoryAdmissionWaitingTasks++;
+    }
+    if (oldestPendingMicroseconds > 0 &&
+	observationMicroseconds > oldestPendingMicroseconds)
+	status.oldestPendingTaskAgeMicroseconds =
+	    static_cast<uint64_t>(observationMicroseconds -
+		oldestPendingMicroseconds);
+    {
+	std::lock_guard<std::mutex> progressLock(
+	    this->p->producerProgressMutex);
+	bool primaryDeterminate = false;
+	for (const auto &entry : this->p->producerProgress) {
+	    const std::shared_ptr<BObolLodProducerProgressRecord> &record =
+		entry.second;
+	    if (!record)
+		continue;
+	    const BObolLodProducerProgressRecord::Snapshot progress =
+		record->snapshot(observationMicroseconds);
+	    if (!progress.active)
+		continue;
+	    bool relevant = record->ownerGeneration == generation;
+	    if (!relevant && !record->activeKey.empty()) {
+		const auto producer = this->p->sharedProducers.find(
+		    record->activeKey);
+		relevant = producer != this->p->sharedProducers.end() &&
+		    producer->second.leases.find(generation) !=
+			producer->second.leases.end();
+	    }
+	    if (!relevant)
+		continue;
+
+	    const int stage = progress.stage;
+	    if (stage <= BOBOL_LOD_PRODUCER_STAGE_NONE ||
+		stage >= BOBOL_LOD_PRODUCER_STAGE_COUNT)
+		continue;
+	    status.activeProducerCount++;
+	    status.maximumProducerQueueWaitMicroseconds = std::max(
+		status.maximumProducerQueueWaitMicroseconds,
+		progress.queueWaitMicroseconds);
+	    status.maximumProducerElapsedMicroseconds = std::max(
+		status.maximumProducerElapsedMicroseconds,
+		progress.elapsedMicroseconds);
+	    const auto add = [](uint64_t left, uint64_t right) {
+		return right > UINT64_MAX - left ? UINT64_MAX : left + right;
+	    };
+	    status.activeProducerSourceFaceCount = add(
+		status.activeProducerSourceFaceCount,
+		progress.sourceFaceCount);
+	    status.activeProducerSourcePointCount = add(
+		status.activeProducerSourcePointCount,
+		progress.sourcePointCount);
+	    status.activeProducerSourceByteCount = add(
+		status.activeProducerSourceByteCount,
+		progress.sourceByteCount);
+	    status.producerStageMask |= 1u << (stage - 1);
+	    status.producerStageTaskCounts[stage]++;
+	    const uint64_t total = progress.totalUnits;
+	    const uint64_t completed = progress.completedUnits;
+	    if (status.producerStage == BOBOL_LOD_PRODUCER_STAGE_NONE ||
+		lod_producer_stage_display_priority(stage) <
+		    lod_producer_stage_display_priority(status.producerStage)) {
+		status.producerStage = stage;
+		status.producerStageTaskCount = 1;
+		status.producerStageCompletedUnits = completed;
+		status.producerStageTotalUnits = total;
+		status.producerStageElapsedMicroseconds =
+		    progress.stageElapsedMicroseconds;
+		primaryDeterminate = total != 0;
+		continue;
+	    }
+	    if (stage != status.producerStage)
+		continue;
+	    status.producerStageTaskCount++;
+	    status.producerStageElapsedMicroseconds = std::max(
+		status.producerStageElapsedMicroseconds,
+		progress.stageElapsedMicroseconds);
+	    status.producerStageCompletedUnits = completed >
+		    UINT64_MAX - status.producerStageCompletedUnits ? UINT64_MAX :
+		    status.producerStageCompletedUnits + completed;
+	    if (!primaryDeterminate || !total) {
+		status.producerStageTotalUnits = 0;
+		primaryDeterminate = false;
+	    } else {
+		status.producerStageTotalUnits = total >
+			UINT64_MAX - status.producerStageTotalUnits ? UINT64_MAX :
+		    status.producerStageTotalUnits + total;
+	    }
+	}
+    }
+    return status;
+}
+
+BObolLodQueueStatus
+BObolLodService::generationQueueStatusForDiagnostics(
+    uint64_t generation) const
+{
+    BObolLodQueueStatus status;
+    if (!generation)
+	return status;
+
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    for (const BObolLodWorkItem &item : this->p->pending) {
+	bool relevant = item.task.generation == generation;
+	if (!relevant) {
+	    const BObolSharedProducer *shared =
+		lod_shared_producer_for_task_unlocked(this->p, item.id);
+	    relevant = shared && shared->leases.find(generation) !=
+		shared->leases.end();
+	}
+	if (!relevant)
+	    continue;
+	if (!lod_task_dependencies_ready(this->p, item.task)) {
+	    status.dependencyBlockedTasks++;
+	} else if (!lod_task_working_set_available(this->p, item.task)) {
+	    status.transientMemoryBlockedTasks++;
+	} else {
+	    status.runnableTasks++;
+	}
+    }
+
+    status.taskCapacityBlocked =
+	this->p->inFlight >= this->p->maxActiveTasks ? TRUE : FALSE;
+    const size_t reservedResults =
+	this->p->resultReservations > SIZE_MAX - this->p->results.size() ?
+	    SIZE_MAX : this->p->results.size() + this->p->resultReservations;
+    status.resultCapacityBlocked =
+	reservedResults >= this->p->maxQueuedResults ? TRUE : FALSE;
     return status;
 }
 
@@ -7449,6 +8377,8 @@ BObolLodService::residentCapacityStatus(void) const
 {
     BObolLodResidentCapacityStatus status;
     std::lock_guard<std::mutex> lock(this->p->mutex);
+    std::lock_guard<std::mutex> admissionLock(
+	this->p->residentMeshAdmissionMutex);
     status.stableResidentBytes =
 	this->p->residentMeshStableBytes.load(std::memory_order_relaxed);
     status.reservedGrowthBytes =
@@ -7466,7 +8396,8 @@ BObolLodService::stableResidentMeshBytesForDiagnostics(void) const
 size_t
 BObolLodService::reservedResidentMeshGrowthBytesForDiagnostics(void) const
 {
-    std::lock_guard<std::mutex> lock(this->p->mutex);
+    std::lock_guard<std::mutex> lock(
+	this->p->residentMeshAdmissionMutex);
     return this->p->residentMeshGrowthReservationBytes;
 }
 
@@ -7480,15 +8411,15 @@ BObolLodService::residentMeshAdmissionRevision(void) const
 uint64_t
 BObolLodService::residentMeshCacheLoadCountForDiagnostics(void) const
 {
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    return this->p->residentMeshCacheLoads;
+    return this->p->residentMeshCacheLoads.load(
+	std::memory_order_relaxed);
 }
 
 uint64_t
 BObolLodService::residentMeshHitCountForDiagnostics(void) const
 {
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    return this->p->residentMeshHits;
+    return this->p->residentMeshHits.load(
+	std::memory_order_relaxed);
 }
 
 uint64_t

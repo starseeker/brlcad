@@ -12,6 +12,7 @@
 #include "common.h"
 
 #include "identity_counter_private.h"
+#include "parallel_budget_private.h"
 #include "transaction_fault_private.h"
 
 #include "bv.h"
@@ -158,7 +159,7 @@ public:
 	    workers.reserve(workerCount);
 	    for (size_t worker = 0; worker < workerCount; ++worker)
 		workers.emplace_back(&BObolBoundedParallelExecutor::workerLoop,
-		    this);
+		    this, worker);
 	} catch (const std::system_error &) {
 	    stopWorkers();
 	} catch (const std::bad_alloc &) {
@@ -185,23 +186,34 @@ public:
 		work(item);
 	    return;
 	}
+	BObolParallelBudgetLease helperBudget;
+	const size_t admittedWorkers = helperBudget.tryAcquireHelpers(
+	    std::min(workCount, workers.size()));
+	if (admittedWorkers <= 1) {
+	    helperBudget.release();
+	    for (size_t item = 0; item < workCount; ++item)
+		work(item);
+	    return;
+	}
 
 	std::unique_lock<std::mutex> lock(stateMutex);
 	currentWork = &work;
 	nextItem = 0;
 	totalItems = workCount;
 	remainingItems = workCount;
+	activeWorkerCount = admittedWorkers;
 	workerFailure = nullptr;
 	bobol_identity_advance(generation);
 	workReady.notify_all();
 	workComplete.wait(lock, [this]() { return remainingItems == 0; });
 	currentWork = nullptr;
+	activeWorkerCount = 0;
 	if (workerFailure)
 	    std::rethrow_exception(workerFailure);
     }
 
 private:
-    void workerLoop(void)
+    void workerLoop(size_t workerIndex)
     {
 	uint64_t observedGeneration = 0;
 	std::unique_lock<std::mutex> lock(stateMutex);
@@ -212,6 +224,8 @@ private:
 	    if (stopping)
 		return;
 	    observedGeneration = generation;
+	    if (workerIndex >= activeWorkerCount)
+		continue;
 	    while (nextItem < totalItems) {
 		const size_t item = nextItem++;
 		const std::function<void(size_t)> *work = currentWork;
@@ -254,6 +268,7 @@ private:
     size_t nextItem = 0;
     size_t totalItems = 0;
     size_t remainingItems = 0;
+    size_t activeWorkerCount = 0;
     uint64_t generation = 0;
     bool stopping = false;
 };
@@ -1233,6 +1248,10 @@ public:
 
 private:
     friend class BObolPopSourceReader;
+    void configurePreview(
+	const struct BObolMeshLodPreviewRequest *previewRequest,
+	BObolMeshLodPreviewCallback preview, void *previewData);
+    bool publishRequestedCoveragePreview(void);
     void initializeGeneration(unsigned long long userKey,
 	const struct BObolMeshLodPreviewRequest *previewRequest,
 	BObolMeshLodPreviewCallback preview, void *previewData);
@@ -1243,7 +1262,9 @@ private:
     bool cacheSpatialLeaves(void);
     bool scanSourceBounds(void);
     bool buildOrientedBounds(const struct bg_pca_accumulator &moments);
-    bool publishSerializedCoveragePreview(void);
+    void reportProgress(int stage, uint64_t completed,
+	uint64_t total) const;
+    bool publishCoveragePreview(void);
     int activationCutForTriangle(const BObolPopRec triangle[3]) const;
     bool classifySpatialFace(BObolPopSourceReader &reader,
 	uint32_t sourceFace, uint8_t &activation, uint16_t &cell) const;
@@ -1320,6 +1341,9 @@ private:
     bool sourceLimitedPrefix = false;
     int sourceLimitedCut = -1;
     bool spatialLeafRequested = false;
+    bool coveragePreviewRequested = false;
+    bool coveragePreviewAttempted = false;
+    bool previewConfigured = false;
     bool sourceBoundsScanned = false;
     bool coveragePreviewBoundsKnown = false;
     bool coveragePreviewBoundsMismatch = false;
@@ -1336,6 +1360,8 @@ private:
     void *spatialPageCallbackData = NULL;
     BObolMeshLodCancellationCallback cancellationCallback = NULL;
     void *cancellationCallbackData = NULL;
+    BObolMeshLodProgressCallback progressCallback = NULL;
+    void *progressCallbackData = NULL;
     const char *generationFailureReason = "generation was not started";
     /* Authored BoTs may contain zero-area faces with a repeated vertex
      * index.  They contribute no pixels, but retaining them in a progressive
@@ -1690,6 +1716,13 @@ BObolPopState::classifySpatialFace(BObolPopSourceReader &reader,
 bool
 BObolPopState::triProcess(void)
 {
+    uint64_t progressTotal = static_cast<uint64_t>(faceCount) >
+	UINT64_MAX / 2 ? UINT64_MAX : static_cast<uint64_t>(faceCount) * 2;
+    progressTotal = static_cast<uint64_t>(vertexCount) >
+	UINT64_MAX - progressTotal ? UINT64_MAX :
+	progressTotal + static_cast<uint64_t>(vertexCount);
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION, 0,
+	progressTotal);
     vertexTriMinCut.assign(vertexCount,
 	UINT8_MAX);
     cutTriVerts.resize(cutCount);
@@ -1737,16 +1770,30 @@ BObolPopState::triProcess(void)
 	    floor((value - minimum[axis]) * quantizeScale[axis]));
     };
 	std::atomic_bool cancelled(false);
+	std::atomic<uint64_t> classifiedFaceCount(0);
     const auto classifyRange = [this, &quantize, &minimum,
-	    &extent, &cancelled, buildSpatialCells](
+	    &extent, &cancelled, &classifiedFaceCount, progressTotal,
+	    buildSpatialCells](
 	    size_t begin, size_t end) {
 	BObolPopSourceReader reader(*this);
+	size_t progressCursor = begin;
 	for (size_t faceIndex = begin; faceIndex < end; ++faceIndex) {
-	if ((faceIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
-	    generationCancelled()) {
-	    cancelled.store(true, std::memory_order_relaxed);
-	    return;
-	}
+	    if (((faceIndex - begin) &
+		    BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0) {
+		if (faceIndex > progressCursor) {
+		    const uint64_t completed = classifiedFaceCount.fetch_add(
+			static_cast<uint64_t>(faceIndex - progressCursor),
+			std::memory_order_relaxed) +
+			static_cast<uint64_t>(faceIndex - progressCursor);
+		    reportProgress(BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION,
+			completed, progressTotal);
+		    progressCursor = faceIndex;
+		}
+		if (generationCancelled()) {
+		    cancelled.store(true, std::memory_order_relaxed);
+		    return;
+		}
+	    }
 	BObolPopRec triangle[3];
 	double centroid[3] = {0.0, 0.0, 0.0};
 	bool badFace = false;
@@ -1801,6 +1848,14 @@ BObolPopState::triProcess(void)
 	    faceClusterCell[faceIndex] = static_cast<uint16_t>(cluster);
 	}
 	}
+	if (end > progressCursor) {
+	    const uint64_t completed = classifiedFaceCount.fetch_add(
+		static_cast<uint64_t>(end - progressCursor),
+		std::memory_order_relaxed) +
+		static_cast<uint64_t>(end - progressCursor);
+	    reportProgress(BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION,
+		completed, progressTotal);
+	}
     };
 
     size_t workerCount = 1;
@@ -1810,24 +1865,44 @@ BObolPopState::triProcess(void)
 	workerCount = std::min<size_t>(
 	    std::max<size_t>(1, bu_avail_cpus()), usefulWorkers);
     }
+    BObolParallelBudgetLease classificationBudget;
+    if (workerCount > 1) {
+	workerCount = classificationBudget.tryAcquireHelpers(workerCount);
+	if (workerCount <= 1) {
+	    classificationBudget.release();
+	    workerCount = 1;
+	}
+    }
     if (workerCount <= 1) {
 	classifyRange(0, faceCount);
     } else {
 	std::vector<std::thread> workers;
-	workers.reserve(workerCount);
-	const size_t chunk = (faceCount + workerCount - 1) / workerCount;
-	for (size_t workerIndex = 0; workerIndex < workerCount; ++workerIndex) {
-	    const size_t begin = workerIndex * chunk;
-	    const size_t end = std::min(faceCount, begin + chunk);
-	    if (begin >= end)
-		break;
-	    workers.emplace_back(classifyRange, begin, end);
+	try {
+	    workers.reserve(workerCount);
+	    const size_t chunk = (faceCount + workerCount - 1) / workerCount;
+	    for (size_t workerIndex = 0; workerIndex < workerCount;
+		 workerIndex++) {
+		const size_t begin = workerIndex * chunk;
+		const size_t end = std::min(faceCount, begin + chunk);
+		if (begin >= end)
+		    break;
+		workers.emplace_back(classifyRange, begin, end);
+	    }
+	} catch (...) {
+	    for (std::thread &worker : workers)
+		if (worker.joinable())
+		    worker.join();
+	    classificationBudget.release();
+	    return false;
 	}
 	for (std::thread &worker : workers)
 	    worker.join();
     }
+    classificationBudget.release();
     if (cancelled.load(std::memory_order_relaxed))
 	return false;
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION,
+	static_cast<uint64_t>(faceCount), progressTotal);
 
     size_t cutFaceCounts[POP_CUT_COUNT_MAX] = {0};
     size_t badFaceCount = 0;
@@ -1843,9 +1918,16 @@ BObolPopState::triProcess(void)
 
     BObolPopSourceReader mergeReader(*this);
     for (size_t faceIndex = 0; faceIndex < faceCount; ++faceIndex) {
-	if ((faceIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
-	    generationCancelled())
-	    return false;
+	if ((faceIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0) {
+	    const uint64_t completed = static_cast<uint64_t>(faceCount) >
+		UINT64_MAX - static_cast<uint64_t>(faceIndex) ? UINT64_MAX :
+		static_cast<uint64_t>(faceCount) +
+		    static_cast<uint64_t>(faceIndex);
+	    reportProgress(BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION,
+		completed, progressTotal);
+	    if (generationCancelled())
+		return false;
+	}
 	const uint8_t cut = faceActivationCut[faceIndex];
 	if (cut >= cutCount)
 	    continue;
@@ -1873,9 +1955,18 @@ BObolPopState::triProcess(void)
 
     for (size_t vertexIndex = 0; vertexIndex < vertexTriMinCut.size();
 	 vertexIndex++) {
-	if ((vertexIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
-	    generationCancelled())
-	    return false;
+	if ((vertexIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0) {
+	    uint64_t completed = static_cast<uint64_t>(faceCount) >
+		UINT64_MAX / 2 ? UINT64_MAX :
+		static_cast<uint64_t>(faceCount) * 2;
+	    completed = static_cast<uint64_t>(vertexIndex) >
+		UINT64_MAX - completed ? UINT64_MAX :
+		completed + static_cast<uint64_t>(vertexIndex);
+	    reportProgress(BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION,
+		completed, progressTotal);
+	    if (generationCancelled())
+		return false;
+	}
 	const uint8_t activation = vertexTriMinCut[vertexIndex];
 	/* Unreferenced vertices do not participate in any rendered triangle.
 	 * Assigning them to the terminal global prefix while spatial chunks omit
@@ -1920,6 +2011,8 @@ BObolPopState::triProcess(void)
      * faces or vertices are cheap and still re-snap the resident coordinates
      * to a finer grid. */
     minPopCut = firstPopulatedCut >= 0 ? firstPopulatedCut : 0;
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION,
+	progressTotal, progressTotal);
     return true;
 }
 
@@ -2193,6 +2286,89 @@ BObolPopState::buildChunks(void)
     return true;
 }
 
+void
+BObolPopState::configurePreview(
+    const struct BObolMeshLodPreviewRequest *previewRequest,
+    BObolMeshLodPreviewCallback preview, void *previewData)
+{
+    if (previewConfigured)
+	return;
+    previewConfigured = true;
+    previewCallback = preview;
+    previewCallbackData = previewData;
+    spatialPageCallback = previewRequest ?
+	previewRequest->spatial_page_callback : NULL;
+    spatialPageCallbackData = previewRequest ?
+	previewRequest->spatial_page_data : NULL;
+    cancellationCallback = previewRequest ?
+	previewRequest->cancellation_callback : NULL;
+    cancellationCallbackData = previewRequest ?
+	previewRequest->cancellation_data : NULL;
+    progressCallback = previewRequest ?
+	previewRequest->progress_callback : NULL;
+    progressCallbackData = previewRequest ?
+	previewRequest->progress_data : NULL;
+    spatialLeafRequested = hasSerializedSource && previewRequest &&
+	previewRequest->spatial_leaf_producer != 0;
+    coveragePreviewRequested = previewCallback && previewRequest &&
+	(previewRequest->coverage_preview != 0 || spatialLeafRequested) &&
+	(spatialLeafRequested || faceCount > BOBOL_MESH_LOD_CHUNK_FACE_TARGET);
+
+    if (!coveragePreviewRequested || !previewRequest->coverage_bounds_valid)
+	return;
+    coveragePreviewBoundsKnown = true;
+    for (size_t axis = 0; axis < 3; ++axis) {
+	coveragePreviewMinimum[axis] = previewRequest->coverage_bmin[axis];
+	coveragePreviewMaximum[axis] = previewRequest->coverage_bmax[axis];
+	if (!std::isfinite(coveragePreviewMinimum[axis]) ||
+	    !std::isfinite(coveragePreviewMaximum[axis]) ||
+	    coveragePreviewMaximum[axis] < coveragePreviewMinimum[axis])
+	    coveragePreviewBoundsKnown = false;
+    }
+}
+
+bool
+BObolPopState::publishRequestedCoveragePreview(void)
+{
+    if (!coveragePreviewRequested || coveragePreviewAttempted)
+	return true;
+    coveragePreviewAttempted = true;
+    if (generationCancelled()) {
+	generationFailureReason = "generation cancelled";
+	return false;
+    }
+    if (!coveragePreviewBoundsKnown) {
+	generationFailureReason = "coverage bounds scan";
+	if (!scanSourceBounds())
+	    return false;
+    }
+
+    coveragePreviewBoundsMismatch = false;
+    (void)publishCoveragePreview();
+    if (generationCancelled()) {
+	generationFailureReason = "generation cancelled";
+	return false;
+    }
+    if (!coveragePreviewBoundsMismatch)
+	return true;
+
+    /* Discovery bounds can race a source edit.  Never publish an occupancy
+     * certificate against that stale extent: recover once from an
+     * independently scanned source bound, then let canonical generation
+     * remain authoritative if this optional preview cannot be built. */
+    coveragePreviewBoundsKnown = false;
+    generationFailureReason = "coverage bounds validation";
+    if (!scanSourceBounds())
+	return false;
+    coveragePreviewBoundsMismatch = false;
+    (void)publishCoveragePreview();
+    if (generationCancelled()) {
+	generationFailureReason = "generation cancelled";
+	return false;
+    }
+    return true;
+}
+
 BObolPopState::BObolPopState(
     struct BObolMeshLodContext *ctx,
     const point_t *vertices,
@@ -2215,6 +2391,12 @@ BObolPopState::BObolPopState(
     normalArray = normals;
     faceCount = inputFaceCount;
     faceArray = faces;
+
+    configurePreview(previewRequest, preview, previewData);
+    generationFailureReason = "source validation";
+    if (!vertexArray || !vertexCount || !faceArray || !faceCount ||
+	!publishRequestedCoveragePreview())
+	return;
 
     size_t drawableFaceCount = 0;
     for (size_t faceIndex = 0; faces && faceIndex < inputFaceCount;
@@ -2290,7 +2472,18 @@ BObolPopState::BObolPopState(
     serializedFlipWinding = serialized.orientation == RT_BOT_CW;
     hasSerializedSource = true;
 
+    configurePreview(previewRequest, preview, previewData);
     initializeGeneration(userKey, previewRequest, preview, previewData);
+}
+
+void
+BObolPopState::reportProgress(int stage, uint64_t completed,
+	uint64_t total) const
+{
+    if (!progressCallback)
+	return;
+    progressCallback(stage, total ? std::min(completed, total) : completed,
+	total, progressCallbackData);
 }
 
 bool
@@ -2298,12 +2491,20 @@ BObolPopState::scanSourceBounds(void)
 {
     if (sourceBoundsScanned)
 	return true;
+    const uint64_t progressTotal = static_cast<uint64_t>(vertexCount) >
+	    UINT64_MAX / 2 ? UINT64_MAX :
+	static_cast<uint64_t>(vertexCount) * 2;
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS, 0,
+	progressTotal);
     bg_pca_accumulator_init(&sourcePcaMoments);
     BObolPopSourceReader reader(*this, BObolPopPointAccess::Sequential);
     for (size_t vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex) {
-	if ((vertexIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
-	    generationCancelled())
-	    return false;
+	if ((vertexIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0) {
+	    reportProgress(BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS,
+		static_cast<uint64_t>(vertexIndex), progressTotal);
+	    if (generationCancelled())
+		return false;
+	}
 	point_t point;
 	if (!reader.point(vertexIndex, point) ||
 	    bg_pca_accumulator_add(&sourcePcaMoments, point) != BRLCAD_OK)
@@ -2318,11 +2519,15 @@ BObolPopState::scanSourceBounds(void)
     if (!std::isfinite(maxx - minx) || !std::isfinite(maxy - miny) ||
 	!std::isfinite(maxz - minz))
 	return false;
-    if (hasSerializedSource) {
-	VSET(bbmin, minx, miny, minz);
-	VSET(bbmax, maxx, maxy, maxz);
-    }
+    /* Native generation normally seeds these through bg_trimesh_aabb below,
+     * but a stale caller-supplied preview extent can force this scan from the
+     * constructor before that canonical path runs.  The independently read
+     * source bounds are authoritative for both native and serialized inputs. */
+    VSET(bbmin, minx, miny, minz);
+    VSET(bbmax, maxx, maxy, maxz);
     sourceBoundsScanned = true;
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS,
+	static_cast<uint64_t>(vertexCount), progressTotal);
     return true;
 }
 
@@ -2331,6 +2536,9 @@ BObolPopState::buildOrientedBounds(
     const struct bg_pca_accumulator &moments)
 {
     orientedBoundsValid = false;
+    const uint64_t progressTotal = static_cast<uint64_t>(vertexCount) >
+	    UINT64_MAX / 2 ? UINT64_MAX :
+	static_cast<uint64_t>(vertexCount) * 2;
     struct bg_pca_frame frame;
     if (bg_pca_accumulator_frame(&frame, &moments) != BRLCAD_OK)
 	return false;
@@ -2356,9 +2564,16 @@ BObolPopState::buildOrientedBounds(
     };
     BObolPopSourceReader reader(*this, BObolPopPointAccess::Sequential);
     for (size_t vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex) {
-	if ((vertexIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
-	    generationCancelled())
-	    return false;
+	if ((vertexIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0) {
+	    const uint64_t completed = static_cast<uint64_t>(vertexCount) >
+		UINT64_MAX - static_cast<uint64_t>(vertexIndex) ? UINT64_MAX :
+		static_cast<uint64_t>(vertexCount) +
+		    static_cast<uint64_t>(vertexIndex);
+	    reportProgress(BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS,
+		completed, progressTotal);
+	    if (generationCancelled())
+		return false;
+	}
 	point_t point;
 	if (!reader.point(vertexIndex, point))
 	    return false;
@@ -2372,6 +2587,8 @@ BObolPopState::buildOrientedBounds(
 		projectionMaximum[axis], projection);
 	}
     }
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS,
+	progressTotal, progressTotal);
 
     fastf_t orientedExtent[3] = {};
     const fastf_t axisAlignedExtent[3] = {
@@ -2441,9 +2658,9 @@ BObolPopState::generationCancelled(void) const
 }
 
 bool
-BObolPopState::publishSerializedCoveragePreview(void)
+BObolPopState::publishCoveragePreview(void)
 {
-    if (!previewCallback || !hasSerializedSource ||
+    if (!previewCallback ||
 	(!sourceBoundsScanned && !coveragePreviewBoundsKnown) || !vertexCount)
 	return false;
     const int64_t started = bu_gettime();
@@ -2451,6 +2668,9 @@ BObolPopState::publishSerializedCoveragePreview(void)
     constexpr size_t cellCount = BOBOL_MESH_LOD_COVERAGE_PREVIEW_CELL_COUNT;
     constexpr size_t pointsPerCell =
 	BOBOL_MESH_LOD_COVERAGE_PREVIEW_POINTS_PER_CELL;
+    constexpr size_t outputValuesPerCell = pointsPerCell * 3u;
+    constexpr size_t outputSampleValueCount =
+	cellCount * outputValuesPerCell;
     static_assert(cellCount == cellAxis * cellAxis * cellAxis,
 	"coverage preview grid must be cubic");
     const fastf_t *previewMinimum = sourceBoundsScanned ?
@@ -2463,10 +2683,6 @@ BObolPopState::publishSerializedCoveragePreview(void)
 	previewMaximum[Z] - previewMinimum[Z]
     };
     constexpr fastf_t boundRelativeTolerance = 1.0e-5;
-    const size_t valuesPerCell = pointsPerCell * 3u;
-    if (cellCount > std::numeric_limits<size_t>::max() / valuesPerCell)
-	return false;
-    const size_t sampleValueCount = cellCount * valuesPerCell;
     struct CoverageWorkerSamples {
 	std::array<uint8_t, cellCount> population = {};
 	std::vector<fastf_t> points;
@@ -2479,7 +2695,28 @@ BObolPopState::publishSerializedCoveragePreview(void)
 	    BOBOL_MESH_LOD_COVERAGE_PREVIEW_MAX_WORKERS,
 	    std::max<size_t>(1, bu_avail_cpus()));
     }
+    BObolParallelBudgetLease coverageBudget;
+    if (workerCount > 1) {
+	workerCount = coverageBudget.tryAcquireHelpers(workerCount);
+	if (workerCount <= 1) {
+	    coverageBudget.release();
+	    workerCount = 1;
+	}
+    }
+    /* Retain at most pointsPerCell representatives after merging all source
+     * ranges.  Giving every helper that complete allowance multiplied the
+     * nominal 3 MiB scratch buffer by the worker count even though the excess
+     * samples were immediately discarded.  A ceiling share preserves the
+     * same merged cap while bounding the parallel scratch footprint. */
+    const size_t samplesPerWorkerCell =
+	(pointsPerCell + workerCount - 1u) / workerCount;
+    const size_t valuesPerCell = samplesPerWorkerCell * 3u;
+    if (cellCount > std::numeric_limits<size_t>::max() / valuesPerCell)
+	return false;
+    const size_t sampleValueCount = cellCount * valuesPerCell;
     std::vector<CoverageWorkerSamples> workers;
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_COVERAGE_PREVIEW, 0,
+	static_cast<uint64_t>(vertexCount));
     try {
 	workers.resize(workerCount);
 	for (CoverageWorkerSamples &worker : workers)
@@ -2488,16 +2725,30 @@ BObolPopState::publishSerializedCoveragePreview(void)
 	return false;
     }
 
+    std::atomic<uint64_t> sampledVertexCount(0);
     const auto sampleRange = [this, previewMinimum, previewMaximum,
-	&extent, &workers, valuesPerCell, cellAxis, pointsPerCell,
-	boundRelativeTolerance](size_t workerIndex, size_t begin, size_t end) {
+	&extent, &workers, &sampledVertexCount, valuesPerCell, cellAxis,
+	samplesPerWorkerCell, boundRelativeTolerance](size_t workerIndex, size_t begin,
+	size_t end) {
 	CoverageWorkerSamples &worker = workers[workerIndex];
 	BObolPopSourceReader reader(*this, BObolPopPointAccess::Sequential);
+	size_t progressCursor = begin;
 	for (size_t vertexIndex = begin; vertexIndex < end; ++vertexIndex) {
-	    if ((vertexIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
-		generationCancelled()) {
-		worker.sourceValid = false;
-		return;
+	    if (((vertexIndex - begin) &
+		    BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0) {
+		if (vertexIndex > progressCursor) {
+		    const uint64_t completed = sampledVertexCount.fetch_add(
+			static_cast<uint64_t>(vertexIndex - progressCursor),
+			std::memory_order_relaxed) +
+			static_cast<uint64_t>(vertexIndex - progressCursor);
+		    reportProgress(BOBOL_LOD_PRODUCER_STAGE_COVERAGE_PREVIEW,
+			completed, static_cast<uint64_t>(vertexCount));
+		    progressCursor = vertexIndex;
+		}
+		if (generationCancelled()) {
+		    worker.sourceValid = false;
+		    return;
+		}
 	    }
 	    point_t point;
 	    if (!reader.point(vertexIndex, point)) {
@@ -2526,12 +2777,20 @@ BObolPopState::publishSerializedCoveragePreview(void)
 	    const size_t cell = coordinate[X] + cellAxis *
 		(coordinate[Y] + cellAxis * coordinate[Z]);
 	    if (cell >= worker.population.size() ||
-		worker.population[cell] >= pointsPerCell)
+		worker.population[cell] >= samplesPerWorkerCell)
 		continue;
 	    fastf_t *destination = worker.points.data() +
 		cell * valuesPerCell + worker.population[cell] * 3u;
 	    VMOVE(destination, point);
 	    ++worker.population[cell];
+	}
+	if (end > progressCursor) {
+	    const uint64_t completed = sampledVertexCount.fetch_add(
+		static_cast<uint64_t>(end - progressCursor),
+		std::memory_order_relaxed) +
+		static_cast<uint64_t>(end - progressCursor);
+	    reportProgress(BOBOL_LOD_PRODUCER_STAGE_COVERAGE_PREVIEW,
+		completed, static_cast<uint64_t>(vertexCount));
 	}
     };
     if (workerCount == 1) {
@@ -2546,18 +2805,21 @@ BObolPopState::publishSerializedCoveragePreview(void)
 		const size_t end = std::min(vertexCount, begin + chunk);
 		sampleWorkers.emplace_back(sampleRange, worker, begin, end);
 	    }
-	} catch (const std::system_error &) {
+	} catch (...) {
 	    for (std::thread &worker : sampleWorkers)
-		worker.join();
+		if (worker.joinable())
+		    worker.join();
+	    coverageBudget.release();
 	    return false;
 	}
 	for (std::thread &worker : sampleWorkers)
 	    worker.join();
     }
+    coverageBudget.release();
 
     std::vector<fastf_t> points;
     try {
-	points.reserve(sampleValueCount);
+	points.reserve(outputSampleValueCount);
     } catch (const std::bad_alloc &) {
 	return false;
     }
@@ -2569,6 +2831,8 @@ BObolPopState::publishSerializedCoveragePreview(void)
 	    return false;
 	}
     }
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_COVERAGE_PREVIEW,
+	static_cast<uint64_t>(vertexCount), static_cast<uint64_t>(vertexCount));
     /* The certificate is spatial occupancy.  Merge cell-local samples in
      * source-range order; their order within an occupied cell is irrelevant. */
     for (size_t cell = 0; cell < cellCount; ++cell) {
@@ -2609,7 +2873,7 @@ BObolPopState::publishSerializedCoveragePreview(void)
     previewCallback(BOBOL_MESH_LOD_PREVIEW_COVERAGE_POINTS, previewKey,
 	&data, &hierarchy, previewCallbackData);
     if (getenv("BOBOL_DRAW_TIMING"))
-	bu_log("[obol-timing] serialized coverage preview: %8.1f ms "
+	bu_log("[obol-timing] coverage preview: %8.1f ms "
 	       "(points=%zu workers=%zu)\n",
 	       (bu_gettime() - started) / 1000.0, data.point_count,
 	       workerCount);
@@ -2622,16 +2886,7 @@ BObolPopState::initializeGeneration(
 	const struct BObolMeshLodPreviewRequest *previewRequest,
 	BObolMeshLodPreviewCallback preview, void *previewData)
 {
-    previewCallback = preview;
-    previewCallbackData = previewData;
-    spatialPageCallback = previewRequest ?
-	previewRequest->spatial_page_callback : NULL;
-    spatialPageCallbackData = previewRequest ?
-	previewRequest->spatial_page_data : NULL;
-    cancellationCallback = previewRequest ?
-	previewRequest->cancellation_callback : NULL;
-    cancellationCallbackData = previewRequest ?
-	previewRequest->cancellation_data : NULL;
+    configurePreview(previewRequest, preview, previewData);
     generationFailureReason = "source validation";
     if (generationCancelled()) {
 	generationFailureReason = "generation cancelled";
@@ -2640,48 +2895,27 @@ BObolPopState::initializeGeneration(
     if ((!vertexArray && !hasSerializedSource) || !vertexCount ||
 	(!faceArray && !hasSerializedSource) || !faceCount) {
 	return;
-	}
-    spatialLeafRequested = hasSerializedSource && previewRequest &&
-	previewRequest->spatial_leaf_producer != 0;
-    /* A source-order face prefix has no whole-object meaning.  Before the
-     * content hash and spatial page construction, scan the serialized vertex
-     * stream sequentially and publish a bounded spatially stratified point
-     * representation instead.  It has an explicit preview kind and never
-     * claims to be a PoP hierarchy. */
-    if (spatialLeafRequested) {
-	if (previewRequest && previewRequest->coverage_bounds_valid) {
-	    for (size_t axis = 0; axis < 3; ++axis) {
-		coveragePreviewMinimum[axis] =
-		    previewRequest->coverage_bmin[axis];
-		coveragePreviewMaximum[axis] =
-		    previewRequest->coverage_bmax[axis];
-	    }
-	    coveragePreviewBoundsKnown =
-		std::isfinite(coveragePreviewMaximum[X] -
-		    coveragePreviewMinimum[X]) &&
-		std::isfinite(coveragePreviewMaximum[Y] -
-		    coveragePreviewMinimum[Y]) &&
-		std::isfinite(coveragePreviewMaximum[Z] -
-		    coveragePreviewMinimum[Z]);
-	}
-	if (!coveragePreviewBoundsKnown) {
-	    generationFailureReason = "coverage bounds scan";
-	    if (!scanSourceBounds())
-		return;
-	}
-	coveragePreviewBoundsMismatch = false;
-	(void)publishSerializedCoveragePreview();
-	if (coveragePreviewBoundsMismatch) {
-	    coveragePreviewBoundsKnown = false;
-	    generationFailureReason = "coverage bounds validation";
-	    if (!scanSourceBounds())
-		return;
-	    (void)publishSerializedCoveragePreview();
-	}
     }
+    /* A source-order face prefix has no whole-object meaning.  Before content
+     * hashing and PoP classification, publish a bounded spatially stratified
+     * point representation when the caller explicitly requests it.  Native
+     * sources normally completed this in their constructor before repeated-
+     * index normalization; serialized sources arrive here directly. */
+    if (!publishRequestedCoveragePreview())
+	return;
 
     if (!userKey) {
 	generationFailureReason = "source hashing";
+	uint64_t hashTotal = static_cast<uint64_t>(vertexCount) >
+		UINT64_MAX - static_cast<uint64_t>(faceCount) ? UINT64_MAX :
+	    static_cast<uint64_t>(vertexCount) +
+		static_cast<uint64_t>(faceCount);
+	if (normalArray)
+	    hashTotal = hashTotal > UINT64_MAX -
+		    static_cast<uint64_t>(faceCount) ? UINT64_MAX :
+		hashTotal + static_cast<uint64_t>(faceCount);
+	reportProgress(BOBOL_LOD_PRODUCER_STAGE_SOURCE_HASHING, 0,
+	    hashTotal);
 	struct bu_data_hash_state *state = bu_data_hash_create();
 	static const char prefixSemantics[] = "BObol-chunked-PoP-format-24";
 	static const char spatialSemantics[] =
@@ -2690,19 +2924,48 @@ BObolPopState::initializeGeneration(
 	if (spatialLeafRequested)
 	    bu_data_hash_update(state, spatialSemantics, sizeof(spatialSemantics));
 	if (vertexArray && faceArray) {
-	    bu_data_hash_update(state, vertexArray,
-		vertexCount * sizeof(point_t));
-	    bu_data_hash_update(state, faceArray,
-		3 * faceCount * sizeof(int));
+	    /* Keep the digest byte-identical while exposing progress and bounded
+	     * cancellation latency.  One monolithic update made a large native BoT
+	     * look stuck at zero percent even though the producer was consuming CPU
+	     * normally. */
+	    const auto hashRecords = [this, state, hashTotal](const void *records,
+		    size_t count, size_t stride, uint64_t completedBase) {
+		const unsigned char *bytes = static_cast<const unsigned char *>(
+		    records);
+		const size_t recordsPerUpdate =
+		    BOBOL_MESH_LOD_CANCELLATION_POLL_MASK + 1u;
+		for (size_t first = 0; first < count;) {
+		    reportProgress(BOBOL_LOD_PRODUCER_STAGE_SOURCE_HASHING,
+			completedBase + static_cast<uint64_t>(first), hashTotal);
+		    if (generationCancelled())
+			return false;
+		    const size_t amount = std::min(recordsPerUpdate,
+			count - first);
+		    bu_data_hash_update(state, bytes + first * stride,
+			amount * stride);
+		    first += amount;
+		}
+		return true;
+	    };
+	    if (!hashRecords(vertexArray, vertexCount, sizeof(point_t), 0) ||
+		!hashRecords(faceArray, faceCount, 3 * sizeof(int),
+		    static_cast<uint64_t>(vertexCount))) {
+		bu_data_hash_destroy(state);
+		generationFailureReason = "generation cancelled";
+		return;
+	    }
 	} else {
 	    BObolPopSourceReader reader(*this,
 		BObolPopPointAccess::Sequential);
 	    for (size_t index = 0; index < vertexCount; ++index) {
-		if ((index & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
-		    generationCancelled()) {
-		    bu_data_hash_destroy(state);
-		    generationFailureReason = "generation cancelled";
-		    return;
+		if ((index & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0) {
+		    reportProgress(BOBOL_LOD_PRODUCER_STAGE_SOURCE_HASHING,
+			static_cast<uint64_t>(index), hashTotal);
+		    if (generationCancelled()) {
+			bu_data_hash_destroy(state);
+			generationFailureReason = "generation cancelled";
+			return;
+		    }
 		}
 		point_t point;
 		if (!reader.point(index, point)) {
@@ -2712,11 +2975,18 @@ BObolPopState::initializeGeneration(
 		bu_data_hash_update(state, point, sizeof(point));
 	    }
 	    for (size_t index = 0; index < faceCount; ++index) {
-		if ((index & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
-		    generationCancelled()) {
-		    bu_data_hash_destroy(state);
-		    generationFailureReason = "generation cancelled";
-		    return;
+		if ((index & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0) {
+		    const uint64_t completed = static_cast<uint64_t>(vertexCount) >
+			UINT64_MAX - static_cast<uint64_t>(index) ? UINT64_MAX :
+			static_cast<uint64_t>(vertexCount) +
+			    static_cast<uint64_t>(index);
+		    reportProgress(BOBOL_LOD_PRODUCER_STAGE_SOURCE_HASHING,
+			completed, hashTotal);
+		    if (generationCancelled()) {
+			bu_data_hash_destroy(state);
+			generationFailureReason = "generation cancelled";
+			return;
+		    }
 		}
 		int face[3] = {};
 		if (!reader.face(index, face)) {
@@ -2733,13 +3003,41 @@ BObolPopState::initializeGeneration(
 	}
 	const unsigned char normalFlag = normalArray ? 1u : 0u;
 	bu_data_hash_update(state, &normalFlag, sizeof(normalFlag));
-	if (normalArray)
-	    bu_data_hash_update(state, normalArray,
-		3 * faceCount * sizeof(vect_t));
+	if (normalArray) {
+	    const size_t recordsPerUpdate =
+		BOBOL_MESH_LOD_CANCELLATION_POLL_MASK + 1u;
+	    const unsigned char *normalBytes =
+		static_cast<const unsigned char *>(
+		    static_cast<const void *>(normalArray));
+	    const uint64_t completedBase =
+		static_cast<uint64_t>(vertexCount) > UINT64_MAX -
+			static_cast<uint64_t>(faceCount) ? UINT64_MAX :
+		    static_cast<uint64_t>(vertexCount) +
+			static_cast<uint64_t>(faceCount);
+	    for (size_t first = 0; first < faceCount;) {
+		reportProgress(BOBOL_LOD_PRODUCER_STAGE_SOURCE_HASHING,
+		    completedBase > UINT64_MAX - static_cast<uint64_t>(first) ?
+			UINT64_MAX : completedBase + static_cast<uint64_t>(first),
+		    hashTotal);
+		if (generationCancelled()) {
+		    bu_data_hash_destroy(state);
+		    generationFailureReason = "generation cancelled";
+		    return;
+		}
+		const size_t amount = std::min(recordsPerUpdate,
+		    faceCount - first);
+		bu_data_hash_update(state,
+		    normalBytes + first * 3 * sizeof(vect_t),
+		    amount * 3 * sizeof(vect_t));
+		first += amount;
+	    }
+	}
 	const unsigned char cullFlag = shadedCullBackfaces ? 1u : 0u;
 	bu_data_hash_update(state, &cullFlag, sizeof(cullFlag));
 	hash = bu_data_hash_val(state);
 	bu_data_hash_destroy(state);
+	reportProgress(BOBOL_LOD_PRODUCER_STAGE_SOURCE_HASHING,
+	    hashTotal, hashTotal);
     } else {
 	hash = userKey;
     }
@@ -2751,10 +3049,12 @@ BObolPopState::initializeGeneration(
      * immutable header before reusing it so generate-and-open can materialize
      * its first prefix without reclassifying the mesh or publishing an
      * uninitialized shell. */
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_CACHE_LOOKUP, 0, 1);
     void *cacheData = NULL;
     const size_t cacheSize = cacheGet(&cacheData, CACHE_POP_MAX_CUT);
     const bool cachedMarkerPresent = cacheSize && cacheData;
     cacheDone();
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_CACHE_LOOKUP, 1, 1);
     if (cachedMarkerPresent && loadCachedHeader())
 	return;
 
@@ -2774,29 +3074,38 @@ BObolPopState::initializeGeneration(
     }
 
     generationFailureReason = "bounds and oriented-proxy scan";
+    const uint64_t boundsTotal = static_cast<uint64_t>(vertexCount) >
+	    UINT64_MAX / 2 ? UINT64_MAX :
+	static_cast<uint64_t>(vertexCount) * 2;
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS, 0,
+	boundsTotal);
     if (!scanSourceBounds())
 	return;
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS,
+	static_cast<uint64_t>(vertexCount), boundsTotal);
     orientedBoundsValid = buildOrientedBounds(sourcePcaMoments);
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS,
+	boundsTotal, boundsTotal);
     if (generationCancelled()) {
 	generationFailureReason = "generation cancelled";
 	return;
     }
 
     const int64_t classifyStarted = bu_gettime();
-	generationFailureReason = "PoP classification";
+    generationFailureReason = "PoP classification";
     buildCutSchedule();
     currCut = maxPopCut;
-	/* The spatial producer is staged behind an explicit diagnostic switch
-	 * until its constrained partial-publication path can replace the current
-	 * useful live-prefix fallback.  Keeping the switch here lets the same
-	 * serialized source exercise the bounded classifier without changing the
-	 * production cache contract prematurely. */
-	if (spatialLeafRequested) {
-	    generationFailureReason = "spatial PoP classification";
-	    isValid = cache();
-	    generationFailureReason = isValid ? NULL : generationFailureReason;
-	    return;
-	}
+    /* The spatial producer is staged behind an explicit diagnostic switch
+     * until its constrained partial-publication path can replace the current
+     * useful live-prefix fallback.  Keeping the switch here lets the same
+     * serialized source exercise the bounded classifier without changing the
+     * production cache contract prematurely. */
+    if (spatialLeafRequested) {
+	generationFailureReason = "spatial PoP classification";
+	isValid = cache();
+	generationFailureReason = isValid ? NULL : generationFailureReason;
+	return;
+    }
     if (!triProcess()) {
 	generationFailureReason = generationCancelled() ?
 	    "generation cancelled" : generationFailureReason;
@@ -2892,13 +3201,16 @@ BObolPopState::initializeGeneration(
     }
     if (faceCount > BOBOL_MESH_LOD_CHUNK_FACE_TARGET) {
 	generationFailureReason = "spatial chunk construction";
+	reportProgress(BOBOL_LOD_PRODUCER_STAGE_SPATIAL_CONSTRUCTION, 0, 2);
 	if (!buildClusters())
 	    return;
+	reportProgress(BOBOL_LOD_PRODUCER_STAGE_SPATIAL_CONSTRUCTION, 1, 2);
 	if (getenv("BOBOL_DRAW_TIMING"))
 	    bu_log("[obol-timing] pop clusters: %8.1f ms\n",
 		   (bu_gettime() - classifyStarted) / 1000.0);
 	if (!buildChunks())
 	    return;
+	reportProgress(BOBOL_LOD_PRODUCER_STAGE_SPATIAL_CONSTRUCTION, 2, 2);
 	if (getenv("BOBOL_DRAW_TIMING"))
 	    bu_log("[obol-timing] pop chunks:   %8.1f ms\n",
 		   (bu_gettime() - classifyStarted) / 1000.0);
@@ -2911,12 +3223,14 @@ BObolPopState::initializeGeneration(
     const int64_t cacheStarted = bu_gettime();
 
     generationFailureReason = "cache persistence";
-	const bool cacheComplete = cache();
-	releaseCachePublicationScratch();
-	if (cacheComplete) {
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_CACHE_PERSISTENCE, 0, 1);
+    const bool cacheComplete = cache();
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_CACHE_PERSISTENCE, 1, 1);
+    releaseCachePublicationScratch();
+    if (cacheComplete) {
 	isValid = true;
 	generationFailureReason = NULL;
-	} else {
+    } else {
 	/* A complete cache may not fit the process's constrained map even though
 	 * the already-classified, bounded first prefix does.  Keep that prefix
 	 * live and explicitly cap this transient asset at it.  No name mapping is
@@ -3440,9 +3754,14 @@ BObolPopState::materializeInitialPrefix(int cut)
      * for identical content under another source name.  Reuse its cache;
      * only a genuinely new hierarchy has producer scratch for direct
      * materialization. */
-	if ((!vertexArray && !hasSerializedSource) || cutTriVerts.empty() ||
-	cutTris.empty() || triIndexMap.size() != vertexCount)
-	return setCut(cut);
+    if ((!vertexArray && !hasSerializedSource) || cutTriVerts.empty() ||
+	cutTris.empty() || triIndexMap.size() != vertexCount) {
+	reportProgress(BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION, 0, 0);
+	const bool loaded = setCut(cut);
+	reportProgress(BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION,
+	    loaded ? 1 : 0, loaded ? 1 : 0);
+	return loaded;
+    }
     cut = std::max(minPopCut, std::min(maxPopCut, cut));
 
     size_t pointCount = 0;
@@ -3454,12 +3773,22 @@ BObolPopState::materializeInitialPrefix(int cut)
     if (!pointCount || !triangleCount ||
 	pointCount > SIZE_MAX / 3 || triangleCount > SIZE_MAX / 3)
 	return false;
+    const uint64_t progressTotal = static_cast<uint64_t>(pointCount) >
+	UINT64_MAX - static_cast<uint64_t>(triangleCount) ? UINT64_MAX :
+	static_cast<uint64_t>(pointCount) +
+	    static_cast<uint64_t>(triangleCount);
+    uint64_t progressCompleted = 0;
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION, 0,
+	progressTotal);
 
     lodTriPoints.clear();
     lodTriPoints.reserve(pointCount * 3);
-	BObolPopSourceReader reader(*this);
+    BObolPopSourceReader reader(*this);
     for (int cutIndex = 0; cutIndex <= cut; ++cutIndex) {
 	for (uint32_t sourceVertex : cutTriVerts[cutIndex]) {
+	    if ((progressCompleted & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0)
+		reportProgress(BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION,
+		    progressCompleted, progressTotal);
 	    if (sourceVertex >= vertexCount)
 		return false;
 	    point_t point;
@@ -3468,7 +3797,8 @@ BObolPopState::materializeInitialPrefix(int cut)
 	    lodTriPoints.push_back(point[X]);
 	    lodTriPoints.push_back(point[Y]);
 	    lodTriPoints.push_back(point[Z]);
-	}
+	    ++progressCompleted;
+    }
     }
 
     lodTris.clear();
@@ -3481,6 +3811,9 @@ BObolPopState::materializeInitialPrefix(int cut)
     }
     for (int cutIndex = 0; cutIndex <= cut; ++cutIndex) {
 	for (uint32_t sourceFace : cutTris[cutIndex]) {
+	    if ((progressCompleted & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0)
+		reportProgress(BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION,
+		    progressCompleted, progressTotal);
 	    if (sourceFace >= faceCount)
 		return false;
 	    int face[3] = {};
@@ -3502,10 +3835,13 @@ BObolPopState::materializeInitialPrefix(int cut)
 		    lodTriNormals.push_back(normal[Z]);
 		}
 	    }
+	    ++progressCompleted;
 	}
     }
     lodTriPointsSnapped.clear();
     currCut = cut;
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION,
+	progressTotal, progressTotal);
     return true;
 }
 
@@ -4408,6 +4744,8 @@ BObolPopState::cacheSpatialLeaves(void)
 	faceCount > UINT32_MAX || !cutCount)
 	return false;
     const int64_t started = bu_gettime();
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION, 0,
+	static_cast<uint64_t>(faceCount));
     BObolBoundedParallelExecutor spatialWorkers(
 	BOBOL_MESH_LOD_SPATIAL_CLASSIFICATION_MAX_WORKERS);
 
@@ -4430,6 +4768,7 @@ BObolPopState::cacheSpatialLeaves(void)
     int firstCut = -1;
     std::vector<BObolSpatialFaceDisk> records;
     records.reserve(leafFaceCount);
+    uint64_t spatialPageTotal = 0;
 
     struct SpatialPageWork {
 	uint32_t chunkId = 0;
@@ -4458,7 +4797,8 @@ BObolPopState::cacheSpatialLeaves(void)
 	return true;
     };
 
-    const auto publishPage = [this, &firstCut](SpatialPageWork &work) {
+    const auto publishPage = [this, &firstCut,
+	&spatialPageTotal](SpatialPageWork &work) {
 	if (!work.ready || work.prepared.info.chunk_id != chunkInfos.size())
 	    return false;
 	chunkInfos.push_back(work.prepared.info);
@@ -4483,6 +4823,8 @@ BObolPopState::cacheSpatialLeaves(void)
 	}
 	firstCut = firstCut < 0 ? cached.min_cut :
 	    std::min(firstCut, cached.min_cut);
+	reportProgress(BOBOL_LOD_PRODUCER_STAGE_SPATIAL_CONSTRUCTION,
+	    static_cast<uint64_t>(chunkInfos.size()), spatialPageTotal);
 	return true;
     };
 
@@ -4549,9 +4891,13 @@ BObolPopState::cacheSpatialLeaves(void)
     uint32_t firstUnclassifiedFace = 0;
     for (; firstUnclassifiedFace < faceCount &&
 	 records.size() < seedFaceCount; ++firstUnclassifiedFace) {
-	if ((firstUnclassifiedFace & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
-	    generationCancelled())
-	    return fail();
+	if ((firstUnclassifiedFace & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0) {
+	    reportProgress(BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION,
+		static_cast<uint64_t>(firstUnclassifiedFace),
+		static_cast<uint64_t>(faceCount));
+	    if (generationCancelled())
+		return fail();
+	}
 	uint8_t activation = UINT8_MAX;
 	uint16_t cell = UINT16_MAX;
 	if (!classifySpatialFace(reader, firstUnclassifiedFace, activation, cell))
@@ -4562,6 +4908,9 @@ BObolPopState::cacheSpatialLeaves(void)
     }
     if (records.empty() || !cachePage())
 	return fail();
+	reportProgress(BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION,
+	    static_cast<uint64_t>(firstUnclassifiedFace),
+	    static_cast<uint64_t>(faceCount));
     minPopCut = firstCut;
     spatialLeafCache = true;
     if (spatialPublicationLimited)
@@ -4577,6 +4926,7 @@ BObolPopState::cacheSpatialLeaves(void)
     std::vector<uint16_t> batchCells;
     std::array<std::vector<BObolSpatialFaceDisk>, cellCount>
 	batchCellRecords;
+    std::array<uint64_t, cellCount> spooledFaceCounts = {};
     for (uint32_t batchBegin = firstUnclassifiedFace;
 	 batchBegin < faceCount;) {
 	const uint32_t batchEnd = static_cast<uint32_t>(std::min<uint64_t>(
@@ -4666,14 +5016,30 @@ BObolPopState::cacheSpatialLeaves(void)
 		    sizeof(BObolSpatialFaceDisk), cellRecords.size(),
 		    spools[cell]) != cellRecords.size())
 		return fail();
+	    spooledFaceCounts[cell] +=
+		static_cast<uint64_t>(cellRecords.size());
 	}
 	batchBegin = batchEnd;
+	reportProgress(BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION,
+	    static_cast<uint64_t>(batchEnd), static_cast<uint64_t>(faceCount));
     }
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION,
+	static_cast<uint64_t>(faceCount), static_cast<uint64_t>(faceCount));
     if (getenv("BOBOL_DRAW_TIMING"))
 	bu_log("[obol-timing] spatial PoP partition: %8.1f ms "
 	       "(faces=%zu)\n", (bu_gettime() - started) / 1000.0,
 	       faceCount);
 
+    spatialPageTotal = 1;
+    for (uint64_t cellFaces : spooledFaceCounts) {
+	if (!cellFaces)
+	    continue;
+	const uint64_t pages = (cellFaces + leafFaceCount - 1) / leafFaceCount;
+	spatialPageTotal = pages > UINT64_MAX - spatialPageTotal ? UINT64_MAX :
+	    spatialPageTotal + pages;
+    }
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_SPATIAL_CONSTRUCTION,
+	static_cast<uint64_t>(chunkInfos.size()), spatialPageTotal);
     std::vector<SpatialPageWork> pageWave;
     pageWave.reserve(BOBOL_MESH_LOD_SPATIAL_PAGE_MAX_WORKERS);
     for (size_t cell = 0; cell < cellCount; ++cell) {
@@ -4725,12 +5091,15 @@ BObolPopState::cacheSpatialLeaves(void)
 	return false;
     minPopCut = firstCut;
     spatialLeafCache = true;
-	const bool metadataCached = cacheChunkMetadata();
-	if (metadataCached && getenv("BOBOL_DRAW_TIMING"))
-	    bu_log("[obol-timing] spatial PoP pages:     %8.1f ms "
-		   "(%zu pages)\n", (bu_gettime() - started) / 1000.0,
-		   chunkInfos.size());
-	return metadataCached;
+    const bool metadataCached = cacheChunkMetadata();
+    if (metadataCached)
+	reportProgress(BOBOL_LOD_PRODUCER_STAGE_SPATIAL_CONSTRUCTION,
+	    spatialPageTotal, spatialPageTotal);
+    if (metadataCached && getenv("BOBOL_DRAW_TIMING"))
+	bu_log("[obol-timing] spatial PoP pages:     %8.1f ms "
+	       "(%zu pages)\n", (bu_gettime() - started) / 1000.0,
+	       chunkInfos.size());
+    return metadataCached;
 }
 
 bool
@@ -5515,8 +5884,11 @@ BObolPopState::cache(void)
     }
 
     const bool leavesComplete = !spatialLeafRequested || cacheSpatialLeaves();
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_CACHE_PERSISTENCE, 0, 1);
     const bool complete = leavesComplete &&
 	(spatialPublicationLimited || cacheTri());
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_CACHE_PERSISTENCE,
+	complete ? 1 : 0, 1);
 
     cacheLock.unlock();
     bu_semaphore_release(writeSem);

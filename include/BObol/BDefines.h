@@ -36,4 +36,29 @@
 #  endif
 #endif
 
+/* Observable stages of one background mesh-LoD producer.  These values are
+ * diagnostics only: they neither select work nor form part of cache/request
+ * identity.  Keep NONE at zero so default-initialized public status records
+ * unambiguously describe the absence of an executing producer. */
+enum BObolLodProducerStage {
+    BOBOL_LOD_PRODUCER_STAGE_NONE = 0,
+    BOBOL_LOD_PRODUCER_STAGE_CACHE_LOOKUP = 1,
+    BOBOL_LOD_PRODUCER_STAGE_SOURCE_PREPARATION = 2,
+    BOBOL_LOD_PRODUCER_STAGE_SOURCE_HASHING = 3,
+    BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS = 4,
+    BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION = 5,
+    BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION = 6,
+    BOBOL_LOD_PRODUCER_STAGE_SPATIAL_CONSTRUCTION = 7,
+    BOBOL_LOD_PRODUCER_STAGE_CACHE_PERSISTENCE = 8,
+    /* Appended to preserve the numeric values already exposed by the public
+     * diagnostic API.  It executes before hashing for an eligible cold
+     * source even though its stable value follows the older stages. */
+    BOBOL_LOD_PRODUCER_STAGE_COVERAGE_PREVIEW = 9,
+    /* A resident asset serializes cache loading, construction, and prefix
+     * publication.  An executing task may wait here before it can inspect
+     * that shared asset. */
+    BOBOL_LOD_PRODUCER_STAGE_ASSET_SERIALIZATION = 10,
+    BOBOL_LOD_PRODUCER_STAGE_COUNT = 11
+};
+
 #endif /* BOBOL_BDEFINES_H */
