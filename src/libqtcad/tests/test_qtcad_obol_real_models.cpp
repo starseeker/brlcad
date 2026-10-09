@@ -1284,30 +1284,52 @@ sync_draw_case(const struct model_case &testCase)
 	const int64_t settleDeadline = bu_gettime() +
 	    REAL_MODEL_PROGRESSIVE_SETTLE_TIMEOUT_US;
 	int64_t lastFeedbackFrame = 0;
+	int64_t idleSince = 0;
 	for (int attempt = 0; bu_gettime() < settleDeadline; attempt++) {
 	    QCoreApplication::processEvents();
-	    const int advanced = controller->advanceProgressiveWork(NULL,
-		&progressiveStatus);
+	    (void)controller->advanceProgressiveWork(NULL, &progressiveStatus);
 	    /* Hidden software views do not receive a normal expose/paint stream.
 	     * The production coordinator intentionally gates richer cuts on a
 	     * completed presentation, so supply that feedback at a bounded 10 Hz
-	     * instead of either starving it or rendering on every 1 ms poll. */
+	     * instead of either starving it or rendering on every 1 ms poll.  Pump
+	     * and render are independent host levels: a pump can transfer its last
+	     * obligation to RENDER while returning hasMore == false.  Present that
+	     * terminal edge immediately instead of mistaking it for convergence. */
 	    const int64_t now = bu_gettime();
-	    if (progressiveStatus.hasMore &&
-		(controller->hasPendingLodRefinementFrame() ||
-		 lastFeedbackFrame == 0 || now - lastFeedbackFrame >= 100000)) {
+	    const bool terminalRenderPending = !progressiveStatus.hasMore &&
+		controller->isRenderRequested();
+	    if (terminalRenderPending ||
+		(progressiveStatus.hasMore &&
+		 (controller->hasPendingLodRefinementFrame() ||
+		  lastFeedbackFrame == 0 || now - lastFeedbackFrame >= 100000))) {
 		view.need_update(QG_VIEW_REFRESH);
-		controller->requestLodCapacityRender("real-model-progressive-feedback");
+		if (!controller->isRenderRequested())
+		    controller->requestLodCapacityRender(
+			"real-model-progressive-feedback");
 		QCoreApplication::processEvents();
 		QImage feedbackImage;
 		(void)qtcad_obol_present_requested_frame(view, controller,
 		    feedbackImage);
 		lastFeedbackFrame = bu_gettime();
 	    }
-	    if (!progressiveStatus.hasMore &&
-		(progressiveStatus.changed || advanced == 0 || attempt > 0)) {
-		settled = 1;
-		break;
+	    const BObolHostWorkSnapshot hostWork =
+		controller->getHostWorkSnapshot();
+	    BObolLodService *service = controller->getLodService();
+	    const bool serviceIdle = !service || service->workStatus().isIdle();
+	    const bool controllerIdle = !hostWork.pumpPending() &&
+		!hostWork.renderPending() && !hostWork.frameClaimed() &&
+		!controller->hasPendingLodResults() &&
+		!controller->hasPendingLodSubmissions() &&
+		!controller->hasPendingLodRefinementFrame() && serviceIdle;
+	    if (!progressiveStatus.hasMore && controllerIdle) {
+		if (!idleSince)
+		    idleSince = now;
+		if (now - idleSince >= 100000) {
+		    settled = 1;
+		    break;
+		}
+	    } else {
+		idleSince = 0;
 	    }
 	    std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
@@ -1433,12 +1455,35 @@ sync_draw_case(const struct model_case &testCase)
 	     settledCounts.segmentCount < testCase.minWireSegments);
 	if ((testCase.expectM35TableColor && settledTableColorPixels < 20) ||
 	    settledGeometryTooSmall) {
+	    BObolLodConvergenceStatus settledConvergence;
+	    controller->getLodConvergenceStatus(settledConvergence);
 	    fprintf(stderr,
-		"%s:%s settled deferred draw lost M35 table colors or detail: "
-		"table_color_pixels=%d shapes=%d segments=%d meshes=%d triangles=%d\n",
+		"%s:%s settled deferred draw lost colors or detail: "
+		"table_color_pixels=%d shapes=%d segments=%d meshes=%d triangles=%d "
+		"active_mesh=%zu active_cad=%zu expected=%zu available=%zu "
+		"visible=%zu active=%zu satisfied=%zu terminal=%d ready=%d "
+		"pending={tasks=%zu in_flight=%zu results=%zu writes=%zu "
+		"submissions=%d refinement=%d render=%d progressive=%d}\n",
 		testCase.file, testCase.root, settledTableColorPixels,
 		settledCounts.shapeCount, settledCounts.segmentCount,
-		settledCounts.meshCount, settledCounts.triangleCount);
+		settledCounts.meshCount, settledCounts.triangleCount,
+		controller->getActiveLodMeshPayloadCount(),
+		controller->getActiveLodCadPayloadCount(),
+		settledConvergence.expectedLeafCount,
+		settledConvergence.availableLeafCount,
+		settledConvergence.visibleTargetCount,
+		settledConvergence.activePayloadCount,
+		settledConvergence.satisfiedPayloadCount,
+		settledConvergence.terminal ? 1 : 0,
+		settledConvergence.viewReady ? 1 : 0,
+		settledConvergence.pendingTasks,
+		settledConvergence.inFlight,
+		settledConvergence.queuedResults,
+		settledConvergence.queuedCacheWrites,
+		controller->hasPendingLodSubmissions() ? 1 : 0,
+		controller->hasPendingLodRefinementFrame() ? 1 : 0,
+		controller->isRenderRequested() ? 1 : 0,
+		controller->hasProgressiveWorkPending() ? 1 : 0);
 	    ged_close(gedp);
 	    return 0;
 	}
