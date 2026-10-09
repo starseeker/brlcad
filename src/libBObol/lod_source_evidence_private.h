@@ -74,6 +74,11 @@ public:
 	return this->submittedValue.sources();
     }
 
+    const BObolLodSourceSnapshotSet::Sources &observed(void) const
+    {
+	return this->observedValue.sources();
+    }
+
     void reset(void)
     {
 	this->observedValue = BObolLodSourceSnapshotSet();

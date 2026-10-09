@@ -60,6 +60,34 @@ public:
      * PoP hierarchy; the following quality pass promotes view-significant
      * leaves under the aggregate scene budget. */
     void setStructuralCoverageOnly(SbBool coverageOnly);
+    /* Permit at most this many prominent missing occurrences to enter the
+     * normal mesh provider path during a structural-only pass.  Their standing
+     * proxies continue to count toward complete coverage, and every ordinary
+     * task, byte, and render-cost governor remains authoritative. */
+    void setStructuralCoveragePreviewLimit(size_t occurrenceCount);
+    size_t getStructuralCoveragePreviewCount(void) const;
+    /* Keep a bounded hero/quick-win frontier while the ordinary structural
+     * census projects its real entries.  The controller may feed those
+     * entries back to a later action after preview producers have retired. */
+    void setStructuralCoveragePreviewScanEnabled(SbBool enabled);
+    void setStructuralCoveragePreviewEntry(size_t entryIndex);
+    /* Supply a previously discovered scene-wide preview frontier.  Entries
+     * are visited ahead of the current bounded census window and do not
+     * contribute a second time to its visibility/coverage counters. */
+    void setStructuralCoveragePreviewEntries(
+	const std::vector<size_t> &entryIndices);
+    SbBool getStructuralCoveragePreviewCandidate(size_t &entryIndex,
+	unsigned int &visualEmphasis, double &visualFootprint,
+	uint64_t &sourcePopulation) const;
+    /* Candidate observations retained from this bounded window.  The first
+     * record is the strongest hero and the second, when present, is a
+     * distinct-asset preparation quick win.  Asset identity and aggregate
+     * footprint let the controller merge these records across windows. */
+    size_t getStructuralCoveragePreviewCandidateCount(void) const;
+    SbBool getStructuralCoveragePreviewCandidate(size_t candidateIndex,
+	size_t &entryIndex, uint64_t &assetIdentity,
+	unsigned int &visualEmphasis, double &visualFootprint,
+	double &aggregateVisualFootprint, uint64_t &sourcePopulation) const;
     /* Permit visible, non-subpixel BoTs from a complete small-scene profile
      * to request their terminal mesh directly when its exact render cost fits
      * the aggregate scene allowance.  Service working-set, result, resident,
@@ -72,8 +100,9 @@ public:
      * enter the mesh provider path. */
     void setStructuralPresentationRepair(SbBool repair);
     /** Replace the selected structural frontier with view-local terminal
-     * proxies instead of opening mesh providers.  This mode is valid only
-     * after the controller has an exact capacity witness for that frontier. */
+     * proxies instead of opening mesh providers.  This mode is valid after
+     * either an exact capacity witness or a complete exact-frontier repair
+     * which produced no presentation/provider progress. */
     void setStructuralTerminalProxy(SbBool terminalProxy);
     /* Preload the minimum prefixes needed by a private finer point threshold.
      * The displayed aggregate-point cut remains authoritative, so this
@@ -302,6 +331,20 @@ private:
     float targetPixelError;
     float pointProxyPixelThreshold;
     SbBool structuralCoverageOnly;
+    size_t structuralCoveragePreviewLimit;
+    size_t structuralCoveragePreviewCount;
+    SbBool structuralCoveragePreviewScanEnabled;
+    std::vector<size_t> structuralCoveragePreviewEntries;
+    struct StructuralCoveragePreviewCandidateRecord {
+	size_t entryIndex = SIZE_MAX;
+	uint64_t assetIdentity = 0;
+	unsigned int visualEmphasis = 0;
+	double visualFootprint = 0.0;
+	double aggregateVisualFootprint = 0.0;
+	uint64_t sourcePopulation = 0;
+    };
+    std::vector<StructuralCoveragePreviewCandidateRecord>
+	structuralCoveragePreviewCandidates;
     SbBool allowTerminalMeshAdmission;
     SbBool structuralPresentationRepair;
     SbBool structuralTerminalProxy;

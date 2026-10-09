@@ -336,6 +336,24 @@ public:
 	size_t coveredCount = 0;
     };
 
+    struct ProviderWaitInputs {
+	bool completedPass = false;
+	bool providerPending = false;
+	bool serviceIdle = false;
+	bool resultDeliveryIdle = false;
+	bool passAdmittedWork = false;
+	bool passChangedCut = false;
+	bool passResidencyPending = false;
+	bool passBudgetBlocked = false;
+	bool rescanPending = false;
+	bool selectiveOwnerPending = false;
+	bool structuralOwnerPending = false;
+	bool retainedAllocationOwnerPending = false;
+	bool capacityOwnerPending = false;
+	bool presentationOwnerPending = false;
+	bool planningOwnerPending = false;
+    };
+
     /* Coverage may defer quality until every visible occurrence has a useful
      * presentation.  Once that proof completes, only an unowned ordinary
      * coverage pass needs the generic deferred-quality successor.  A retained
@@ -357,6 +375,7 @@ public:
 	if (invalidateCoverage) {
 	    this->coverageCompleteValue = false;
 	    this->demandCensusRequiredValue = false;
+	    this->demandCensusProviderParkedValue = false;
 	    this->demandDeferredValue = false;
 	    /* The counters belong to one exact view/inventory pass.  A camera or
 	     * population epoch may begin while the preceding bounded pass is only
@@ -453,6 +472,57 @@ public:
 	return this->demandCensusRequiredValue;
     }
 
+    /* Once a complete dense pass has proved that its remaining mesh demand is
+     * unavailable from the current source population, replaying that same
+     * pass cannot make progress.  A live provider is the only producer in
+     * this state.  Park only at a clean ownership boundary: every competing
+     * cursor, allocator, residency, and presentation owner must already be
+     * idle, and the pass itself must have produced no effect. */
+    bool shouldParkDemandCensusForProvider(
+	const ProviderWaitInputs &inputs) const
+    {
+	return this->demandCensusRequiredValue &&
+	    this->demandDeferredValue && inputs.completedPass &&
+	    inputs.providerPending && inputs.serviceIdle &&
+	    inputs.resultDeliveryIdle && !inputs.passAdmittedWork &&
+	    !inputs.passChangedCut && !inputs.passResidencyPending &&
+	    !inputs.passBudgetBlocked && !inputs.rescanPending &&
+	    !inputs.selectiveOwnerPending &&
+	    !inputs.structuralOwnerPending &&
+	    !inputs.retainedAllocationOwnerPending &&
+	    !inputs.capacityOwnerPending &&
+	    !inputs.presentationOwnerPending &&
+	    !inputs.planningOwnerPending;
+    }
+
+    /* A dense pass whose every mesh demand is deliberately deferred cannot
+     * make progress while a live provider is the only possible successor.
+     * Move, rather than discard, that obligation off the runnable submission
+     * level.  A genuine provider availability/settlement edge releases it. */
+    bool parkDemandCensusForProvider(void)
+    {
+	if (!this->demandCensusRequiredValue)
+	    return false;
+	this->demandCensusRequiredValue = false;
+	this->demandCensusProviderParkedValue = true;
+	this->demandDeferredValue = false;
+	return true;
+    }
+
+    bool releaseProviderParkedDemandCensus(void)
+    {
+	if (!this->demandCensusProviderParkedValue)
+	    return false;
+	this->demandCensusProviderParkedValue = false;
+	this->demandCensusRequiredValue = true;
+	return true;
+    }
+
+    bool demandCensusProviderParked(void) const
+    {
+	return this->demandCensusProviderParkedValue;
+    }
+
     /* Return true only when this completed pass actually established demand.
      * A point-classification owner may defer mesh admission again; retain the
      * requirement in that case so a later ordinary pass cannot use a sparse
@@ -491,6 +561,7 @@ public:
 	this->coverageCompleteValue = !completion.missing;
 	this->demandCensusRequiredValue =
 	    !completion.missing && completion.demandDeferred;
+	this->demandCensusProviderParkedValue = false;
 	this->completeVisibleCountValue = completion.visibleCount;
 	this->completeVisibleCountValidValue = true;
 	this->censusValue = Census::NONE;
@@ -534,6 +605,7 @@ public:
 	this->censusValue = Census::NONE;
 	this->coverageCompleteValue = false;
 	this->demandCensusRequiredValue = false;
+	this->demandCensusProviderParkedValue = false;
 	this->demandDeferredValue = false;
 	this->clearPassCounters();
 	this->clearCompleteVisibleCount();
@@ -577,6 +649,7 @@ private:
      * completed structural pass; the second records whether an attempted
      * successor was itself deferred by a stronger presentation owner. */
     bool demandCensusRequiredValue = false;
+    bool demandCensusProviderParkedValue = false;
     bool demandDeferredValue = false;
     size_t visibleCountValue = 0;
     size_t coveredCountValue = 0;
@@ -632,6 +705,185 @@ public:
 	const size_t additionalCost = terminalCost > currentCost ?
 	    terminalCost - currentCost : 0;
 	return additionalCost <= remainingCost;
+    }
+};
+
+/* A large cold source must retain its complete structural-coverage pass, but
+ * that proof need not make the first recognizable mesh wait behind every
+ * occurrence in the scene.  This policy opens a tightly bounded set of
+ * preview producers.  The submit action still owns per-occurrence visual
+ * selection and render-cost reservation, while the service remains the
+ * authority for transient and resident memory.
+ *
+ * Keeping this as a separate policy is important: structuralCoverageOnly
+ * continues to describe the pass's global correctness contract.  A preview
+ * is a limited exception for an already covered occurrence, not permission to
+ * turn a large-scene census into an unbounded mesh-first pass. */
+class BObolLodColdPreviewPolicy {
+public:
+    struct Candidate {
+	size_t entryIndex = SIZE_MAX;
+	uint64_t assetIdentity = 0;
+	uint64_t sourcePopulation = 0;
+	double visualFootprint = 0.0;
+	double aggregateVisualFootprint = 0.0;
+	unsigned int emphasis = 0;
+    };
+
+    struct Inputs {
+	bool structuralCoverageOnly = false;
+	bool boundedSource = false;
+	bool quietView = false;
+	bool ordinaryDensePass = false;
+	bool resultPublicationPending = false;
+	size_t activeServiceTasks = 0;
+	size_t activeProducerCount = 0;
+	size_t serviceWorkerCount = 1;
+	size_t activeMeshOccurrenceCount = 0;
+	size_t remainingRenderCost = 0;
+    };
+
+    static constexpr size_t maximumPreviewMeshOccurrences = 8;
+    static constexpr size_t maximumConcurrentPreviewProducers = 2;
+    static constexpr size_t maximumAdmissionsPerPump = 2;
+    static constexpr size_t candidateSampleLimit = 64;
+
+    static bool sameAsset(const Candidate &a, const Candidate &b)
+    {
+	return a.assetIdentity && b.assetIdentity &&
+	    a.assetIdentity == b.assetIdentity;
+    }
+
+    static bool heroBetter(const Candidate &a, const Candidate &b)
+    {
+	if (a.emphasis != b.emphasis)
+	    return a.emphasis > b.emphasis;
+	if (a.visualFootprint < b.visualFootprint ||
+	    a.visualFootprint > b.visualFootprint)
+	    return a.visualFootprint > b.visualFootprint;
+	if (a.sourcePopulation != b.sourcePopulation)
+	    return a.sourcePopulation < b.sourcePopulation;
+	return a.entryIndex < b.entryIndex;
+    }
+
+    static bool quickWinBetter(const Candidate &a, const Candidate &b)
+    {
+	/* Source population is the best cold-path latency predictor available
+	 * without opening the asset: hashing, bounds analysis, and classification
+	 * are all linear in points or faces.  Aggregate footprint credits a shared
+	 * asset for every sampled visible occurrence which one producer unlocks.
+	 * A modest emphasis weight respects user intent without turning this second
+	 * lane into another copy of the lexicographic hero lane. */
+	const unsigned int aEmphasis = std::min(a.emphasis, 2u);
+	const unsigned int bEmphasis = std::min(b.emphasis, 2u);
+	const long double aBenefit = static_cast<long double>(
+	    std::max(0.0, a.aggregateVisualFootprint)) *
+	    static_cast<long double>(1u + 3u * aEmphasis);
+	const long double bBenefit = static_cast<long double>(
+	    std::max(0.0, b.aggregateVisualFootprint)) *
+	    static_cast<long double>(1u + 3u * bEmphasis);
+	const long double aPopulation = static_cast<long double>(
+	    std::max<uint64_t>(1, a.sourcePopulation));
+	const long double bPopulation = static_cast<long double>(
+	    std::max<uint64_t>(1, b.sourcePopulation));
+	const long double left = aBenefit * bPopulation;
+	const long double right = bBenefit * aPopulation;
+	if (left < right || left > right)
+	    return left > right;
+	return heroBetter(a, b);
+    }
+
+    static std::vector<size_t> selectCandidates(
+	const std::vector<Candidate> &candidates, size_t limit)
+    {
+	std::vector<size_t> selected;
+	if (candidates.empty() || limit == 0)
+	    return selected;
+	limit = std::min(limit, maximumAdmissionsPerPump);
+	selected.reserve(limit);
+
+	/* One cold producer is a latency lane, not a quality allocation.  Sending
+	 * the largest visible asset through that sole slot can leave an otherwise
+	 * responsive scene entirely boxed until its longest source scan finishes.
+	 * Prefer the best visible benefit per estimated source work when only one
+	 * admission is possible.  With two slots, preserve the complementary hero
+	 * lane so a conspicuous/highlighted object and a quick first-mesh win can
+	 * make progress together. */
+	if (limit == 1) {
+	    size_t quick = 0;
+	    for (size_t i = 1; i < candidates.size(); ++i)
+		if (quickWinBetter(candidates[i], candidates[quick]))
+		    quick = i;
+	    selected.push_back(quick);
+	    return selected;
+	}
+
+	size_t hero = 0;
+	for (size_t i = 1; i < candidates.size(); ++i)
+	    if (heroBetter(candidates[i], candidates[hero]))
+		hero = i;
+	selected.push_back(hero);
+
+	while (selected.size() < limit) {
+	    size_t best = SIZE_MAX;
+	    for (size_t i = 0; i < candidates.size(); ++i) {
+		bool duplicate = false;
+		for (size_t chosen : selected) {
+		    if (i == chosen || sameAsset(candidates[i],
+			    candidates[chosen])) {
+			duplicate = true;
+			break;
+		    }
+		}
+		if (duplicate)
+		    continue;
+		if (best == SIZE_MAX ||
+		    quickWinBetter(candidates[i], candidates[best]))
+		    best = i;
+	    }
+	    if (best == SIZE_MAX)
+		break;
+	    selected.push_back(best);
+	}
+	return selected;
+    }
+
+    static bool candidateScanEnabled(const Inputs &inputs)
+    {
+	return inputs.structuralCoverageOnly && inputs.boundedSource &&
+	    inputs.quietView && inputs.ordinaryDensePass;
+    }
+
+    static size_t admissionLimit(const Inputs &inputs)
+    {
+	if (!candidateScanEnabled(inputs) ||
+	    inputs.resultPublicationPending ||
+	    inputs.activeMeshOccurrenceCount >=
+		maximumPreviewMeshOccurrences)
+	    return 0;
+	const size_t workerCount = std::max<size_t>(1,
+	    inputs.serviceWorkerCount);
+	const size_t producerLimit = std::min(
+	    maximumConcurrentPreviewProducers, workerCount);
+	if (inputs.activeProducerCount >= producerLimit ||
+	    inputs.activeServiceTasks >= workerCount)
+	    return 0;
+	/* The established all-box bootstrap may admit exactly one first prefix
+	 * before a renderer-cost sample exists.  Every later preview must spend
+	 * real remaining scene allowance.  In-flight work still counts here: two
+	 * simultaneous unmeasured prefixes would turn this exception into an
+	 * implicit scene-budget increase. */
+	if (inputs.remainingRenderCost == 0)
+	    return inputs.activeMeshOccurrenceCount == 0 &&
+	    inputs.activeServiceTasks == 0 &&
+	    inputs.activeProducerCount == 0 ? 1 : 0;
+	const size_t previewSlots = producerLimit -
+	    inputs.activeProducerCount;
+	const size_t workerSlots = workerCount - inputs.activeServiceTasks;
+	const size_t occurrenceSlots = maximumPreviewMeshOccurrences -
+	    inputs.activeMeshOccurrenceCount;
+	return std::min({maximumAdmissionsPerPump, previewSlots, workerSlots,
+	    occurrenceSlots});
     }
 };
 
@@ -1145,13 +1397,41 @@ public:
 	decision.outcome = hasTerminalError ? Outcome::FAILED :
 	    !decision.terminal ? Outcome::ACTIVE :
 	    decision.performanceLimited ? Outcome::CONSTRAINED : Outcome::READY;
-	decision.hasLodState =
+	/* Interaction, the aggregate control guard, and the shared host-pump level
+	 * are control mechanisms, not evidence that this view contains an
+	 * LoD-managed scene.  In particular, a window's initial resize/autoview can
+	 * briefly raise all three after an empty database provider has retired.
+	 * Letting the derived visualPending/backgroundPending values create
+	 * hasLodState in that case paints an orange progress card over a view with
+	 * nothing to refine.
+	 *
+	 * Population counters and source/geometry production are the independent
+	 * witnesses.  Publication is retained because an accepted result can be
+	 * between its owner-thread mutation and exact presentation when sampled;
+	 * concrete submission, calibration, and background work are likewise real
+	 * LoD operations even before a population counter becomes nonzero. */
+	const bool hasPopulationEvidence =
 	    inputs.expectedLeafCount > 0 || inputs.availableLeafCount > 0 ||
 	    inputs.visibleTargetCount > 0 || inputs.activePayloadCount > 0 ||
+	    inputs.satisfiedPayloadCount > 0 ||
+	    inputs.presentedSubpixelOccurrenceCount > 0 ||
+	    inputs.presentedStructuralBoxCount > 0 ||
 	    inputs.terminalProxyOccurrenceCount > 0 ||
-	    inputs.gpuTrackedBufferBytes > 0 || decision.visualPending ||
-	    decision.backgroundPending;
+	    inputs.terminalOccurrenceFailureCount > 0 ||
+	    inputs.memoryLimitedPayloadCount > 0 ||
+	    inputs.gpuTrackedBufferBytes > 0;
+	const bool hasIndependentLodWork =
+	    inputs.failedSourceCount > 0 || inputs.structuralDiscovery ||
+	    inputs.sourcePreparationPending || inputs.submissionPending ||
+	    inputs.resultPending || inputs.publicationPending ||
+	    inputs.calibrationPending || inputs.presentationQualityPending ||
+	    inputs.pendingTasks > 0 || inputs.inFlight > 0 ||
+	    inputs.queuedCacheWrites > 0 || inputs.compactionPending;
+	decision.hasLodState = hasPopulationEvidence || hasIndependentLodWork;
 	if (!decision.hasLodState)
+	    /* Preserve the internal interaction lifecycle and its finite quiet
+	     * successor.  hasLodState is the public boundary which prevents that
+	     * controller-only state from becoming a progress-display episode. */
 	    return decision;
 
 	/* An unfinished leaf census owns discovery.  Once that census is complete,

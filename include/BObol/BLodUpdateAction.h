@@ -42,6 +42,7 @@ public:
     size_t getResultCount(void) const;
     unsigned int getMatchedResultCount(void) const;
     unsigned int getAppliedResultCount(void) const;
+    unsigned int getUnchangedResultCount(void) const;
     unsigned int getRejectedResultCount(void) const;
     unsigned int getCurrentDemandRetryResultCount(void) const;
     unsigned int getUnmatchedResultCount(void) const;
@@ -63,6 +64,7 @@ private:
     BObolViewLodState *viewState;
     unsigned int matchedResultCount;
     unsigned int appliedResultCount;
+    unsigned int unchangedResultCount;
     unsigned int rejectedResultCount;
     unsigned int currentDemandRetryResultCount;
     unsigned int unmatchedResultCount;
