@@ -5,24 +5,23 @@ set -eu
 PATH="/usr/bin:/bin:${PATH}"
 export PATH
 
-if [ "$#" -ne 3 ]; then
-    echo "Usage: mged_obol_progressive_lod.sh <mged> <db> <workdir>" 1>&2
+MGED_OBOL_SCRIPT_DIR=${0%/*}
+if [ "$MGED_OBOL_SCRIPT_DIR" = "$0" ]; then
+    MGED_OBOL_SCRIPT_DIR=.
+fi
+. "${MGED_OBOL_SCRIPT_DIR}/mged_obol_test_helpers.sh"
+
+if [ "$#" -ne 4 ]; then
+    echo "Usage: mged_obol_progressive_lod.sh <mged> <db> <workdir> <cmake>" 1>&2
     exit 1
 fi
 
 MGED="$1"
 DB="$2"
 WORKDIR="$3"
+CMAKE_COMMAND="$4"
 PYTHON="${PYTHON:-}"
-
-if [ -z "$PYTHON" ]; then
-    for cand in python3.11 python3.14 python3 python; do
-	if command -v "$cand" >/dev/null 2>&1; then
-	    PYTHON="$cand"
-	    break
-	fi
-    done
-fi
+mged_obol_find_python || true
 
 TMPDB="${WORKDIR}/mged_obol_progressive_lod.g"
 CACHE="${WORKDIR}/mged_obol_progressive_lod_cache"
@@ -39,8 +38,8 @@ PNG_PIX="${MGED_DIR}/png-pix"
 PIXSTAT="${MGED_DIR}/pixstat"
 
 rm -f "$TMPDB" "$LOG" "$FRAME0" "$FRAME1" "$FRAME2" "$FRAME3"
-cmake -E rm -rf "$CACHE"
-cmake -E make_directory "$CACHE"
+"$CMAKE_COMMAND" -E rm -rf "$CACHE"
+"$CMAKE_COMMAND" -E make_directory "$CACHE"
 cp "$DB" "$TMPDB"
 
 printf 'dm open --host headless --renderer sw

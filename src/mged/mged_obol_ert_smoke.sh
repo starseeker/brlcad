@@ -5,6 +5,12 @@ set -eu
 PATH="/usr/bin:/bin:${PATH}"
 export PATH
 
+MGED_OBOL_SCRIPT_DIR=${0%/*}
+if [ "$MGED_OBOL_SCRIPT_DIR" = "$0" ]; then
+    MGED_OBOL_SCRIPT_DIR=.
+fi
+. "${MGED_OBOL_SCRIPT_DIR}/mged_obol_test_helpers.sh"
+
 if [ "$#" -ne 3 ]; then
     echo "Usage: mged_obol_ert_smoke.sh <mged> <db> <workdir>" 1>&2
     exit 1
@@ -14,15 +20,7 @@ MGED="$1"
 DB="$2"
 WORKDIR="$3"
 PYTHON="${PYTHON:-}"
-
-if [ -z "$PYTHON" ]; then
-    for cand in python3.11 python3.14 python3 python; do
-	if command -v "$cand" >/dev/null 2>&1; then
-	    PYTHON="$cand"
-	    break
-	fi
-    done
-fi
+mged_obol_find_python || true
 
 RT_OUT="${WORKDIR}/mged_obol_rt_smoke.png"
 ERT_OUT="${WORKDIR}/mged_obol_ert_smoke.png"
@@ -33,6 +31,7 @@ if [ "$MGED_DIR" = "$MGED" ]; then
 fi
 PNG_PIX="${MGED_DIR}/png-pix"
 PIXSTAT="${MGED_DIR}/pixstat"
+RENDER_WAIT_MS=15000
 
 rm -f "$RT_OUT" "$ERT_OUT" "$LOG"
 
@@ -41,17 +40,17 @@ dm host
 draw all.g
 autoview
 rt
-after 5000
+after %s
 refresh
 screengrab %s
 ert
-after 5000
+after %s
 refresh
 screengrab %s
 ert -P 1 -H 16
 after 100
 quit
-' "$RT_OUT" "$ERT_OUT" | "$MGED" -c -a nu -r "$DB" > "$LOG" 2>&1
+' "$RENDER_WAIT_MS" "$RT_OUT" "$RENDER_WAIT_MS" "$ERT_OUT" | "$MGED" -c -a nu -r "$DB" > "$LOG" 2>&1
 
 if ! grep -qx "headless" "$LOG"; then
     echo "MGED Obol ert smoke did not open a headless endpoint host" 1>&2

@@ -1592,6 +1592,24 @@ proc csg_edit_bot_vertices_moved {source moved delta prim} {
         csg_edit_list_value_at V $index $expected $prim
     }
 }
+proc csg_edit_bot_target_delta {source moved target} {
+    set vertices [db get $source V]
+    set center {0 0 0}
+    foreach index $moved {
+        set accumulated {}
+        foreach sum $center value [lindex $vertices $index] {
+            lappend accumulated [expr {$sum + $value}]
+        }
+        set center $accumulated
+    }
+
+    set delta {}
+    set count [llength $moved]
+    foreach value $target sum $center {
+        lappend delta [expr {$value - $sum / double($count)}]
+    }
+    return $delta
+}
 csg_mouse_case csg_lifecycle_bot.s {{Move Vertex}} "mouse move vertex" {
     {csg_edit_prepare_mouse_view}
     {press {Pick Vertex}}
@@ -1608,20 +1626,29 @@ csg_mouse_case csg_lifecycle_bot.s {{Pick Vertex} {Move Vertex}} "mouse pick and
     {M 1 512 512}
 } [list csg_edit_bot_vertices_moved csg_lifecycle_bot.s {0} \
     $csg_special_mouse_target]
+set csg_bot_edge_mouse_target [list \
+    [expr {1024.0 / $csg_bv_coord_half_range * $csg_dispatch_view_size / 2.0}] \
+    [lindex $csg_special_mouse_target 1] 0]
+set csg_bot_edge_mouse_delta [csg_edit_bot_target_delta \
+    csg_lifecycle_bot.s {0 1} $csg_bot_edge_mouse_target]
 csg_mouse_case csg_lifecycle_bot.s {{Move Edge}} "mouse move edge" {
     {csg_edit_prepare_mouse_view}
     {press {Pick Edge}}
     {p 0 1}
     {press {Move Edge}}
     {M 1 1024 512}
-} [list csg_edit_bot_vertices_moved csg_lifecycle_bot.s {0 1} {10 5 0}]
+} [list csg_edit_bot_vertices_moved csg_lifecycle_bot.s {0 1} \
+    $csg_bot_edge_mouse_delta]
 csg_mouse_case csg_lifecycle_bot.s {{Pick Edge} {Move Edge}} "mouse pick and move edge" {
     {csg_edit_prepare_mouse_view}
     {press {Pick Edge}}
     {M 1 512 512}
     {press {Move Edge}}
     {M 1 1024 512}
-} [list csg_edit_bot_vertices_moved csg_lifecycle_bot.s {0 1} {10 5 0}]
+} [list csg_edit_bot_vertices_moved csg_lifecycle_bot.s {0 1} \
+    $csg_bot_edge_mouse_delta]
+set csg_bot_triangle_mouse_delta [csg_edit_bot_target_delta \
+    csg_lifecycle_bot.s {0 1 2} $csg_special_mouse_target]
 csg_mouse_case csg_lifecycle_bot.s {{Move Triangle}} "mouse move triangle" {
     {csg_edit_prepare_mouse_view}
     {press {Pick Triangle}}
@@ -1629,7 +1656,7 @@ csg_mouse_case csg_lifecycle_bot.s {{Move Triangle}} "mouse move triangle" {
     {press {Move Triangle}}
     {M 1 512 512}
 } [list csg_edit_bot_vertices_moved csg_lifecycle_bot.s {0 1 2} \
-    $csg_special_mouse_target]
+    $csg_bot_triangle_mouse_delta]
 csg_mouse_case csg_lifecycle_ebm.s {{Extrude Depth}} "mouse extrusion depth" {
     {csg_edit_prepare_mouse_view}
     {press {Extrude Depth}}
