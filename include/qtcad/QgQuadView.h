@@ -78,6 +78,7 @@ public:
 
 	void enableDefaultMouseBindings();
 	void disableDefaultMouseBindings();
+	void setNativeLodProgressOverlay(bool enabled);
 
 signals:
 	void changed(QgView *);
@@ -96,6 +97,7 @@ private:
 	QGridLayout *createLayout();
 
 	QgViewType graphicsType = QgViewType::SW;
+	bool nativeLodProgressOverlay = true;
 	// Holds up to 4 views in single view only the first view is constructed
 	// The other views are constructed if quad view mode is selected by the user
 	QgView *views[4] = {nullptr, nullptr, nullptr, nullptr};
