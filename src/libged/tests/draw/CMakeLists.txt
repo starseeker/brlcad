@@ -140,7 +140,8 @@ if(TARGET ged_test_quad)
 endif(TARGET ged_test_quad)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_quad_tmp.g)
 
-# The idea here is to test view stability across resize events
+# Keep the former legacy-DM controls in source distributions for historical
+# comparison.  The AET test now checks same-run Obol captures directly.
 set(aet_test_ctrls aet_00.apng aet_01.apng aet_02.apng aet_03.apng)
 brlcad_addexec(ged_test_aet "aet.cpp;util.cpp" "libged;libBObol;PNG::PNG;ZLIB::ZLIB;Threads::Threads" TEST)
 if(TARGET ged_test_aet)
@@ -153,6 +154,7 @@ endif(TARGET ged_test_aet)
 brlcad_add_test(NAME ged_test_drawing_aet COMMAND ged_test_aet -c "${CMAKE_CURRENT_SOURCE_DIR}")
 if(TARGET ged_test_aet)
   set_property(TEST ged_test_drawing_aet APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  set_property(TEST ged_test_drawing_aet APPEND PROPERTY ENVIRONMENT GED_TEST_DRAW_OBOL_CAPTURE=1)
 endif(TARGET ged_test_aet)
 
 # The image controls and runtime cache are intentionally local to the test
@@ -391,6 +393,7 @@ foreach(_ged_drawing_stage0_test
     ged_test_drawing_lod
     ged_test_drawing_select
     ged_test_drawing_quad
+    ged_test_drawing_aet
     ged_test_selection_semantics
     ged_test_snap_semantics
     ged_test_lod_crossrun

@@ -793,6 +793,126 @@ ged_draw_frontier_foreach_root(struct ged *gedp,
 }
 
 
+namespace {
+
+static bool
+frontier_candidate_would_cycle(struct ged *gedp, const path_ids &ids,
+	ged_db_index_id object_id)
+{
+    if (!object_id)
+	return false;
+    for (ged_db_index_id id : ids) {
+	struct ged_db_index_record record;
+	if (ged_db_index_record_get(gedp, id, &record) && record.valid &&
+	    record.object_id == object_id)
+	    return true;
+    }
+    return false;
+}
+
+
+static int
+frontier_candidate_emit(struct ged *gedp, const frontier_root &root,
+	const path_ids &ids, const std::string &instance_key, int draw_mode,
+	ged_draw_shape_candidate_cb callback, void *userdata)
+{
+    if (!frontier_path_visible(root, ids))
+	return 1;
+    const std::string path = print_path(gedp, ids);
+    if (path.empty())
+	return 1;
+    struct ged_draw_shape_candidate candidate = {
+	path.c_str(), instance_key.c_str(), draw_mode
+    };
+    return callback(&candidate, userdata);
+}
+
+} // namespace
+
+
+extern "C" int
+ged_draw_frontier_foreach_visible_candidate(
+    struct ged *gedp, struct ged_view_context *view_ctx, int mode,
+    ged_draw_shape_candidate_cb callback, void *userdata)
+{
+    if (!gedp || !callback)
+	return -1;
+    frontier_state *state = state_get(gedp, false);
+    if (!state)
+	return 0;
+
+    int count = 0;
+    for (const frontier_root &root : state->roots) {
+	if (!root_in_scope(root, view_ctx, mode) || root.ids.empty())
+	    continue;
+
+	const int candidate_mode = root.mode >= 0 ? root.mode :
+	    ged_draw_default_mode(gedp);
+	struct bu_vls key = BU_VLS_INIT_ZERO;
+	if (!ged_draw_obol_database_source_instance_key_get(root.view,
+		root.path.c_str(), candidate_mode, &key))
+	    bu_vls_strcpy(&key, root.path.c_str());
+	const std::string instance_key = bu_vls_cstr(&key);
+	bu_vls_free(&key);
+
+	/* Evaluated representations are one addressable result, not a set of
+	 * editable primitive leaves. */
+	if (candidate_mode == GED_DRAW_MODE_EVAL_WIRE ||
+	    candidate_mode == GED_DRAW_MODE_EVAL_POINTS) {
+	    if (frontier_path_visible(root, root.ids)) {
+		count++;
+		if (!frontier_candidate_emit(gedp, root, root.ids,
+			instance_key, candidate_mode, callback, userdata))
+		    return count;
+	    }
+	    continue;
+	}
+
+	/* Iterative depth-first traversal preserves database child order while
+	 * keeping adversarially deep combination trees off the C++ call stack. */
+	std::vector<path_ids> pending;
+	pending.push_back(root.ids);
+	while (!pending.empty()) {
+	    path_ids current = std::move(pending.back());
+	    pending.pop_back();
+	    struct ged_db_index_record record;
+	    if (current.empty() ||
+		!ged_db_index_record_get(gedp, current.back(), &record) ||
+		!record.valid)
+		continue;
+
+	    const size_t child_count = record.is_comb ?
+		ged_db_index_child_count(gedp, current.back()) : 0;
+	    if (!record.is_comb || child_count == 0) {
+		/* Empty combinations do not contribute drawable occurrences. */
+		if (record.is_comb)
+		    continue;
+		if (!frontier_path_visible(root, current))
+		    continue;
+		count++;
+		if (!frontier_candidate_emit(gedp, root, current,
+			instance_key, candidate_mode, callback, userdata))
+		    return count;
+		continue;
+	    }
+
+	    for (size_t row = child_count; row > 0; row--) {
+		struct ged_db_index_child child;
+		if (!ged_db_index_child_at(gedp, current.back(), row - 1,
+			&child) || !child.record.valid ||
+		    frontier_candidate_would_cycle(gedp, current,
+			child.record.object_id))
+		    continue;
+		path_ids descendant = current;
+		descendant.push_back(child.record.id);
+		pending.push_back(std::move(descendant));
+	    }
+	}
+    }
+    return count;
+}
+
+
 static int
 frontier_visibility_emit(
     struct ged *gedp,

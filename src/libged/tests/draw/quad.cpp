@@ -38,11 +38,10 @@
 #include <ged/draw.h>
 #include <ged/event.h>
 
-/* Historical controls came from four legacy display managers and encode
- * their primitive wire tessellation.  The retained renderer is checked
- * structurally here; exact view projection, including elevation 90, is
- * asserted independently by libBObol_lod_update_action. */
-#define QUAD_SSIM_THRES 0.92
+/* These controls are captured from the headless Obol endpoint.  Keep only a
+ * tight allowance for platform rasterization differences; missing geometry,
+ * stale primitive tessellation, and view-scale regressions must still fail. */
+#define QUAD_SSIM_THRES 0.99
 
 static int keep_images = 0;
 

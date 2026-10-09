@@ -688,7 +688,9 @@ ged_draw_obol_database_source_line_data_copy_for_path(
     const char *path,
     point_t **points,
     int **commands,
-    size_t *point_count)
+    size_t *point_count,
+    struct ged_draw_view_segment_style **segment_styles,
+    size_t *segment_style_count)
 {
     if (points)
 	*points = NULL;
@@ -696,7 +698,12 @@ ged_draw_obol_database_source_line_data_copy_for_path(
 	*commands = NULL;
     if (point_count)
 	*point_count = 0;
-    if (!points || !commands || !point_count)
+    if (segment_styles)
+	*segment_styles = NULL;
+    if (segment_style_count)
+	*segment_style_count = 0;
+    if (!points || !commands || !point_count || !segment_styles ||
+	!segment_style_count)
 	return 0;
 
     SoBRLDatabaseSource *source =
@@ -710,10 +717,26 @@ ged_draw_obol_database_source_line_data_copy_for_path(
 	compactPoints.size() != compactCommands.size())
 	return 0;
 
+    std::vector<BObolCompactWireSegment> compactSegments;
+    (void)source->copyCompactWireSegments(compactSegments);
+    size_t draw_count = 0;
+    for (int32_t command : compactCommands) {
+	if (command != 0)
+	    draw_count++;
+    }
+    if (draw_count != compactSegments.size())
+	compactSegments.clear();
+
     point_t *copiedPoints = (point_t *)bu_calloc(compactPoints.size(),
 	sizeof(point_t), "GED Obol compact export points");
     int *copiedCommands = (int *)bu_calloc(compactCommands.size(),
 	sizeof(int), "GED Obol compact export commands");
+    struct ged_draw_view_segment_style *copiedStyles = NULL;
+    if (!compactSegments.empty()) {
+	copiedStyles = (struct ged_draw_view_segment_style *)bu_calloc(
+	    compactSegments.size(), sizeof(*copiedStyles),
+	    "GED Obol compact export segment styles");
+    }
     for (size_t i = 0; i < compactPoints.size(); i++) {
 	copiedPoints[i][X] = compactPoints[i][0];
 	copiedPoints[i][Y] = compactPoints[i][1];
@@ -721,10 +744,26 @@ ged_draw_obol_database_source_line_data_copy_for_path(
 	copiedCommands[i] = compactCommands[i] == 0 ?
 	    GED_DRAW_VIEW_LINE_MOVE : GED_DRAW_VIEW_LINE_DRAW;
     }
+    for (size_t i = 0; i < compactSegments.size(); i++) {
+	const BObolCompactWireSegment &segment = compactSegments[i];
+	struct ged_draw_view_segment_style *style = &copiedStyles[i];
+	style->line_pattern = segment.linePattern;
+	style->line_pattern_factor = segment.linePatternFactor;
+	style->line_width = segment.lineWidth;
+	style->transparency = segment.transparency;
+	for (int channel = 0; channel < 3; channel++) {
+	    const float value = (std::max)(0.0f,
+		(std::min)(1.0f, segment.color[channel]));
+	    style->color[channel] = static_cast<unsigned char>(
+		value * 255.0f + 0.5f);
+	}
+    }
 
     *points = copiedPoints;
     *commands = copiedCommands;
     *point_count = compactPoints.size();
+    *segment_styles = copiedStyles;
+    *segment_style_count = compactSegments.size();
     return 1;
 }
 

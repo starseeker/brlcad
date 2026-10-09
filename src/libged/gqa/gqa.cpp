@@ -41,6 +41,10 @@
 #include <math.h>
 #include <limits.h>			/* home of INT_MAX aka MAXINT */
 
+#include <array>
+#include <string>
+#include <vector>
+
 
 #include "bu/parallel.h"
 #include "bu/getopt.h"
@@ -420,8 +424,40 @@ gqa_publish_result_primitive_metadata(struct ged_view_feature_batch *scene,
     if (!scene || !name || !builder)
 	return 0;
 
-    int primitive = 0;
     const size_t layer_count = bg_line_layer_builder_layer_count(builder);
+    size_t primitive_count = 0;
+    for (size_t i = 0; i < layer_count; i++) {
+	const struct bg_line_layer *layer =
+	    bg_line_layer_builder_layer_at(builder, i);
+	if (!layer)
+	    continue;
+	const int *commands = bg_line_layer_commands(layer);
+	const size_t point_count = bg_line_layer_point_count(layer);
+	if (!commands)
+	    continue;
+	int have_previous = 0;
+	for (size_t j = 0; j < point_count; j++) {
+	    if (commands[j] == BG_GEOMETRY_LINE_DRAW && have_previous)
+		primitive_count++;
+	    if (commands[j] == BG_GEOMETRY_LINE_MOVE ||
+		commands[j] == BG_GEOMETRY_LINE_DRAW)
+		have_previous = 1;
+	}
+    }
+    if (primitive_count > static_cast<size_t>(INT_MAX))
+	return 0;
+
+    struct gqa_primitive_metadata_storage {
+	std::string primitive;
+	std::string start;
+	std::string end;
+	std::array<struct ged_view_feature_metadata, 7> metadata;
+    };
+    std::vector<gqa_primitive_metadata_storage> storage(primitive_count);
+    std::vector<struct ged_view_feature_primitive_metadata> descriptors(
+	primitive_count);
+
+    size_t primitive = 0;
     for (size_t i = 0; i < layer_count; i++) {
 	const struct bg_line_layer *layer =
 	    bg_line_layer_builder_layer_at(builder, i);
@@ -436,26 +472,28 @@ gqa_publish_result_primitive_metadata(struct ged_view_feature_batch *scene,
 	int have_previous = 0;
 	for (size_t j = 0; j < point_count; j++) {
 	    if (commands[j] == BG_GEOMETRY_LINE_DRAW && have_previous) {
-		char primitive_buf[64] = {0};
 		char start[192] = {0};
 		char end[192] = {0};
-		snprintf(primitive_buf, sizeof(primitive_buf), "%d", primitive);
 		snprintf(start, sizeof(start), "%.17g %.17g %.17g",
 		    V3ARGS(previous));
 		snprintf(end, sizeof(end), "%.17g %.17g %.17g",
 		    V3ARGS(points[j]));
-		struct ged_view_feature_metadata metadata[7] = {
+		gqa_primitive_metadata_storage &entry = storage[primitive];
+		entry.primitive = std::to_string(primitive);
+		entry.start = start;
+		entry.end = end;
+		entry.metadata = {{
 		    {"result.schema", ged_gqa_result_schema(family)},
-		    {"result.primitive", primitive_buf},
+		    {"result.primitive", entry.primitive.c_str()},
 		    {"result.primitive.kind", ged_gqa_result_kind(family)},
 		    {"result.severity", ged_gqa_result_severity(family)},
-		    {"segment.start_mm", start},
-		    {"segment.end_mm", end},
+		    {"segment.start_mm", entry.start.c_str()},
+		    {"segment.end_mm", entry.end.c_str()},
 		    {"result.units", "mm"}
-		};
-		if (!ged_view_feature_batch_primitive_metadata_replace(
-			scene, name, primitive, metadata, 7))
-		    return 0;
+		}};
+		descriptors[primitive].primitive = static_cast<int>(primitive);
+		descriptors[primitive].metadata = entry.metadata.data();
+		descriptors[primitive].metadata_count = entry.metadata.size();
 		primitive++;
 	    }
 	    if (commands[j] == BG_GEOMETRY_LINE_MOVE ||
@@ -466,7 +504,9 @@ gqa_publish_result_primitive_metadata(struct ged_view_feature_batch *scene,
 	}
     }
 
-    return 1;
+    return ged_view_feature_batch_primitive_metadata_replace_all(
+	scene, name, descriptors.empty() ? NULL : descriptors.data(),
+	descriptors.size());
 }
 
 static int

@@ -1539,10 +1539,55 @@ ged_draw_foreach_visible_view_record(struct ged_view_context *view_ctx,
 }
 
 
-int
-ged_draw_view_db_object_record_foreach_segment(
+static void
+_ged_draw_view_segment_default_style(
 	const struct ged_draw_view_db_object_record *rec,
-	ged_draw_view_segment_cb cb,
+	struct ged_draw_view_segment_style *style)
+{
+    if (!style)
+	return;
+    memset(style, 0, sizeof(*style));
+    style->line_pattern = rec && rec->line_style ? 0xcf33u : 0xffffu;
+    style->line_pattern_factor = 1u;
+    style->line_width = rec && rec->line_width > 0 ? rec->line_width : 1.0;
+    style->transparency = rec ? rec->transparency : 0.0;
+    if (rec) {
+	style->color[0] = rec->color[0];
+	style->color[1] = rec->color[1];
+	style->color[2] = rec->color[2];
+    }
+}
+
+
+static int
+_ged_draw_view_styled_segment_emit(
+	const struct ged_draw_view_db_object_record *rec,
+	const struct ged_draw_view_export_detail *detail,
+	size_t primitive_index,
+	enum ged_draw_view_segment_geometry_role role,
+	const point_t start,
+	const point_t end,
+	ged_draw_view_styled_segment_cb cb,
+	void *userdata)
+{
+    struct ged_draw_view_styled_segment segment;
+    memset(&segment, 0, sizeof(segment));
+    VMOVE(segment.start, start);
+    VMOVE(segment.end, end);
+    segment.primitive_index = primitive_index;
+    segment.geometry_role = role;
+    _ged_draw_view_segment_default_style(rec, &segment.style);
+    if (detail && primitive_index < detail->arrays.segment_style_count &&
+	detail->arrays.segment_styles)
+	segment.style = detail->arrays.segment_styles[primitive_index];
+    return cb(&segment, userdata);
+}
+
+
+int
+ged_draw_view_db_object_record_foreach_styled_segment(
+	const struct ged_draw_view_db_object_record *rec,
+	ged_draw_view_styled_segment_cb cb,
 	void *userdata)
 {
     const struct ged_draw_view_export_detail *detail =
@@ -1556,8 +1601,16 @@ ged_draw_view_db_object_record_foreach_segment(
     point_t last = VINIT_ZERO;
     point_t fin = VINIT_ZERO;
 
-    if (detail->geometry_kind == GED_DRAW_VIEW_EXPORT_GEOMETRY_LINE_SET &&
+
+    if ((detail->geometry_kind == GED_DRAW_VIEW_EXPORT_GEOMETRY_LINE_SET ||
+	    detail->geometry_kind == GED_DRAW_VIEW_EXPORT_GEOMETRY_ANNOTATION) &&
 	    detail->arrays.point_count && detail->arrays.points) {
+	enum ged_draw_view_segment_geometry_role role =
+	    (detail->geometry_kind == GED_DRAW_VIEW_EXPORT_GEOMETRY_ANNOTATION ||
+	     (rec->geometry_name &&
+	      BU_STR_EQUAL(rec->geometry_name, "annotation"))) ?
+	    GED_DRAW_VIEW_SEGMENT_ROLE_ANNOTATION :
+	    GED_DRAW_VIEW_SEGMENT_ROLE_WIRE;
 	for (size_t i = 0; i < detail->arrays.point_count; i++) {
 	    int cmd = _ged_draw_view_line_command_from_detail(detail, i);
 	    if (cmd == GED_DRAW_VIEW_LINE_MOVE) {
@@ -1569,7 +1622,8 @@ ged_draw_view_db_object_record_foreach_segment(
 	    } else {
 		continue;
 	    }
-	    if (!cb(last, fin, userdata))
+	    if (!_ged_draw_view_styled_segment_emit(rec, detail, count, role,
+		    last, fin, cb, userdata))
 		return count;
 	    count++;
 	    VMOVE(last, fin);
@@ -1596,7 +1650,8 @@ ged_draw_view_db_object_record_foreach_segment(
 		continue;
 	    }
 	    VMOVE(fin, detail->arrays.points[idx]);
-	    if (!cb(last, fin, userdata))
+	    if (!_ged_draw_view_styled_segment_emit(rec, detail, count,
+		    GED_DRAW_VIEW_SEGMENT_ROLE_WIRE, last, fin, cb, userdata))
 		return count;
 	    count++;
 	    VMOVE(last, fin);
@@ -1617,8 +1672,10 @@ ged_draw_view_db_object_record_foreach_segment(
 	    if (idx < 0) {
 		if (face_vertices > 1 && first_idx >= 0 && prev_idx >= 0 &&
 			prev_idx != first_idx) {
-		    if (!cb(detail->surface.points[prev_idx],
-			    detail->surface.points[first_idx], userdata))
+		    if (!_ged_draw_view_styled_segment_emit(rec, detail, count,
+			    GED_DRAW_VIEW_SEGMENT_ROLE_SURFACE_EDGE,
+			    detail->surface.points[prev_idx],
+			    detail->surface.points[first_idx], cb, userdata))
 			return count;
 		    count++;
 		}
@@ -1636,8 +1693,10 @@ ged_draw_view_db_object_record_foreach_segment(
 		continue;
 	    }
 	    if (prev_idx >= 0) {
-		if (!cb(detail->surface.points[prev_idx],
-			detail->surface.points[idx], userdata))
+		if (!_ged_draw_view_styled_segment_emit(rec, detail, count,
+			GED_DRAW_VIEW_SEGMENT_ROLE_SURFACE_EDGE,
+			detail->surface.points[prev_idx],
+			detail->surface.points[idx], cb, userdata))
 		    return count;
 		count++;
 	    }
@@ -1647,14 +1706,48 @@ ged_draw_view_db_object_record_foreach_segment(
 
 	if (face_vertices > 1 && first_idx >= 0 && prev_idx >= 0 &&
 		prev_idx != first_idx) {
-	    if (!cb(detail->surface.points[prev_idx],
-		    detail->surface.points[first_idx], userdata))
+	    if (!_ged_draw_view_styled_segment_emit(rec, detail, count,
+		    GED_DRAW_VIEW_SEGMENT_ROLE_SURFACE_EDGE,
+		    detail->surface.points[prev_idx],
+		    detail->surface.points[first_idx], cb, userdata))
 		return count;
 	    count++;
 	}
     }
 
     return count;
+}
+
+
+struct _ged_draw_view_unstyled_segment_context {
+    ged_draw_view_segment_cb cb;
+    void *userdata;
+};
+
+
+static int
+_ged_draw_view_unstyled_segment_cb(
+	const struct ged_draw_view_styled_segment *segment,
+	void *userdata)
+{
+    struct _ged_draw_view_unstyled_segment_context *context =
+	(struct _ged_draw_view_unstyled_segment_context *)userdata;
+    return context && context->cb && segment ?
+	context->cb(segment->start, segment->end, context->userdata) : 0;
+}
+
+
+int
+ged_draw_view_db_object_record_foreach_segment(
+	const struct ged_draw_view_db_object_record *rec,
+	ged_draw_view_segment_cb cb,
+	void *userdata)
+{
+    if (!cb)
+	return 0;
+    struct _ged_draw_view_unstyled_segment_context context = {cb, userdata};
+    return ged_draw_view_db_object_record_foreach_styled_segment(rec,
+	_ged_draw_view_unstyled_segment_cb, &context);
 }
 
 
