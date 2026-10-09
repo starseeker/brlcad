@@ -70,7 +70,7 @@ static int bu_initialized;
  * Sample use:
  * bu_get_value_by_keyword V8 [concat type [.inmem get box.s]]
  *
- * @param clientData	- associated data/state
+ * @param UNUSED_clientData	- unused callback data
  * @param argc		- number of elements in argv
  * @param argv		- command name and arguments
  *
@@ -154,7 +154,7 @@ tcl_bu_get_value_by_keyword(ClientData UNUSED(clientData),
 /**
  * A wrapper for bu_rgb_to_hsv.
  *
- * @param clientData	- associated data/state
+ * @param UNUSED_clientData	- unused callback data
  * @param argc		- number of elements in argv
  * @param argv		- command name and arguments
  *
@@ -203,7 +203,7 @@ tcl_bu_rgb_to_hsv(ClientData UNUSED(clientData),
 /**
  * A wrapper for bu_hsv_to_rgb.
  *
- * @param clientData	- associated data/state
+ * @param UNUSED_clientData	- unused callback data
  * @param argc		- number of elements in argv
  * @param argv		- command name and arguments
  *
@@ -322,7 +322,7 @@ _tclcad_bu_dir_print(const char *dirkey, int fail_quietly)
 /**
  * A wrapper for bu_dir.
  *
- * @param clientData	- associated data/state
+ * @param UNUSED_clientData	- unused callback data
  * @param argc		- number of elements in argv
  * @param argv		- command name and arguments
  *
@@ -343,7 +343,7 @@ tcl_bu_dir(ClientData UNUSED(clientData), Tcl_Interp *interp, int argc,
 /**
  * A wrapper for bu_file_null.
  *
- * @param clientData	- associated data/state
+ * @param UNUSED_clientData	- unused callback data
  * @param argc		- number of elements in argv
  * @param UNUSED_argv	- command name and arguments
  *
@@ -364,7 +364,7 @@ tcl_bu_file_null(ClientData UNUSED(clientData), Tcl_Interp *interp, int argc,
 /**
  * A wrapper for bu_units_conversion.
  *
- * @param clientData	- associated data/state
+ * @param UNUSED_clientData	- unused callback data
  * @param argc		- number of elements in argv
  * @param argv		- command name and arguments
  *

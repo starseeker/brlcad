@@ -541,7 +541,7 @@ proc xmin_setup_sketch_editor {} {
 	VL {{0 0} {10 0} {10 10} {0 10} {5 0} {5 5}} \
 	SL {{line S 0 E 1} {line S 1 E 2} {carc S 4 E 5 R 5 L 1 O 0}}
     Sketch_editor .#auto gui.sketch gui.sketch
-    set editors [find objects -class Sketch_editor]
+    set editors [::itcl::find objects -class Sketch_editor]
     if {[llength $editors] == 0} {
 	error "Sketch_editor did not create an object"
     }
