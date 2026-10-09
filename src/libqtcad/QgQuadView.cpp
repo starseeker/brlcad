@@ -134,8 +134,11 @@ qg_quad_attach_endpoint(struct ged *gedp, QgView *view)
 	return 0;
     struct ged_view_context *view_ctx =
 	ged_view_context_from_bv(view->viewContext());
-    return ged_view_context_obol_endpoint_set(view_ctx,
-	view->displayEndpoint(), 0);
+    if (!ged_view_context_obol_endpoint_set(view_ctx,
+	    view->displayEndpoint(), 0))
+	return 0;
+    view->setNativeLodProgressOverlay(view->nativeLodProgressOverlay());
+    return 1;
 }
 
 /**
@@ -210,6 +213,7 @@ QgView *
 QgQuadView::createView(unsigned int index)
 {
 	QgView *view = new QgView(this, graphicsType);
+	view->setNativeLodProgressOverlay(nativeLodProgressOverlay);
 	static const char *test_ids[] = {
 	    "view-upper-right",
 	    "view-upper-left",
@@ -231,6 +235,16 @@ QgQuadView::createView(unsigned int index)
 	QObject::connect(view, &QgView::changed, this, &QgQuadView::do_view_changed);
 	QObject::connect(view, &QgView::init_done, this, &QgQuadView::do_init_done);
 	return view;
+}
+
+void
+QgQuadView::setNativeLodProgressOverlay(bool enabled)
+{
+	nativeLodProgressOverlay = enabled;
+	for (QgView *view : views) {
+		if (view)
+			view->setNativeLodProgressOverlay(enabled);
+	}
 }
 
 /**

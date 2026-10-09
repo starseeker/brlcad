@@ -222,8 +222,76 @@ qged_append_progressive_control_diagnostic_values(
 	static_cast<qint64>(status.inFlight));
     sample.insert(QStringLiteral("lod_convergence_queued_results"),
 	static_cast<qint64>(status.queuedResults));
+    sample.insert(QStringLiteral("lod_queue_runnable_tasks"),
+	static_cast<qint64>(status.runnableQueuedTasks));
+    sample.insert(QStringLiteral("lod_cpu_admission_waiting_tasks"),
+	static_cast<qint64>(status.cpuAdmissionWaitingTasks));
+    sample.insert(QStringLiteral("lod_queue_dependency_blocked_tasks"),
+	static_cast<qint64>(status.dependencyBlockedTasks));
+    sample.insert(QStringLiteral("lod_queue_transient_memory_blocked_tasks"),
+	static_cast<qint64>(status.transientMemoryBlockedTasks));
+    sample.insert(QStringLiteral("lod_task_submission_capacity_blocked"),
+	status.taskSubmissionCapacityBlocked ? true : false);
+    sample.insert(QStringLiteral("lod_result_submission_capacity_blocked"),
+	status.resultSubmissionCapacityBlocked ? true : false);
     sample.insert(QStringLiteral("lod_convergence_shared_producer_leases"),
 	static_cast<qint64>(status.sharedProducerLeases));
+    sample.insert(QStringLiteral("lod_producer_stage_mask"),
+	static_cast<qint64>(status.producerStageMask));
+    sample.insert(QStringLiteral("lod_producer_stage"),
+	static_cast<qint64>(status.producerStage));
+    QJsonArray producerStageTaskCounts;
+    for (int stage = BOBOL_LOD_PRODUCER_STAGE_NONE;
+	 stage < BOBOL_LOD_PRODUCER_STAGE_COUNT; ++stage)
+	producerStageTaskCounts.append(static_cast<qint64>(std::min<size_t>(
+	    status.producerStageTaskCounts[stage],
+	    static_cast<size_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_producer_stage_task_counts"),
+	producerStageTaskCounts);
+    sample.insert(QStringLiteral("lod_producer_stage_task_count"),
+	static_cast<qint64>(std::min<size_t>(
+	    status.producerStageTaskCount,
+	    static_cast<size_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_active_producer_count"),
+	static_cast<qint64>(std::min<size_t>(
+	    status.activeProducerCount,
+	    static_cast<size_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_producer_stage_completed_units"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.producerStageCompletedUnits,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_producer_stage_total_units"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.producerStageTotalUnits,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_oldest_pending_task_age_us"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.oldestPendingTaskAgeMicroseconds,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_maximum_producer_queue_wait_us"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.maximumProducerQueueWaitMicroseconds,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_maximum_producer_elapsed_us"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.maximumProducerElapsedMicroseconds,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_producer_stage_elapsed_us"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.producerStageElapsedMicroseconds,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_active_producer_source_faces"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.activeProducerSourceFaceCount,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_active_producer_source_points"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.activeProducerSourcePointCount,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_active_producer_source_bytes"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.activeProducerSourceByteCount,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
     sample.insert(QStringLiteral("lod_convergence_source_preparation_providers"),
 	static_cast<qint64>(status.sourcePreparationProviderCount));
     sample.insert(QStringLiteral("lod_source_preparation_completed_units"),
@@ -956,6 +1024,21 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	static_cast<qint64>(std::min<size_t>(
 	    convergence.presentedPrimitiveCount,
 	    static_cast<size_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_convergence_active_faces"),
+	static_cast<qint64>(std::min<size_t>(convergence.activeFaces,
+	    static_cast<size_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_convergence_active_source_faces"),
+	static_cast<qint64>(std::min<size_t>(convergence.activeSourceFaces,
+	    static_cast<size_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_convergence_source_mesh_occurrences"),
+	static_cast<qint64>(std::min<size_t>(
+	    convergence.sourceMeshOccurrenceCount,
+	    static_cast<size_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral(
+	"lod_convergence_temporary_coverage_occurrences"),
+	static_cast<qint64>(std::min<size_t>(
+	    convergence.temporaryCoverageOccurrenceCount,
+	    static_cast<size_t>(std::numeric_limits<qint64>::max()))));
     sample.insert(QStringLiteral("lod_convergence_presented_subpixel_occurrences"),
 	static_cast<qint64>(std::min<size_t>(
 	    convergence.presentedSubpixelOccurrenceCount,
@@ -964,6 +1047,61 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	static_cast<qint64>(std::min<size_t>(
 	    convergence.presentedStructuralBoxCount,
 	    static_cast<size_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_proxy_reason_mask"),
+	static_cast<qint64>(convergence.proxyReasons.reasonMask));
+    sample.insert(QStringLiteral("lod_proxy_source_preparation_occurrences"),
+	static_cast<qint64>(convergence.proxyReasons.
+	    sourcePreparationOccurrenceCount));
+    sample.insert(QStringLiteral("lod_proxy_visibility_planning_occurrences"),
+	static_cast<qint64>(convergence.proxyReasons.
+	    visibilityPlanningOccurrenceCount));
+    sample.insert(QStringLiteral("lod_proxy_geometry_preparation_occurrences"),
+	static_cast<qint64>(convergence.proxyReasons.
+	    geometryPreparationOccurrenceCount));
+    sample.insert(QStringLiteral("lod_proxy_renderer_preparation_occurrences"),
+	static_cast<qint64>(convergence.proxyReasons.
+	    rendererPreparationOccurrenceCount));
+    sample.insert(QStringLiteral("lod_proxy_intentional_subpixel_occurrences"),
+	static_cast<qint64>(convergence.proxyReasons.
+	    intentionalSubpixelOccurrenceCount));
+    sample.insert(QStringLiteral("lod_proxy_frame_budget_occurrences"),
+	static_cast<qint64>(convergence.proxyReasons.frameBudgetOccurrenceCount));
+    sample.insert(QStringLiteral("lod_proxy_memory_budget_occurrences"),
+	static_cast<qint64>(convergence.proxyReasons.memoryBudgetOccurrenceCount));
+    sample.insert(QStringLiteral("lod_proxy_terminal_failure_occurrences"),
+	static_cast<qint64>(convergence.proxyReasons.
+	    terminalFailureOccurrenceCount));
+    sample.insert(QStringLiteral("lod_proxy_unclassified_occurrences"),
+	static_cast<qint64>(convergence.proxyReasons.unclassifiedOccurrenceCount));
+    sample.insert(QStringLiteral("lod_proxy_temporary_structural_occurrences"),
+	static_cast<qint64>(convergence.proxyReasons.
+	    temporaryStructuralOccurrenceCount()));
+    sample.insert(QStringLiteral("lod_proxy_budget_limited_occurrences"),
+	static_cast<qint64>(convergence.proxyReasons.
+	    budgetLimitedStructuralOccurrenceCount()));
+    sample.insert(QStringLiteral("lod_episode_elapsed_ms"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    convergence.episode.elapsedMilliseconds,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_episode_first_proxy_reached"),
+	convergence.episode.firstProxyReached ? true : false);
+    sample.insert(QStringLiteral("lod_episode_first_proxy_ms"),
+	static_cast<qint64>(convergence.episode.firstProxyMilliseconds));
+    sample.insert(QStringLiteral("lod_episode_first_mesh_reached"),
+	convergence.episode.firstMeshReached ? true : false);
+    sample.insert(QStringLiteral("lod_episode_first_mesh_ms"),
+	static_cast<qint64>(convergence.episode.firstMeshMilliseconds));
+    sample.insert(QStringLiteral("lod_episode_structural_proxy_baseline"),
+	static_cast<qint64>(convergence.episode.structuralProxyBaselineCount));
+    sample.insert(QStringLiteral("lod_episode_half_proxies_replaced"),
+	convergence.episode.halfStructuralProxiesReplaced ? true : false);
+    sample.insert(QStringLiteral("lod_episode_half_proxies_replaced_ms"),
+	static_cast<qint64>(
+	    convergence.episode.halfStructuralProxyReplacementMilliseconds));
+    sample.insert(QStringLiteral("lod_episode_stable_view_reached"),
+	convergence.episode.stableViewReached ? true : false);
+    sample.insert(QStringLiteral("lod_episode_stable_view_ms"),
+	static_cast<qint64>(convergence.episode.stableViewMilliseconds));
     sample.insert(QStringLiteral("lod_convergence_terminal_occurrence_failures"),
 	static_cast<qint64>(std::min<size_t>(
 	    convergence.terminalOccurrenceFailureCount,
@@ -1946,6 +2084,12 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	    static_cast<qint64>(service->availableResultTaskCapacity()));
 	sample.insert(QStringLiteral("lod_service_pending_tasks"),
 	    static_cast<qint64>(work.pendingTasks));
+	sample.insert(QStringLiteral("lod_service_cpu_admission_waiting_tasks"),
+	    static_cast<qint64>(work.cpuAdmissionWaitingTasks));
+	sample.insert(
+	    QStringLiteral("lod_service_transient_memory_admission_waiting_tasks"),
+	    static_cast<qint64>(
+		work.transientMemoryAdmissionWaitingTasks));
 	sample.insert(QStringLiteral("lod_service_active_requests"),
 	    static_cast<qint64>(work.activeRequests));
 	sample.insert(QStringLiteral("lod_service_queued_results"),

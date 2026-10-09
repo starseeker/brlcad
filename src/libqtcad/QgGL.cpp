@@ -145,7 +145,8 @@ return;
     /* A provider/idle transition may have occurred since the preceding
      * frame.  Apply its retained HUD delta before rendering this frame so a
      * completed view never presents one final stale progress indicator. */
-    (void)qgcanvas_sync_obol_lod_progress(*d);
+    (void)qgcanvas_sync_obol_lod_progress(*d,
+	d->obol && d->obol->isRenderRequested());
 
     const SbBool rendered =
 	qgcanvas_render_obol_pending(*d, this, TRUE, TRUE);
@@ -156,6 +157,10 @@ return;
     if (rendered)
 	qgcanvas_frame_complete(*d, this);
     qgcanvas_queue_obol_progressive_update(*d, this);
+    {
+	QPainter painter(this);
+	qgcanvas_paint_lod_progress_overlay(*d, this, painter);
+    }
     /*
      * A test recorder must observe the framebuffer already produced by this
      * paint.  QOpenGLWidget::grabFramebuffer() from frameSwapped can request
@@ -227,6 +232,12 @@ void QgGL::present_frame()
 {
     QTCAD_SLOT("QgGL::present_frame", 1);
     request_update(BV_REFRESH_FRAMEBUFFER | BV_REFRESH_FORCE);
+    /* Endpoint callbacks can arrive while an embedded canvas is still hidden.
+     * Qt may discard that paint request, but a progressive-provider wake is a
+     * level which must be serviced independently of presentation.  Arm the
+     * bounded owner-thread pump here so startup work cannot wait for the first
+     * unrelated expose or input event. */
+    qgcanvas_queue_obol_progressive_update(*d, this);
 }
 
 void QgGL::queued_update()

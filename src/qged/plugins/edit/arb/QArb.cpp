@@ -66,6 +66,7 @@ struct QArbManipulatorState {
     bobol_display_endpoint_t *endpoint = nullptr;
     BObolViewController *controller = nullptr;
     BObolFeatureHandle feature;
+    bool pointer_captured = false;
     int active = -1;
     int active_domain = -1;
     int active_edit_index = -1;
@@ -132,6 +133,7 @@ qarb_manipulator_result(const BObolCommandResult &result, void *userData)
     state->endpoint = nullptr;
     state->controller = nullptr;
     state->feature = BObolFeatureHandle();
+    state->pointer_captured = false;
     state->active = -1;
     state->active_domain = -1;
     state->active_edit_index = -1;
@@ -180,6 +182,7 @@ qarb_manipulator_clear(QArbManipulatorState *state)
 	    state->endpoint, state);
     BObolViewController *controller = state->controller;
     const BObolFeatureHandle feature = state->feature;
+    state->pointer_captured = false;
     state->active = -1;
     state->active_domain = -1;
     state->active_edit_index = -1;
@@ -327,6 +330,7 @@ QArb::mode_changed(int mode)
 	manipulator->active = -1;
 	manipulator->active_domain = -1;
 	manipulator->active_edit_index = -1;
+	manipulator->pointer_captured = false;
 	(void)qarb_manipulator_publish(state, manipulator,
 	    preview_path.toUtf8().constData(), domain, -1, -1, -1);
     }
@@ -393,6 +397,7 @@ QArb::update_manipulators()
 	    current->selectionDomain.getValue() ==
 		static_cast<int>(domain);
 	if (!preserveInteraction) {
+	    manipulator->pointer_captured = false;
 	    manipulator->active = -1;
 	    manipulator->active_domain = -1;
 	    manipulator->active_edit_index = -1;
@@ -508,6 +513,7 @@ QArb::sync_session_selection(int commandId, bool publish)
 	    current->selectionDomain.getValue() ==
 		static_cast<int>(nextDomain);
 	if (!preserveInteraction) {
+	    manipulator->pointer_captured = false;
 	    manipulator->active = -1;
 	    manipulator->active_domain = -1;
 	    manipulator->active_edit_index = -1;
@@ -696,6 +702,7 @@ QArb::handle_manipulator_input(QArbManipulatorState *manipulator,
     const SoBRLIndexedEditManipulator::Domain domain =
 	static_cast<SoBRLIndexedEditManipulator::Domain>(domainIndex + 1);
     if (action == QARB_MANIPULATOR_PRESS) {
+	manipulator->pointer_captured = false;
 	const int feature = node->hitTest(domain, event->x,
 	    event->y, width, height, camera);
 	if (domainIndex < 0 || domainIndex > 2 || feature < 0 ||
@@ -742,6 +749,7 @@ QArb::handle_manipulator_input(QArbManipulatorState *manipulator,
 	manipulator->active = feature;
 	manipulator->active_domain = domainIndex;
 	manipulator->active_edit_index = editIndex;
+	manipulator->pointer_captured = true;
 	(void)qarb_manipulator_publish(state, manipulator,
 	    preview_path.toUtf8().constData(), domain,
 	    state->selection_domain == domainIndex ?
@@ -816,8 +824,9 @@ QArb::handle_manipulator_input(QArbManipulatorState *manipulator,
     }
 
     if (action == QARB_MANIPULATOR_RELEASE) {
-	if (manipulator->active < 0)
+	if (!manipulator->pointer_captured)
 	    return BOBOL_INPUT_RESULT_UNHANDLED;
+	manipulator->pointer_captured = false;
 	manipulator->active = -1;
 	manipulator->active_domain = -1;
 	manipulator->active_edit_index = -1;

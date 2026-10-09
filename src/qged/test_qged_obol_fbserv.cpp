@@ -250,10 +250,6 @@ test_qged_obol_fbserv_backend(void)
     GED_CHECK(source->dirtyRevision.getValue() == 0,
 	      "qged framebuffer writes must not mutate Coin dirty fields");
 
-    GED_CHECK(fbs_framebuffer_view(fbs, 3, 4, 2, 2) == 0,
-	      "qged Obol fbserv backend must record framebuffer view state");
-    GED_CHECK(fbs_framebuffer_cursor(fbs, 1, 7, 8) == 0,
-	      "qged Obol fbserv backend must record cursor state");
     GED_CHECK(fbs_framebuffer_flush(fbs) == 0,
 	      "qged Obol fbserv backend must publish pending stream state");
 
@@ -269,14 +265,6 @@ test_qged_obol_fbserv_backend(void)
     GED_CHECK(viewport->realizedDirtyRevision.getValue() ==
 	      source->dirtyRevision.getValue(),
 	      "qged framebuffer viewport must sync to source dirty generation");
-    GED_CHECK(NEAR_EQUAL(viewport->sourceCenter.getValue()[0], 3.0f, SMALL_FASTF) &&
-	      NEAR_EQUAL(viewport->sourceCenter.getValue()[1], 4.0f, SMALL_FASTF) &&
-	      NEAR_EQUAL(viewport->sourceZoom.getValue(), 2.0f, SMALL_FASTF),
-	      "qged framebuffer flush must publish view state to viewport image");
-    GED_CHECK(viewport->cursorVisible.getValue() == TRUE &&
-	      NEAR_EQUAL(viewport->cursorImagePosition.getValue()[0], 7.0f, SMALL_FASTF) &&
-	      NEAR_EQUAL(viewport->cursorImagePosition.getValue()[1], 8.0f, SMALL_FASTF),
-	      "qged framebuffer flush must publish cursor state to viewport image");
     GED_CHECK(controller->isRenderRequested(),
 	      "qged framebuffer flush must request an Obol render");
     GED_CHECK(fbs_framebuffer_poll(fbs) == 1,
@@ -290,6 +278,26 @@ test_qged_obol_fbserv_backend(void)
     GED_CHECK(intermediateOrange > intermediate.width() * intermediate.height() / 4 &&
 	intermediateOrange < intermediate.width() * intermediate.height() * 3 / 4,
 	      "qged must visibly present a meaningful partial framebuffer update");
+
+    GED_CHECK(fbs_framebuffer_view(fbs, 3, 4, 2, 2) == 0,
+	      "qged Obol fbserv backend must record framebuffer view state");
+    GED_CHECK(fbs_framebuffer_cursor(fbs, 1, 7, 8) == 0,
+	      "qged Obol fbserv backend must record cursor state");
+    GED_CHECK(fbs_framebuffer_flush(fbs) == 0 &&
+	      ged_view_framebuffer_present(gedp) == BRLCAD_OK,
+	      "qged framebuffer view state must publish on the owner thread");
+    GED_CHECK(NEAR_EQUAL(viewport->sourceCenter.getValue()[0], 3.0f, SMALL_FASTF) &&
+	      NEAR_EQUAL(viewport->sourceCenter.getValue()[1], 4.0f, SMALL_FASTF) &&
+	      NEAR_EQUAL(viewport->sourceZoom.getValue(), 2.0f, SMALL_FASTF),
+	      "qged framebuffer flush must publish view state to viewport image");
+    GED_CHECK(viewport->cursorVisible.getValue() == TRUE &&
+	      NEAR_EQUAL(viewport->cursorImagePosition.getValue()[0], 7.0f, SMALL_FASTF) &&
+	      NEAR_EQUAL(viewport->cursorImagePosition.getValue()[1], 8.0f, SMALL_FASTF),
+	      "qged framebuffer flush must publish cursor state to viewport image");
+    GED_CHECK(controller->isRenderRequested() &&
+	      fbs_framebuffer_poll(fbs) == 1 &&
+	      !controller->isRenderRequested(),
+	      "qged framebuffer view-state update must request and complete an Obol render");
 
     size_t secondBandOffset = (size_t)info.width * (size_t)firstBandHeight * 3;
     int secondBandHeight = info.height - firstBandHeight;
