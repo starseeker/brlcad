@@ -1521,6 +1521,30 @@ test_multiple_opts(void)
 }
 
 
+static void
+count_progressive_flush(void *data)
+{
+    int *flush_count = (int *)data;
+    if (flush_count)
+	(*flush_count)++;
+}
+
+
+static void
+test_progressive_flush(void)
+{
+    int flush_count = 0;
+
+    rt_framebuffer_flush_callback_set(count_progressive_flush, &flush_count);
+    rt_fb_progressive_flush();
+    CHECK_INT("progressive flush callback", 1, flush_count);
+
+    rt_framebuffer_flush_callback_set(NULL, NULL);
+    rt_fb_progressive_flush();
+    CHECK_INT("progressive flush callback cleared", 1, flush_count);
+}
+
+
 /* -----------------------------------------------------------------------
  * Test table
  * ----------------------------------------------------------------------- */
@@ -1582,7 +1606,8 @@ static struct rt_opt_test_entry all_tests[] = {
     { "help",            test_opt_help            },
     { "unknown_opt",     test_opt_unknown         },
     { "optind_boundary", test_optind_boundary     },
-    { "multiple_opts",   test_multiple_opts       },
+    { "multiple_opts",     test_multiple_opts       },
+    { "progressive_flush", test_progressive_flush   },
     { NULL, NULL }
 };
 
