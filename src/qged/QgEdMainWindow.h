@@ -97,8 +97,6 @@ class QgEdMainWindow : public QMainWindow
 	// Called from QgEdApp::do_quad_view_change when the user activates a
 	// different view in the quad-view layout.
 	void setActiveView(QgView *view);
-	void setNativeLodProgressOverlay(bool enabled);
-
 	// Save the operator's windowing dimensions during an ordinary close.
 	void closeEvent(QCloseEvent *event) override;
 

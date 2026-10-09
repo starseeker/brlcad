@@ -103,13 +103,6 @@ QgEdMainWindow::QgEdMainWindow(QgViewType canvas_type, int quad_view)
 }
 
 void
-QgEdMainWindow::setNativeLodProgressOverlay(bool enabled)
-{
-    if (c4)
-	c4->setNativeLodProgressOverlay(enabled);
-}
-
-void
 QgEdMainWindow::CreateWidgets(QgViewType canvas_type)
 {
     QgEdApp *ap = (QgEdApp *)qApp;

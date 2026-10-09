@@ -73,11 +73,6 @@ BObolViewController *obolViewController();
 struct bobol_display_endpoint *displayEndpoint();
 QgCanvasBase *canvasBase();
 
-/* Select a toolkit-native LoD progress overlay for this Qt host.  Retained
- * presentation remains available to headless and diagnostic consumers. */
-void setNativeLodProgressOverlay(bool enabled);
-bool nativeLodProgressOverlay() const;
-
 void aet(double a, double e, double t);
 
 QObject *active_event_filter() const
@@ -118,7 +113,6 @@ private:
 QBoxLayout  *l = nullptr;
 QgCanvasBase *canvas = nullptr;
 struct bobol_display_endpoint *endpoint = nullptr;
-bool native_lod_progress_overlay = false;
 QObject     *curr_event_filter = nullptr;
 std::vector<QObject *> filters;
 };

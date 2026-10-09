@@ -955,11 +955,9 @@ ged_obol_faceplate_sync_lod_progress(
 	publication.remove(label_name);
     };
 
-    enum ged_view_lod_progress_presentation_mode presentation_mode =
-	GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED;
-    if (ged_view_lod_progress_presentation_mode_get(&presentation_mode,
-	    view_ctx) && presentation_mode !=
-	    GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED) {
+    int progress_visible = 1;
+    if (ged_view_lod_progress_visible_get(&progress_visible, view_ctx) &&
+	!progress_visible) {
 	remove_progress();
 	return;
     }

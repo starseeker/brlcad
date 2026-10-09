@@ -295,10 +295,6 @@ QgEdApp::QgEdApp(int &argc, char *argv[], const char *db_file, int swrast_mode,
 
     // Create the windows
     w = new QgEdMainWindow(canvas_type, quad_mode);
-    /* Keep LoD progress in the retained scene so every display host presents
-     * the same toolkit-neutral card. */
-    w->setNativeLodProgressOverlay(false);
-
     /* GED needs some information and methods from QGED - make
      * those assignment */
     struct ged *gedp = mdl->ged();
