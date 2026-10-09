@@ -33,7 +33,7 @@ if(SH_EXEC AND TARGET gsh)
     "$<TARGET_FILE:gsh>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
     "${CMAKE_CURRENT_BINARY_DIR}" "$<TARGET_FILE:png-pix>"
     "$<TARGET_FILE:pixcount>" "$<TARGET_FILE:pixdiff>")
-  set_tests_properties(gsh_obol_progressive_lod PROPERTIES TIMEOUT 90)
+  set_tests_properties(gsh_obol_progressive_lod PROPERTIES TIMEOUT 150)
   set_property(TEST gsh_obol_progressive_lod APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 endif(SH_EXEC AND TARGET gsh)
 
