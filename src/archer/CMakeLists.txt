@@ -55,19 +55,22 @@ set(
   archer_utility_FILES
   plugins/Utility/README
   plugins/Utility/attrGroupsDisplayUtilityP.tcl
-  plugins/Utility/attrGroupsDisplayUtilityP/AttrGroupsDisplayUtilityP.tcl
   plugins/Utility/botUtilityP.tcl
-  plugins/Utility/botUtilityP/BotUtilityP.tcl
   plugins/Utility/lodUtilityP.tcl
-  plugins/Utility/lodUtilityP/LODUtilityP.tcl
 )
 set(archer_wizard_FILES
   plugins/Wizards/humanwizard.tcl
-  plugins/Wizards/humanwizard/HumanWizard.tcl
   plugins/Wizards/tankwizard.tcl
+  plugins/Wizards/tirewizard.tcl
+)
+set(
+  archer_plugin_support_FILES
+  plugins/Utility/attrGroupsDisplayUtilityP/AttrGroupsDisplayUtilityP.tcl
+  plugins/Utility/botUtilityP/BotUtilityP.tcl
+  plugins/Utility/lodUtilityP/LODUtilityP.tcl
+  plugins/Wizards/humanwizard/HumanWizard.tcl
   plugins/Wizards/tankwizard/TankWizard.tcl
   plugins/Wizards/tankwizard/images/tank.png
-  plugins/Wizards/tirewizard.tcl
   plugins/Wizards/tirewizard/TireWizard.tcl
 )
 
@@ -92,6 +95,7 @@ set(
   plugins/Core/README
   ${archer_utility_FILES}
   ${archer_wizard_FILES}
+  ${archer_plugin_support_FILES}
   ${archer_txt}
   archer_launch.tcl
   archer.c

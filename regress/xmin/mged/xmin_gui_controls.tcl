@@ -128,9 +128,9 @@ proc ::mged::xmin::exercise_view_ring {id top} {
 
 proc ::mged::xmin::exercise_grid {id top} {
     global mged_gui
-    upvar #0 ::brlcad::mged::grid::grid_control grid_control
 
     invoke $top {Tools {Grid Control Panel}}
+    upvar #0 ::brlcad::mged::grid::grid_control grid_control
     set panel $top.grid_control
     ::gui::test::require {[winfo exists $panel] && [winfo ismapped $panel]} \
 	"Grid Control Panel did not open"

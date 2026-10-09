@@ -270,10 +270,9 @@ proc ::mged::xmin::workflows::write_text_file {path contents} {
 }
 
 proc ::mged::xmin::workflows::exercise_file_operations {id top database} {
-    upvar #0 ::brlcad::mged::extract::control ex_control
-
     set extracted_database [file join $::env(GUI_TEST_DIR) extracted.g]
     invoke $top {File Export {Database Objects}}
+    upvar #0 ::brlcad::mged::extract::control ex_control
     set extract_panel .$id.do_extract
     ::gui::test::require {
 	[winfo exists $extract_panel] && [winfo ismapped $extract_panel]

@@ -33,6 +33,9 @@ namespace eval ::mged::xmin::search_exec {
     variable covered_draw_time_limit_ms 5000
     variable draw_time_limit_ms 15000
     variable display_widget ""
+    variable deferred_apply_done 0
+    variable deferred_apply_timeout_ms 1000
+    variable deferred_apply_wait 0
     variable finished 0
     variable interrupt_requested 0
     variable minimum_tgc_paths 1000
@@ -40,9 +43,17 @@ namespace eval ::mged::xmin::search_exec {
     variable nested_error_code {}
     variable nested_message ""
     variable nested_status 0
+    variable player_id ""
     variable ready_retries 0
     variable ready_retry_limit 800
     variable retry_delay_ms 25
+}
+
+proc ::mged::xmin::search_exec::nested_apply {} {
+    variable player_id
+
+    mged_apply_active $player_id \
+	{set ::mged::xmin::search_exec::deferred_apply_done 1}
 }
 
 proc ::mged::xmin::search_exec::fail {message} {
@@ -76,6 +87,9 @@ proc ::mged::xmin::search_exec::request_interrupt {} {
 
 proc ::mged::xmin::search_exec::exercise {} {
     variable covered_draw_time_limit_ms
+    variable deferred_apply_done
+    variable deferred_apply_timeout_ms
+    variable deferred_apply_wait
     variable draw_time_limit_ms
     variable interrupt_requested
     variable minimum_tgc_paths
@@ -83,6 +97,7 @@ proc ::mged::xmin::search_exec::exercise {} {
     variable nested_error_code
     variable nested_message
     variable nested_status
+    variable retry_delay_ms
 
     set paths [::brlcad::mged search / -type tgc]
     ::gui::test::require {[llength $paths] >= $minimum_tgc_paths} \
@@ -92,7 +107,9 @@ proc ::mged::xmin::search_exec::exercise {} {
     set nested_error_code {}
     set nested_message ""
     set nested_status 0
-    after 25 ::mged::xmin::search_exec::nested_search
+    after $retry_delay_ms ::mged::xmin::search_exec::nested_search
+    set deferred_apply_done 0
+    after $retry_delay_ms ::mged::xmin::search_exec::nested_apply
     set started [clock milliseconds]
     set draw_status [catch {
 	::brlcad::mged search / -type tgc -exec draw "{}" ";"
@@ -108,6 +125,17 @@ proc ::mged::xmin::search_exec::exercise {} {
 	$nested_message eq "another MGED command is already running" &&
 	$nested_error_code eq {BRLCAD MGED COMMAND_BUSY}
     } "nested search was not rejected safely: $nested_message"
+    set deferred_apply_deadline \
+	[expr {[clock milliseconds] + $deferred_apply_timeout_ms}]
+    while {!$deferred_apply_done &&
+	[clock milliseconds] < $deferred_apply_deadline} {
+	set deferred_apply_wait 0
+	after $retry_delay_ms \
+	    [list set ::mged::xmin::search_exec::deferred_apply_wait 1]
+	vwait ::mged::xmin::search_exec::deferred_apply_wait
+    }
+    ::gui::test::require {$deferred_apply_done} \
+	"display-manager callback was not resumed after the search"
     set draw_limit_message [format \
 	"search -exec draw took %dms; expected less than %dms" \
 	$draw_elapsed $draw_time_limit_ms]
@@ -222,6 +250,7 @@ proc ::mged::xmin::search_exec::run {} {
     global mged_gui mged_players
     variable command_widget
     variable display_widget
+    variable player_id
     variable ready_retries
     variable ready_retry_limit
     variable retry_delay_ms
@@ -258,6 +287,7 @@ proc ::mged::xmin::search_exec::run {} {
 
     set command_widget $top.t
     set display_widget $mged_gui($id,active_dm)
+    set player_id $id
     exercise
     finish 0 "PASS: MGED search drawing is linear, serialized, and interruptible"
 }
