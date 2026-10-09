@@ -712,6 +712,37 @@ The same test keeps the large DB-index fanout stress fixture isolated from
 later event/draw service coverage by reopening a fresh fixture after the index
 section.
 
+Interactive LoD Telemetry
+-------------------------
+
+Set `BOBOL_LOD_TELEMETRY_FILE` to a file path before starting an application
+to record every named LoD control transition as JSON Lines.  The first
+controller truncates the file for the new process session; additional views in
+that process share it and have distinct numeric controller IDs.  Records are
+flushed individually so a log remains useful after an assertion or crash.
+Each transition contains both control endpoints, queue and producer progress,
+proxy causes, allocation and memory budgets, renderer preparation, camera
+state, the exact user-facing progress-indicator class, and presentation
+obligations.  The `submission` object records selective target/entry counts,
+the active structural-repair frontier, reservation and terminal mode, pass
+annotations, and the most recent visited/task/cut/skip counts.  These numeric
+fields remain available in sanitized logs and distinguish a bounded pass from
+an idle cursor without exposing source identity.  Incremental inventory
+records accompany geometry and visibility revisions and include primitive type
+plus source face and vertex counts.
+The pending record reports any finite refinement cooldown in microseconds, and
+the derived signals distinguish a handoff deliberately waiting for that timer,
+one without an active renderer or producer, and one with no renderer, producer,
+controller pump, or pacing route at all.
+
+Set `BOBOL_LOD_TELEMETRY_SANITIZE=1` with the file variable when a session may
+contain sensitive database identity.  Sanitized logs omit database filenames,
+instance keys, content hashes, render-reason strings, and all original object
+paths.  Stable aliases are assigned for the life of the session: databases are
+`db<num>.g`, combinations are `c<num>.c`, and solids are `s<num>.s`.  Primitive
+types and BoT face/vertex counts remain available for performance analysis.
+The environment is sampled when each view controller is constructed.
+
 Production Exit Status
 ----------------------
 

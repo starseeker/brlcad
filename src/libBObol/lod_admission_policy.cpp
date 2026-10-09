@@ -609,6 +609,7 @@ BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(
 	    inputs.stableCalibrationPending,
 	    inputs.capacityAllocationPending,
 	    inputs.capacitySamplePending,
+	    inputs.headroomProbePending,
 	    inputs.stablePresentationAvailable);
 	return BObolLodPointProxyEvidence::producerOwnsCalibrationFrame(
 	    inputs.submissionPending, submissionPaused, inputs.providerPending,
@@ -656,13 +657,19 @@ bool
 BObolLodAdmissionPlanner::presentationPausesSubmission(
 	bool discoveryCalibrationPending, bool stableCalibrationPending,
 	bool capacityAllocationPending, bool capacitySamplePending,
-	bool stablePresentationAvailable)
+	bool headroomProbePending, bool stablePresentationAvailable)
 {
     /* ALLOCATING is a producer phase, not a presentation phase.  A point
      * calibration may already be queued as the capacity transaction's
      * successor, but it cannot pause the retained-allocation cursor which
      * creates the candidate it is waiting behind. */
-    return capacitySamplePending || discoveryCalibrationPending ||
+
+    /* A headroom retry is an explicitly requested replay of one retained
+     * population.  Letting an active demand cursor change that population
+     * before the replay completes invalidates the witness and can leave both
+     * PUMP and RENDER asserted while neither transition may advance. */
+    return capacitySamplePending || headroomProbePending ||
+	    discoveryCalibrationPending ||
 	    (stableCalibrationPending && stablePresentationAvailable &&
 	     !capacityAllocationPending);
 }

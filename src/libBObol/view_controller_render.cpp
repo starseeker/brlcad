@@ -857,6 +857,7 @@ BObolViewController::notePresentationRenderInterrupted(
 	    this->d->lodPointQualityPhase.presentationPending(),
 	    this->d->lodAdmissionEvidence.capacity().capacityAllocationPending(),
 	    this->d->lodAdmissionEvidence.capacity().presentationFramePending(),
+	    this->d->lodAdmissionEvidence.headroom().retryPending(),
 	    state && state->hasCadPresentationAssemblies());
     /* Defer capacity recovery only to an owner which can publish a different
      * future population.  A requested publication frame, retained-growth
@@ -1285,6 +1286,8 @@ BObolViewController::notePresentationRenderInterrupted(
 	    this->d->lodAdmissionEvidence.capacity().capacityAllocationPending();
 	continuationInputs.capacitySamplePending =
 	    this->d->lodAdmissionEvidence.capacity().presentationFramePending();
+	continuationInputs.headroomProbePending =
+	    this->d->lodAdmissionEvidence.headroom().retryPending();
 	continuationInputs.stablePresentationAvailable =
 	    state && state->hasCadPresentationAssemblies();
 	continuationInputs.providerPending =
@@ -1504,6 +1507,9 @@ BObolViewController::advanceStableLodReducerIfReady(void)
 	    sceneBudget);
     const std::vector<SoBRLDatabaseSource *> structuralSources =
 	controller_render_database_source_roots(this);
+    const bool structuralPopulationSettled =
+	controller_lod_structural_population_settled(
+	    structuralSources, externalProducersSettled);
     const bool meshFirstSceneSafe =
 	controller_lod_mesh_first_scene_safe(structuralSources);
     const bool haveStructuralProjectionPopulation =
@@ -1525,7 +1531,7 @@ BObolViewController::advanceStableLodReducerIfReady(void)
      * provide immediate useful coverage during discovery; seed the first
      * mesh wave once, from the settled inventory which it is meant to bound. */
     if (haveStructuralProjectionPopulation &&
-	externalProducersSettled &&
+	structuralPopulationSettled &&
 	!this->d->lodInteractionSession.active() &&
 	pointAggregationOwnsStructuralFrontier) {
 	const BObolLodAdmissionPlan seedPlan =
@@ -1582,7 +1588,7 @@ BObolViewController::advanceStableLodReducerIfReady(void)
 	     * frontier without spending or waiting for a duplicate frame. */
 	}
     }
-    if (externalProducersSettled &&
+    if (structuralPopulationSettled &&
 	this->d->lodDiscoveryPointProxyPixelThreshold > 1.01f) {
 	const float oldEffective = std::max(
 	    this->d->lodPresentationPointProxyPixelThreshold,
@@ -1639,7 +1645,7 @@ BObolViewController::advanceStableLodReducerIfReady(void)
 	BObolLodAvailabilityScheduler::structuralRepairMayOwn(
 	    this->d->lodAvailabilityLedger.residentGrowthPending(),
 	    this->d->lodAvailabilityLedger.residencyDrainActive()) &&
-	externalProducersSettled &&
+	structuralPopulationSettled &&
 	!generationWork.hasResultWork();
     const bool pointCalibrationBlocksStructuralRepair =
 	this->d->lodPointQualityPhase.presentationPending() &&
@@ -1899,6 +1905,17 @@ BObolViewController::advanceStableLodReducerIfReady(void)
 		 * safely publish an occurrence-scoped constraint. */
 		if (!exactStructuralFrontier)
 		    return;
+		/* A certified compact population is sufficient to spend a bounded
+		 * mesh-repair allowance, but it cannot prove that a still-live
+		 * provider will never publish a richer representation.  Keep the
+		 * temporary structural image and wait for that provider edge instead
+		 * of converting it into a terminal proxy prematurely. */
+		if (!externalProducersSettled) {
+		    (void)this->d->lodCoveragePolicy.
+			parkDemandCensusForProvider();
+		    this->d->retireRetainedRefinementObservation();
+		    return;
+		}
 		terminalProxyRepair = true;
 	    }
 	}
@@ -3026,10 +3043,13 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	const BObolPresentationTimingContext &context)
 {
     const uint64_t now = this->beginRenderTiming();
-    if (!startedNanoseconds || now <= startedNanoseconds)
+    if (!startedNanoseconds || now < startedNanoseconds)
 	return;
+    /* A valid traversal can begin and finish within one clock tick.  Commit
+     * it with the smallest representable duration so completion still
+     * retires the host's claimed-frame witness. */
     this->recordCompletedRenderTiming(startedNanoseconds,
-	now - startedNanoseconds, context);
+	now > startedNanoseconds ? now - startedNanoseconds : 1, context);
 }
 
 void
@@ -3913,6 +3933,8 @@ BObolViewController::recordCompletedRenderTiming(uint64_t startedNanoseconds,
 	this->d->lodAdmissionEvidence.capacity().capacityAllocationPending();
     producerInputs.capacitySamplePending =
 	    this->d->lodAdmissionEvidence.capacity().presentationFramePending();
+    producerInputs.headroomProbePending =
+	this->d->lodAdmissionEvidence.headroom().retryPending();
 	producerInputs.stablePresentationAvailable =
 	    haveCadPresentationAssemblies != FALSE;
 	producerInputs.providerPending =
@@ -4742,6 +4764,13 @@ BObolViewController::recordCompletedRenderTiming(uint64_t startedNanoseconds,
     if (staticDecision.allowsStableSuccessor())
 	this->advanceStableLodReducerIfReady();
 
+    /* Completing a frame can retire the presentation owner and expose a
+     * submission, demand, or compaction producer which was deliberately
+     * paused behind it.  Recompute the level-triggered host contract here,
+     * after every capacity-frame reducer has selected its successor.  Without
+     * this handoff Qt observes neither RENDER nor PUMP and the newly runnable
+     * producer remains stranded until unrelated input happens to wake it. */
+    this->synchronizeProgressiveWorkPending();
 }
 
 void
@@ -4798,13 +4827,18 @@ BObolViewController::completePresentationBarrier(uint64_t elapsedNanoseconds,
 	    this->d->lodViewRevision.value(),
 	    this->d->lodPolicyRevision.value(), exactFrame != FALSE);
     if (frameCompletion.retired) {
-	/* A capacity candidate owns its complete sample sequence.  Result
-	 * publication supplies its bounded frame cadence, so an additional
-	 * render-duration cooldown would serialize independent asset loads behind
-	 * those frames. */
+	/* A capacity candidate owns its complete sample sequence.  A retained
+	 * handoff in ALLOCATION_REQUIRED likewise owns the immediate reconciliation
+	 * pass which replaces its temporary global ceiling.  Both paths already
+	 * have bounded presentation cadence; imposing another render-duration wait
+	 * after each frame can leave a visibly incomplete population idle for the
+	 * full cooldown. */
 	const bool capacityOwnsSuccessor =
 	    this->d->lodAdmissionEvidence.capacity().
 		capacityTransactionPending();
+	const bool handoffOwnsSuccessor =
+	    this->d->lodPresentationPolicy.handoffPending() &&
+	    !this->d->lodPresentationPolicy.handoffPresentationPending();
 	const SbBool resumeResidentRefinement =
 	    ((frameCompletion.reasons &
 	      BObolLodPresentationTransaction::REASON_RESIDENT_REFINEMENT) != 0 ||
@@ -4826,7 +4860,8 @@ BObolViewController::completePresentationBarrier(uint64_t elapsedNanoseconds,
 		BObolLodAdmissionRevisionDomain::CAPACITY);
 	const int64_t cooldownMicroseconds =
 	    BObolLodPresentationTransaction::refinementCooldownMicroseconds(
-		elapsedNanoseconds, capacityOwnsSuccessor);
+		elapsedNanoseconds,
+		capacityOwnsSuccessor || handoffOwnsSuccessor);
 	const int64_t nowMicroseconds = bu_gettime();
 	this->d->lodRefinementNotBeforeMicroseconds =
 	    cooldownMicroseconds > 0 &&
@@ -4993,12 +5028,19 @@ BObolViewController::schedulePendingLodHandoffAllocationIfReady(void)
 	return FALSE;
     const size_t delayedReconciliationBudget =
 	this->d->lodPresentationPolicy.handoffReconciliationBudget();
+	BObolViewLodState *sceneLodState = this->d->viewAttachment ?
+	    this->d->viewAttachment->getViewLodState() : NULL;
+	const bool applyCurrentCertificate =
+	    this->d->retainedAllocationApplicationPending(sceneLodState);
 	/* The capacity epoch is part of the allocation certificate's identity.
 	 * Advance it before constructing the successor; advancing afterward
 	 * immediately makes the new plan stale and can resubmit the identical
-	 * handoff forever. */
-	this->d->advanceAdmissionRevision(
-	    BObolLodAdmissionRevisionDomain::CAPACITY);
+	 * handoff forever.  If a current certificate still has unapplied cuts,
+	 * however, this is its delayed application pass rather than a successor
+	 * problem; preserve its revision until those stamps are consumed. */
+	if (!applyCurrentCertificate)
+	    this->d->advanceAdmissionRevision(
+		BObolLodAdmissionRevisionDomain::CAPACITY);
     if (delayedReconciliationBudget > 0)
 	this->d->requestPresentationReconciliation(
 	    delayedReconciliationBudget);

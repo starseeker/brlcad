@@ -20,9 +20,10 @@
 /*
  * Observed-time projection of the finite convergence ranks.  This is a HUD
  * estimator, not a scheduler: no production decision may consume its output.
- * A rank without a denominator or an observed rate makes the result
- * indeterminate.  Keeping that distinction explicit avoids a confident 99%
- * display while one expensive source or renderer-preparation item remains.
+ * Ordinary ranks use observed unit rates.  Visible refinement instead uses
+ * conservative completed-frame cycles so fast result publication cannot imply
+ * a completion time which ignores presentation and replanning.  Unknown work
+ * or an unqualified refinement frontier makes the result indeterminate.
  */
 class BObolLodProgressEstimator {
 public:
@@ -42,8 +43,13 @@ public:
     };
 
     struct Inputs {
-	BObolLodViewEpoch viewEpoch;
-	BObolLodPolicyEpoch policyEpoch;
+	uint64_t episodeRevision = 0;
+	/* Admission policy epochs identify internally selected refinement tiers.
+	 * They reset only the cycle forecast; the user-visible episode is owned by
+	 * episodeRevision. */
+	BObolLodPolicyEpoch refinementTierEpoch;
+	uint64_t renderCompletionSerial = 0;
+	int64_t episodeStartMicroseconds = 0;
 	int64_t observationMicroseconds = 0;
 	bool terminal = false;
 	bool unknownForegroundWork = false;
@@ -54,27 +60,43 @@ public:
 	{
 	    return this->ranks[static_cast<size_t>(value)];
 	}
+
+	const WorkRank &rank(Rank value) const
+	{
+	    return this->ranks[static_cast<size_t>(value)];
+	}
     };
 
     struct Estimate {
 	bool available = false;
+	bool refinementCycleBased = false;
 	float fraction = 0.0f;
 	uint64_t remainingMilliseconds = 0;
+	uint64_t remainingRefinementCycles = 0;
     };
 
     Estimate evaluate(const Inputs &inputs)
     {
-	const bool newEpisode = this->viewEpoch != inputs.viewEpoch ||
-	    this->policyEpoch != inputs.policyEpoch;
+	const bool newEpisode =
+	    this->episodeRevision != inputs.episodeRevision;
 	if (newEpisode)
 	    this->beginEpisode(inputs);
+	const bool refinementTierChanged = !newEpisode &&
+	    this->refinementTierEpoch != inputs.refinementTierEpoch;
+	if (refinementTierChanged) {
+	    this->refinementTierEpoch = inputs.refinementTierEpoch;
+	    this->fractionFloor = 0.0f;
+	    this->cycleForecast.reset();
+	}
 	const bool terminalChanged = inputs.terminal != this->lastTerminal;
 	this->lastTerminal = inputs.terminal;
 
 	if (inputs.terminal) {
 	    this->lastEstimate.available = true;
+	    this->lastEstimate.refinementCycleBased = false;
 	    this->lastEstimate.fraction = 1.0f;
 	    this->lastEstimate.remainingMilliseconds = 0;
+	    this->lastEstimate.remainingRefinementCycles = 0;
 	    return this->lastEstimate;
 	}
 
@@ -83,9 +105,15 @@ public:
 	    rankChanged = this->rates[i].observe(inputs.ranks[i],
 		inputs.observationMicroseconds, this->episodeStartMicroseconds) ||
 		rankChanged;
-
+	const CycleForecast::Estimate cycleEstimate =
+	    this->cycleForecast.observe(inputs.refinementTierEpoch,
+		inputs.renderCompletionSerial,
+		inputs.rank(Rank::VISIBLE_RESOLUTION),
+		inputs.observationMicroseconds);
+	if (cycleEstimate.confidenceReset)
+	    this->fractionFloor = 0.0f;
 	const bool estimateInputsChanged = newEpisode || terminalChanged ||
-	    rankChanged ||
+	    refinementTierChanged || rankChanged || cycleEstimate.changed ||
 	    inputs.unknownForegroundWork != this->unknownForegroundWork ||
 	    inputs.finalPresentationMicroseconds !=
 		this->finalPresentationMicroseconds;
@@ -98,6 +126,8 @@ public:
 	long double remainingMicroseconds = 0.0L;
 	bool hasIncompleteRank = false;
 	bool allIncompleteRanksMeasured = !inputs.unknownForegroundWork;
+	bool refinementCycleBased = false;
+	uint64_t remainingRefinementCycles = 0;
 	for (size_t i = 0; i < this->rates.size(); ++i) {
 	    const WorkRank &rank = inputs.ranks[i];
 	    if (!rank.present || rank.total == 0)
@@ -106,6 +136,16 @@ public:
 	    if (completed == rank.total)
 		continue;
 	    hasIncompleteRank = true;
+	    if (i == static_cast<size_t>(Rank::VISIBLE_RESOLUTION)) {
+		if (!cycleEstimate.available) {
+		    allIncompleteRanksMeasured = false;
+		    continue;
+		}
+		remainingMicroseconds += cycleEstimate.remainingMicroseconds;
+		refinementCycleBased = true;
+		remainingRefinementCycles = cycleEstimate.remainingCycles;
+		continue;
+	    }
 	    long double rate = this->rates[i].microsecondsPerUnit();
 	    /* Capacity-search units include a bounded presentation and timing
 	     * sample.  The current completed-frame duration is a useful seed before
@@ -122,7 +162,9 @@ public:
 		rank.total - completed) * rate;
 	}
 
-	if (inputs.finalPresentationMicroseconds > 0)
+	/* A completed-frame cycle already includes its presentation.  Other ranks
+	 * still need one final exact frame after their last unit is published. */
+	if (inputs.finalPresentationMicroseconds > 0 && !refinementCycleBased)
 	    remainingMicroseconds += static_cast<long double>(
 		inputs.finalPresentationMicroseconds);
 	const bool hasEstimatedWork = hasIncompleteRank ||
@@ -145,7 +187,10 @@ public:
 	    std::min(maximumActiveFraction, fraction));
 	this->fractionFloor = fraction;
 	this->lastEstimate.available = true;
+	this->lastEstimate.refinementCycleBased = refinementCycleBased;
 	this->lastEstimate.fraction = fraction;
+	this->lastEstimate.remainingRefinementCycles =
+	    remainingRefinementCycles;
 	this->lastEstimate.remainingMilliseconds =
 	    remainingMicroseconds >= static_cast<long double>(UINT64_MAX) *
 		microsecondsPerMillisecond ? UINT64_MAX :
@@ -157,19 +202,207 @@ public:
 
     void resetEpisode(void)
     {
-	this->viewEpoch.reset();
-	this->policyEpoch.reset();
+	this->episodeRevision = 0;
+	this->refinementTierEpoch.reset();
 	this->episodeStartMicroseconds = 0;
 	this->unknownForegroundWork = false;
 	this->finalPresentationMicroseconds = 0;
 	this->lastTerminal = false;
 	this->fractionFloor = 0.0f;
 	this->lastEstimate = Estimate();
+	this->cycleForecast.reset();
 	for (Rate &rate : this->rates)
 	    rate.resetObservation();
     }
 
 private:
+    class CycleForecast {
+    public:
+	struct Estimate {
+	    bool changed = false;
+	    bool confidenceReset = false;
+	    bool available = false;
+	    uint64_t remainingCycles = 0;
+	    long double remainingMicroseconds = 0.0L;
+	};
+
+	Estimate observe(BObolLodPolicyEpoch tier, uint64_t renderSerial,
+	    const WorkRank &rank, int64_t nowMicroseconds)
+	{
+	    Estimate result;
+	    if (!rank.present || rank.total == 0 ||
+		std::min(rank.completed, rank.total) == rank.total) {
+		result.changed = this->active;
+		this->reset();
+		return result;
+	    }
+
+	    const uint64_t completed = std::min(rank.completed, rank.total);
+	    const uint64_t unresolved = rank.total - completed;
+	    if (!this->active || this->tier != tier ||
+		this->totalUnits != rank.total) {
+		result.confidenceReset = true;
+		this->begin(tier, renderSerial, rank.total, unresolved,
+		    nowMicroseconds);
+		result.changed = true;
+		return result;
+	    }
+
+	    /* Newly discovered debt invalidates every projection immediately, even
+	     * when it appears between completed frames.  The next completed frame
+	     * establishes a fresh comparable baseline. */
+	    if (unresolved > this->lastObservedUnresolved) {
+		this->resetSamples();
+		this->setBoundary(renderSerial, unresolved, nowMicroseconds);
+		this->lastObservedUnresolved = unresolved;
+		result.changed = true;
+		result.confidenceReset = true;
+		return result;
+	    }
+	    this->lastObservedUnresolved = unresolved;
+
+	    if (!renderSerial)
+		return this->estimate(unresolved, result);
+	    if (!this->boundarySerial) {
+		this->setBoundary(renderSerial, unresolved, nowMicroseconds);
+		result.changed = true;
+		return result;
+	    }
+	    if (renderSerial != this->boundarySerial) {
+		const bool consecutive = this->boundarySerial != UINT64_MAX &&
+		    renderSerial == this->boundarySerial + 1;
+		const int64_t duration = nowMicroseconds -
+		    this->boundaryMicroseconds;
+		if (!consecutive || duration <= 0 ||
+		    unresolved >= this->boundaryUnresolved) {
+		    this->resetSamples();
+		    result.confidenceReset = true;
+		} else {
+		    this->appendSample(this->boundaryUnresolved - unresolved,
+			duration);
+		}
+		this->setBoundary(renderSerial, unresolved, nowMicroseconds);
+		result.changed = true;
+	    }
+	    return this->estimate(unresolved, result);
+	}
+
+	void reset(void)
+	{
+	    this->active = false;
+	    this->tier.reset();
+	    this->totalUnits = 0;
+	    this->lastObservedUnresolved = 0;
+	    this->boundarySerial = 0;
+	    this->boundaryUnresolved = 0;
+	    this->boundaryMicroseconds = 0;
+	    this->resetSamples();
+	}
+
+    private:
+	void begin(BObolLodPolicyEpoch newTier, uint64_t renderSerial,
+	    uint64_t total, uint64_t unresolved, int64_t nowMicroseconds)
+	{
+	    this->reset();
+	    this->active = true;
+	    this->tier = newTier;
+	    this->totalUnits = total;
+	    this->lastObservedUnresolved = unresolved;
+	    this->setBoundary(renderSerial, unresolved, nowMicroseconds);
+	}
+
+	void setBoundary(uint64_t renderSerial, uint64_t unresolved,
+	    int64_t nowMicroseconds)
+	{
+	    this->boundarySerial = renderSerial;
+	    this->boundaryUnresolved = unresolved;
+	    this->boundaryMicroseconds = nowMicroseconds;
+	}
+
+	void resetSamples(void)
+	{
+	    this->sampleCount = 0;
+	    this->reductions.fill(0);
+	    this->durations.fill(0);
+	}
+
+	void appendSample(uint64_t reduction, int64_t duration)
+	{
+	    if (!reduction || duration <= 0)
+		return;
+	    if (this->sampleCount < sampleCapacity) {
+		this->reductions[this->sampleCount] = reduction;
+		this->durations[this->sampleCount] =
+		    static_cast<uint64_t>(duration);
+		this->sampleCount++;
+		return;
+	    }
+	    for (size_t i = 1; i < sampleCapacity; ++i) {
+		this->reductions[i - 1] = this->reductions[i];
+		this->durations[i - 1] = this->durations[i];
+	    }
+	    this->reductions[sampleCapacity - 1] = reduction;
+	    this->durations[sampleCapacity - 1] =
+		static_cast<uint64_t>(duration);
+	}
+
+	Estimate estimate(uint64_t unresolved, Estimate result) const
+	{
+	    if (this->sampleCount < minimumQualifiedSamples)
+		return result;
+	    long double totalReduction = 0.0L;
+	    long double totalDuration = 0.0L;
+	    for (size_t i = 0; i < this->sampleCount; ++i) {
+		totalReduction += static_cast<long double>(
+		    this->reductions[i]);
+		totalDuration += static_cast<long double>(
+		    this->durations[i]);
+	    }
+	    if (totalReduction <= 0.0L || totalDuration <= 0.0L)
+		return result;
+
+	    /* Preserve the measured relationship between work and elapsed time.
+	     * Combining the smallest reduction with the longest duration, when they
+	     * came from different frames, manufactured a rate which had never been
+	     * observed.  On a recorded 37k-item frontier that amplified a roughly
+	     * 20-second tail into a 15-minute forecast.  Aggregate paired samples
+	     * instead, retaining a modest margin for the usual convergence taper. */
+	    static constexpr long double safetyNumerator = 5.0L;
+	    static constexpr long double safetyDenominator = 4.0L;
+	    const long double safety = safetyNumerator / safetyDenominator;
+	    const long double projectedCycles =
+		static_cast<long double>(unresolved) *
+		static_cast<long double>(this->sampleCount) /
+		totalReduction * safety;
+	    if (projectedCycles >= static_cast<long double>(UINT64_MAX)) {
+		result.remainingCycles = UINT64_MAX;
+	    } else {
+		result.remainingCycles = static_cast<uint64_t>(projectedCycles);
+		if (static_cast<long double>(result.remainingCycles) <
+		    projectedCycles)
+		    result.remainingCycles++;
+	    }
+	    result.remainingMicroseconds =
+		static_cast<long double>(unresolved) * totalDuration /
+		totalReduction * safety;
+	    result.available = true;
+	    return result;
+	}
+
+	static constexpr size_t sampleCapacity = 8;
+	static constexpr size_t minimumQualifiedSamples = 3;
+	bool active = false;
+	BObolLodPolicyEpoch tier;
+	uint64_t totalUnits = 0;
+	uint64_t lastObservedUnresolved = 0;
+	uint64_t boundarySerial = 0;
+	uint64_t boundaryUnresolved = 0;
+	int64_t boundaryMicroseconds = 0;
+	size_t sampleCount = 0;
+	std::array<uint64_t, sampleCapacity> reductions = {};
+	std::array<uint64_t, sampleCapacity> durations = {};
+    };
+
     class Rate {
     public:
 	bool observe(const WorkRank &rank, int64_t nowMicroseconds,
@@ -252,27 +485,32 @@ private:
 
     void beginEpisode(const Inputs &inputs)
     {
-	this->viewEpoch = inputs.viewEpoch;
-	this->policyEpoch = inputs.policyEpoch;
-	this->episodeStartMicroseconds = inputs.observationMicroseconds;
+	this->episodeRevision = inputs.episodeRevision;
+	this->refinementTierEpoch = inputs.refinementTierEpoch;
+	this->episodeStartMicroseconds =
+	    inputs.episodeStartMicroseconds > 0 &&
+	    inputs.episodeStartMicroseconds <= inputs.observationMicroseconds ?
+	    inputs.episodeStartMicroseconds : inputs.observationMicroseconds;
 	this->unknownForegroundWork = inputs.unknownForegroundWork;
 	this->finalPresentationMicroseconds =
 	    inputs.finalPresentationMicroseconds;
 	this->lastTerminal = false;
 	this->fractionFloor = 0.0f;
 	this->lastEstimate = Estimate();
+	this->cycleForecast.reset();
 	for (Rate &rate : this->rates)
 	    rate.resetObservation();
     }
 
-    BObolLodViewEpoch viewEpoch;
-    BObolLodPolicyEpoch policyEpoch;
+    uint64_t episodeRevision = 0;
+    BObolLodPolicyEpoch refinementTierEpoch;
     int64_t episodeStartMicroseconds = 0;
     bool unknownForegroundWork = false;
     bool lastTerminal = false;
     uint64_t finalPresentationMicroseconds = 0;
     float fractionFloor = 0.0f;
     Estimate lastEstimate;
+    CycleForecast cycleForecast;
     std::array<Rate, static_cast<size_t>(Rank::COUNT)> rates;
     static constexpr long double microsecondsPerMillisecond = 1000.0L;
 };

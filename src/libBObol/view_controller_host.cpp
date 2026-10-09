@@ -437,6 +437,16 @@ BObolViewController::initializeControllerState(SoNode *root, SoCamera *camera,
 	    this->clearRenderRequest();
 	    this->clearProgressiveWorkPending();
 	}
+	this->d->lodTelemetry = BObolLodTelemetry::fromEnvironment();
+	if (this->d->lodTelemetry) {
+	    this->d->lodControlTransitionEndpoint =
+		this->captureLodControlTraceState();
+	    this->d->lodControlTransitionHasEndpoint = TRUE;
+	    this->recordLodControlTransition(
+		BOBOL_LOD_CONTROL_TRANSITION_INITIAL,
+		this->d->lodControlTransitionEndpoint,
+		this->d->lodControlTransitionEndpoint, TRUE);
+	}
     } catch (...) {
 	this->releaseControllerStateNoexcept();
 	throw;
@@ -596,6 +606,8 @@ BObolViewController::setViewportSceneGraphWithLod(SoNode *root)
 void
 BObolViewController::setSceneRoot(SoNode *root, SbBool preserveLodState)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     if (!preserveLodState)
 	this->cancelActiveLodGeneration();
     this->clearRtPickCaches();
@@ -627,6 +639,8 @@ BObolViewController::getSceneRoot(void) const
 void
 BObolViewController::setRenderSceneRoot(SoNode *root, SbBool preserveLodState)
 {
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     if (!preserveLodState)
 	this->cancelActiveLodGeneration();
     this->clearRtPickCaches();
@@ -678,6 +692,8 @@ BObolViewController::setViewAttachment(BObolViewAttachment *attachment)
     if (!attachment || attachment == this->d->viewAttachment)
 	return;
 
+    BObolLodControlTransitionScope controlTransition(
+	this, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
     this->cancelActiveLodGeneration();
 
     SoNode *root = this->getSceneRoot();

@@ -140,6 +140,70 @@ test_control_transition_journal(void)
 	records[0].event == BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT,
 	"application exact-presentation requests are explicit input edges");
 
+    records.clear();
+    externalController.setViewportSize(320, 240);
+    CHECK(externalController.drainLodControlTransitions(records) == 1 &&
+	records.size() == 1 &&
+	records[0].event == BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT &&
+	records[0].before.viewRevision != records[0].after.viewRevision,
+	"viewport changes publish one named external-input transition");
+
+    BObolViewController rootController;
+    rootController.setLodControlTransitionTracing(TRUE, 64);
+    records.clear();
+    (void)rootController.drainLodControlTransitions(records);
+    SoSeparator *sceneRoot = new SoSeparator;
+    sceneRoot->ref();
+    rootController.clearRenderRequest();
+    records.clear();
+    (void)rootController.drainLodControlTransitions(records);
+    records.clear();
+    rootController.setSceneRoot(sceneRoot, TRUE);
+    CHECK(rootController.drainLodControlTransitions(records) == 1 &&
+	records.size() == 1 &&
+	records[0].event == BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT,
+	"scene-root replacement publishes one named external-input transition");
+
+    SoSeparator *renderRoot = new SoSeparator;
+    renderRoot->ref();
+    rootController.clearRenderRequest();
+    records.clear();
+    (void)rootController.drainLodControlTransitions(records);
+    records.clear();
+    rootController.setRenderSceneRoot(renderRoot, TRUE);
+    const size_t renderRootRecordCount =
+	rootController.drainLodControlTransitions(records);
+    if (renderRootRecordCount != 1 || records.size() != 1 ||
+	records[0].event != BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT) {
+	bu_log("render-root control journal: returned=%zu records=%zu",
+	    renderRootRecordCount, records.size());
+	for (const BObolLodControlTransitionRecord &record : records)
+	    bu_log(" serial=%llu event=%s", (unsigned long long)record.serial,
+		bobol_lod_control_transition_event_name(record.event));
+	bu_log("\n");
+    }
+    CHECK(renderRootRecordCount == 1 && records.size() == 1 &&
+	records[0].event == BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT,
+	"render-root replacement publishes one named external-input transition");
+
+    BObolViewAttachment *attachment = new BObolViewAttachment;
+    attachment->ref();
+    rootController.clearRenderRequest();
+    records.clear();
+    (void)rootController.drainLodControlTransitions(records);
+    records.clear();
+    rootController.setViewAttachment(attachment);
+    CHECK(rootController.drainLodControlTransitions(records) == 1 &&
+	records.size() == 1 &&
+	records[0].event == BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT,
+	"view-attachment replacement publishes one named external-input transition");
+    rootController.setLodControlTransitionTracing(FALSE);
+    rootController.setSceneRoot(NULL, TRUE);
+    rootController.setRenderSceneRoot(NULL, TRUE);
+    attachment->unref();
+    renderRoot->unref();
+    sceneRoot->unref();
+
     static constexpr unsigned int randomizedTransitionCount = 512;
     static constexpr uint32_t randomizedSeedMultiplier = 1664525u;
     static constexpr uint32_t randomizedSeedIncrement = 1013904223u;
@@ -1001,6 +1065,40 @@ test_progressive_frame_wakeup_contract(void)
 	refinementController.isRenderRequested() &&
 	!refinementController.hasProgressiveWorkPending(),
 	"exact-frame work transfers from its pump to the successor render");
+
+    /* A completed LoD-capacity frame can retire the presentation owner and
+     * expose a producer which was deliberately paused behind it.  The frame
+     * completion itself must restore the PUMP level: Qt only schedules its
+     * progressive timer from the published host-work snapshot, so relying on
+     * a later input or paint would strand that producer indefinitely. */
+    BObolViewController completionController;
+    PendingProgressState completionState;
+    const uint64_t completionToken =
+	completionController.registerProgressiveProvider(
+	    test_pending_progress_provider, &completionState);
+    SbBool capacityRelevant = FALSE;
+    SbBool planningRelevant = FALSE;
+    CHECK(completionToken != 0 &&
+	completionController.consumeRenderRequest(NULL, &capacityRelevant,
+	    &planningRelevant) && capacityRelevant && planningRelevant,
+	"capacity-frame handoff fixture claims its LoD render");
+    completionController.clearProgressiveWorkPending();
+    CHECK(!completionController.hasProgressiveWorkPending() &&
+	completionController.getHostWorkSnapshot().frameClaimed(),
+	"capacity-frame handoff fixture begins with render-only ownership");
+    const uint64_t completionStarted =
+	completionController.beginRenderTiming();
+    completionController.completeRenderTiming(completionStarted,
+	BObolPresentationTimingContext(
+	    BObolLodCapacityRelevance::RELEVANT,
+	    BObolLodPlanningRelevance::RELEVANT,
+	    BObolCadPresentationExecution::NOT_EXECUTED,
+	    BOBOL_CAD_PREPARATION_NONE,
+	    BObolCadPresentationCompleteness::EXACT));
+    CHECK(completionController.hasProgressiveWorkPending() &&
+	!completionController.getHostWorkSnapshot().frameClaimed(),
+	"completed capacity frame restores pending producer pump ownership");
+    completionController.unregisterProgressiveProvider(completionToken);
     return 0;
 }
 
@@ -2330,9 +2428,25 @@ test_display_endpoint_contract(void)
     CHECK(bobol_display_endpoint_render_engine_resolved_get(endpoint) ==
 	  BOBOL_RENDER_ENGINE_AUTO,
 	  "unbound automatic renderer remains explicitly unresolved");
+    BObolViewController *transition_controller =
+	static_cast<BObolViewController *>(
+	    bobol_display_endpoint_controller(endpoint));
+    transition_controller->setLodControlTransitionTracing(TRUE, 64);
+    std::vector<BObolLodControlTransitionRecord> renderer_records;
+    (void)transition_controller->drainLodControlTransitions(renderer_records);
+    renderer_records.clear();
     CHECK(bobol_display_endpoint_render_engine_set(endpoint,
 	  BOBOL_RENDER_ENGINE_SW),
 	  "display endpoint accepts a typed renderer policy");
+    (void)transition_controller->drainLodControlTransitions(renderer_records);
+    CHECK(renderer_records.size() == 1 &&
+	  renderer_records.front().event ==
+	      BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT &&
+	  renderer_records.front().before.convergence.controlViolationMask == 0 &&
+	  renderer_records.front().after.convergence.controlViolationMask == 0 &&
+	  renderer_records.front().after.hostWork.renderPending(),
+	  "renderer selection publishes one witnessed control transaction");
+    transition_controller->setLodControlTransitionTracing(FALSE);
     CHECK(bobol_display_endpoint_render_engine_get(endpoint) ==
 	  BOBOL_RENDER_ENGINE_SW,
 	  "display endpoint retains renderer policy");

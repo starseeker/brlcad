@@ -315,6 +315,11 @@ public:
 	bool forceTerminal = false;
 	bool releaseCutFloor = false;
 	bool stablePresentationHandoff = false;
+	/* A completed visibility census may prove that the current view has no
+	 * drawable occurrence even while off-screen retained payloads remain.
+	 * Such a view still needs one retained-allocation transaction to certify
+	 * the empty population and discharge a motion-to-stable handoff. */
+	bool exactEmptyView = false;
 	size_t stablePresentationCostFloor = 0;
     };
 
@@ -484,7 +489,7 @@ private:
 	const bool requestedRetainedReallocation =
 	    this->retainedAllocationRequestValue.pending() &&
 	    !inputs.interactive && !inputs.forceTerminal &&
-	    inputs.activeCost > 0;
+	    (inputs.activeCost > 0 || inputs.exactEmptyView);
 	const bool requestedPresentationReconciliation =
 	    requestedRetainedReallocation &&
 	    this->retainedAllocationRequestValue.reconcilesPresentation();

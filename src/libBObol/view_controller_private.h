@@ -14,6 +14,7 @@
 #include "BObol/BViewController.h"
 #include "BObol/BViewStore.h"
 #include "identity_counter_private.h"
+#include "lod_telemetry_private.h"
 #include "view_lod_coordinator_state_private.h"
 #include "bv.h"
 
@@ -56,6 +57,9 @@ std::vector<SoBRLDatabaseSource *> controller_render_database_sources(
     const BObolViewController *controller);
 std::vector<SoBRLDatabaseSource *> controller_render_database_source_roots(
     const BObolViewController *controller);
+bool controller_lod_structural_population_settled(
+    const std::vector<SoBRLDatabaseSource *> &sources,
+    bool externalProducersSettled);
 bool controller_lod_source_inputs_unsubmitted(
     const std::vector<SoBRLDatabaseSource *> &sources,
     const std::vector<BObolLodSourceSnapshot> &submitted);
@@ -604,9 +608,14 @@ struct BObolViewController::Impl : BObolLodCoordinator {
     mutable std::mutex presentationSyncMutex;
     BObolPresentationSyncCallback presentationSyncCallback = NULL;
     void *presentationSyncUserData = NULL;
-    /* Owner-thread diagnostic journal.  It is allocation-free and untouched
-     * while disabled; the explicit record limit bounds opt-in test runs. */
-    SbBool lodControlTransitionTracing = FALSE;
+    /* The owner-thread transition capture feeds an optional bounded in-memory
+     * journal and the environment-selected streaming telemetry sink. */
+    bool lodControlTransitionActive(void) const
+    {
+	return this->lodControlTransitionJournalEnabled != FALSE ||
+	    this->lodTelemetry.get() != NULL;
+    }
+    SbBool lodControlTransitionJournalEnabled = FALSE;
     size_t lodControlTransitionRecordLimit =
 	BOBOL_LOD_CONTROL_TRACE_DEFAULT_RECORD_LIMIT;
     uint64_t lodControlTransitionNextToken = 1;
@@ -616,6 +625,7 @@ struct BObolViewController::Impl : BObolLodCoordinator {
     BObolLodControlTraceState lodControlTransitionEndpoint;
     std::vector<BObolLodControlTransitionFrame> lodControlTransitionFrames;
     std::vector<BObolLodControlTransitionRecord> lodControlTransitionRecords;
+    std::unique_ptr<BObolLodTelemetry> lodTelemetry;
     /* Worker callbacks cannot inspect Coin/controller state.  They publish
      * only the finite event kind; the owner thread captures both endpoints at
      * its next journal boundary. */

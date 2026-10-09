@@ -2639,6 +2639,13 @@ bobol_display_endpoint_render_engine_set(
     if (!bobol_display_endpoint_render_engine_supported(endpoint, engine))
 	return 0;
     EndpointOperationScope endpointScope(endpoint);
+    /* Renderer selection is one controller transaction.  Its implementation
+     * first invalidates renderer-derived capacity evidence and only then
+     * publishes the successor frame (or retires graphical work).  Without an
+     * outer scope, nested controller calls expose that intermediate state to
+     * the control journal as presentation debt with no render/pump witness. */
+    BObolLodControlTransitionScope controlTransition(
+	endpoint->controller, BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT);
 
     const enum bobol_render_engine previous = endpoint->engine;
     if (previous == engine) {

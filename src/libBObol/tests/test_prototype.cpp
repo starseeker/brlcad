@@ -1102,6 +1102,14 @@ write_test_db(char *dbpath, size_t dbpath_len)
 	wdb_close(wdbp);
 	return 0;
     }
+    struct wmember brepAssembly;
+    BU_LIST_INIT(&brepAssembly.l);
+    if (!mk_addmember("brep.s", &brepAssembly.l, NULL, WMOP_UNION) ||
+	mk_lcomb(wdbp, "brep_assembly.c", &brepAssembly, 0, NULL, NULL,
+	    NULL, 0) != 0) {
+	wdb_close(wdbp);
+	return 0;
+    }
     if (!make_empty_brep(wdbp, "empty.brep")) {
 	wdb_close(wdbp);
 	return 0;
@@ -2022,6 +2030,115 @@ exercise_brep_lod_contract(struct db_i *dbip)
 	bobol_mesh_lod_destroy(fineVariant);
     if (!variantsCoexist)
 	return 0;
+
+    /* A mixed manifest can have captured this BREP while it was still a
+     * structural box even though the detached producer subsequently finished
+     * and persisted the exact PoP variant.  Replay the structural record at
+     * the older coarse tolerance while the newer fine variant remains the
+     * object's name-mapped payload.  Recovery must reopen the exact coarse
+     * key from hierarchy metadata: retessellating would retain a staged mesh
+     * and republish the coarse key as the current named entry. */
+    {
+	struct BObolMeshLodCacheStatus beforeWarm =
+	    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+	if (bobol_mesh_lod_cache_status(dbip, "brep.s", &beforeWarm) !=
+		BRLCAD_OK || !beforeWarm.has_cached_payload ||
+	    beforeWarm.cache_key != fineKey)
+	    return 0;
+
+	SoBRLDatabaseSource *warmSource = new SoBRLDatabaseSource;
+	warmSource->ref();
+	warmSource->setDatabase(dbip);
+	warmSource->path = "brep_assembly.c";
+	warmSource->sourceRevision = 413;
+	warmSource->drawMode = SoBRLDatabaseSource::SHADED;
+	warmSource->tessellationRelTol = 0.15f;
+	warmSource->setRealizationViewPolicy(TRUE, FALSE, TRUE,
+	    100.0f, 1.0f, 512, 512, 1, 0.0f, 0.0f);
+
+	BObolCompactOccurrenceStream warmStream;
+	warmStream.setExpectedCount(1);
+	warmStream.setCoverageBounds(coarseRequest.bounds);
+	warmStream.setCoverageBoundsComplete(true);
+	warmStream.setWarmCensusComplete(true);
+	BObolCompactManifestOccurrence terminal;
+	terminal.path = "/brep_assembly.c/brep.s";
+	terminal.sourceName = "brep.s";
+	terminal.sourceType = "brep";
+	terminal.bounds = coarseRequest.bounds;
+	warmStream.recordWarmTerminalOccurrence(terminal);
+
+	const SbBool warmRealized = warmSource->realizeDatabaseMesh(&warmStream);
+	std::vector<BObolCompactOccurrence> warmOccurrences;
+	(void)warmStream.drain(warmOccurrences, 0);
+	size_t completed = 0;
+	size_t total = 0;
+	warmStream.getPreparationWorkCount(completed, total);
+	struct BObolMeshLodCacheStatus afterWarm =
+	    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+	const bool afterStatus = bobol_mesh_lod_cache_status(
+	    dbip, "brep.s", &afterWarm) == BRLCAD_OK;
+	const bool warmRecovered = warmRealized &&
+	    warmStream.hasWarmCoverageComplete() && completed == 1 && total == 1 &&
+	    warmStream.stagedSourceByteCount() == 0 &&
+	    warmOccurrences.size() == 1 && warmOccurrences[0].lodBacked &&
+	    warmOccurrences[0].sourceMeshRequestValid &&
+	    warmOccurrences[0].geometry &&
+	    warmOccurrences[0].geometry->structuralProxy &&
+	    warmOccurrences[0].sourceMeshRequest.sourceType == "brep" &&
+	    warmOccurrences[0].sourceMeshRequest.meshAssetPath ==
+		"/brep_assembly.c/brep.s" &&
+	    warmOccurrences[0].sourceMeshRequest.meshAssetName == "brep.s" &&
+	    warmOccurrences[0].sourceMeshRequest.meshAssetContentHash ==
+		coarseKey &&
+	    warmOccurrences[0].sourceMeshRequest.faceCount ==
+		coarseRequest.faceCount &&
+	    warmOccurrences[0].sourceMeshRequest.pointCount ==
+		coarseRequest.pointCount &&
+	    fabs(warmOccurrences[0].sourceMeshRequest.
+		meshAssetTessellationRelTol - 0.15) <= 1.0e-6 &&
+	    afterStatus && afterWarm.has_cached_payload &&
+	    afterWarm.cache_key == fineKey;
+	warmSource->unref();
+	if (!warmRecovered)
+	    return 0;
+    }
+
+    /* The content-addressed BREP hierarchy outlives the separate structural
+     * manifest.  A cold census must still recover the exact cached PoP and
+     * avoid retaining a newly tessellated source mesh. */
+    {
+	SoBRLDatabaseSource *coldCensusSource = new SoBRLDatabaseSource;
+	coldCensusSource->ref();
+	coldCensusSource->setDatabase(dbip);
+	coldCensusSource->path = "brep_assembly.c";
+	coldCensusSource->sourceRevision = 414;
+	coldCensusSource->drawMode = SoBRLDatabaseSource::SHADED;
+	coldCensusSource->tessellationRelTol = 0.15f;
+	coldCensusSource->setRealizationViewPolicy(TRUE, FALSE, TRUE,
+	    100.0f, 1.0f, 512, 512, 1, 0.0f, 0.0f);
+
+	BObolCompactOccurrenceStream coldCensusStream;
+	const SbBool coldCensusRealized =
+	    coldCensusSource->realizeDatabaseMesh(&coldCensusStream);
+	std::vector<BObolCompactOccurrence> coldCensusOccurrences;
+	(void)coldCensusStream.drain(coldCensusOccurrences, 0);
+	bool recoveredCachedBrep = false;
+	for (const BObolCompactOccurrence &occurrence :
+	     coldCensusOccurrences) {
+	    if (occurrence.lodBacked &&
+		occurrence.sourceMeshRequestValid &&
+		occurrence.sourceMeshRequest.sourceType == "brep" &&
+		occurrence.sourceMeshRequest.meshAssetContentHash == coarseKey)
+		recoveredCachedBrep = true;
+	}
+	const bool coldCensusRecovered = coldCensusRealized &&
+	    recoveredCachedBrep &&
+	    coldCensusStream.stagedSourceByteCount() == 0;
+	coldCensusSource->unref();
+	if (!coldCensusRecovered)
+	    return 0;
+    }
 
     BObolLodService service;
     if (!service.start(1, TRUE))
