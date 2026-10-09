@@ -62,6 +62,17 @@ proc ::mged::xmin::help::exercise_command_manual {top} {
     ::gui::test::require {[lindex [$html_widget yview] 0] > 0.0} \
 	"manual browser did not follow an in-page hyperlink"
 
+    set original_location [$html_view location]
+    set load_status [$browser loadPage xmin_page_that_does_not_exist]
+    ::gui::test::require {
+	!$load_status && [$html_view location] eq $original_location &&
+	[$html_view error] ne ""
+    } "manual browser did not preserve its page after a load failure"
+    ::gui::test::require {[$browser loadPage search]} \
+	"manual browser did not recover after a load failure"
+    ::gui::test::require {[$html_view error] eq ""} \
+	"manual browser did not clear its error after recovery"
+
     ::gui::test::require {
 	[catch {man xmin_page_that_does_not_exist} message] &&
 	[string first "couldn't find manual page" $message] >= 0
@@ -196,6 +207,19 @@ proc ::mged::xmin::help::exercise_html_manual {top} {
     ::mged::gui::test::settle
     ::gui::test::require {[$viewer title] eq "Table of Contents"} \
 	"internal Manual viewer Back button did not restore the prior page"
+
+    set original_location [$viewer location]
+    set missing_path [file join $::env(GUI_TEST_DIR) missing-manual.html]
+    set navigation_status \
+	[::mged::manual::navigate $viewer goto $missing_path]
+    ::gui::test::require {
+	!$navigation_status && [$viewer location] eq $original_location &&
+	[$viewer title] eq "Table of Contents" && [$viewer error] ne ""
+    } "internal Manual viewer did not preserve a failed navigation"
+    ::gui::test::require {
+	[::mged::manual::navigate $viewer goto $original_location] &&
+	[$viewer error] eq ""
+    } "internal Manual viewer did not recover after a navigation failure"
     destroy $fallback
 }
 

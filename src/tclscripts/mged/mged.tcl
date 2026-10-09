@@ -530,6 +530,17 @@ proc ::mged::manual::local_path {location} {
     return [::tklitehtml::local_path $location]
 }
 
+proc ::mged::manual::navigate {viewer args} {
+    global message
+
+    if {[catch {$viewer {*}$args} error]} {
+	set message $error
+	return 0
+    }
+    set message ""
+    return 1
+}
+
 proc ::mged::manual::go_to {viewer screen} {
     global ::tk::Priv
 
@@ -544,9 +555,14 @@ proc ::mged::manual::go_to {viewer screen} {
     if {[file pathtype $filename] eq "relative"} {
 	set filename [file join [pwd] $filename]
     }
-    set filename [file normalize $filename]
-    if {[file readable $filename] && ![file isdirectory $filename]} {
-	$viewer goto [file_uri $filename]
+    if {[catch {file normalize $filename} normalized]} {
+	cad_dialog $::tk::Priv(cad_dialog) $screen "Error reading file" \
+	    "Cannot read file $filename." error 0 OK
+	return
+    }
+    set filename $normalized
+    if {[file readable $filename] && [file isfile $filename]} {
+	navigate $viewer goto [file_uri $filename]
 	return
     }
 
@@ -572,7 +588,7 @@ proc ia_man {parent screen} {
     button $w.f.goto -text "Go To" \
 	-command [list ::mged::manual::go_to $viewer $screen]
     button $w.f.back -text "Back" \
-	-command [list $viewer back]
+	-command [list ::mged::manual::navigate $viewer back]
 
     pack $w.f.close $w.f.goto $w.f.back -side left -fill x -expand yes
     label $w.message -textvariable message -anchor w
@@ -581,7 +597,7 @@ proc ia_man {parent screen} {
     update idletasks
 
     set contents [file join $mged_html_dir contents.html]
-    $viewer goto $contents
+    ::mged::manual::navigate $viewer goto $contents
 }
 
 #==============================================================================
