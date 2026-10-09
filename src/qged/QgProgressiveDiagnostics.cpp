@@ -43,6 +43,7 @@
 
 #include "BObol/BLodService.h"
 #include "BObol/BDatabaseSource.h"
+#include "BObol/BLodProgressOverlay.h"
 #include "BObol/BSourceRealization.h"
 #include "BObol/BViewController.h"
 #include "BObol/BViewLod.h"
@@ -413,66 +414,31 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	struct ged_view_context *sampleViewContext =
 	    ged_view_context_from_bv(view->viewContext());
 	if (sampleViewContext) {
-	    static const char lodProgressLabelName[] =
-		"_faceplate/lod_progress_label";
-	    sample.insert(QStringLiteral("lod_progress_track_present"),
-		ged_view_feature_exists(sampleViewContext,
-		    "_faceplate/lod_progress_track") != 0);
-	    sample.insert(QStringLiteral("lod_progress_fill_present"),
-		ged_view_feature_exists(sampleViewContext,
-		    "_faceplate/lod_progress_fill") != 0);
-	    sample.insert(QStringLiteral("lod_progress_label_present"),
-		ged_view_feature_exists(sampleViewContext,
-		    lodProgressLabelName) != 0);
-	    const auto appendProgressFeature = [&](const char *name,
-		const QString &prefix) {
-		point_t *points = NULL;
-		size_t pointCount = 0;
-		if (ged_view_feature_points_copy(sampleViewContext, name,
-			&points, &pointCount) && points && pointCount > 0) {
-		    fastf_t minimumY = points[0][Y];
-		    fastf_t maximumY = points[0][Y];
-		    for (size_t i = 1; i < pointCount; i++) {
-			minimumY = std::min(minimumY, points[i][Y]);
-			maximumY = std::max(maximumY, points[i][Y]);
-		    }
-		    sample.insert(prefix + QStringLiteral("_point_count"),
-			static_cast<qint64>(pointCount));
-		    sample.insert(prefix + QStringLiteral("_minimum_y"),
-			static_cast<double>(minimumY));
-		    sample.insert(prefix + QStringLiteral("_maximum_y"),
-			static_cast<double>(maximumY));
+	    sample.insert(QStringLiteral("lod_progress_card_present"), false);
+	    BObolViewController *controller = view->obolViewController();
+	    if (controller) {
+		const BObolFeatureStore &features = controller->features();
+		SoNode *node = features.node(
+		    features.find("_faceplate/lod_progress"));
+		if (node && node->isOfType(
+			SoBRLLodProgressOverlay::getClassTypeId())) {
+		    const auto *card =
+			static_cast<const SoBRLLodProgressOverlay *>(node);
+		    const SbColor color = card->color.getValue();
+		    QJsonArray rgb;
+		    for (int component = 0; component < 3; ++component)
+			rgb.append(static_cast<int>(color[component] * 255.0f + 0.5f));
+		    sample.insert(QStringLiteral("lod_progress_card_present"), true);
+		    sample.insert(QStringLiteral("lod_progress_card_title"),
+			QString::fromUtf8(card->title.getValue().getString()));
+		    sample.insert(QStringLiteral("lod_progress_card_detail"),
+			QString::fromUtf8(card->detail.getValue().getString()));
+		    sample.insert(QStringLiteral("lod_progress_card_color"), rgb);
+		    sample.insert(QStringLiteral("lod_progress_card_terminal"),
+			card->terminal.getValue() != FALSE);
+		    sample.insert(QStringLiteral("lod_progress_card_ready"),
+			card->terminalReady.getValue() != FALSE);
 		}
-		if (points)
-		    bu_free(points, "qged LoD progress feature points");
-
-		struct ged_view_feature_style style =
-		    ged_view_feature_style_default();
-		if (ged_view_feature_style_get(sampleViewContext, name, &style)) {
-		    QJsonArray color;
-		    color.append(style.color[0]);
-		    color.append(style.color[1]);
-		    color.append(style.color[2]);
-		    sample.insert(prefix + QStringLiteral("_color"), color);
-		    sample.insert(prefix + QStringLiteral("_line_width"),
-			style.line_width);
-		}
-	    };
-	    appendProgressFeature("_faceplate/lod_progress_track",
-		QStringLiteral("lod_progress_track"));
-	    appendProgressFeature("_faceplate/lod_progress_fill",
-		QStringLiteral("lod_progress_fill"));
-	    if (ged_view_feature_label_count(
-		    sampleViewContext, lodProgressLabelName) > 0) {
-		struct bu_vls labelText = BU_VLS_INIT_ZERO;
-		point_t labelPoint = VINIT_ZERO;
-		unsigned char labelColor[3] = {0, 0, 0};
-		if (ged_view_feature_label_copy(sampleViewContext,
-			lodProgressLabelName, 0, &labelText, labelPoint,
-			labelColor))
-		    sample.insert(QStringLiteral("lod_progress_label_text"),
-			QString::fromUtf8(bu_vls_addr(&labelText)));
-		bu_vls_free(&labelText);
 	    }
 	    const struct bv *sampleBv = bv_context_view_const(
 		ged_view_context_bv_const(sampleViewContext));

@@ -79,9 +79,7 @@ struct draw_test_obol_capture_diagnostic {
     size_t rightEdgePixels = 0;
     BObolLodConvergenceStatus convergence;
     BObolHostWorkSnapshot work;
-    SbBool progressTrack = FALSE;
-    SbBool progressFill = FALSE;
-    SbBool progressLabel = FALSE;
+    SbBool progressCard = FALSE;
     int overlayChildren = 0;
 };
 
@@ -95,15 +93,14 @@ draw_test_obol_log_capture_diagnostic(int id)
     if (d.id != id)
 	return;
     bu_log("draw-obol-capture-failure[%03d]: right_overlay=%d pixels=%zu "
-	   "features=%d/%d/%d overlay_children=%d phase=%d ready=%d "
+	   "progress_card=%d overlay_children=%d phase=%d ready=%d "
 	   "performance_limited=%d background=%d fraction=%.3f "
 	   "available=%zu expected=%zu "
 	   "targets=%zu active=%zu satisfied=%zu subpixel=%zu boxes=%zu "
 	   "terminal_failures=%zu memory_limited=%zu faces=%zu budget=%zu "
 	   "work=0x%x\n",
 	   id, d.rightEdgeOverlay ? 1 : 0, d.rightEdgePixels,
-	   d.progressTrack ? 1 : 0, d.progressFill ? 1 : 0,
-	   d.progressLabel ? 1 : 0, d.overlayChildren,
+	   d.progressCard ? 1 : 0, d.overlayChildren,
 	   d.convergence.phase, d.convergence.viewReady ? 1 : 0,
 	   d.convergence.performanceLimited ? 1 : 0,
 	   d.convergence.backgroundPending ? 1 : 0,
@@ -711,12 +708,8 @@ draw_test_obol_screengrab_impl(struct ged *gedp, struct ged_view_context *view_c
 	draw_test_last_capture_diagnostic.convergence);
     draw_test_last_capture_diagnostic.work =
 	controller->getHostWorkSnapshot();
-    draw_test_last_capture_diagnostic.progressTrack =
-	controller->features().exists("_faceplate/lod_progress_track");
-    draw_test_last_capture_diagnostic.progressFill =
-	controller->features().exists("_faceplate/lod_progress_fill");
-    draw_test_last_capture_diagnostic.progressLabel =
-	controller->features().exists("_faceplate/lod_progress_label");
+    draw_test_last_capture_diagnostic.progressCard =
+	controller->features().exists("_faceplate/lod_progress");
     SoGroup *overlayRoot = controller->getFramebufferOverlayRoot();
     draw_test_last_capture_diagnostic.overlayChildren = overlayRoot ?
 	overlayRoot->getNumChildren() : 0;
