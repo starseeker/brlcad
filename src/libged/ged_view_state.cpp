@@ -912,8 +912,8 @@ ged_view_lod_progress_presentation_mode_set(
     if (!record->gedp || !controller)
 	return 1;
 
-    /* The narrow synchronizer stages all three records in one publication,
-     * so ownership transitions cannot expose a half-removed progress HUD. */
+    /* The narrow synchronizer publishes or removes the retained card without
+     * rebuilding unrelated faceplate elements. */
     if (ged_view_lod_progress_sync(record->gedp, view_ctx) == BRLCAD_OK)
 	return 1;
 

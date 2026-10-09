@@ -118,7 +118,7 @@ private:
 QBoxLayout  *l = nullptr;
 QgCanvasBase *canvas = nullptr;
 struct bobol_display_endpoint *endpoint = nullptr;
-bool native_lod_progress_overlay = true;
+bool native_lod_progress_overlay = false;
 QObject     *curr_event_filter = nullptr;
 std::vector<QObject *> filters;
 };
