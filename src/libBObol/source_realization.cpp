@@ -14,6 +14,7 @@
 #include "BObol/BLodService.h"
 #include "database_source_realization.h"
 #include "draw_cache_private.h"
+#include "parallel_budget_private.h"
 #include "transaction_fault_private.h"
 #include "bu/app.h"
 #include "bu/file.h"
@@ -399,11 +400,14 @@ struct SourceRealizationWorker {
 
 struct BObolSourceRealizationCoordinatorPrivate {
     BObolSourceRealizationCoordinatorPrivate(void) :
-	stopping(false), active(0), activeBytes(0), queueRetirements(0),
+	stopped(false), stopping(false), active(0), activeBytes(0),
+	queueRetirements(0),
 	maxActiveBytes(bobol_lod_working_set_global_limit())
     {
     }
 
+    std::mutex stopMutex;
+    bool stopped;
     std::mutex mutex;
     std::condition_variable cv;
     bool stopping;
@@ -540,6 +544,11 @@ source_realization_worker(BObolSourceRealizationCoordinatorPrivate *service,
 	}
 
 	try {
+	    /* Source discovery and mesh-LoD production may overlap during a cold
+	     * draw.  Count both against the same process budget so each one's
+	     * internal helpers cannot multiply the other's outer worker pool. */
+	    BObolParallelBudgetLease cpuBudget;
+	    cpuBudget.acquireOuter();
 	    source_realize_item(work.job, work.itemIndex);
 	} catch (const std::bad_alloc &) {
 	    source_job_fail(work.job, work.itemIndex);
@@ -566,6 +575,11 @@ source_realization_worker(BObolSourceRealizationCoordinatorPrivate *service,
 static void
 source_realization_stop(BObolSourceRealizationCoordinatorPrivate *service)
 {
+    if (!service)
+	return;
+    std::unique_lock<std::mutex> stopLock(service->stopMutex);
+    if (service->stopped)
+	return;
     {
 	std::lock_guard<std::mutex> lock(service->mutex);
 	service->stopping = true;
@@ -601,6 +615,7 @@ source_realization_stop(BObolSourceRealizationCoordinatorPrivate *service)
     }
     std::unique_lock<std::mutex> lock(service->mutex);
     service->cv.wait(lock, [service]() { return !service->queueRetirements; });
+    service->stopped = true;
 }
 
 BObolSourceRealizationRequest::BObolSourceRealizationRequest(void) :
@@ -719,6 +734,12 @@ BObolSourceRealizationCoordinator::BObolSourceRealizationCoordinator(void) :
 }
 
 BObolSourceRealizationCoordinator::~BObolSourceRealizationCoordinator(void)
+{
+    this->shutdown();
+}
+
+void
+BObolSourceRealizationCoordinator::shutdown(void)
 {
     source_realization_stop(this->p.get());
 }

@@ -325,6 +325,73 @@ test_filtered_result_drain(void)
     return 0;
 }
 
+static int
+test_preview_dispatch_order(void)
+{
+    BObolLodService service;
+    ServiceTestContext context;
+    TaskData ordinaryData{&context, 1};
+    TaskData previewFullData{&context, 2};
+    TaskData previewProxyData{&context, 3};
+    TaskData previewProxySecondData{&context, 4};
+
+    if (!service.start(1, FALSE)) {
+	printf("FAIL: LoD service did not start for preview dispatch test\n");
+	return 1;
+    }
+    const uint64_t generation = service.beginGeneration();
+    const auto taskFor = [&](const char *name, int qualityTier,
+	    int dispatchClass, TaskData *data) {
+	BObolLodTask task;
+	task.generation = generation;
+	task.request = make_request(name);
+	task.request.qualityTier = qualityTier;
+	task.dispatchClass = dispatchClass;
+	task.realize = ready_task;
+	task.realizeData = data;
+	return task;
+    };
+    std::vector<BObolLodTask> tasks;
+    tasks.push_back(taskFor("/dispatch/ordinary", BOBOL_LOD_QUALITY_METADATA,
+	BOBOL_LOD_TASK_DISPATCH_NORMAL, &ordinaryData));
+    tasks.push_back(taskFor("/dispatch/preview-full",
+	BOBOL_LOD_QUALITY_FULL_DETAIL, BOBOL_LOD_TASK_DISPATCH_PREVIEW,
+	&previewFullData));
+    tasks.push_back(taskFor("/dispatch/preview-proxy",
+	BOBOL_LOD_QUALITY_PROXY, BOBOL_LOD_TASK_DISPATCH_PREVIEW,
+	&previewProxyData));
+    tasks.push_back(taskFor("/dispatch/preview-proxy-second",
+	BOBOL_LOD_QUALITY_PROXY, BOBOL_LOD_TASK_DISPATCH_PREVIEW,
+	&previewProxySecondData));
+
+    std::vector<uint64_t> taskIds;
+    if (service.submitBatch(tasks, taskIds, FALSE) != tasks.size() ||
+	wait_for_settled(service, tasks.size())) {
+	service.stop();
+	return 1;
+    }
+    {
+	std::lock_guard<std::mutex> lock(context.mutex);
+	const std::vector<int> expected{3, 4, 2, 1};
+	if (context.executionOrder != expected) {
+	    printf("FAIL: preview dispatch did not preserve class/tier/FIFO "
+		"ordering\n");
+	    service.stop();
+	    return 1;
+	}
+    }
+    service.stop();
+
+    BObolLodTask cleared;
+    cleared.dispatchClass = BOBOL_LOD_TASK_DISPATCH_PREVIEW;
+    cleared.clear();
+    if (cleared.dispatchClass != BOBOL_LOD_TASK_DISPATCH_NORMAL) {
+	printf("FAIL: LoD task clear retained preview dispatch class\n");
+	return 1;
+    }
+    return 0;
+}
+
 static BObolLodResult
 ready_mesh_task(const BObolLodRequest &request, void *userData)
 {
@@ -1441,7 +1508,12 @@ test_debug_delay_cancellation(void)
 	service.workStatus();
     if (delayed.isIdle() || delayed.delayedTasks != 1 ||
 	delayed.inFlightTasks == 0 || delayed.activeRequests == 0) {
-	printf("FAIL: LoD service work snapshot omitted delayed work\n");
+	printf("FAIL: LoD service work snapshot omitted delayed work "
+	       "idle=%d delayed=%zu in_flight=%zu active=%zu "
+	       "executing=%zu cpu_wait=%zu\n",
+	       delayed.isIdle(), delayed.delayedTasks, delayed.inFlightTasks,
+	       delayed.activeRequests, delayed.executingTasks,
+	       delayed.cpuAdmissionWaitingTasks);
 	return 1;
     }
 
@@ -1981,6 +2053,102 @@ test_active_request_duplicate_suppression(void)
 	service.hasActiveRequest(queuedNew.request)) {
 	printf("FAIL: LoD service retained coalesced request ownership after "
 	       "publication\n");
+	service.stop();
+	return 1;
+    }
+
+    service.stop();
+    return 0;
+}
+
+static int
+test_pending_active_request_retarget(void)
+{
+    BObolLodService service;
+    BlockingTaskData blockerData;
+    DebugDelayTaskData targetData;
+
+    if (!service.start(1, FALSE)) {
+	printf("FAIL: pending-demand retarget service did not start\n");
+	return 1;
+    }
+
+    const auto releaseAndStop = [&]() {
+	{
+	    std::lock_guard<std::mutex> lock(blockerData.mutex);
+	    blockerData.release = true;
+	}
+	blockerData.cv.notify_all();
+	service.stop();
+    };
+
+    const uint64_t generation = service.beginGeneration();
+    BObolLodTask blocker;
+    blocker.generation = generation;
+    blocker.request = make_request("/pending-demand/blocker.bot");
+    blocker.realize = blocking_task;
+    blocker.realizeData = &blockerData;
+    blocker.publishResult = FALSE;
+    if (!service.submit(blocker) || wait_for_blocking_task_started(blockerData)) {
+	releaseAndStop();
+	return 1;
+    }
+
+    BObolLodTask pending;
+    pending.generation = generation;
+    pending.request = make_request("/pending-demand/target.bot");
+    pending.request.occurrenceKey = "/assembly/target.bot";
+    pending.request.coalesceAssetProducer = TRUE;
+    pending.request.viewRevision = 3;
+    pending.request.policyRevision = 5;
+    pending.realize = debug_delay_task;
+    pending.realizeData = &targetData;
+    if (!service.submitIfNotActive(pending)) {
+	printf("FAIL: pending-demand target was not queued\n");
+	releaseAndStop();
+	return 1;
+    }
+
+    BObolLodRequest current = pending.request;
+    current.viewRevision = 4;
+    current.policyRevision = 6;
+    current.projectedPixelDiameter = 321.0f;
+    current.targetPixelError = 0.25f;
+    if (!service.updateActiveRequestDemand(current, generation)) {
+	printf("FAIL: pending-demand target did not accept current demand\n");
+	releaseAndStop();
+	return 1;
+    }
+
+    {
+	std::lock_guard<std::mutex> lock(blockerData.mutex);
+	blockerData.release = true;
+    }
+    blockerData.cv.notify_all();
+    if (wait_for_settled(service, 1)) {
+	service.stop();
+	return 1;
+    }
+
+    std::vector<BObolLodResult> results;
+    const size_t drained = service.drainResults(results);
+    int calls = 0;
+    {
+	std::lock_guard<std::mutex> lock(targetData.mutex);
+	calls = targetData.calls;
+    }
+    if (drained != 1 || results.size() != 1 || calls != 1 ||
+	results[0].providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	!bobol_lod_result_matches_request(results[0], current) ||
+	bobol_lod_result_matches_request(results[0], pending.request)) {
+	printf("FAIL: queued producer executed obsolete demand "
+	       "(drained=%zu calls=%d status=%d view=%llu policy=%llu)\n",
+	       drained, calls,
+	       results.empty() ? -1 : results[0].providerStatus,
+	       static_cast<unsigned long long>(results.empty() ? 0 :
+		   results[0].request.viewRevision.value()),
+	       static_cast<unsigned long long>(results.empty() ? 0 :
+		   results[0].request.policyRevision.value()));
 	service.stop();
 	return 1;
     }
@@ -3729,6 +3897,46 @@ test_rt_mesh_provider_task(void)
 		unionRequest.requiredChunks.end(), 0u);
 	    BObolLodResult unionRich = unionService.realizeResidentMeshLod(
 		unionRequest, unionProvider);
+	    BObolLodRequest culledRequest = unionRequest;
+	    culledRequest.occurrenceKey = "culled-spatial-occurrence";
+	    culledRequest.requiredChunks.clear();
+	    culledRequest.spatialProjectionValid = TRUE;
+	    culledRequest.localToRoot.setTranslate(
+		SbVec3f(100000.0f, 100000.0f, 100000.0f));
+	    culledRequest.viewProjection.makeIdentity();
+	    BObolLodResult culledResult =
+		unionService.realizeResidentMeshLod(
+		    culledRequest, unionProvider);
+	    if (culledResult.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+		!culledResult.terminal || !culledResult.progressiveMesh ||
+		!culledResult.progressiveMesh->isValid() ||
+		!culledResult.progressiveMesh->hasSpatialClusters() ||
+		culledResult.geometry.activeCut !=
+		    culledRequest.requestedCut ||
+		culledResult.resolvedCut != culledRequest.requestedCut ||
+		culledResult.counts.faceCount != 0 ||
+		culledResult.counts.pointCount != 0 ||
+		!culledResult.presentationLayers.empty() ||
+		!culledResult.request.requiredChunks.empty() ||
+		!culledResult.payloadIsConsistent()) {
+		printf("FAIL: an empty projected spatial demand was not "
+		       "published as a terminal zero-draw mesh "
+		       "(status=%d terminal=%d active=%d resolved=%d "
+		       "faces=%llu points=%llu layers=%zu chunks=%zu "
+		       "diagnostic=%s)\n",
+		       culledResult.providerStatus,
+		       culledResult.terminal ? 1 : 0,
+		       culledResult.geometry.activeCut,
+		       culledResult.resolvedCut,
+		       static_cast<unsigned long long>(
+			   culledResult.counts.faceCount),
+		       static_cast<unsigned long long>(
+			   culledResult.counts.pointCount),
+		       culledResult.presentationLayers.size(),
+		       culledResult.request.requiredChunks.size(),
+		       culledResult.diagnostic.getString());
+		ret = 1;
+	    }
 	    std::vector<uint32_t> initiallyResident;
 	    if (unionRich.progressiveMesh)
 		unionRich.progressiveMesh->residentChunkIds(initiallyResident);
@@ -3766,9 +3974,9 @@ test_rt_mesh_provider_task(void)
 	    const bool retainedBoth =
 		std::binary_search(retained.begin(), retained.end(), 0u) &&
 		std::binary_search(retained.begin(), retained.end(), 1u);
-	    const bool retainedIndependentCuts = retainedCuts.size() == 2 &&
+	    const bool retainedRichCuts = retainedCuts.size() == 2 &&
 		retainedCuts[0] == BObolLodChunkCut{0, unionHierarchy.max_cut} &&
-		retainedCuts[1] == BObolLodChunkCut{1, secondView.cut};
+		retainedCuts[1] == BObolLodChunkCut{1, unionHierarchy.max_cut};
 	    const std::vector<uint32_t> unionRetained = retained;
 	    unionService.releaseResidentMeshConsumer(0xa002);
 	    const size_t trimQueued =
@@ -3787,7 +3995,7 @@ test_rt_mesh_provider_task(void)
 		coverageFloorCuts[0] ==
 		    BObolLodChunkCut{0, unionHierarchy.max_cut} &&
 		coverageFloorCuts[1] ==
-		    BObolLodChunkCut{1, secondView.cut};
+		    BObolLodChunkCut{1, unionHierarchy.max_cut};
 	    /* Expanding the visible page set while zooming out must be an atomic
 	     * transition from the incumbent presentation to the new view target.
 	     * A stale bounded-delivery stamp may ask for the absolute minimum, but
@@ -3869,8 +4077,8 @@ test_rt_mesh_provider_task(void)
 		    BObolLodChunkCut{1, expectedPressurePageCut};
 	    if (unionRich.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 		!unionRich.progressiveMesh || allQueued || firstQueued ||
-		!secondQueued || !started || unionWait || !retainedBoth ||
-		!retainedIndependentCuts ||
+		secondQueued || !started || unionWait || !retainedBoth ||
+		!retainedRichCuts ||
 		trimQueued ||
 		trimWait || !retainedWarmPages ||
 		continuityResult.providerStatus != BOBOL_LOD_PROVIDER_READY ||
@@ -3903,7 +4111,7 @@ test_rt_mesh_provider_task(void)
 		       started ? 1 : 0, unionWait, trimWait,
 		       pressureWait,
 		       retainedBoth ? 1 : 0,
-		       retainedIndependentCuts ? 1 : 0,
+		       retainedRichCuts ? 1 : 0,
 		       retainedWarmPages ? 1 : 0,
 		       continuityResult.geometry.activeCut,
 		       continuityRequest.requestedCut,
@@ -4012,10 +4220,9 @@ test_rt_mesh_provider_task(void)
 	ret = 1;
     }
 
-    /* A stable demand snapshot protects the presented prefix.  Once the
-     * asset disappears from every consumer snapshot, the service must keep
-     * only its minimum useful prefix and later restore richer data from the
-     * same on-disk cache into the same retained mesh identity. */
+    /* Healthy resident capacity is a latency cache, not merely the current
+     * visibility set.  Withdrawing demand must preserve the richer prefix so
+     * a later camera expansion can reuse it without another cache load. */
     if (terminalStage.progressiveMesh &&
 	terminalStage.geometry.cacheKey.isValid() &&
 	terminalStage.progressiveMesh->residentCut() >
@@ -4065,34 +4272,36 @@ test_rt_mesh_provider_task(void)
 	}
 
 	std::vector<BObolLodResidentDemand> hidden;
+	const uint64_t loadsBefore =
+	    service.residentMeshCacheLoadCountForDiagnostics();
+	const uint64_t hitsBefore =
+	    service.residentMeshHitCountForDiagnostics();
 	const size_t queued =
 	    service.scheduleResidentMeshCompaction(0x1234, 2, hidden);
 	const int compactWait = wait_for_resident_compaction(service);
 	const size_t compactBytes =
 	    service.residentMeshBytesForDiagnostics();
-	std::vector<uint32_t> coverageFloorPages;
-	terminalStage.progressiveMesh->residentChunkIds(coverageFloorPages);
-	std::vector<BObolLodChunkCut> coverageFloorCuts;
-	terminalStage.progressiveMesh->residentChunkCuts(coverageFloorCuts);
-	const int coverageFloorLevel =
+	std::vector<uint32_t> retainedPages;
+	terminalStage.progressiveMesh->residentChunkIds(retainedPages);
+	std::vector<BObolLodChunkCut> retainedCuts;
+	terminalStage.progressiveMesh->residentChunkCuts(retainedCuts);
+	const int retainedLevel =
 	    terminalStage.progressiveMesh->residentCut();
-	if (queued != 1 || compactWait ||
-	    coverageFloorPages != terminalStage.request.requiredChunks ||
-	    coverageFloorCuts == richChunkCuts ||
-	    compactBytes >= richBytes) {
-	    printf("FAIL: hidden resident PoP prefix did not compact "
+	if (queued != 0 || compactWait ||
+	    retainedPages != terminalStage.request.requiredChunks ||
+	    retainedCuts != richChunkCuts || retainedLevel != richLevel ||
+	    compactBytes != richBytes) {
+	    printf("FAIL: healthy hidden resident PoP prefix was not retained "
 		   "(count=%zu level=%d min=%d pages=%zu/%zu bytes=%zu/%zu)\n",
 		   queued,
-		   coverageFloorLevel,
+		   retainedLevel,
 		   terminalStage.progressiveMesh->minimumCut(),
-		   coverageFloorPages.size(),
+		   retainedPages.size(),
 		   terminalStage.request.requiredChunks.size(),
 		   compactBytes, richBytes);
 	    ret = 1;
 	}
 
-	const uint64_t loadsBefore =
-	    service.residentMeshCacheLoadCountForDiagnostics();
 	BObolMeshLodProvider reloadProvider = stagedProvider;
 	reloadProvider.progressiveDelivery = FALSE;
 	reloadProvider.useCurrentDrawCut = FALSE;
@@ -4104,11 +4313,12 @@ test_rt_mesh_provider_task(void)
 	    reloaded.progressiveMesh != terminalStage.progressiveMesh ||
 	    reloaded.progressiveMesh->residentCut() !=
 		stagedRequest.requestedCut ||
-	    service.residentMeshCacheLoadCountForDiagnostics() <=
-		loadsBefore) {
-	    printf("FAIL: compacted resident PoP prefix did not reload "
-		   "from cache in place (status=%d terminal=%d active=%d "
-		   "resident=%d requested=%d same=%d loads=%llu/%llu)\n",
+	    service.residentMeshCacheLoadCountForDiagnostics() !=
+		loadsBefore ||
+	    service.residentMeshHitCountForDiagnostics() <= hitsBefore) {
+	    printf("FAIL: healthy hidden resident PoP prefix was not reused "
+		   "in place (status=%d terminal=%d active=%d resident=%d "
+		   "requested=%d same=%d loads=%llu/%llu hits=%llu/%llu)\n",
 		   reloaded.providerStatus, reloaded.terminal ? 1 : 0,
 		   reloaded.geometry.activeCut,
 		   reloaded.progressiveMesh ?
@@ -4118,7 +4328,10 @@ test_rt_mesh_provider_task(void)
 		       1 : 0,
 		   static_cast<unsigned long long>(
 		       service.residentMeshCacheLoadCountForDiagnostics()),
-		       static_cast<unsigned long long>(loadsBefore));
+		   static_cast<unsigned long long>(loadsBefore),
+		   static_cast<unsigned long long>(
+		       service.residentMeshHitCountForDiagnostics()),
+		   static_cast<unsigned long long>(hitsBefore));
 	    ret = 1;
 	}
 
@@ -4148,6 +4361,7 @@ test_rt_mesh_provider_task(void)
 	    staleDemand.channelMask = 2;
 	    staleDemand.chunkIds = staleRich.request.requiredChunks;
 	    std::vector<BObolLodResidentDemand> staleDemands(1, staleDemand);
+	    staleCompactionService.setResidentMeshLimit(1);
 	    staleQueued = staleCompactionService.scheduleResidentMeshCompaction(
 		0x5678, 1, staleDemands);
 	    renewedRich = staleCompactionService.realizeResidentMeshLod(
@@ -4202,6 +4416,7 @@ test_rt_mesh_provider_task(void)
 	    oldDemand.cut = invalidatedRich.progressiveMesh->minimumCut();
 	    oldDemand.channelMask = 2;
 	    oldDemand.chunkIds = invalidatedRich.request.requiredChunks;
+	    invalidatedCompactionService.setResidentMeshLimit(1);
 	    invalidatedQueued =
 		invalidatedCompactionService.scheduleResidentMeshCompaction(
 		    0x5679, 17, {oldDemand});
@@ -4246,6 +4461,7 @@ test_rt_mesh_provider_task(void)
 	    std::vector<BObolLodResidentDemand> compactDemands(
 		1, compactDemand);
 	    const int rendererRichCut = reloaded.progressiveMesh->residentCut();
+	    service.setResidentMeshLimit(1);
 	    const size_t rendererQueued =
 		service.scheduleResidentMeshCompaction(
 		    0x1234, 3, compactDemands);
@@ -5137,13 +5353,18 @@ test_generation_scoped_consumers(void)
 	printf("FAIL: second generation submission\n");
 	return 1;
     }
+    /* Keep the first worker occupied long enough to make the queued-age
+     * observation deterministic without depending on scheduler granularity. */
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
     const BObolLodGenerationWorkStatus firstWork =
 	service.generationWorkStatus(firstGeneration);
     const BObolLodGenerationWorkStatus secondWork =
 	service.generationWorkStatus(secondGeneration);
     if (firstWork.activeTasks != 1 || firstWork.executingTasks != 1 ||
 	firstWork.pendingTasks != 0 || secondWork.activeTasks != 1 ||
-	secondWork.executingTasks != 0 || secondWork.pendingTasks != 1) {
+	secondWork.executingTasks != 0 || secondWork.pendingTasks != 1 ||
+	firstWork.oldestPendingTaskAgeMicroseconds != 0 ||
+	secondWork.oldestPendingTaskAgeMicroseconds == 0) {
 	printf("FAIL: per-generation active/pending/executing counters\n");
 	{
 	    std::lock_guard<std::mutex> lock(state.mutex);
@@ -5171,6 +5392,8 @@ test_generation_scoped_consumers(void)
 	secondCompleted.activeTasks != 0 ||
 	firstCompleted.queuedResults != 1 ||
 	secondCompleted.queuedResults != 1 ||
+	firstCompleted.oldestPendingTaskAgeMicroseconds != 0 ||
+	secondCompleted.oldestPendingTaskAgeMicroseconds != 0 ||
 	state.notifications.load() != 2) {
 	printf("FAIL: per-generation completion/result notification state "
 	       "(notifications=%u)\n", state.notifications.load());
@@ -5212,6 +5435,7 @@ struct IntermediateResultState {
     std::condition_variable cv;
     bool entered = false;
     bool published = false;
+    bool publishReplacement = false;
     bool release = false;
 };
 
@@ -5230,9 +5454,22 @@ intermediate_result_task(const BObolLodRequest &request, void *userData)
     preview.counts.faceCount = 11;
     preview.bounds = request.bounds;
 
-    const bool published = state && state->service &&
+    bool published = state && state->service &&
 	state->service->tryPublishIntermediateResult(
 	    state->generation, std::move(preview));
+    if (published && state->publishReplacement) {
+	BObolLodResult replacement;
+	replacement.request = request;
+	replacement.cacheKey = bobol_lod_cache_key(request);
+	replacement.resultKind = BOBOL_LOD_RESULT_AABB;
+	replacement.qualityTier = request.qualityTier;
+	replacement.providerStatus = BOBOL_LOD_PROVIDER_READY;
+	replacement.terminal = FALSE;
+	replacement.counts.faceCount = 12;
+	replacement.bounds = request.bounds;
+	published = state->service->tryPublishIntermediateResult(
+	    state->generation, std::move(replacement)) != FALSE;
+    }
     if (state) {
 	std::unique_lock<std::mutex> lock(state->mutex);
 	state->published = published;
@@ -5319,6 +5556,346 @@ test_intermediate_result_lifecycle(void)
 	return 1;
     }
 
+    service.stop();
+    return 0;
+}
+
+static int
+test_cpu_admission_wait_diagnostics(void)
+{
+    static const size_t saturationWidth = 8;
+    BObolLodService saturatingService;
+    BObolLodService waitingService;
+    BlockingTaskData blockers;
+    ServiceTestContext waitingContext;
+    TaskData waitingData{&waitingContext, 1};
+    int ret = 0;
+
+    if (!saturatingService.start(saturationWidth, FALSE) ||
+	!waitingService.start(1, FALSE)) {
+	printf("FAIL: LoD CPU-admission diagnostic service setup\n");
+	return 1;
+    }
+    const auto releaseAndStop = [&]() {
+	{
+	    std::lock_guard<std::mutex> lock(blockers.mutex);
+	    blockers.release = true;
+	}
+	blockers.cv.notify_all();
+	(void)wait_for_settled(saturatingService, 0);
+	(void)wait_for_settled(waitingService, 0);
+	saturatingService.stop();
+	waitingService.stop();
+    };
+
+    const uint64_t saturationGeneration =
+	saturatingService.beginGeneration();
+    std::vector<BObolLodTask> blockersToSubmit;
+    blockersToSubmit.reserve(saturationWidth);
+    for (size_t i = 0; i < saturationWidth; ++i) {
+	char name[64] = {0};
+	snprintf(name, sizeof(name), "/cpu-admission/blocker-%zu", i);
+	BObolLodTask task;
+	task.generation = saturationGeneration;
+	task.request = make_request(name);
+	task.realize = blocking_task;
+	task.realizeData = &blockers;
+	task.estimatedWorkingSetBytes = 1;
+	task.publishResult = FALSE;
+	blockersToSubmit.push_back(task);
+    }
+    std::vector<uint64_t> blockerIds;
+    if (saturatingService.submitBatch(
+	    blockersToSubmit, blockerIds, FALSE) != saturationWidth) {
+	printf("FAIL: LoD CPU-admission saturation submission\n");
+	releaseAndStop();
+	return 1;
+    }
+
+    bool saturated = false;
+    size_t saturationWorkingSetBytes = 0;
+    for (int attempt = 0; attempt < 1000; ++attempt) {
+	const BObolLodServiceWorkStatus work = saturatingService.workStatus();
+	int blockerCalls = 0;
+	{
+	    std::lock_guard<std::mutex> lock(blockers.mutex);
+	    blockerCalls = blockers.calls;
+	}
+	const size_t activeWorkingSetBytes =
+	    bobol_lod_working_set_global_active_bytes();
+	if (work.pendingTasks == 0 &&
+	    work.executingTasks == saturationWidth &&
+	    work.cpuAdmissionWaitingTasks +
+		static_cast<size_t>(blockerCalls) == saturationWidth &&
+	    activeWorkingSetBytes == static_cast<size_t>(blockerCalls)) {
+	    saturationWorkingSetBytes = activeWorkingSetBytes;
+	    saturated = true;
+	    break;
+	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    if (!saturated) {
+	printf("FAIL: LoD CPU-admission saturation did not settle\n");
+	releaseAndStop();
+	return 1;
+    }
+
+    const uint64_t waitingGeneration = waitingService.beginGeneration();
+    BObolLodTask waiting;
+    waiting.generation = waitingGeneration;
+    waiting.request = make_request("/cpu-admission/waiting-preview");
+    waiting.request.coalesceAssetProducer = TRUE;
+    waiting.dispatchClass = BOBOL_LOD_TASK_DISPATCH_PREVIEW;
+    waiting.realize = ready_task;
+    waiting.realizeData = &waitingData;
+    waiting.estimatedWorkingSetBytes = 64;
+    waiting.publishResult = FALSE;
+    if (!waitingService.submit(waiting)) {
+	printf("FAIL: LoD CPU-admission waiting task submission\n");
+	releaseAndStop();
+	return 1;
+    }
+
+    bool observed = false;
+    for (int attempt = 0; attempt < 1000; ++attempt) {
+	const BObolLodServiceWorkStatus serviceWork =
+	    waitingService.workStatus();
+	const BObolLodGenerationWorkStatus generationWork =
+	    waitingService.generationWorkStatus(waitingGeneration);
+	if (serviceWork.cpuAdmissionWaitingTasks == 1 &&
+	    generationWork.cpuAdmissionWaitingTasks == 1 &&
+	    serviceWork.executingTasks == 1 &&
+	    generationWork.executingTasks == 1 &&
+	    generationWork.activeProducerCount == 0) {
+	    if (bobol_lod_working_set_global_active_bytes() !=
+		saturationWorkingSetBytes) {
+		printf("FAIL: CPU-waiting LoD task reserved transient memory\n");
+		ret = 1;
+	    }
+	    observed = true;
+	    break;
+	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    if (!observed) {
+	printf("FAIL: LoD service hid process CPU-admission wait\n");
+	ret = 1;
+    }
+    releaseAndStop();
+    return ret;
+}
+
+static int
+test_transient_memory_admission_wait_diagnostics(void)
+{
+    const size_t limit = bobol_lod_working_set_global_limit();
+    if (!limit || limit == SIZE_MAX)
+	return 0;
+    if (bobol_lod_working_set_global_active_bytes() != 0 ||
+	bobol_lod_working_set_global_active_tasks() != 0 ||
+	!bobol_lod_working_set_acquire(limit)) {
+	printf("FAIL: transient-memory diagnostic governor setup\n");
+	return 1;
+    }
+
+    BObolLodService service;
+    ServiceTestContext context;
+    TaskData data{&context, 1};
+    bool reservationHeld = true;
+    const auto releaseAndStop = [&]() {
+	if (reservationHeld) {
+	    bobol_lod_working_set_release(limit);
+	    reservationHeld = false;
+	}
+	(void)wait_for_settled(service, 0);
+	service.stop();
+    };
+
+    if (!service.start(1, FALSE)) {
+	bobol_lod_working_set_release(limit);
+	printf("FAIL: transient-memory diagnostic service setup\n");
+	return 1;
+    }
+    const uint64_t generation = service.beginGeneration();
+    BObolLodTask waiting;
+    waiting.generation = generation;
+    waiting.request = make_request("/memory-admission/waiting");
+    waiting.realize = ready_task;
+    waiting.realizeData = &data;
+    waiting.estimatedWorkingSetBytes = 1;
+    waiting.publishResult = FALSE;
+    if (!service.submit(waiting)) {
+	printf("FAIL: transient-memory waiting task submission\n");
+	releaseAndStop();
+	return 1;
+    }
+
+    bool observed = false;
+    for (int attempt = 0; attempt < 1000; ++attempt) {
+	const BObolLodServiceWorkStatus serviceWork = service.workStatus();
+	const BObolLodGenerationWorkStatus generationWork =
+	    service.generationWorkStatus(generation);
+	const BObolLodQueueStatus queueWork =
+	    service.generationQueueStatusForDiagnostics(generation);
+	bool callbackRan = false;
+	{
+	    std::lock_guard<std::mutex> lock(context.mutex);
+	    callbackRan = !context.executionOrder.empty();
+	}
+	if (serviceWork.transientMemoryAdmissionWaitingTasks == 1 &&
+	    generationWork.transientMemoryAdmissionWaitingTasks == 1 &&
+	    serviceWork.executingTasks == 1 &&
+	    generationWork.executingTasks == 1 &&
+	    queueWork.transientMemoryBlockedTasks +
+		generationWork.transientMemoryAdmissionWaitingTasks == 1 &&
+	    !callbackRan) {
+	    observed = true;
+	    break;
+	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    if (!observed) {
+	printf("FAIL: LoD service hid process transient-memory wait\n");
+	releaseAndStop();
+	return 1;
+    }
+
+    bobol_lod_working_set_release(limit);
+    reservationHeld = false;
+    if (wait_for_settled(service, 0)) {
+	service.stop();
+	return 1;
+    }
+    bool retired = false;
+    for (int attempt = 0; attempt < 1000; ++attempt) {
+	const BObolLodServiceWorkStatus completedWork = service.workStatus();
+	const BObolLodGenerationWorkStatus completedGeneration =
+	    service.generationWorkStatus(generation);
+	bool callbackRan = false;
+	{
+	    std::lock_guard<std::mutex> lock(context.mutex);
+	    callbackRan = context.executionOrder.size() == 1;
+	}
+	if (completedWork.transientMemoryAdmissionWaitingTasks == 0 &&
+	    completedGeneration.transientMemoryAdmissionWaitingTasks == 0 &&
+	    callbackRan && bobol_lod_working_set_global_active_bytes() == 0 &&
+	    bobol_lod_working_set_global_active_tasks() == 0) {
+	    retired = true;
+	    break;
+	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    if (!retired) {
+	printf("FAIL: transient-memory wait did not retire cleanly\n");
+	service.stop();
+	return 1;
+    }
+    service.stop();
+    return 0;
+}
+
+static int
+test_intermediate_result_capacity_retry(void)
+{
+    BObolLodService service;
+    ServiceTestContext context;
+    TaskData fillerData{&context, 7};
+    IntermediateResultState state;
+    service.setQueueLimits(4, 1, 1);
+    /* The second worker is essential: it exercises the idle peer awakened
+     * to promote a producer's capacity-blocked mailbox value. */
+    if (!service.start(2, FALSE)) {
+	printf("FAIL: deferred intermediate-result service setup\n");
+	return 1;
+    }
+    const uint64_t generation = service.beginGeneration();
+
+    BObolLodTask filler;
+    filler.generation = generation;
+    filler.request = make_request("/intermediate-filler.bot");
+    filler.realize = ready_task;
+    filler.realizeData = &fillerData;
+    if (!service.submit(filler) || wait_for_settled(service, 1)) {
+	service.stop();
+	return 1;
+    }
+
+    state.service = &service;
+    state.generation = generation;
+    state.publishReplacement = true;
+    BObolLodTask task;
+    task.generation = generation;
+    task.request = make_request("/intermediate-deferred.bot");
+    task.realize = intermediate_result_task;
+    task.realizeData = &state;
+    /* The occupied one-result queue is the deterministic contention source;
+     * this task needs no reservation for its authoritative completion. */
+    task.publishResult = FALSE;
+    if (!service.submit(task)) {
+	printf("FAIL: deferred intermediate-result submission\n");
+	service.stop();
+	return 1;
+    }
+    {
+	std::unique_lock<std::mutex> lock(state.mutex);
+	if (!state.cv.wait_for(lock, std::chrono::seconds(2),
+		[&state] { return state.entered; }) || !state.published) {
+	    printf("FAIL: capacity-blocked intermediate result was not retained\n");
+	    state.release = true;
+	    lock.unlock();
+	    state.cv.notify_all();
+	    service.stop();
+	    return 1;
+	}
+    }
+    if (service.queuedResultCountForDiagnostics() != 2) {
+	printf("FAIL: deferred intermediate result was absent from work state\n");
+	{
+	    std::lock_guard<std::mutex> lock(state.mutex);
+	    state.release = true;
+	}
+	state.cv.notify_all();
+	service.stop();
+	return 1;
+    }
+
+    std::vector<BObolLodResult> fillerResult;
+    if (service.drainGenerationResults(
+	    fillerResult, generation, 1) != 1 ||
+	fillerResult.front().counts.faceCount != 7) {
+	printf("FAIL: deferred preview displaced an older queued result\n");
+	{
+	    std::lock_guard<std::mutex> lock(state.mutex);
+	    state.release = true;
+	}
+	state.cv.notify_all();
+	service.stop();
+	return 1;
+    }
+
+    std::vector<BObolLodResult> preview;
+    if (service.drainGenerationResults(preview, generation) != 1 ||
+	preview.size() != 1 || preview.front().terminal ||
+	preview.front().counts.faceCount != 12) {
+	printf("FAIL: capacity-blocked intermediate result was not retried\n");
+	{
+	    std::lock_guard<std::mutex> lock(state.mutex);
+	    state.release = true;
+	}
+	state.cv.notify_all();
+	service.stop();
+	return 1;
+    }
+
+    {
+	std::lock_guard<std::mutex> lock(state.mutex);
+	state.release = true;
+    }
+    state.cv.notify_all();
+    if (wait_for_settled(service, 0)) {
+	service.stop();
+	return 1;
+    }
     service.stop();
     return 0;
 }
@@ -5621,9 +6198,15 @@ main(int argc, char **argv)
 
     if (runIsolated(test_dependency_order_and_cache_write))
 	return 1;
+    if (runIsolated(test_preview_dispatch_order))
+	return 1;
     if (runIsolated(test_filtered_result_drain))
 	return 1;
     if (runIsolated(test_occurrence_result_coalescing))
+	return 1;
+    if (runIsolated(test_cpu_admission_wait_diagnostics))
+	return 1;
+    if (runIsolated(test_transient_memory_admission_wait_diagnostics))
 	return 1;
     if (runIsolated(test_generation_cancellation))
 	return 1;
@@ -5652,6 +6235,8 @@ main(int argc, char **argv)
     if (runIsolated(test_cancelled_cache_write_not_persisted))
 	return 1;
     if (runIsolated(test_active_request_duplicate_suppression))
+	return 1;
+    if (runIsolated(test_pending_active_request_retarget))
 	return 1;
     if (runIsolated(test_asset_producer_coalescing))
 	return 1;
@@ -5690,6 +6275,8 @@ main(int argc, char **argv)
     if (runIsolated(test_generation_scoped_consumers))
 	return 1;
     if (runIsolated(test_intermediate_result_lifecycle))
+	return 1;
+    if (runIsolated(test_intermediate_result_capacity_retry))
 	return 1;
     if (runIsolated(test_progress_display_status))
 	return 1;

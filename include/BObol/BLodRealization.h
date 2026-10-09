@@ -44,6 +44,23 @@ enum BObolLodNormalStyle {
     BOBOL_LOD_NORMAL_SMOOTH = 2
 };
 
+/* Scheduling intent captured at the point where a provider task is created.
+ * This is diagnostic metadata only: it does not participate in persistent
+ * cache, asset, coalescing, or result-authentication identity. */
+enum BObolLodSubmissionReason {
+    BOBOL_LOD_SUBMISSION_UNSPECIFIED = 0,
+    BOBOL_LOD_SUBMISSION_INITIAL = 1,
+    BOBOL_LOD_SUBMISSION_ASSET_REPLACEMENT = 2,
+    BOBOL_LOD_SUBMISSION_NORMAL_PRESENTATION_REPAIR = 3,
+    BOBOL_LOD_SUBMISSION_SPATIAL_PRESENTATION_REPAIR = 4,
+    BOBOL_LOD_SUBMISSION_PRESENTATION_REFINEMENT = 5,
+    BOBOL_LOD_SUBMISSION_RESIDENT_PREFETCH = 6,
+    BOBOL_LOD_SUBMISSION_PRESENTATION_AND_RESIDENT_PREFETCH = 7,
+    BOBOL_LOD_SUBMISSION_FORCED = 8,
+    BOBOL_LOD_SUBMISSION_RESET = 9,
+    BOBOL_LOD_SUBMISSION_TERMINAL_PROMOTION = 10
+};
+
 enum BObolLodQualityTier {
     BOBOL_LOD_QUALITY_METADATA = 0,
     BOBOL_LOD_QUALITY_ATTRIBUTES = 1,
@@ -505,6 +522,7 @@ struct BOBOL_EXPORT BObolLodRequest {
      * census which projected this request: 0 ordinary, 1 highlighted,
      * 2 selected.  It is scheduling metadata and not cache identity. */
     uint8_t visualEmphasis;
+    int submissionReason;
     int drawMode;
     int normalStyle;
     float normalCreaseAngle;
