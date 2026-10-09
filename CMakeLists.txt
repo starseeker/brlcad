@@ -2892,6 +2892,13 @@ include(${CMAKE_SOURCE_DIR}/src/source_dirs.cmake)
 # Now we have the necessary info - trigger the primary management logic
 brlcad_bext_process()
 
+# TkLiteHtml is loaded by Tcl at runtime rather than linked into BRL-CAD, but
+# its exported target ensures the Tk applications wait for dependency staging.
+# Search after bext processing so a managed install takes normal precedence.
+if(BRLCAD_ENABLE_TK)
+  find_package(tklitehtml 0.1 CONFIG REQUIRED)
+endif(BRLCAD_ENABLE_TK)
+
 # Zlib is discovered indirectly by packages such as OpenVDB, OpenNURBS, and
 # PNG.  Select it now so none of those packages can create an imported target
 # from stale cache entries; a later lookup cannot replace an existing target.
