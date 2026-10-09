@@ -69,6 +69,8 @@ struct ged_view_host_record {
 	gedp(NULL),
 	display_endpoint(NULL),
 	owns_display_endpoint(0),
+	lod_progress_presentation_mode(
+	    GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED),
 	callbacks(NULL),
 	update_callback(NULL),
 	update_callback_data(NULL),
@@ -82,6 +84,8 @@ struct ged_view_host_record {
     struct ged *gedp;
     bobol_display_endpoint_t *display_endpoint;
     int owns_display_endpoint;
+    enum ged_view_lod_progress_presentation_mode
+	lod_progress_presentation_mode;
     struct bu_ptbl *callbacks;
     ged_view_context_update_callback_t update_callback;
     void *update_callback_data;
@@ -325,6 +329,21 @@ ged_view_context_host_attach(struct ged *gedp, struct ged_view_context *view_ctx
 	return 0;
 
     (void)ged_view_host_record_create(gedp, view_ctx);
+    return 1;
+}
+
+extern "C" GED_EXPORT int
+ged_view_context_host_thread_claim(struct ged_view_context *view_ctx)
+{
+    struct ged_view_host_record *record =
+	ged_view_host_record_find(view_ctx);
+    if (!record)
+	return 0;
+
+    /* This is an explicit serialized handoff, not a relaxed cross-thread
+     * access check.  Hosts such as gsh create their GED state before starting
+     * the blocking input thread which subsequently owns all view mutation. */
+    record->owner_thread = std::this_thread::get_id();
     return 1;
 }
 
@@ -858,6 +877,49 @@ ged_view_context_display_endpoint_ensure(struct ged_view_context *view_ctx)
 	return 1;
     return ged_draw_obol_render_endpoint_ensure_for_view(record->gedp,
 	view_ctx, 1);
+}
+
+extern "C" GED_EXPORT int
+ged_view_lod_progress_presentation_mode_get(
+	enum ged_view_lod_progress_presentation_mode *mode,
+	const struct ged_view_context *view_ctx)
+{
+    const struct ged_view_host_record *record =
+	ged_view_host_record_find(view_ctx);
+    if (!mode || !record)
+	return 0;
+    *mode = record->lod_progress_presentation_mode;
+    return 1;
+}
+
+extern "C" GED_EXPORT int
+ged_view_lod_progress_presentation_mode_set(
+	struct ged_view_context *view_ctx,
+	enum ged_view_lod_progress_presentation_mode mode)
+{
+    struct ged_view_host_record *record =
+	ged_view_host_record_find(view_ctx);
+    if (!record || mode < GED_VIEW_LOD_PROGRESS_PRESENTATION_RETAINED ||
+	mode > GED_VIEW_LOD_PROGRESS_PRESENTATION_NONE)
+	return 0;
+    if (record->lod_progress_presentation_mode == mode)
+	return 1;
+
+    const enum ged_view_lod_progress_presentation_mode previous =
+	record->lod_progress_presentation_mode;
+    record->lod_progress_presentation_mode = mode;
+    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
+    if (!record->gedp || !controller)
+	return 1;
+
+    /* The narrow synchronizer stages all three records in one publication,
+     * so ownership transitions cannot expose a half-removed progress HUD. */
+    if (ged_view_lod_progress_sync(record->gedp, view_ctx) == BRLCAD_OK)
+	return 1;
+
+    record->lod_progress_presentation_mode = previous;
+    (void)ged_view_lod_progress_sync(record->gedp, view_ctx);
+    return 0;
 }
 
 /* These adapters own GED view policy even before a display endpoint exists.

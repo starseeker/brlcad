@@ -2245,7 +2245,18 @@ ged_draw_foreach_visible_shape_candidate(struct ged *gedp,
 					 ged_draw_shape_candidate_cb cb,
 					 void *userdata)
 {
-    if (!gedp || !cb || !ged_draw_obol_scene_controller_full_synced(gedp))
+    if (!gedp || !cb)
+	return;
+
+    /* Retained semantic intent is authoritative and remains available before
+     * a null/headless display has published an Obol database source.  Walking
+     * its database index here is intentional: candidate enumeration happens
+     * only while an interaction requests a pick list and realizes no meshes. */
+    if (ged_draw_frontier_foreach_visible_candidate(gedp,
+	    ged_draw_active_view_ctx(gedp), -1, cb, userdata) > 0)
+	return;
+
+    if (!ged_draw_obol_scene_controller_full_synced(gedp))
 	return;
 
     struct ged_draw_visible_shape_candidate_ctx ctx = {
@@ -2255,6 +2266,53 @@ ged_draw_foreach_visible_shape_candidate(struct ged *gedp,
     };
     (void)ged_draw_obol_visible_database_source_records_foreach_fast(gedp,
 	    _ged_draw_visible_shape_candidate_cb, &ctx);
+}
+
+
+static ged_draw_shape_ref
+ged_draw_semantic_shape_ref_for_candidate(
+    struct ged *gedp, const struct ged_draw_shape_candidate *candidate)
+{
+    if (!gedp || !candidate || !candidate->path || !candidate->path[0] ||
+	!ged_db_index_path_exists(gedp, candidate->path))
+	return GED_DRAW_SHAPE_REF_NULL;
+
+    const int state = ged_draw_frontier_path_state(gedp,
+	ged_draw_active_view_ctx(gedp), candidate->path, candidate->draw_mode);
+    if (state <= 0)
+	return GED_DRAW_SHAPE_REF_NULL;
+
+    struct ged_draw_obol_scene_context_info info;
+    memset(&info, 0, sizeof(info));
+    info.path = bu_strdup(candidate->path);
+    info.instance_key = bu_strdup(candidate->instance_key &&
+	    candidate->instance_key[0] ? candidate->instance_key :
+	    candidate->path);
+    info.name = ged_draw_obol_context_leaf_name_dup(candidate->path);
+    info.is_database_source = 1;
+    info.has_parent = 1;
+    info.draw_tree_depth = ged_draw_obol_group_context_depth(candidate->path);
+    info.draw_mode_valid = 1;
+    info.draw_mode = candidate->draw_mode;
+
+    void *scene_ctx = ged_draw_obol_context_token_find(gedp, &info, NULL);
+    if (!scene_ctx)
+	scene_ctx = ged_draw_obol_context_token_create(gedp, &info, NULL);
+    ged_draw_obol_scene_context_info_free(&info);
+
+    struct ged_draw_obol_context_token *token =
+	ged_draw_obol_context_from_scene_ctx(scene_ctx);
+    if (!token || !token->is_database_source || !token->fullpath_valid)
+	return GED_DRAW_SHAPE_REF_NULL;
+
+    ged_draw_scene_handle scene_ref = ged_draw_scene_handle_make(scene_ctx,
+	GED_DRAW_SCENE_BACKEND_OBOL);
+    ged_draw_shape_ref ref = ged_draw_registry_shape_ref_from_source_ref(gedp,
+	scene_ref);
+    if (!ged_draw_shape_ref_is_null(ref))
+	(void)ged_draw_registry_shape_ref_set_indexed_fullpath(gedp, ref,
+	    &token->fullpath);
+    return ref;
 }
 
 
@@ -2272,7 +2330,11 @@ ged_draw_shape_ref_for_candidate(
     record.database_path = candidate->path;
     record.instance_key = candidate->instance_key;
     record.draw_mode = candidate->draw_mode;
-    return ged_draw_obol_shape_ref_for_database_source_record(gedp, &record);
+    ged_draw_shape_ref ref =
+	ged_draw_obol_shape_ref_for_database_source_record(gedp, &record);
+    if (!ged_draw_shape_ref_is_null(ref))
+	return ref;
+    return ged_draw_semantic_shape_ref_for_candidate(gedp, candidate);
 }
 
 
@@ -3257,6 +3319,9 @@ ged_draw_shape_ref_record_summary(struct ged *gedp,
 	    GED_DRAW_MODE_WIRE;
 	(void)ged_bobol_database_source_record_summary_for_path_mode(gedp,
 	    token->path, source_mode, out);
+	if (source_mode == GED_DRAW_MODE_EVAL_WIRE ||
+	    source_mode == GED_DRAW_MODE_EVAL_POINTS)
+	    out->evaluated_region = 1;
 	if (ged_draw_group_ref_is_null(out->owning_group_ref))
 	    out->owning_group_ref = token->fullpath_valid ?
 		ged_draw_obol_top_group_ref_for_fullpath(gedp,

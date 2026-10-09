@@ -78,6 +78,9 @@ extern int ged_draw_default_mode(const struct ged *gedp);
 extern int ged_draw_bounds(struct ged *gedp, vect_t *min, vect_t *max,
 	int include_overlays);
 extern uint64_t ged_draw_highlight_revision(const struct ged *gedp);
+extern int ged_draw_obol_database_source_instance_key_get(
+	struct ged_view_context *view_ctx, const char *path, int draw_mode,
+	struct bu_vls *out);
 extern uint64_t ged_draw_highlight_revision_advance(struct ged *gedp);
 extern void ged_draw_set_highlighted_shape_ref(struct ged *gedp,
 	ged_draw_shape_ref ref);
@@ -731,9 +734,11 @@ struct ged_draw_view_export_detail {
 	point_t *points;
 	int *commands;
 	int *indices;
+	struct ged_draw_view_segment_style *segment_styles;
 	size_t point_count;
 	size_t command_count;
 	size_t index_count;
+	size_t segment_style_count;
     } arrays;
     struct {
 	point_t *points;
@@ -1296,7 +1301,9 @@ extern int ged_draw_obol_database_source_line_data_copy_for_path(
 	const char *path,
 	point_t **points,
 	int **commands,
-	size_t *point_count);
+	size_t *point_count,
+	struct ged_draw_view_segment_style **segment_styles,
+	size_t *segment_style_count);
 extern int ged_draw_obol_database_source_surface_summary_for_path(
 	struct ged *gedp,
 	const char *path,

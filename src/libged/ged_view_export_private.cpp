@@ -30,6 +30,9 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <string>
+#include <unordered_set>
+
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BSceneController.h"
 #include "bg/plane.h"
@@ -115,6 +118,9 @@ _ged_draw_view_export_detail_free(struct ged_draw_view_export_detail *detail)
 	bu_free(detail->arrays.commands, "ged draw view export array commands");
     if (detail->arrays.indices)
 	bu_free(detail->arrays.indices, "ged draw view export array indices");
+    if (detail->arrays.segment_styles)
+	bu_free(detail->arrays.segment_styles,
+		"ged draw view export segment styles");
     if (detail->surface.points)
 	bu_free(detail->surface.points, "ged draw view export surface points");
     if (detail->surface.indices)
@@ -261,7 +267,8 @@ _ged_draw_view_export_detail_line_from_obol(
 	size_t compact_count = 0;
 	if (ged_draw_obol_database_source_line_data_copy_for_path(gedp,
 		shape_path, &compact_points, &compact_commands,
-		&compact_count)) {
+		&compact_count, &detail->arrays.segment_styles,
+		&detail->arrays.segment_style_count)) {
 	    detail->geometry_kind = GED_DRAW_VIEW_EXPORT_GEOMETRY_LINE_SET;
 	    detail->arrays.points = compact_points;
 	    detail->arrays.commands = compact_commands;
@@ -415,8 +422,14 @@ _ged_draw_view_export_detail_annotation_from_obol(
     struct ged_draw_obol_annotation_summary summary;
     memset(&summary, 0, sizeof(summary));
     if (!ged_draw_obol_database_source_annotation_summary_for_path(gedp,
-	    shape_path, &summary) || !summary.valid)
-	return 0;
+	    shape_path, &summary) || !summary.valid) {
+	/* Native compact annotation realization intentionally keeps its plotted
+	 * wire/fill representation without retaining a parallel Coin annotation
+	 * node.  Export that exact display geometry even when semantic annotation
+	 * editing metadata is unavailable in this snapshot. */
+	return _ged_draw_view_export_detail_line_from_obol(detail, gedp,
+		shape_path, 1);
+    }
 
     detail->geometry_kind = GED_DRAW_VIEW_EXPORT_GEOMETRY_ANNOTATION;
     detail->annotation.display_space = 1;
@@ -446,8 +459,27 @@ _ged_draw_view_export_detail_annotation_from_obol(
 	    return 0;
     }
 
+    /* Semantic annotation points describe editable source data.  Vector
+     * export also needs the plotted line stream, whose retained wire style
+     * runs carry exact per-segment pattern, width, color, and opacity. */
+    point_t *line_points = NULL;
+    int *line_commands = NULL;
+    size_t line_point_count = 0;
+    if (ged_draw_obol_database_source_line_data_copy_for_path(gedp,
+	    shape_path, &line_points, &line_commands, &line_point_count,
+	    &detail->arrays.segment_styles,
+	    &detail->arrays.segment_style_count)) {
+	detail->arrays.points = line_points;
+	detail->arrays.commands = line_commands;
+	detail->arrays.point_count = line_point_count;
+	detail->arrays.command_count = line_point_count;
+	detail->record.vlist_structure_count =
+	    detail->arrays.segment_style_count;
+	detail->record.vlist_point_count = line_point_count;
+    }
+
     _ged_draw_view_export_record_bounds_from_points(&detail->record,
-	    detail->annotation.points, detail->annotation.point_count);
+	detail->annotation.points, detail->annotation.point_count);
     return 1;
 }
 
@@ -600,6 +632,7 @@ _ged_draw_view_export_detail_from_obol_shape(
     }
     rec->visible = display.visible;
     rec->line_style = display.line_style;
+    rec->line_width = display.line_width;
     rec->color[0] = display.material_color[0];
     rec->color[1] = display.material_color[1];
     rec->color[2] = display.material_color[2];
@@ -635,6 +668,7 @@ struct ged_draw_obol_view_export_ctx {
     ged_draw_view_db_object_record_cb cb;
     void *userdata;
     int keep_going;
+    std::unordered_set<std::string> exported_source_instances;
 };
 
 
@@ -813,6 +847,7 @@ _ged_draw_view_export_detail_from_obol_source_record(
 		source_record->database_path) ? 1 : 0;
     rec->visible = source_record->visible;
     rec->line_style = 0;
+    rec->line_width = 1;
 
     struct ged_draw_scene_display_summary display;
     memset(&display, 0, sizeof(display));
@@ -822,6 +857,10 @@ _ged_draw_view_export_detail_from_obol_source_record(
 	rec->color[0] = display.material_color[0];
 	rec->color[1] = display.material_color[1];
 	rec->color[2] = display.material_color[2];
+    }
+    if (display.valid) {
+	rec->line_style = display.line_style;
+	rec->line_width = display.line_width;
     }
 
     MAT_IDN(rec->model_mat);
@@ -859,9 +898,17 @@ _ged_draw_view_export_obol_source_record_cb(
     if (!_ged_draw_view_export_obol_source_record_matches(ctx, record))
 	return 1;
 
+    const char *source_key = record->instance_key && record->instance_key[0] ?
+	record->instance_key : record->database_path;
+    if (source_key && ctx->exported_source_instances.find(source_key) !=
+	    ctx->exported_source_instances.end())
+	return 1;
+
     struct ged_draw_view_export_detail detail;
     if (_ged_draw_view_export_detail_from_obol_source_record(&detail, ctx,
 	    record)) {
+	if (source_key)
+	    ctx->exported_source_instances.insert(source_key);
 	ctx->keep_going = ctx->cb(&detail.record, ctx->userdata);
 	_ged_draw_view_export_detail_free(&detail);
     }
@@ -879,7 +926,7 @@ _ged_draw_view_export_source_records_from_obol(
 	return;
 
     ctx->keep_going = *keep_going;
-    if (ged_draw_obol_database_source_records_foreach(ctx->gedp, 1,
+    if (ged_draw_obol_database_source_records_foreach(ctx->gedp, 0,
 	    _ged_draw_view_export_obol_source_record_cb, ctx) >= 0)
 	*keep_going = ctx->keep_going;
 }
@@ -1195,6 +1242,7 @@ _ged_draw_view_export_detail_from_obol_feature(
 	    GED_SELECTION_SELECTED_PATH, feature->name) ? 1 : 0;
     rec->visible = feature->visible;
     rec->line_style = feature->line_style;
+    rec->line_width = feature->line_width;
     rec->color[0] = feature->color[0];
     rec->color[1] = feature->color[1];
     rec->color[2] = feature->color[2];
@@ -1277,6 +1325,7 @@ _ged_draw_view_export_polygon_record_cb(
 	    polygon->name) ? 1 : 0;
     rec->visible = 1;
     rec->line_style = 0;
+    rec->line_width = 1;
     rec->color[0] = polygon->edge_color[0];
     rec->color[1] = polygon->edge_color[1];
     rec->color[2] = polygon->edge_color[2];
@@ -1388,11 +1437,6 @@ _ged_draw_view_export_records_from_obol(
     if (!keep_going || !*keep_going || !gedp || !cb)
 	return;
 
-    struct ged_draw_obol_scene_context_info root_info;
-    memset(&root_info, 0, sizeof(root_info));
-    if (!ged_draw_obol_scene_context_info_for_path(gedp, "/", &root_info))
-	return;
-
     struct ged_draw_obol_view_export_ctx ctx;
     ctx.gedp = gedp;
     ctx.view_ctx = view_ctx;
@@ -1405,15 +1449,21 @@ _ged_draw_view_export_records_from_obol(
     ctx.keep_going = 1;
 
     _ged_draw_view_export_source_records_from_obol(&ctx, keep_going);
-    if (!*keep_going) {
-	ged_draw_obol_scene_context_info_free(&root_info);
+    if (!*keep_going)
 	return;
-    }
-    ctx.keep_going = 1;
 
-    _ged_draw_view_export_visit_obol_info(&ctx, &root_info, NULL);
-    *keep_going = ctx.keep_going;
-    ged_draw_obol_scene_context_info_free(&root_info);
+    /* Direct database-source publications can exist before the semantic
+     * hierarchy has installed a synthetic root.  They are independently
+     * enumerable and must remain exportable in that state (notably for an
+     * immediate draw/plot command sequence). */
+    struct ged_draw_obol_scene_context_info root_info;
+    memset(&root_info, 0, sizeof(root_info));
+    if (ged_draw_obol_scene_context_info_for_path(gedp, "/", &root_info)) {
+	ctx.keep_going = 1;
+	_ged_draw_view_export_visit_obol_info(&ctx, &root_info, NULL);
+	*keep_going = ctx.keep_going;
+	ged_draw_obol_scene_context_info_free(&root_info);
+    }
 
     _ged_draw_view_export_polygon_records_from_rt(view_ctx, query_flags,
 	    glob, draw_mode, cb, userdata, keep_going);
@@ -1442,6 +1492,29 @@ ged_draw_view_context_foreach_export_record(
     int keep_going = 1;
     _ged_draw_view_export_records_from_obol(gedp, view_ctx, query_flags,
 	render_flags, glob, draw_mode, cb, userdata, &keep_going);
+}
+
+
+int
+ged_draw_view_context_prepare_export_payload(
+	struct ged_view_context *view_ctx)
+{
+    if (!view_ctx)
+	return 0;
+
+    struct ged *gedp = ged_view_context_owner(view_ctx);
+    /* A non-rendering/headless owner may retain semantic draw intent without
+     * having created an Obol scene controller yet.  Deterministic export is
+     * the first concrete consumer in that case, so attach the default scene
+     * adapter and consume the current semantic snapshot before asking it to
+     * realize payload.  Merely checking for an existing controller makes an
+     * immediate `draw; plot` empty until an unrelated overlay or display
+     * operation happens to attach one. */
+    if (!ged_draw_obol_scene_controller_ensure_owned(gedp, 1) ||
+	!ged_draw_obol_scene_controller_is_owned(gedp))
+	return 0;
+
+    return ged_draw_obol_database_source_realize_pending(gedp);
 }
 
 static int

@@ -4,7 +4,7 @@ brlcad_add_test(NAME facetize_worker_protocol COMMAND facetize_worker_protocol_t
 brlcad_addexec(facetize_validation_test "validation.cpp;../validation.cpp" "libwdb;librt;libbu" TEST)
 brlcad_add_test(NAME facetize_validation COMMAND facetize_validation_test)
 
-brlcad_addexec(facetize_recovery_test recovery.cpp "libged;libwdb;librt;libbu" TEST_USESDATA)
+brlcad_addexec(facetize_recovery_test recovery.cpp "libged;libBObol;libwdb;librt;libbu" TEST_USESDATA)
 if(TARGET facetize_recovery_test)
   add_dependencies(facetize_recovery_test ged_plugins facetize_process)
   set(FACETIZE_RECOVERY_TMP "${CMAKE_CURRENT_BINARY_DIR}/facetize_recovery_tmp")
