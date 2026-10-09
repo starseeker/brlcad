@@ -386,6 +386,18 @@ cmd_oed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	return TCL_ERROR;
     }
 
+    /* Direct oed performs the illuminate step internally.  matpick has the
+     * same state contract as the interactive path and must run from OBJ PATH,
+     * not the temporary OBJ PICK state used while resolving the occurrence. */
+    if (chg_state(s, ST_O_PICK, ST_O_PATH, "Object illuminate") != TCL_OK) {
+	db_free_full_path(&lhs);
+	db_free_full_path(&rhs);
+	db_free_full_path(&both);
+	Tcl_AppendResult(interp, "Unable to enter object path state",
+	    (char *)NULL);
+	return TCL_ERROR;
+    }
+
     /* Select the matrix */
     struct bu_vls tcl_cmd = BU_VLS_INIT_ZERO;
     size_t matpick_pos = one_path ? lhs.fp_len - 1 : lhs.fp_len;
