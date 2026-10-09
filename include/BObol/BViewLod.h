@@ -142,13 +142,15 @@ public:
 	NORMAL_SMOOTH = 2
     };
 
-    /* A source result is either consumed by the current compact population
-     * or overtaken by a source/demand generation and must be requested again.
-     * Malformed provider results are recorded as terminal occurrence failures
-     * and therefore count as accepted convergence evidence. */
+    /* A source result is consumed by the current compact population, is
+     * already represented by an equal retained publication, or was overtaken
+     * by a source/demand generation and must be requested again.  Malformed
+     * provider results are recorded as terminal occurrence failures and
+     * therefore count as accepted convergence evidence. */
     enum class SourceResultDisposition {
 	ACCEPTED = 0,
-	RETRY_CURRENT_DEMAND
+	RETRY_CURRENT_DEMAND,
+	UNCHANGED
     };
 
     struct BOBOL_EXPORT MeshPayload {
@@ -304,6 +306,10 @@ public:
 	SbBool hasSnappedPoints;
 	SbBool hasNormals;
 	SbBool shadedCullBackfaces;
+	/* A parked occurrence retains its payload identity and shared asset while
+	 * contributing no active presentation cost.  Presentation synchronization
+	 * suppresses both its mesh and the authored structural fallback. */
+	SbBool presentationActive;
 	SbBool memoryLimited;
 	SbString diagnostic;
 	/* Non-owning provenance for O(1) validation of metadata-only hot-path
@@ -335,7 +341,15 @@ public:
     SbBool applyDisplayResult(const SoBRLMeshShape *shape,
 			      const BObolLodResult &result);
     SbBool applySourceResult(const SoBRLDatabaseSource *source,
-			     const BObolLodResult &result);
+	const BObolLodResult &result);
+    /** Atomically replace one retained compact mesh occurrence with a
+     * capacity-certified terminal OBB.  This explicit downgrade is reserved
+     * for an exact renderer audit which proved that the richer payload could
+     * not produce a presentation; normal provider publication remains
+     * monotonic in representation rank. */
+    SbBool replaceCadPayloadWithTerminalProxy(
+	const SoBRLDatabaseSource *source, const CadPayload *payload,
+	const BObolLodResult &result);
     SbBool consumeDisplayResult(const SoBRLMeshShape *shape,
 	BObolLodResult &result);
     SourceResultDisposition consumeSourceResult(
@@ -385,6 +399,13 @@ public:
 	const SoBRLDatabaseSource *source, uint32_t sourceEntryIndex,
 	const SbString &occurrenceKey, int activeCut, int requestedCut,
 	uint64_t viewRevision, uint64_t policyRevision);
+    /** Re-publish one authoritative resident-progressive occurrence without
+     * changing its cut, demand metadata, or allocation.  This presentation
+     * repair is used when an exact render audit still observes the source
+     * structural proxy for an otherwise valid view-local binding. */
+    SbBool refreshResidentCadProgressivePresentation(
+	const SoBRLDatabaseSource *source, uint32_t sourceEntryIndex,
+	const SbString &occurrenceKey, uint64_t geometryRevision);
     /** Retire direct progressive bindings whose source population or
      * immutable part revision has been replaced.  Source delta journals keep
      * the common mutation path proportional to changed entries. */
@@ -485,15 +506,18 @@ public:
     SbBool cadAllocationPlanCutsApplied(
 	uint64_t planSerial, uint64_t viewRevision,
 	uint64_t policyRevision, size_t fixedCadPresentationCost) const;
+    /** Number of occurrences in the active allocation whose retained
+     * presentation does not yet realize its assigned cut/population. */
+    size_t cadAllocationMismatchCount(void) const;
     /** TRUE when this occurrence realizes its current allocation's cut,
      * spatial population, and renderer channel. */
     SbBool cadAllocatedPresentationApplied(
 	const CadPayload *payload, uint64_t viewRevision,
 	uint64_t policyRevision, int drawMode) const;
+    /** Activate or park a retained occurrence without discarding its binding. */
+    SbBool setCadPayloadActive(const CadPayload *payload, SbBool active);
     /* Remove one view-local display binding while retaining its shared asset.
-     * The source occurrence's structural fallback becomes visible again.
-     * Used by scene-budget/frustum admission when an insignificant occurrence
-     * should cost zero triangles rather than its minimum populated PoP cut. */
+     * The source occurrence's structural fallback becomes visible again. */
     SbBool removeCadPayload(const CadPayload *payload);
     SbBool removeMeshPayload(const MeshPayload *payload);
     size_t bindingCount(void) const;
@@ -566,6 +590,18 @@ public:
      * arrays are counted once per displayed occurrence because render cost
      * follows instances, not storage aliases. */
     size_t activeFaceCount(void) const;
+    /** Active faces which belong to source geometry rather than a temporary
+     * cold-start coverage representation.  activeFaceCount() intentionally
+     * continues to report the renderer's total triangle population. */
+    size_t activeSourceFaceCount(void) const;
+    /** Number of active occurrences with at least one genuine source-mesh
+     * presentation.  Unlike a face count, this remains meaningful in wire
+     * drawing modes. */
+    size_t activeSourceMeshOccurrenceCount(void) const;
+    /** Number of active occurrences which still present a generated
+     * cold-start coverage layer.  An occurrence may contribute to this and
+     * activeSourceMeshOccurrenceCount() while validated spatial pages arrive. */
+    size_t temporaryCoverageOccurrenceCount(void) const;
     /* Multi-cost scheduler population in shaded-triangle equivalents. */
     size_t activeRenderCost(void) const;
     /** O(1) CAD-only portion of activeRenderCost(). */
@@ -772,7 +808,7 @@ private:
 	BObolLodResult &result, SbBool consume);
     SourceResultDisposition applySourceResultInternal(
 	const SoBRLDatabaseSource *source, BObolLodResult &result,
-	SbBool consume);
+	SbBool consume, const CadPayload *forcedReplacement = NULL);
     void recordCadOccurrenceFailure(const std::string &sourceBindingKey,
 	const std::string &occurrenceKey, const BObolLodResult &result,
 	int providerStatus);
@@ -918,6 +954,9 @@ private:
     std::map<uint64_t, size_t>
 	cadUnsatisfiedMemoryLimitedAdmissionRevisionCounts;
     size_t cadActiveFaceCount;
+    size_t cadActiveSourceFaceCount;
+    size_t cadSourceMeshOccurrenceCount;
+    size_t cadTemporaryCoverageOccurrenceCount;
     size_t cadActiveRenderCost;
     size_t cadMinimumActiveRenderCost;
     size_t cadDisplayMeshBytes;

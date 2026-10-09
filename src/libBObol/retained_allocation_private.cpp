@@ -625,6 +625,9 @@ public:
 	result.nextDistinctPresentationBudgetKnown =
 	    this->nextDistinctPresentationBudgetKnown;
 	result.selectedPresentationCost = this->finalCost;
+	result.maximumNonAggregatedProgressiveCut =
+	    this->maximumNonAggregatedProgressiveCut();
+	result.maximumNonAggregatedProgressiveCutKnown = true;
 	result.minimumPresentationCost = this->minimumPresentationCost;
 	result.pixelDemandPresentationCost = this->pixelDemandPresentationCost;
 	result.certifiedPresentationBudget = this->effectiveBudget;
@@ -633,6 +636,7 @@ public:
 	result.pointProxyCandidateCount = this->pointProxyCandidateCount;
 	result.reachablePointProxyCandidateCount =
 	    this->reachablePointProxyCandidateCount;
+	result.selectedPointProxyCount = this->fixedPointAllocations.size();
 	for (SoCADAssembly *assembly : this->pointProxyAssemblies) {
 	    const auto protection =
 		this->pointProxyProtectedInstances.find(assembly);
@@ -654,7 +658,8 @@ public:
 	    const double normalizedError = bobol_lod_normalized_visual_error(
 		error, candidate.targetPixelError);
 	    if (pointProxy)
-		result.selectedPointProxyCount++;
+		result.selectedPointProxyCount = result.selectedPointProxyCount ==
+		    SIZE_MAX ? SIZE_MAX : result.selectedPointProxyCount + 1;
 	    const bool prominent = bobol_lod_visual_prominent(
 		candidate.visualFootprint);
 	    if (prominent)
@@ -807,6 +812,22 @@ private:
 	int drawMode = BOBOL_LOD_DRAW_UNKNOWN;
     };
 
+    int maximumNonAggregatedProgressiveCut(void) const
+    {
+	int maximumCut = this->fixedProgressiveMaximumCut;
+	if (this->viewState)
+	    maximumCut = std::max(maximumCut,
+		this->viewState->maximumResidentCadProgressiveActiveCut());
+	for (size_t i = 0; i < this->candidates.size(); ++i) {
+	    if (i < this->finalPointProxies.size() &&
+		this->finalPointProxies[i])
+		continue;
+	    if (i < this->finalCuts.size())
+		maximumCut = std::max(maximumCut, this->finalCuts[i]);
+	}
+	return maximumCut;
+    }
+
     struct SourceSnapshot {
 	SoBRLDatabaseSource *source = NULL;
 	SoCADAssembly *assembly = NULL;
@@ -926,7 +947,7 @@ private:
     void discover(SourceSnapshot &source,
 	const BObolViewLodState::CadPayload *payload)
     {
-	if (!payload || !payload->isValid())
+	if (!payload || !payload->isValid() || !payload->presentationActive)
 	    return;
 	const bool progressive = payload->progressiveMesh &&
 	    payload->progressiveMesh->isValid();
@@ -951,6 +972,13 @@ private:
 	if ((!progressive || boundedCoverage) &&
 	    (exact || (payload->viewRevision == this->viewRevision() &&
 		payload->policyRevision == this->policyRevision()))) {
+	    /* This presentation is fixed rather than a marginal candidate, but a
+	     * renderer-wide ceiling can still truncate it when it is progressive.
+	     * Retain that cut in the allocation certificate so handoff validation
+	     * does not confuse point-hidden rich cuts with visible fixed geometry. */
+	    if (progressive)
+		this->fixedProgressiveMaximumCut = std::max(
+		    this->fixedProgressiveMaximumCut, payload->activeCut);
 	    this->havePresentedErrorProof =
 		this->havePresentedErrorProof || exact;
 	    const size_t cost = bobol_lod_render_cost_units(
@@ -1342,6 +1370,7 @@ private:
     size_t payloadCursor = 0;
     std::vector<Candidate> candidates;
     std::vector<FixedPointAllocation> fixedPointAllocations;
+    int fixedProgressiveMaximumCut = -1;
     std::unordered_map<SoCADAssembly *, ProtectedSet>
 	pointProxyProtectedInstances;
     std::vector<SoCADAssembly *> pointProxyAssemblies;

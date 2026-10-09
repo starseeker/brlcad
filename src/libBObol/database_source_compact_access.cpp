@@ -30,6 +30,7 @@
 #include "BObol/BViewQuery.h"
 #include "BObol/BVListShape.h"
 #include "cad_assembly_private.h"
+#include "cad_publication_private.h"
 #include "compact_occurrence_registry_private.h"
 #include "database_source_private.h"
 #include "database_source_realization.h"
@@ -139,7 +140,23 @@ SoBRLDatabaseSource::getCompactExpectedInstanceCount(void) const
 {
     const size_t current = this->d->compactIndex ?
 	this->d->compactIndex->entries.size() : 0;
+    if (this->d->compactExpectedInstanceCountCertified)
+	return this->d->compactExpectedInstanceCount;
     return std::max(current, this->d->compactExpectedInstanceCount);
+}
+
+SbBool
+SoBRLDatabaseSource::hasCompleteCompactInstancePopulation(void) const
+{
+    if (!this->d->compactExpectedInstanceCountCertified ||
+	!this->d->compactIndex)
+	return FALSE;
+    const size_t current = this->d->compactIndex->entries.size();
+    const size_t overviews = this->d->compactIndex->overviewCount;
+    if (overviews > current)
+	return FALSE;
+    return current - overviews ==
+	this->d->compactExpectedInstanceCount ? TRUE : FALSE;
 }
 
 SbBool
@@ -446,6 +463,83 @@ SoBRLDatabaseSource::copyCompactWireGeometry(
     }
 
     return points.empty() ? FALSE : TRUE;
+}
+
+SbBool
+SoBRLDatabaseSource::getCompactStructuralPresentationCounts(
+    int index, BObolLodCounts &counts) const
+{
+    counts.clear();
+    if (!this->d->compactIndex || index < 0 ||
+	static_cast<size_t>(index) >= this->d->compactIndex->entries.size())
+	return FALSE;
+    const BObolCompactInstanceEntry &entry =
+	this->d->compactIndex->entries[static_cast<size_t>(index)];
+    if (!entry.geometry || !entry.geometry->structuralProxy)
+	return FALSE;
+    counts = bobol_cad_geometry_counts(*entry.geometry);
+    return TRUE;
+}
+
+SbBool
+SoBRLDatabaseSource::copyCompactWireSegments(
+    std::vector<BObolCompactWireSegment> &segments) const
+{
+    segments.clear();
+    if (!this->d->compactIndex)
+	return FALSE;
+
+    for (const BObolCompactInstanceEntry &entry :
+	 this->d->compactIndex->entries) {
+	if (!entry.visible || !entry.geometry || !entry.geometry->wire)
+	    continue;
+
+	const Obol::WireRep &wire = *entry.geometry->wire;
+	size_t segment_index = 0;
+	const auto append_segment = [&entry, &wire, &segments, &segment_index](
+	    const SbVec3f &local_start, const SbVec3f &local_end) {
+	    BObolCompactWireSegment segment;
+	    entry.localToSource.multVecMatrix(local_start, segment.start);
+	    entry.localToSource.multVecMatrix(local_end, segment.end);
+
+	    segment.color.setValue(entry.style.color[0], entry.style.color[1],
+		entry.style.color[2]);
+	    float alpha = entry.style.color[3];
+	    segment.lineWidth = (std::max)(1.0f, entry.style.lineWidth);
+	    segment.linePattern = entry.style.linePattern;
+	    segment.linePatternFactor = entry.style.linePatternFactor;
+
+	    if (!wire.styleRuns.empty()) {
+		const Obol::WireStyle authored =
+		    wire.styleAtSegment(segment_index);
+		segment.lineWidth = Obol::cadWirePixelWidth(
+		    segment.lineWidth, authored.widthScale);
+		if (authored.patternValid) {
+		    segment.linePattern = authored.linePattern;
+		    segment.linePatternFactor = authored.linePatternFactor;
+		}
+		if (authored.colorValid && entry.style.useGeometryColor) {
+		    segment.color.setValue(authored.color[0], authored.color[1],
+			authored.color[2]);
+		    alpha *= authored.color[3];
+		}
+	    }
+
+	    alpha = (std::max)(0.0f, (std::min)(1.0f, alpha));
+	    segment.transparency = 1.0f - alpha;
+	    segments.push_back(segment);
+	    segment_index++;
+	};
+
+	for (size_t i = 0; i + 1 < wire.segmentPoints.size(); i += 2)
+	    append_segment(wire.segmentPoints[i], wire.segmentPoints[i + 1]);
+	for (const Obol::WirePolyline &polyline : wire.polylines) {
+	    for (size_t i = 1; i < polyline.points.size(); i++)
+		append_segment(polyline.points[i - 1], polyline.points[i]);
+	}
+    }
+
+    return segments.empty() ? FALSE : TRUE;
 }
 
 const BObolCompactInstanceEntry *

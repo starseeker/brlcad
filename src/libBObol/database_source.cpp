@@ -34,6 +34,7 @@
 #include "database_source_presentation_private.h"
 #include "database_source_realization.h"
 #include "identity_counter_private.h"
+#include "parallel_budget_private.h"
 #include "performance_private.h"
 #include "serialized_bot_source_private.h"
 #include "transaction_fault_private.h"
@@ -96,6 +97,7 @@
 #include <condition_variable>
 #include <deque>
 #include <exception>
+#include <functional>
 #include <initializer_list>
 #include <Inventor/misc/SoChildList.h>
 #include <inttypes.h>
@@ -5746,6 +5748,9 @@ compact_mesh_prefill_find_transformed_reuse(
 	threadCount = 1;
     if (threadCount > jobCount)
 	threadCount = jobCount;
+    BObolParallelBudgetLease pcaBudget;
+    if (threadCount > 1)
+	threadCount = 1 + pcaBudget.tryAcquireHelpers(threadCount - 1);
     if (threadCount > 1) {
 	std::atomic<size_t> cursor(0);
 	auto poolWorker = [&]() {
@@ -5757,9 +5762,14 @@ compact_mesh_prefill_find_transformed_reuse(
 	    }
 	};
 	std::vector<std::thread> pool;
-	pool.reserve(threadCount - 1);
-	for (size_t t = 0; t + 1 < threadCount; t++)
-	    pool.emplace_back(poolWorker);
+	try {
+	    pool.reserve(threadCount - 1);
+	    for (size_t t = 0; t + 1 < threadCount; t++)
+		pool.emplace_back(poolWorker);
+	} catch (...) {
+	    /* The caller participates below and drains any work not claimed by
+	     * successfully started helpers. */
+	}
 	poolWorker();
 	for (std::thread &thread : pool)
 	    thread.join();
@@ -5768,6 +5778,7 @@ compact_mesh_prefill_find_transformed_reuse(
 	     !compact_mesh_prefill_cancelled(cancel); i++)
 	    computeSignature(i);
     }
+    pcaBudget.release();
     if (compact_mesh_prefill_cancelled(cancel))
 	return;
 
@@ -6218,6 +6229,10 @@ compact_mesh_prefill_realize(compact_mesh_prefill_workers *workers)
 	threadCount = 1;
     if (threadCount > parallelJobs.size())
 	threadCount = parallelJobs.size();
+    BObolParallelBudgetLease realizationBudget;
+    if (threadCount > 1)
+	threadCount = 1 +
+	    realizationBudget.tryAcquireHelpers(threadCount - 1);
 
     if (threadCount > 1) {
 	std::atomic<size_t> cursor(0);
@@ -6231,9 +6246,12 @@ compact_mesh_prefill_realize(compact_mesh_prefill_workers *workers)
 	    }
 	};
 	std::vector<std::thread> pool;
-	pool.reserve(threadCount - 1);
-	for (size_t t = 0; t + 1 < threadCount; t++)
-	    pool.emplace_back(poolWorker);
+	try {
+	    pool.reserve(threadCount - 1);
+	    for (size_t t = 0; t + 1 < threadCount; t++)
+		pool.emplace_back(poolWorker);
+	} catch (...) {
+	}
 	poolWorker();
 	for (std::thread &thread : pool)
 	    thread.join();
@@ -6244,6 +6262,7 @@ compact_mesh_prefill_realize(compact_mesh_prefill_workers *workers)
 	    compact_mesh_prefill_realize_job(*jobs[idx], workers);
 	}
     }
+    realizationBudget.release();
 
     for (size_t idx : serialJobs) {
 	if (compact_mesh_prefill_cancelled(workers->cancel))
@@ -6279,6 +6298,9 @@ compact_mesh_prefill_import_and_filter(compact_mesh_prefill_collect &collect,
 	threadCount = 1;
     if (threadCount > jobCount)
 	threadCount = jobCount;
+    BObolParallelBudgetLease importBudget;
+    if (threadCount > 1)
+	threadCount = 1 + importBudget.tryAcquireHelpers(threadCount - 1);
     if (threadCount > 1) {
 	std::atomic<size_t> cursor(0);
 	auto poolWorker = [&]() {
@@ -6290,9 +6312,12 @@ compact_mesh_prefill_import_and_filter(compact_mesh_prefill_collect &collect,
 	    }
 	};
 	std::vector<std::thread> pool;
-	pool.reserve(threadCount - 1);
-	for (size_t t = 0; t + 1 < threadCount; t++)
-	    pool.emplace_back(poolWorker);
+	try {
+	    pool.reserve(threadCount - 1);
+	    for (size_t t = 0; t + 1 < threadCount; t++)
+		pool.emplace_back(poolWorker);
+	} catch (...) {
+	}
 	poolWorker();
 	for (std::thread &thread : pool)
 	    thread.join();
@@ -6303,6 +6328,7 @@ compact_mesh_prefill_import_and_filter(compact_mesh_prefill_collect &collect,
 	    importJob(i);
 	}
     }
+    importBudget.release();
     if (compact_mesh_prefill_cancelled(collect.cancel))
 	return;
 
@@ -9653,6 +9679,8 @@ compact_index_count_entry(BObolCompactInstanceIndex &index,
     count(index.sourceMeshRequestCount, entry.sourceMeshRequestValid);
     count(index.residentProgressiveGeometryCount, progressive);
     count(index.displayLodTargetCount, entry.sourceMeshRequestValid || progressive);
+    count(index.overviewCount, BU_STR_EQUAL(
+	entry.shapeSummary.recordRole.getString(), "lod-overview"));
 }
 
 static void compact_index_bounds_add(BObolCompactInstanceIndex &index,
@@ -10443,21 +10471,13 @@ static bool
 compact_complete_stream_leaf_frontier(
     const BObolCompactInstanceIndex &index, size_t expectedLeafCount)
 {
-    /* The expected population excludes the temporary overview.  Avoid the
-     * linear confirmation until the index is large enough to contain both
-     * that overview and every expected leaf. */
-    if (!expectedLeafCount || index.entries.size() <= expectedLeafCount)
+    /* The expected population excludes the temporary overview.  The compact
+     * index maintains the role count at each append/replacement commit, so
+     * this producer/owner handoff remains constant-time for large streams. */
+    if (!expectedLeafCount || !index.overviewCount ||
+	index.overviewCount > index.entries.size())
 	return false;
-
-    size_t leafCount = 0;
-    for (const BObolCompactInstanceEntry &entry : index.entries) {
-	if (BU_STR_EQUAL(entry.shapeSummary.recordRole.getString(),
-		"lod-overview"))
-	    continue;
-	if (++leafCount >= expectedLeafCount)
-	    return true;
-    }
-    return false;
+    return index.entries.size() - index.overviewCount >= expectedLeafCount;
 }
 
 int
@@ -14075,6 +14095,13 @@ struct compact_coverage_collect {
     /* Written only by the hierarchy-walk producer, then transferred as one
      * bounded queue operation. */
     std::vector<compact_coverage_work_item> producerWork;
+    /* When the process-wide budget supplies no helper, the hierarchy-walk
+     * producer uses this nonblocking one-batch pump after each queue flush.
+     * This preserves streaming on one/two-core budgets without consuming the
+     * second outer producer lane. */
+    std::function<void(void)> producerAssist;
+    std::vector<compact_coverage_work_item> producerAssistItems;
+    std::vector<BObolCompactOccurrence> producerAssistPublications;
     /* Coverage is the latency-critical phase.  Retain its completed work
      * records here, then import full BoTs only after every leaf box and the
      * exact target extent have been published. */
@@ -14383,9 +14410,12 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
 	vertices >= compact_coverage_parallel_vertex_threshold &&
 	compact_coverage_try_acquire_parallel_vertex_scan();
     if (parallelBounds) {
-	const size_t workerCount = std::min(
+	const size_t requestedWorkerCount = std::min(
 	    compact_coverage_parallel_vertex_workers,
 	    std::max<size_t>(1, bu_avail_cpus()));
+	BObolParallelBudgetLease boundsBudget;
+	const size_t workerCount =
+	    boundsBudget.tryAcquireHelpers(requestedWorkerCount);
 	std::array<compact_coverage_vertex_bounds,
 	    compact_coverage_parallel_vertex_workers> partialBounds;
 	std::array<std::thread, compact_coverage_parallel_vertex_workers> workers;
@@ -14404,8 +14434,9 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
 	}
 	for (size_t worker = 0; worker < launched; ++worker)
 	    workers[worker].join();
+	boundsBudget.release();
 	compact_coverage_active_vertex_scans.fetch_sub(1);
-	if (launched == workerCount) {
+	if (workerCount && launched == workerCount) {
 	    for (size_t worker = 0; worker < workerCount; ++worker)
 		compact_coverage_merge_vertex_bounds(vertexBounds,
 		    partialBounds[worker]);
@@ -14843,6 +14874,7 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
      * one-leaf database (and any slow first branch with fewer than 16 leaves)
      * wait for the complete walk before a coverage worker could start.  Keep
      * batching for throughput after that first publication. */
+    bool queuedCoverage = false;
     if (collect->occurrenceCount == 1 ||
 	collect->producerWork.size() >= compact_coverage_work_batch_size) {
 	{
@@ -14853,8 +14885,11 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
 	    collect->producerWork.clear();
 	}
 	collect->workReady.notify_one();
+	queuedCoverage = true;
     }
     bu_free(rawPath, "compact coverage path");
+    if (queuedCoverage && collect->producerAssist)
+	collect->producerAssist();
     return make_nop_tree();
 }
 
@@ -15025,7 +15060,12 @@ compact_coverage_seed_warm_terminal_work(
 	    std::unique_ptr<compact_coverage_asset> owned(
 		new compact_coverage_asset);
 	    owned->dp = dp;
-	    owned->assetPath = sourceName;
+	    owned->cacheKey = realize_geometry_cache_key(dp);
+	    SbBox3f unusedBounds;
+	    source_lod_cache_key_append(owned->cacheKey, source,
+		unusedBounds,
+		dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP);
+	    owned->assetPath = path;
 	    owned->estimatedWorkingSetBytes =
 		compact_coverage_working_set_estimate(
 		    source->getDatabase(), dp);
@@ -15033,6 +15073,8 @@ compact_coverage_seed_warm_terminal_work(
 	    owned->coverageGeometry = bobol_cad_structural_bounds_geometry(
 		record.bounds, owned->proxyGeometryTransform);
 	    owned->coverageReady = owned->coverageGeometry ? true : false;
+	    owned->lodEligible = owned->coverageReady &&
+		dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP;
 	    asset = owned.get();
 	    stagedAssets.push_back(std::move(owned));
 	    assetsByDirectory.emplace(dp, asset);
@@ -15047,8 +15089,11 @@ compact_coverage_seed_warm_terminal_work(
 	occurrence.assetPath = sourceName;
 	occurrence.occurrenceIndex = record.occurrenceIndex;
 	occurrence.booleanOperation = record.booleanOperation;
+	const char *sourceType =
+	    dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP ?
+	    "brep" : "primitive";
 	occurrence.summary = compact_occurrence_summary(source, path,
-	    sourceName, "primitive", "aabb", revision,
+	    sourceName, sourceType, "aabb", revision,
 	    BObolRealizedShapeSummary::SHAPE_MESH);
 	occurrence.summary.regionId = record.regionId;
 	occurrence.summary.airCode = record.airCode;
@@ -15072,6 +15117,109 @@ compact_coverage_seed_warm_terminal_work(
     collect.assets = std::move(stagedAssets);
     collect.detailWork = std::move(stagedWork);
     collect.occurrenceCount = occurrenceCount;
+    return true;
+}
+
+/* A shaded BREP may already have a persisted immutable PoP hierarchy even
+ * when the independent leaf-manifest lookup missed or was invalidated.
+ * Recover that exact representation from the BREP bytes and current
+ * tessellation contract before importing the much larger rt_db_internal or
+ * tessellating the boundary again. */
+static bool
+compact_coverage_recover_warm_brep_cache(
+	SoBRLDatabaseSource *source, compact_coverage_asset &asset)
+{
+    if (!source || !source->getDatabase() || !asset.dp ||
+	asset.dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BREP ||
+	source->drawMode.getValue() == SoBRLDatabaseSource::WIREFRAME)
+	return false;
+
+    const struct bg_tess_tol ttol = source_tess_tol(source);
+    const struct bn_tol tol = BN_TOL_INIT_TOL;
+    const unsigned long long key = cad_brep_shaded_asset_key(
+	source->getDatabase(), asset.dp, &ttol, &tol);
+    if (!key)
+	return false;
+
+    struct BObolMeshLod *lod = bobol_mesh_lod_get_cached_prefix(
+	source->getDatabase(), key);
+    if (!lod)
+	return false;
+
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    bool valid = bobol_mesh_lod_cache_key_get(lod) == key &&
+	bobol_mesh_lod_hierarchy_info_get(lod, &hierarchy) &&
+	hierarchy.min_cut >= 0 && hierarchy.max_cut >= hierarchy.min_cut &&
+	hierarchy.max_cut < BOBOL_MESH_LOD_CUT_COUNT_MAX &&
+	hierarchy.cut_count == static_cast<uint32_t>(hierarchy.max_cut + 1);
+    uint64_t faceCount = 0;
+    uint64_t pointCount = 0;
+    SbBox3f bounds;
+    bounds.makeEmpty();
+    if (valid) {
+	const BObolMeshLodCutInfo &terminal = hierarchy.cuts[hierarchy.max_cut];
+	faceCount = terminal.face_count;
+	pointCount = terminal.point_count;
+	valid = terminal.exact && faceCount && pointCount &&
+	    faceCount <= static_cast<uint64_t>(
+		std::numeric_limits<size_t>::max()) &&
+	    pointCount <= static_cast<uint64_t>(
+		std::numeric_limits<size_t>::max());
+	for (int axis = 0; valid && axis < 3; ++axis) {
+	    valid = std::isfinite(hierarchy.quantization_min[axis]) &&
+		std::isfinite(hierarchy.quantization_max[axis]) &&
+		hierarchy.quantization_min[axis] <=
+		    hierarchy.quantization_max[axis];
+	}
+	if (valid) {
+	    bounds = SbBox3f(
+		SbVec3f(
+		    static_cast<float>(hierarchy.quantization_min[X]),
+		    static_cast<float>(hierarchy.quantization_min[Y]),
+		    static_cast<float>(hierarchy.quantization_min[Z])),
+		SbVec3f(
+		    static_cast<float>(hierarchy.quantization_max[X]),
+		    static_cast<float>(hierarchy.quantization_max[Y]),
+		    static_cast<float>(hierarchy.quantization_max[Z])));
+	    valid = !bounds.isEmpty();
+	}
+    }
+
+    std::shared_ptr<const Obol::PartGeometry> proxy;
+    SbMatrix proxyTransform = SbMatrix::identity();
+    if (valid)
+	proxy = bobol_cad_structural_bounds_geometry(bounds, proxyTransform);
+    bobol_mesh_lod_destroy(lod);
+    if (!valid || !proxy)
+	return false;
+
+    BObolSourceMeshRequest request;
+    request.sourceType = "brep";
+    request.meshAssetPath = asset.assetPath.c_str();
+    request.meshAssetName = asset.dp->d_namep ? asset.dp->d_namep : "";
+    request.meshAssetBounds = bounds;
+    request.meshAssetContentHash = key;
+    request.meshAssetTessellationAbsTol = ttol.abs;
+    request.meshAssetTessellationRelTol = ttol.rel;
+    request.meshAssetTessellationNormTol = ttol.norm;
+    request.meshAssetTransform = SbMatrix::identity();
+    request.faceCount = faceCount;
+    request.pointCount = pointCount;
+    request.bounds = bounds;
+
+    asset.sourceMeshRequest = request;
+    asset.coverageBounds = bounds;
+    asset.coverageGeometry = proxy;
+    asset.geometry = proxy;
+    asset.proxyGeometryTransform = proxyTransform;
+    asset.vertexCount = static_cast<size_t>(pointCount);
+    asset.faceCount = static_cast<size_t>(faceCount);
+    asset.coverageReady = true;
+    asset.lodEligible = true;
+    asset.sourceMeshReady = true;
+    asset.ready = true;
+    asset.realizedSourceType = "brep";
     return true;
 }
 
@@ -15126,28 +15274,34 @@ compact_stream_publish_parallel_coverage(
     size_t workerCount = bu_avail_cpus();
     workerCount = std::max<size_t>(1, std::min<size_t>(workerCount, 32));
     collect.producerWork.reserve(compact_coverage_work_batch_size);
-    const auto coverageWorker = [&]() {
+    const auto coverageWorker = [&](bool waitForWork) {
 	/* Bounds and the first useful overview are foreground draw latency, not
 	 * speculative refinement.  Lowering these workers' priority let unrelated
 	 * renderer/cache work starve a cold scene into several blank seconds.
 	 * Full-array import below remains niced. */
-	std::vector<compact_coverage_work_item> items;
+	std::vector<compact_coverage_work_item> localItems;
+	std::vector<BObolCompactOccurrence> localPublications;
+	std::vector<compact_coverage_work_item> &items = waitForWork ?
+	    localItems : collect.producerAssistItems;
+	std::vector<BObolCompactOccurrence> &publications = waitForWork ?
+	    localPublications : collect.producerAssistPublications;
 	items.reserve(compact_coverage_work_batch_size);
-	std::vector<BObolCompactOccurrence> publications;
 	publications.reserve(compact_coverage_work_batch_size + 1);
 	for (;;) {
 	    items.clear();
 	    publications.clear();
 	    {
 		std::unique_lock<std::mutex> lock(collect.workMutex);
-		collect.workReady.wait(lock, [&]() {
-		    return collect.producerDone || !collect.work.empty() ||
-			stream->isCancelled();
-		});
+		if (waitForWork) {
+		    collect.workReady.wait(lock, [&]() {
+			return collect.producerDone || !collect.work.empty() ||
+			    stream->isCancelled();
+		    });
+		}
 		if (stream->isCancelled())
 		    break;
 		if (collect.work.empty()) {
-		    if (collect.producerDone)
+		    if (collect.producerDone || !waitForWork)
 			break;
 		    continue;
 		}
@@ -15367,6 +15521,8 @@ compact_stream_publish_parallel_coverage(
 	    }
 	    if (!publications.empty())
 		stream->pushBatch(std::move(publications));
+	    if (!waitForWork)
+		break;
 	}
     };
     const auto detailWorker = [&]() {
@@ -15395,6 +15551,12 @@ compact_stream_publish_parallel_coverage(
 		continue;
 	    }
 	    std::call_once(asset.realizeOnce, [&]() {
+		/* The content-addressed mesh cache and the structural manifest have
+		 * independent lifetimes.  Requiring a manifest hit here caused a
+		 * cold hierarchy census to re-tessellate every BREP even when its
+		 * exact PoP payload was already reusable. */
+		if (compact_coverage_recover_warm_brep_cache(source, asset))
+		    return;
 		if (!bobol_lod_working_set_acquire(
 		    asset.estimatedWorkingSetBytes))
 		    return;
@@ -15499,6 +15661,7 @@ compact_stream_publish_parallel_coverage(
 			source->getDatabase(), asset.dp, &intern, &ttol, &tol,
 			revision, asset.sourceMeshRequest);
 		if (staged) {
+		    asset.realizedSourceType = "brep";
 		    asset.sourceMeshRequest.meshAssetPath =
 			asset.assetPath.c_str();
 		    asset.sourceMeshRequest.meshAssetName =
@@ -15642,11 +15805,16 @@ compact_stream_publish_parallel_coverage(
 	    occurrence.occurrenceIndex = item.occurrence.occurrenceIndex;
 	    occurrence.booleanOperation = item.occurrence.booleanOperation;
 	    occurrence.summary = item.occurrence.summary;
+	    if (!asset.realizedSourceType.empty())
+		occurrence.summary.sourceType =
+		    asset.realizedSourceType.c_str();
 	    if (occurrence.sourceMeshRequestValid) {
 		compact_source_mesh_request_sync(occurrence.sourceMeshRequest,
 		    occurrence.summary);
 		compact_summary_lod_from_source_mesh_request(occurrence.summary,
 		    occurrence.sourceMeshRequest);
+		occurrence.summary.boundsValid = TRUE;
+		occurrence.summary.bounds = asset.coverageBounds;
 	    } else if (asset.geometry && asset.geometry->wire) {
 		occurrence.summary.shapeKind =
 		    BObolRealizedShapeSummary::SHAPE_VLIST;
@@ -15679,9 +15847,6 @@ compact_stream_publish_parallel_coverage(
 		occurrence.summary.boundsValid = TRUE;
 		occurrence.summary.bounds = asset.geometry->shaded->bounds;
 	    }
-	    if (!asset.realizedSourceType.empty())
-		occurrence.summary.sourceType =
-		    asset.realizedSourceType.c_str();
 	    stream->recordManifestOccurrence(occurrence);
 	    stream->push(std::move(occurrence));
 	    if (!asset.coverageReady)
@@ -15691,10 +15856,27 @@ compact_stream_publish_parallel_coverage(
 	}
     };
     std::vector<std::thread> workers;
-    workers.reserve(workerCount);
+    BObolParallelBudgetLease coverageBudget;
+    size_t coverageWorkerCount = 0;
     if (!selectiveWarmReplay) {
-	for (size_t i = 0; i < workerCount; i++)
-	    workers.push_back(std::thread(coverageWorker));
+	coverageWorkerCount =
+	    coverageBudget.tryAcquireHelpers(workerCount);
+	try {
+	    workers.reserve(coverageWorkerCount);
+	    for (size_t i = 0; i < coverageWorkerCount; i++)
+		workers.push_back(std::thread(coverageWorker, true));
+	} catch (...) {
+	    /* Successfully started consumers drain the complete queue.  If no
+	     * helper could start, the producer thread drains it after enumeration
+	     * below. */
+	}
+    }
+    if (!selectiveWarmReplay && workers.empty()) {
+	try {
+	    collect.producerAssist = [&]() { coverageWorker(false); };
+	} catch (const std::bad_alloc &) {
+	    /* End-of-walk fallback below still guarantees completion. */
+	}
     }
 
     /*
@@ -15748,8 +15930,15 @@ compact_stream_publish_parallel_coverage(
 	collect.producerDone = true;
     }
     collect.workReady.notify_all();
-    for (std::thread &thread : workers)
-	thread.join();
+    if (!selectiveWarmReplay && workers.empty()) {
+	coverageWorker(true);
+    } else {
+	for (std::thread &thread : workers)
+	    thread.join();
+    }
+    coverageWorkerCount = workers.empty() && !selectiveWarmReplay ? 1 :
+	workers.size();
+    coverageBudget.release();
     if (walkResult < 0 || stream->isCancelled())
 	return -1;
     const size_t emptyOccurrenceCount = terminalEmptyOccurrences.load();
@@ -15806,28 +15995,38 @@ compact_stream_publish_parallel_coverage(
 	    SbMatrix::identity());
 	std::vector<unsigned char> primaryMatches(candidates.size(), 0);
 	std::atomic<size_t> nextCandidate(0);
-	const size_t proofWorkerCount = std::max<size_t>(1,
+	const size_t requestedProofWorkerCount = std::max<size_t>(1,
 	    std::min(workerCount, candidates.size()));
+	BObolParallelBudgetLease proofBudget;
+	const size_t proofWorkerCount = proofBudget.tryAcquireHelpers(
+	    requestedProofWorkerCount);
+	const auto proofWorker = [&]() {
+	    for (;;) {
+		const size_t candidateIndex = nextCandidate.fetch_add(1);
+		if (candidateIndex >= candidates.size())
+		    break;
+		primaryMatches[candidateIndex] =
+		    compact_coverage_serialized_rigid_match(
+			source->getDatabase(), primary->dp,
+			candidates[candidateIndex]->dp,
+			primaryTransforms[candidateIndex],
+			mappedDatabase.file) ? 1 : 0;
+	    }
+	};
 	std::vector<std::thread> proofWorkers;
-	proofWorkers.reserve(proofWorkerCount);
-	for (size_t i = 0; i < proofWorkerCount; ++i) {
-	    proofWorkers.push_back(std::thread([&]() {
-		for (;;) {
-		    const size_t candidateIndex =
-			nextCandidate.fetch_add(1);
-		    if (candidateIndex >= candidates.size())
-			break;
-		    primaryMatches[candidateIndex] =
-			compact_coverage_serialized_rigid_match(
-			    source->getDatabase(), primary->dp,
-			    candidates[candidateIndex]->dp,
-			    primaryTransforms[candidateIndex],
-			    mappedDatabase.file) ? 1 : 0;
-		}
-	    }));
+	try {
+	    proofWorkers.reserve(proofWorkerCount);
+	    for (size_t i = 0; i < proofWorkerCount; ++i)
+		proofWorkers.push_back(std::thread(proofWorker));
+	} catch (...) {
 	}
-	for (std::thread &proofWorker : proofWorkers)
-	    proofWorker.join();
+	if (proofWorkers.empty()) {
+	    proofWorker();
+	} else {
+	    for (std::thread &worker : proofWorkers)
+		worker.join();
+	}
+	proofBudget.release();
 
 	for (size_t candidateIndex = 0;
 	     candidateIndex < candidates.size(); ++candidateIndex) {
@@ -15949,7 +16148,8 @@ compact_stream_publish_parallel_coverage(
 	bu_log("[obol-timing] coverage bounds: %.1f ms; %zu occurrences, "
 	       "%zu assets, %zu workers, %zu boxes\n",
 	       static_cast<double>(coverageCompleted - collectStart) / 1000.0,
-	       collect.occurrenceCount, collect.assets.size(), workerCount,
+	       collect.occurrenceCount, collect.assets.size(),
+	       coverageWorkerCount,
 	       publishedBoxes.load());
 
     /* Bounds-first is a scheduling barrier, not a loss of parallelism.  Once
@@ -15957,10 +16157,22 @@ compact_stream_publish_parallel_coverage(
      * reuse the same bounded worker count to import the source arrays needed
      * by PoP and enrich each standing leaf in place. */
     workers.clear();
-    for (size_t i = 0; i < workerCount; i++)
-	workers.push_back(std::thread(detailWorker));
-    for (std::thread &thread : workers)
-	thread.join();
+    BObolParallelBudgetLease detailBudget;
+    const size_t detailWorkerCount =
+	detailBudget.tryAcquireHelpers(workerCount);
+    try {
+	workers.reserve(detailWorkerCount);
+	for (size_t i = 0; i < detailWorkerCount; i++)
+	    workers.push_back(std::thread(detailWorker));
+    } catch (...) {
+    }
+    if (workers.empty()) {
+	detailWorker();
+    } else {
+	for (std::thread &thread : workers)
+	    thread.join();
+    }
+    detailBudget.release();
     if (stream->isCancelled())
 	return -1;
     if (profile.valid) {

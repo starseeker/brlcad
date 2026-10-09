@@ -821,6 +821,7 @@ SoBRLDatabaseSource::getCompactViewLodSupersededFallbackCount(
 	if (presentation == assembly->compactInstancePresentations.end() ||
 	    assembly->compactSpatiallyCulledInstances.find(entry.instance) !=
 		assembly->compactSpatiallyCulledInstances.end() ||
+	    !presentation->second.lodStructuralProxy ||
 	    presentation->second.activePart != entry.part)
 	    continue;
 	count++;
@@ -828,6 +829,52 @@ SoBRLDatabaseSource::getCompactViewLodSupersededFallbackCount(
 	    paths->push_back(entry.semantic.path);
     }
     return count;
+}
+
+SbBool
+SoBRLDatabaseSource::compactViewLodEntryUsesSupersededFallback(
+    const BObolViewLodState *viewState, size_t entryIndex) const
+{
+    if (!this->d->compactIndex || !viewState ||
+	entryIndex >= this->d->compactIndex->entries.size() ||
+	entryIndex > static_cast<size_t>(UINT32_MAX))
+	return FALSE;
+
+    /* Requiring the current payload revision distinguishes a conversion or
+     * admission failure from the benign race where a richer result arrived
+     * after the framebuffer census selected its structural predecessor. */
+    SoBRLCadAssembly *assembly = this->currentCompactViewLodAssembly(viewState);
+    if (!assembly)
+	return FALSE;
+
+    const BObolCompactInstanceEntry &entry =
+	this->d->compactIndex->entries[entryIndex];
+    if (!entry.lodBacked || !entry.geometry ||
+	!entry.geometry->structuralProxy)
+	return FALSE;
+    const SbString &occurrenceKey = compact_instance_identity(entry);
+	const BObolViewLodState::CadPayload *payload =
+	viewState->findCadForSourceEntry(this,
+	    static_cast<uint32_t>(entryIndex), occurrenceKey);
+	/* A resident-progressive source part has no CadPayload: its view-local
+	 * binding selects a cut on the authored immutable part directly.  It is
+	 * nevertheless a richer presentation claim, and a synchronized assembly
+	 * which still marks that same part as structural is the same terminal
+	 * fallback evidence as a rejected cache/service payload. */
+	const bool residentProgressive =
+	    viewState->residentCadProgressiveCut(this,
+		static_cast<uint32_t>(entryIndex), occurrenceKey,
+		entry.geometryRevision) >= 0;
+	if ((!payload || !payload->isValid()) && !residentProgressive)
+	return FALSE;
+
+    const auto presentation =
+	assembly->compactInstancePresentations.find(entry.instance);
+    return presentation != assembly->compactInstancePresentations.end() &&
+	assembly->compactSpatiallyCulledInstances.find(entry.instance) ==
+	    assembly->compactSpatiallyCulledInstances.end() &&
+	presentation->second.lodStructuralProxy &&
+	presentation->second.activePart == entry.part ? TRUE : FALSE;
 }
 
 int
@@ -865,6 +912,7 @@ SoBRLDatabaseSource::getCompactViewLodActiveFallbackCount(
 	if (presentation == assembly->compactInstancePresentations.end() ||
 	    assembly->compactSpatiallyCulledInstances.find(entry.instance) !=
 		assembly->compactSpatiallyCulledInstances.end() ||
+	    !presentation->second.lodStructuralProxy ||
 	    presentation->second.activePart != entry.part)
 	    continue;
 	count++;
@@ -1411,9 +1459,11 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		}
 	    }
 	}
-	const bool spatiallyCulled = payload && payload->progressiveMesh &&
-	    payload->progressiveMesh->hasSpatialClusters() &&
-	    payload->requiredChunks.empty();
+	const bool spatiallyCulled = payload &&
+	    (!payload->presentationActive ||
+	     (payload->progressiveMesh &&
+	      payload->progressiveMesh->hasSpatialClusters() &&
+	      payload->requiredChunks.empty()));
 	const bool wasSpatiallyCulled =
 	    presentationStaging.isSpatiallyCulled(entry.instance);
 	presentationStaging.setSpatiallyCulled(
@@ -1468,6 +1518,10 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    } else {
 		payloadKey += "cut=";
 		payloadKey += std::to_string(payload->activeCut);
+		/* A non-progressive payload replaces any direct progressive
+		 * source-part selection for this occurrence.  In particular, a
+		 * terminal OBB must not inherit the source wire's cut ordinal. */
+		desiredActiveCut = payload->activeCut;
 	    }
 	    payloadKey += ':';
 	    payloadKey += std::to_string(sourceDrawMode);
@@ -1477,10 +1531,16 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    payloadKey += std::to_string(normalCreaseAngle);
 	    const bool layeredPresentation =
 		!payload->presentationLayers.empty();
+	    const bool terminalObbUsesStructuralPart =
+		payload->resultKind == BOBOL_LOD_RESULT_PROXY &&
+		payload->proxy.kind == BOBOL_LOD_PROXY_OBB &&
+		payload->proxy.isValid() && entry.lodBacked && entry.geometry &&
+		entry.geometry->structuralProxy;
 	    if (layeredPresentation)
 		cad_compact_append_layer_identity(
 		    payloadKey, payload->presentationLayers);
 	    const Obol::PartId expectedPayloadPart =
+		terminalObbUsesStructuralPart ? entry.part :
 		cad_compact_payload_part_id(
 		    *payload, occurrenceKey, payloadKey, sourceDrawMode);
 	    /* A payload key describes immutable data, not the retained instance
@@ -1492,6 +1552,15 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		desiredPart = presentation.activePart;
 		desiredChannels = presentation.channels;
 		desiredGeometryValid = true;
+	    } else if (terminalObbUsesStructuralPart) {
+		/* The OBB came from this authored presentation's bounds.  Keeping
+		 * its existing immutable part avoids duplicating equivalent box
+		 * geometry and makes the allocator price exactly what is drawn. */
+		desiredPart = entry.part;
+		desiredChannels = presentationStaging.partChannel(entry.part);
+		desiredActiveCut = -1;
+		desiredGeometryValid = true;
+		desiredLodStructuralProxy = false;
 	    } else {
 		Obol::PartGeometryBuilder geometry;
 		const bool progressive =
@@ -1635,18 +1704,38 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		}
 	    }
 	}
-	if (!desiredGeometryValid)
-	{
-	    /* A rejected or stale LoD payload must fall back to the authored
-	     * structural part as one coherent record.  Keeping the hashed LoD
-	     * part id after geometry conversion failed leaves the instance
-	     * referencing a part that was never inserted and makes it vanish. */
-	    payloadKey.clear();
-	    desiredPart = entry.part;
-	    desiredChannels = presentationStaging.partChannel(entry.part);
-	    desiredActiveCut = -1;
-	    desiredLodStructuralProxy = entry.geometry &&
-		entry.geometry->structuralProxy && entry.lodBacked;
+	if (!desiredGeometryValid) {
+	    const bool terminalObbCanReuseStructuralPart = payload &&
+		payload->resultKind == BOBOL_LOD_RESULT_PROXY &&
+		payload->proxy.kind == BOBOL_LOD_PROXY_OBB &&
+		payload->proxy.isValid() && entry.lodBacked && entry.geometry &&
+		entry.geometry->structuralProxy;
+	    if (terminalObbCanReuseStructuralPart) {
+		/* Planar and linear OBBs are valid terminal coverage, but their
+		 * zero-area shaded faces are deliberately rejected by renderer
+		 * geometry admission.  The authored structural part already draws
+		 * the same conservative extent.  Reuse it while retaining the OBB
+		 * payload identity and terminal presentation semantics; marking this
+		 * record structural would make the exact census repair it forever. */
+		desiredGeometryValid = true;
+		desiredPart = entry.part;
+		desiredChannels =
+		    presentationStaging.partChannel(entry.part);
+		desiredActiveCut = -1;
+		desiredLodStructuralProxy = false;
+	    } else {
+		/* A rejected or stale LoD payload must fall back to the authored
+		 * structural part as one coherent record.  Keeping the hashed LoD
+		 * part id after geometry conversion failed leaves the instance
+		 * referencing a part that was never inserted and makes it vanish. */
+		payloadKey.clear();
+		desiredPart = entry.part;
+		desiredChannels =
+		    presentationStaging.partChannel(entry.part);
+		desiredActiveCut = -1;
+		desiredLodStructuralProxy = entry.geometry &&
+		    entry.geometry->structuralProxy && entry.lodBacked;
+	    }
 	}
 	else if (payload) {
 	    desiredLodStructuralProxy =

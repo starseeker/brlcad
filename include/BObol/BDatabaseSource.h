@@ -317,6 +317,25 @@ struct BOBOL_EXPORT BObolCompactInstanceHandle {
     SbBool isValid(void) const;
 };
 
+/** One effective retained wire segment for renderer-neutral export.
+ *
+ * The style is the final occurrence presentation after authored per-segment
+ * annotation styling, selection/highlight policy, and occurrence opacity have
+ * been combined.  Coordinates remain source-local, matching
+ * copyCompactWireGeometry().
+ */
+struct BOBOL_EXPORT BObolCompactWireSegment {
+    BObolCompactWireSegment(void);
+
+    SbVec3f start;
+    SbVec3f end;
+    SbColor color;
+    float transparency;
+    float lineWidth;
+    uint16_t linePattern;
+    uint16_t linePatternFactor;
+};
+
 struct BOBOL_EXPORT BObolCompactInstanceSummary {
     BObolCompactInstanceSummary(void);
 
@@ -1498,6 +1517,14 @@ public:
      * view-dependent terminal state may intentionally retain mesh payloads
      * for only a visible subset. */
     size_t getCompactExpectedInstanceCount(void) const;
+    /** TRUE only when a producer has certified the active streaming epoch's
+     * expected leaf count and the compact registry contains exactly that leaf
+     * population.  A retained temporary whole-target lod-overview is not a
+     * leaf and does not make an otherwise complete population incomplete.
+     * Equality with getCompactExpectedInstanceCount() is not itself proof:
+     * that progress accessor clamps an uncertified expected count upward to
+     * the currently published prefix. */
+    SbBool hasCompleteCompactInstancePopulation(void) const;
     SbBool getCompactSourceProfile(BObolCompactSourceProfile &profile) const;
     /** Resolve a stable compact occurrence identity to its source-local entry
      * index in expected O(1) time.  Used by retained view work frontiers; it
@@ -1557,6 +1584,11 @@ public:
      * vector export without constructing per-occurrence Coin shape nodes. */
     SbBool copyCompactWireGeometry(std::vector<SbVec3f> &points,
 	std::vector<int32_t> &commands) const;
+    /* Copy the same visible wire population with its exact effective style.
+     * This is the preferred path for vector exporters, which cannot recover
+     * authored annotation styles from the source-wide display summary. */
+    SbBool copyCompactWireSegments(
+	std::vector<BObolCompactWireSegment> &segments) const;
     /* Copy one compact occurrence into source coordinates for a transient
      * selection/edit presentation.  The compact index remains authoritative
      * and retains no Coin shape for this operation. */
@@ -1577,6 +1609,10 @@ public:
 	BObolCompactLodProviderSummary &summary) const;
     SbBool getCompactLodPlanningSummary(int index,
 	BObolCompactLodPlanningSummary &summary) const;
+    /** Return renderer-work counts for an authored structural presentation.
+     * FALSE means the entry has no reusable structural PartGeometry. */
+    SbBool getCompactStructuralPresentationCounts(int index,
+	BObolLodCounts &counts) const;
     SbBool getCompactResidentProgressiveSummary(int index,
 	BObolCompactResidentProgressiveSummary &summary) const;
     /* Constant-time occurrence lookup for scene-wide retained-LoD
@@ -1697,6 +1733,13 @@ public:
     int getCompactViewLodSupersededFallbackCount(
 	const BObolViewLodState *viewState,
 	std::vector<SbString> *paths = NULL) const;
+    /** TRUE when the current, fully synchronized view assembly consumed the
+     * payload or direct resident-progressive binding for @p entryIndex but
+     * retained that occurrence's authored structural part.  A stale assembly
+     * is deliberately reported as FALSE: its binding may simply need the
+     * ordinary presentation rebind. */
+    SbBool compactViewLodEntryUsesSupersededFallback(
+	const BObolViewLodState *viewState, size_t entryIndex) const;
     /* Number of structural AABB/OBB leaf parts that are still the active
      * presentation, whether or not a richer payload has already arrived.
      * Unlike the superseded-only invariant above, this reports legitimate
