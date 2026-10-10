@@ -355,12 +355,13 @@ main(int argc, char **argv)
     std::fclose(temporary);
 
     int result = 0;
+    struct db_i *database = NULL;
     if (!make_database(databasePath)) {
 	std::fprintf(stderr, "FAIL: could not create telemetry database\n");
 	result = 1;
 	goto cleanup_files;
     }
-    struct db_i *database = db_open(databasePath, DB_OPEN_READONLY);
+    database = db_open(databasePath, DB_OPEN_READONLY);
     if (!database || db_dirbuild(database) < 0) {
 	std::fprintf(stderr, "FAIL: could not open telemetry database\n");
 	if (database)

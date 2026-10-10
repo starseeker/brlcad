@@ -43,6 +43,10 @@ constexpr float SPINNER_DOT_SIZE = 2.5f;
 constexpr int SPINNER_DOT_COUNT = 8;
 constexpr int SPINNER_STEP_MILLISECONDS = 90;
 
+}
+
+/* Inventor generates static type hooks that may be unused for a leaf node.
+ * External linkage avoids unused-function warnings for those hooks. */
 class SoBRLLodProgressCard : public SoNode {
     typedef SoNode inherited;
 
@@ -138,7 +142,7 @@ public:
 	    line += "  -  ";
 	    line += this->detail.getValue();
 	}
-	renderText(action, this->textNode, line,
+	renderText(action, line,
 	    SbVec2f(centerX + SPINNER_RADIUS + CARD_PADDING,
 		bottom + 10.0f), TEXT_FONT_SIZE,
 	    SbColor(0.90f, 0.92f, 0.95f));
@@ -163,8 +167,8 @@ private:
 	SoGLContext_glEnd(gl);
     }
 
-    void renderText(SoGLRenderAction *action, SoText2 *&textNode,
-	const SbString &text, const SbVec2f &position, float fontSize,
+    void renderText(SoGLRenderAction *action, const SbString &text,
+	const SbVec2f &position, float fontSize,
 	const SbColor &textColor)
     {
 	SoState *state = action->getState();
@@ -175,12 +179,12 @@ private:
 	SoFontSizeElement::set(state, this, fontSize);
 	SoColorPacker colorPacker;
 	SoLazyElement::setDiffuse(state, this, 1, &textColor, &colorPacker);
-	if (!textNode) {
-	    textNode = new SoText2;
-	    textNode->ref();
+	if (!this->textNode) {
+	    this->textNode = new SoText2;
+	    this->textNode->ref();
 	}
-	textNode->string.setValue(text);
-	textNode->GLRender(action);
+	this->textNode->string.setValue(text);
+	this->textNode->GLRender(action);
 	state->pop();
     }
 
@@ -188,8 +192,6 @@ private:
 };
 
 SO_NODE_SOURCE(SoBRLLodProgressCard);
-
-}
 
 SO_NODE_SOURCE(SoBRLLodProgressOverlay);
 

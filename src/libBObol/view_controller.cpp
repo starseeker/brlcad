@@ -3437,45 +3437,45 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	budgetInputs.releaseCutFloor =
 	    this->d->lodInteractionSession.releaseCutFloorActive();
 	budgetInputs.stablePresentationHandoff =
-		    this->d->lodPresentationPolicy.handoffPending();
-    budgetInputs.stablePresentationCostFloor = std::max(
-	this->d->lodPresentationPolicy.handoffCostFloor(),
-	std::max(
-	    this->d->lodStaticQualityTrial.acceptedPresentationCostFor(
-		this->d->admissionRevisionStamp()),
-	    this->d->lodStaticQualityTrial.constrainedPresentationBudgetFor(
-		this->d->admissionRevisionStamp())));
-    if (controller_lod_trace_enabled("BOBOL_LOD_TRACE_PASS",
-	    this->d->lodViewRevision.value())) {
-	const BObolLodCapacitySearchCertificate &search =
-	    this->d->lodAdmissionEvidence.capacity().capacitySearch();
-	bu_log("BObol LoD admission input phase=%u candidate=%zu "
-	       "samples_remaining=%u current_budget=%zu cursor=%d "
-	       "cursor_refinement=%zu cursor_retained=%d "
-	       "target_fps=%.3f hard_deadline=%d retain_cuts=%d "
-	       "retained_static=%d\n",
-	       static_cast<unsigned int>(search.phase()),
-	       search.candidateBudget(), search.samplesRemaining(),
-	       this->d->lodAdmissionEvidence.capacity().currentBudget(),
-	       this->d->lodAdmissionCursor.initialized() ? 1 : 0,
-	       this->d->lodAdmissionCursor.refinementRemaining(),
-	       this->d->lodAdmissionCursor.retainedAdmission() ? 1 : 0,
-	       targetFps, hardDeadlinePresentation ? 1 : 0,
-	       this->d->lodRetainedViewContinuity.retainOccurrenceCuts() ? 1 : 0,
-	       retainedStaticPresentation ? 1 : 0);
-    }
-    const BObolLodAdmissionPlan admissionPlan =
-	BObolLodAdmissionPlanner::plan(
-	    this->d->lodAdmissionEvidence, this->d->lodAdmissionCursor,
-	    this->d->admissionRevisionStamp(), budgetInputs);
-    this->d->commitAdmissionPlan(admissionPlan);
-    const BObolLodCapacityEvidence::Decision &budget =
-	admissionPlan.capacityDecision;
-    if (this->d->lodStructuralRepair.active())
-	this->d->lodStructuralRepair.reserveCoverageCost(
-	    BObolLodAdmissionPlanner::structuralPerOccurrenceReservation(
-		budget.totalBudget, this->d->lodAdmissionCursor.activeCost(),
-		this->d->lodStructuralRepair.frontierCount()));
+	    this->d->lodPresentationPolicy.handoffPending();
+	budgetInputs.stablePresentationCostFloor = std::max(
+	    this->d->lodPresentationPolicy.handoffCostFloor(),
+	    std::max(
+		this->d->lodStaticQualityTrial.acceptedPresentationCostFor(
+		    this->d->admissionRevisionStamp()),
+		this->d->lodStaticQualityTrial.constrainedPresentationBudgetFor(
+		    this->d->admissionRevisionStamp())));
+	if (controller_lod_trace_enabled("BOBOL_LOD_TRACE_PASS",
+		this->d->lodViewRevision.value())) {
+	    const BObolLodCapacitySearchCertificate &search =
+		this->d->lodAdmissionEvidence.capacity().capacitySearch();
+	    bu_log("BObol LoD admission input phase=%u candidate=%zu "
+		   "samples_remaining=%u current_budget=%zu cursor=%d "
+		   "cursor_refinement=%zu cursor_retained=%d "
+		   "target_fps=%.3f hard_deadline=%d retain_cuts=%d "
+		   "retained_static=%d\n",
+		   static_cast<unsigned int>(search.phase()),
+		   search.candidateBudget(), search.samplesRemaining(),
+		   this->d->lodAdmissionEvidence.capacity().currentBudget(),
+		   this->d->lodAdmissionCursor.initialized() ? 1 : 0,
+		   this->d->lodAdmissionCursor.refinementRemaining(),
+		   this->d->lodAdmissionCursor.retainedAdmission() ? 1 : 0,
+		   targetFps, hardDeadlinePresentation ? 1 : 0,
+		   this->d->lodRetainedViewContinuity.retainOccurrenceCuts() ? 1 : 0,
+		   retainedStaticPresentation ? 1 : 0);
+	}
+	const BObolLodAdmissionPlan admissionPlan =
+	    BObolLodAdmissionPlanner::plan(
+		this->d->lodAdmissionEvidence, this->d->lodAdmissionCursor,
+		this->d->admissionRevisionStamp(), budgetInputs);
+	this->d->commitAdmissionPlan(admissionPlan);
+	const BObolLodCapacityEvidence::Decision &budget =
+	    admissionPlan.capacityDecision;
+	if (this->d->lodStructuralRepair.active())
+	    this->d->lodStructuralRepair.reserveCoverageCost(
+		BObolLodAdmissionPlanner::structuralPerOccurrenceReservation(
+		    budget.totalBudget, this->d->lodAdmissionCursor.activeCost(),
+		    this->d->lodStructuralRepair.frontierCount()));
 	/* An append-only database producer already publishes useful structural
 	 * and minimum-mesh deltas.  Its momentarily idle mesh-service queue is
 	 * not a complete scene population: running the global importance

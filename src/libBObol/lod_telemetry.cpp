@@ -1742,10 +1742,10 @@ private:
     void recordInventory(const BObolViewController &controller,
 	uint64_t inventoryRevision)
     {
-	const std::vector<SoBRLDatabaseSource *> sources =
+	const std::vector<SoBRLDatabaseSource *> renderSources =
 	    controller.getRenderDatabaseSources();
 	std::unordered_set<std::string> liveSources;
-	for (SoBRLDatabaseSource *source : sources) {
+	for (SoBRLDatabaseSource *source : renderSources) {
 	    if (!source)
 		continue;
 	    const std::string key = telemetry_source_key(source);
