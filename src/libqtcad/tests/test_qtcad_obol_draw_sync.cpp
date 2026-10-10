@@ -445,22 +445,6 @@ pending_hud_provider(BObolViewController *, void *,
     return 0;
 }
 
-static BObolLodConvergenceStatus
-active_lod_overlay_status(int phase)
-{
-    BObolLodConvergenceStatus status;
-    status.hasLodState = TRUE;
-    status.phase = phase;
-    status.outcome = BOBOL_LOD_PRESENTATION_ACTIVE;
-    status.terminal = FALSE;
-    status.viewReady = FALSE;
-    status.fraction = 0.25f;
-    status.episodeRevision = 1;
-    status.viewRevision = 1;
-    status.policyRevision = 1;
-    return status;
-}
-
 static bool
 render_hud_frame(BObolViewController *controller)
 {
