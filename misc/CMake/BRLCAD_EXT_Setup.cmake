@@ -30,6 +30,7 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 include(CMakeParseArguments)
+include("${CMAKE_CURRENT_LIST_DIR}/BRLCAD_Repository.cmake")
 
 # Try to locate a usable git executable. On Windows, Visual Studio may
 # provide git in non-standard locations; try common Program Files and
@@ -148,14 +149,14 @@ function(brlcad_bext_init BEXT_SHA1)
     elseif(NOT _brlcad_ext_dir_specified)
       message(
 	WARNING
-	"External dependencies will be downloaded, configured, and built automatically as-needed. Set BRLCAD_EXT_DIR to specify instead."
+	"External dependencies will be acquired from ${_BRLCAD_REPOSITORY_ROOT}, configured, and built automatically as-needed. Set BRLCAD_EXT_DIR to specify instead."
 	)
     endif()
     message(
       STATUS
       "BRLCAD_EXT_DIR specifies prebuilt external dependencies directory\n"
       "containing 'install' and 'noinstall' folders, outputs from installing\n"
-      "https://github.com/BRL-CAD/bext.\n"
+      "${_BRLCAD_BEXT_REPOSITORY}.\n"
     )
   endif(NOT BRLCAD_EXT_NOINSTALL_DIR OR NOT BRLCAD_EXT_INSTALL_DIR)
 
@@ -211,28 +212,24 @@ function(brlcad_rel_version BRLCAD_REL)
   set(${BRLCAD_REL} "rel-${VMAJOR}-${VMINOR}-${VPATCH}" PARENT_SCOPE)
 endfunction()
 
-# Look up branch or tag SHA1 hashes from primary github.com repo
+# Branch/tag queries are advisory; an unavailable source cannot validate them.
 function(remote_sha1 SHA1_VAR BRANCH)
+  set(${SHA1_VAR} "" PARENT_SCOPE)
   if(NOT GIT_EXEC)
-    set(${SHA1_VAR} "" PARENT_SCOPE)
     return()
   endif()
-  # This needs a working internet connection to succeed (and GitHub
-  # must be up and working as well.)
+  brlcad_repository_git_command(git_command)
   execute_process(
-    COMMAND "${CMAKE_COMMAND}" -E env GIT_TERMINAL_PROMPT=0 ${GIT_EXEC} -c credential.helper= -c credential.interactive=false ls-remote https://github.com/BRL-CAD/bext.git ${BRANCH}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    RESULT_VARIABLE LS_REMOTE_STATUS
-    OUTPUT_VARIABLE LS_REMOTE_STR
-    ERROR_VARIABLE LS_REMOTE_STR
-    )
-  if(NOT LS_REMOTE_STATUS AND LS_REMOTE_STR)
-    string(REPLACE " " ";" LS_REMOTE_STR "${LS_REMOTE_STR}")
-    string(REPLACE "\t" ";" LS_REMOTE_STR "${LS_REMOTE_STR}")
-    list(GET LS_REMOTE_STR 0 REMOTE_SHA1)
-    set(${SHA1_VAR} "${REMOTE_SHA1}" PARENT_SCOPE)
-  else()
-    set(${SHA1_VAR} "" PARENT_SCOPE)
+    COMMAND "${CMAKE_COMMAND}" -E env GIT_TERMINAL_PROMPT=0 --
+      ${git_command} -c credential.helper= -c credential.interactive=false
+      ls-remote "${_BRLCAD_BEXT_REPOSITORY}" "${BRANCH}"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    RESULT_VARIABLE git_result
+    OUTPUT_VARIABLE remote_refs
+    ERROR_QUIET
+  )
+  if(git_result STREQUAL "0" AND remote_refs MATCHES "^([0-9a-f]+)[ \t]")
+    set(${SHA1_VAR} "${CMAKE_MATCH_1}" PARENT_SCOPE)
   endif()
 endfunction()
 
@@ -367,23 +364,28 @@ function(setup_bext_dir)
     # no pre-existing sources, so we're cloning into the build dir
     set(BRLCAD_EXT_SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/bext")
 
-    # Write current SHA1 for subsequent processing
+    brlcad_repository_git_command(git_command)
+    message(STATUS "Cloning bext from ${_BRLCAD_BEXT_REPOSITORY}")
+    execute_process(
+      COMMAND ${git_command} clone "${_BRLCAD_BEXT_REPOSITORY}" "${BRLCAD_EXT_SOURCE_DIR}"
+      WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+      RESULT_VARIABLE git_result
+    )
+    if(NOT git_result STREQUAL "0")
+      message(FATAL_ERROR "Unable to clone bext from ${_BRLCAD_BEXT_REPOSITORY} (${git_result})")
+    endif()
+    execute_process(
+      COMMAND ${git_command} -c advice.detachedHead=false checkout "${BEXT_SHA1}"
+      WORKING_DIRECTORY "${BRLCAD_EXT_SOURCE_DIR}"
+      RESULT_VARIABLE git_result
+    )
+    if(NOT git_result STREQUAL "0")
+      message(FATAL_ERROR "Unable to check out pinned bext commit ${BEXT_SHA1} from ${_BRLCAD_BEXT_REPOSITORY} (${git_result}); ensure the repository contains this commit")
+    endif()
+
+    # Record the pin only after checkout succeeds.
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/bext.sha1" "${BEXT_SHA1}")
     distclean("${CMAKE_CURRENT_BINARY_DIR}/bext.sha1")
-
-    # Clone
-    message("BRL-CAD bext clone command: ${GIT_EXEC} clone https://github.com/BRL-CAD/bext.git")
-    execute_process(
-      COMMAND ${GIT_EXEC} clone https://github.com/BRL-CAD/bext.git
-      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-      COMMAND_ERROR_IS_FATAL ANY
-    )
-    message("BRL-CAD bext checkout command: ${GIT_EXEC} -c advice.detachedHead=false checkout ${BEXT_SHA1}")
-    execute_process(
-      COMMAND ${GIT_EXEC} -c advice.detachedHead=false checkout ${BEXT_SHA1}
-      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bext
-      COMMAND_ERROR_IS_FATAL ANY
-    )
 
     # Configure process will need to clean up bext
     if (BRLCAD_BEXT_CLEANUP)
@@ -425,6 +427,12 @@ function(brlcad_ext_setup)
     message(FATAL_ERROR "Invalid bext directory: ${BRLCAD_EXT_SOURCE_DIR}")
   endif()
 
+  if(NOT _BRLCAD_REPOSITORY_ROOT STREQUAL "${_BRLCAD_REPOSITORY_DEFAULT_ROOT}/"
+      AND NOT EXISTS "${BRLCAD_EXT_SOURCE_DIR}/CMake/BextGit.cmake")
+    message(FATAL_ERROR
+      "bext sources in ${BRLCAD_EXT_SOURCE_DIR} do not support BEXT_REPOSITORY_ROOT; update bext before building with BRLCAD_REPOSITORY_ROOT=${BRLCAD_REPOSITORY_ROOT}")
+  endif()
+
   # We do allow the user to specify a build dir to be reused, however
   # this is unpredictable and may cause unexpected results depending
   # on what is or isn't rebuilt - use with care.
@@ -463,11 +471,18 @@ function(brlcad_ext_setup)
   endif(BRLCAD_ENABLE_APPLESEED)
 
   # Define CMake arguments we'll need regardless of mode
+  set(bext_shallow_clone ON)
+  if(_BRLCAD_REPOSITORY_LOCAL)
+    set(bext_shallow_clone OFF)
+  endif()
   set(CMAKE_CMD_ARGS
-    -S ${BRLCAD_EXT_SOURCE_DIR} -B ${BRLCAD_EXT_BUILD_DIR} -DGIT_SHALLOW_CLONE=ON
-    -DENABLE_ALL=${BEXT_ENABLE_ALL} -DUSE_GDAL=${BEXT_USE_GDAL} -DUSE_QT=${BEXT_USE_QT} -DUSE_TCL=${BEXT_USE_TCL}
-    -DUSE_APPLESEED=${BEXT_USE_APPLESEED} -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
-    -DCMAKE_INSTALL_PREFIX=${BRLCAD_EXT_INSTALL_DIR}
+    -S "${BRLCAD_EXT_SOURCE_DIR}" -B "${BRLCAD_EXT_BUILD_DIR}"
+    "-DBEXT_REPOSITORY_ROOT:STRING=${_BRLCAD_REPOSITORY_ROOT}"
+    "-DGIT_SHALLOW_CLONE:BOOL=${bext_shallow_clone}"
+    "-DENABLE_ALL=${BEXT_ENABLE_ALL}" "-DUSE_GDAL=${BEXT_USE_GDAL}"
+    "-DUSE_QT=${BEXT_USE_QT}" "-DUSE_TCL=${BEXT_USE_TCL}"
+    "-DUSE_APPLESEED=${BEXT_USE_APPLESEED}" "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+    "-DCMAKE_INSTALL_PREFIX=${BRLCAD_EXT_INSTALL_DIR}"
     )
   if(BRLCAD_X11_PROVIDER_RESOLVED STREQUAL "XMIN" AND BRLCAD_XMIN_ROOT)
     list(APPEND CMAKE_CMD_ARGS

@@ -15,6 +15,7 @@ set(
   BRLCAD_Options.cmake
   BRLCAD_Probe_Validation.cmake
   BRLCAD_Regress_Util.cmake
+  BRLCAD_Repository.cmake
   BRLCAD_Summary.cmake
   BRLCAD_Targets.cmake
   BRLCAD_Test_Wrappers.cmake
