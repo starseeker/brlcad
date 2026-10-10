@@ -151,10 +151,13 @@ recommended for serious developers.
 
 Various useful configurations for working with bext:
 
-* Get a git clone that has everything which might be needed (large,
-  but useful for offline building)
+* Acquire bext and its dependencies from another repository host
 
-git clone --recurse-submodules https://github.com/BRL-CAD/brlcad
+cmake .. -DBRLCAD_REPOSITORY_ROOT=https://git.example.org/brlcad
+
+* Acquire bext and its dependencies from local bare Git mirrors
+
+cmake .. "-DBRLCAD_REPOSITORY_ROOT=/path/to/mirror/BRL-CAD"
 
 * Have prebuilt bext outputs to reuse - BRL-CAD will simply copy and prepare
   the pre-existing files
@@ -396,6 +399,33 @@ work where performance is critical.
 
 Aliases:  ENABLE_RUNTIME_DEBUG, ENABLE_RUN_TIME_DEBUG, ENABLE_RUNTIME_DEBUGGING
           ENABLE_RUN_TIME_DEBUGGING
+
+
+--- BRLCAD_REPOSITORY_ROOT ---
+
+Repository URL or local directory containing bext and its dependency
+repositories. Defaults to https://github.com/BRL-CAD. The root directly
+contains repositories such as bext.git and astyle.git; BRL-CAD does not
+append BRL-CAD to the root.
+
+Remote Git URLs (including SSH), native paths, and file:// URLs are supported.
+Relative native paths are resolved against the BRL-CAD source directory.
+Quote the entire -D argument for paths containing spaces. The setting is
+cached and is also passed as BEXT_REPOSITORY_ROOT when BRL-CAD configures
+bext, including when BRLCAD_EXT_SOURCE_DIR supplies an existing checkout.
+Alternate roots require bext sources with BEXT_REPOSITORY_ROOT support.
+
+Local roots restrict CMake-driven Git acquisition and queries to file
+transport, with no online fallback. Mirrors must contain all required pinned
+commits and recursive submodules. Dependencies outside bext's canonical URL
+prefix require their own Git URL mappings. This setting does not restrict
+network access by dependency build scripts or change persistent Git settings.
+BRLCAD_EXT_DIR still selects prebuilt outputs, and changing the repository
+root alone does not force those outputs to be rebuilt.
+
+To return to the default source:
+
+cmake .. -DBRLCAD_REPOSITORY_ROOT=https://github.com/BRL-CAD
 
 
 --- BRLCAD_EXT_DIR ---

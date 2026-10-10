@@ -121,6 +121,12 @@ macro(
     # Need to set these locally so configure_file will pick them up...
     set(TARGET_SUFFIX ${TARGET_SUFFIX})
     set(CMAKE_OPTS ${CMAKE_OPTS_IN})
+    # Local archive builds must retain the parent's source selection.  Keep
+    # this out of the separately saved options used to generate CI jobs.
+    string(REPLACE "\\" "\\\\" distcheck_repository_root "${_BRLCAD_REPOSITORY_ROOT}")
+    string(REPLACE "\"" "\\\"" distcheck_repository_root "${distcheck_repository_root}")
+    string(REPLACE "$" "\\$" distcheck_repository_root "${distcheck_repository_root}")
+    string(APPEND CMAKE_OPTS " \"-DBRLCAD_REPOSITORY_ROOT:STRING=${distcheck_repository_root}\"")
 
     # For configure_file, need to set these as variables not just input parameters
     set(source_dir "${source_dir}")
