@@ -226,7 +226,7 @@ private:
 	    long double remainingMicroseconds = 0.0L;
 	};
 
-	Estimate observe(BObolLodPolicyEpoch tier, uint64_t renderSerial,
+	Estimate observe(BObolLodPolicyEpoch observedTier, uint64_t renderSerial,
 	    const WorkRank &rank, int64_t nowMicroseconds)
 	{
 	    Estimate result;
@@ -239,10 +239,10 @@ private:
 
 	    const uint64_t completed = std::min(rank.completed, rank.total);
 	    const uint64_t unresolved = rank.total - completed;
-	    if (!this->active || this->tier != tier ||
+	    if (!this->active || this->tier != observedTier ||
 		this->totalUnits != rank.total) {
 		result.confidenceReset = true;
-		this->begin(tier, renderSerial, rank.total, unresolved,
+		this->begin(observedTier, renderSerial, rank.total, unresolved,
 		    nowMicroseconds);
 		result.changed = true;
 		return result;

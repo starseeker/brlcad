@@ -13325,7 +13325,7 @@ struct SceneLightsRebuildFixture {
 	controller.setSceneLightsEnabled(TRUE);
 	std::vector<BObolSceneLightRealization> initial;
 	initial.push_back(test_scene_light(BOBOL_SCENE_LIGHT_POINT,
-	    SbVec3f(1.0f, 2.0f, 3.0f), SbVec3f(), 0.20f, "old-point"));
+	    SbVec3f(1.0f, 2.0f, 3.0f), SbVec3f(0.0f, 0.0f, 0.0f), 0.20f, "old-point"));
 	controller.setSceneLights(initial);
 	group = static_cast<SoGroup *>(controller.getSceneLightsRoot());
 	require(group && group->getNumChildren() == 1,
@@ -13336,13 +13336,13 @@ struct SceneLightsRebuildFixture {
 
 	if (!clearing) {
 	    next.push_back(test_scene_light(BOBOL_SCENE_LIGHT_DIRECTIONAL,
-		SbVec3f(), SbVec3f(1.0f, 0.0f, 0.0f), 0.35f,
+		SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(1.0f, 0.0f, 0.0f), 0.35f,
 		"new-directional"));
 	    next.push_back(test_scene_light(BOBOL_SCENE_LIGHT_SPOT,
 		SbVec3f(4.0f, 5.0f, 6.0f), SbVec3f(0.0f, -1.0f, 0.0f),
 		0.55f, "new-spot"));
 	    next.push_back(test_scene_light(BOBOL_SCENE_LIGHT_POINT,
-		SbVec3f(7.0f, 8.0f, 9.0f), SbVec3f(), 0.75f,
+		SbVec3f(7.0f, 8.0f, 9.0f), SbVec3f(0.0f, 0.0f, 0.0f), 0.75f,
 		"new-point"));
 	}
     }
@@ -13570,22 +13570,22 @@ struct SceneLightsInputFixture {
 	bool automaticLod) : operation(requested), automatic(automaticLod)
     {
 	initial.push_back(test_scene_light(BOBOL_SCENE_LIGHT_POINT,
-	    SbVec3f(1.0f, 2.0f, 3.0f), SbVec3f(), 0.20f,
+	    SbVec3f(1.0f, 2.0f, 3.0f), SbVec3f(0.0f, 0.0f, 0.0f), 0.20f,
 	    "initial-point"));
 	initial.push_back(test_scene_light(BOBOL_SCENE_LIGHT_DIRECTIONAL,
-	    SbVec3f(), SbVec3f(1.0f, 0.0f, 0.0f), 0.40f,
+	    SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(1.0f, 0.0f, 0.0f), 0.40f,
 	    "initial-directional"));
 	initial.push_back(test_scene_light(BOBOL_SCENE_LIGHT_SPOT,
 	    SbVec3f(4.0f, 5.0f, 6.0f), SbVec3f(0.0f, -1.0f, 0.0f),
 	    0.60f, "initial-spot"));
 	next.push_back(test_scene_light(BOBOL_SCENE_LIGHT_DIRECTIONAL,
-	    SbVec3f(), SbVec3f(0.0f, 1.0f, 0.0f), 0.35f,
+	    SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(0.0f, 1.0f, 0.0f), 0.35f,
 	    "next-directional"));
 	next.push_back(test_scene_light(BOBOL_SCENE_LIGHT_SPOT,
 	    SbVec3f(7.0f, 8.0f, 9.0f), SbVec3f(0.0f, 0.0f, -1.0f),
 	    0.55f, "next-spot"));
 	next.push_back(test_scene_light(BOBOL_SCENE_LIGHT_POINT,
-	    SbVec3f(10.0f, 11.0f, 12.0f), SbVec3f(), 0.75f,
+	    SbVec3f(10.0f, 11.0f, 12.0f), SbVec3f(0.0f, 0.0f, 0.0f), 0.75f,
 	    "next-point"));
 
 	switch (operation) {
@@ -13930,14 +13930,14 @@ check_scene_lights_input_publication()
     BObolViewController replacing;
     std::vector<BObolSceneLightRealization> replacementInitial{
 	test_scene_light(BOBOL_SCENE_LIGHT_POINT, SbVec3f(1.0f, 2.0f, 3.0f),
-	    SbVec3f(), 0.20f, "reentry-initial")};
+	    SbVec3f(0.0f, 0.0f, 0.0f), 0.20f, "reentry-initial")};
     /* Direction has no meaning for a point light.  An unused payload must not
      * turn an enablement-only update into a child replacement. */
     const float unusedNaN = std::numeric_limits<float>::quiet_NaN();
     replacementInitial.front().direction.setValue(
 	unusedNaN, unusedNaN, unusedNaN);
     std::vector<BObolSceneLightRealization> replacementOuter{
-	test_scene_light(BOBOL_SCENE_LIGHT_DIRECTIONAL, SbVec3f(),
+	test_scene_light(BOBOL_SCENE_LIGHT_DIRECTIONAL, SbVec3f(0.0f, 0.0f, 0.0f),
 	    SbVec3f(1.0f, 0.0f, 0.0f), 0.40f, "reentry-outer")};
     std::vector<BObolSceneLightRealization> replacementFinal{
 	test_scene_light(BOBOL_SCENE_LIGHT_SPOT, SbVec3f(4.0f, 5.0f, 6.0f),
@@ -19118,7 +19118,7 @@ struct MasterLightingFixture {
     {
 	controller.setLightingProfile(profile);
 	scene.push_back(test_scene_light(BOBOL_SCENE_LIGHT_POINT,
-	    SbVec3f(1.0f, 2.0f, 3.0f), SbVec3f(), 0.25f,
+	    SbVec3f(1.0f, 2.0f, 3.0f), SbVec3f(0.0f, 0.0f, 0.0f), 0.25f,
 	    "master-lighting-scene"));
 	controller.setSceneLights(scene);
 	sceneGroup = static_cast<SoGroup *>(controller.getSceneLightsRoot());
@@ -20118,10 +20118,10 @@ struct LightingInputFixture {
     explicit LightingInputFixture(bool automaticLod) : automatic(automaticLod)
     {
 	initial.push_back(test_scene_light(BOBOL_SCENE_LIGHT_POINT,
-	    SbVec3f(1.0f, 2.0f, 3.0f), SbVec3f(), 0.25f,
+	    SbVec3f(1.0f, 2.0f, 3.0f), SbVec3f(0.0f, 0.0f, 0.0f), 0.25f,
 	    "lighting-input-initial"));
 	next.push_back(test_scene_light(BOBOL_SCENE_LIGHT_DIRECTIONAL,
-	    SbVec3f(), SbVec3f(0.0f, 1.0f, 0.0f), 0.45f,
+	    SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(0.0f, 1.0f, 0.0f), 0.45f,
 	    "lighting-input-directional"));
 	next.push_back(test_scene_light(BOBOL_SCENE_LIGHT_SPOT,
 	    SbVec3f(4.0f, 5.0f, 6.0f), SbVec3f(0.0f, 0.0f, -1.0f),
@@ -20368,7 +20368,7 @@ check_lighting_state_input_publication()
     BObolViewController leaves;
     std::vector<BObolSceneLightRealization> leafScene{
 	test_scene_light(BOBOL_SCENE_LIGHT_POINT, SbVec3f(1.0f, 2.0f, 3.0f),
-	    SbVec3f(), 0.25f, "lighting-leaf-scene")};
+	    SbVec3f(0.0f, 0.0f, 0.0f), 0.25f, "lighting-leaf-scene")};
     leaves.setSceneLights(leafScene);
     SoGroup *leafGroup = static_cast<SoGroup *>(leaves.getSceneLightsRoot());
     SoNode *leafNode = leafGroup->getChild(0);
@@ -20454,9 +20454,9 @@ check_lighting_state_input_publication()
     BObolViewController reentrant;
     std::vector<BObolSceneLightRealization> initial{
 	test_scene_light(BOBOL_SCENE_LIGHT_POINT, SbVec3f(1.0f, 2.0f, 3.0f),
-	    SbVec3f(), 0.25f, "lighting-reentry-initial")};
+	    SbVec3f(0.0f, 0.0f, 0.0f), 0.25f, "lighting-reentry-initial")};
     std::vector<BObolSceneLightRealization> outer{
-	test_scene_light(BOBOL_SCENE_LIGHT_DIRECTIONAL, SbVec3f(),
+	test_scene_light(BOBOL_SCENE_LIGHT_DIRECTIONAL, SbVec3f(0.0f, 0.0f, 0.0f),
 	    SbVec3f(1.0f, 0.0f, 0.0f), 0.45f, "lighting-reentry-outer")};
     std::vector<BObolSceneLightRealization> finalLights{
 	test_scene_light(BOBOL_SCENE_LIGHT_SPOT, SbVec3f(4.0f, 5.0f, 6.0f),
