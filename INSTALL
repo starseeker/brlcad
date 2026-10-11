@@ -431,7 +431,10 @@ cmake .. -DBRLCAD_REPOSITORY_ROOT=https://github.com/BRL-CAD
 --- BRLCAD_EXT_DIR ---
 
 If specified, BRL-CAD will look in this directory for bext compiled outputs to
-bundle and use during the build.
+bundle and use during the build. Relative paths are resolved against the
+BRL-CAD source directory. Distcheck subconfigures reuse this resolved output
+directory and preserve BRLCAD_REPOSITORY_ROOT, BRLCAD_EXT_SOURCE_DIR, and
+BRLCAD_EXT_PARALLEL when specified.
 
 
 --- BRLCAD_EXT_SOURCE_DIR ---
@@ -439,7 +442,8 @@ bundle and use during the build.
 If specified, BRL-CAD will look in this directory for bext source files. Use
 this when you have a pre-existing bext clone and don't want BRL-CAD's configure
 process to pull down another copy, but are still looking to have the BRL-CAD
-configure process manage producing bext build outputs.
+configure process manage producing bext build outputs. Relative paths are
+resolved against the BRL-CAD source directory.
 
 
 --- BRLCAD_EXT_PARALLEL ---

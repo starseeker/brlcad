@@ -89,6 +89,15 @@ function(brlcad_bext_init BEXT_SHA1)
     set(BRLCAD_EXT_DIR "${BRLCAD_EXT_DIR_ENV}")
   endif(BRLCAD_EXT_DIR_ENV AND NOT DEFINED BRLCAD_EXT_DIR)
 
+  # Resolve paths before probing them so later subconfigures use the same
+  # directories even when launched from a different working directory.
+  foreach(_brlcad_ext_path_var BRLCAD_EXT_DIR BRLCAD_EXT_SOURCE_DIR)
+    if(DEFINED ${_brlcad_ext_path_var} AND NOT "${${_brlcad_ext_path_var}}" STREQUAL "")
+      get_filename_component(${_brlcad_ext_path_var} "${${_brlcad_ext_path_var}}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+      set(${_brlcad_ext_path_var} "${${_brlcad_ext_path_var}}" PARENT_SCOPE)
+    endif()
+  endforeach()
+
   set(_brlcad_ext_dir_specified FALSE)
   set(_brlcad_ext_dir_managed FALSE)
 
