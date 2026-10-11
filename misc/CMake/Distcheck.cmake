@@ -95,6 +95,33 @@ add_custom_target(
 )
 set_target_properties(distcheck-source_archives PROPERTIES FOLDER "BRL-CAD Distribution Checking")
 
+# Dependency paths must survive CMake, build-tool, and shell parsing.  Load
+# their values from a cache file rather than embedding them in command text.
+set(distcheck_dependency_cache "${CMAKE_CURRENT_BINARY_DIR}/CMakeTmp/distcheck_dependencies.cmake")
+set(distcheck_dependency_vars BRLCAD_REPOSITORY_ROOT BRLCAD_EXT_DIR)
+foreach(distcheck_optional_var BRLCAD_EXT_SOURCE_DIR BRLCAD_EXT_PARALLEL)
+  if(DEFINED ${distcheck_optional_var})
+    list(APPEND distcheck_dependency_vars ${distcheck_optional_var})
+  endif()
+endforeach()
+file(WRITE "${distcheck_dependency_cache}" "")
+foreach(distcheck_var IN LISTS distcheck_dependency_vars)
+  set(distcheck_value "${${distcheck_var}}")
+  if(distcheck_var STREQUAL "BRLCAD_REPOSITORY_ROOT")
+    set(distcheck_value "${_BRLCAD_REPOSITORY_ROOT}")
+  endif()
+  set(distcheck_type STRING)
+  if(distcheck_var MATCHES "_DIR$")
+    set(distcheck_type PATH)
+  endif()
+  string(REPLACE "\\" "\\\\" distcheck_value "${distcheck_value}")
+  string(REPLACE "\"" "\\\"" distcheck_value "${distcheck_value}")
+  string(REPLACE "$" "\\$" distcheck_value "${distcheck_value}")
+  file(APPEND "${distcheck_dependency_cache}"
+    "set(${distcheck_var} \"${distcheck_value}\" CACHE ${distcheck_type} \"Inherited dependency setting\" FORCE)\n")
+endforeach()
+distclean("${distcheck_dependency_cache}")
+
 # Utility function for defining individual distcheck targets
 macro(
   create_distcheck
@@ -120,13 +147,10 @@ macro(
 
     # Need to set these locally so configure_file will pick them up...
     set(TARGET_SUFFIX ${TARGET_SUFFIX})
-    set(CMAKE_OPTS ${CMAKE_OPTS_IN})
-    # Local archive builds must retain the parent's source selection.  Keep
-    # this out of the separately saved options used to generate CI jobs.
-    string(REPLACE "\\" "\\\\" distcheck_repository_root "${_BRLCAD_REPOSITORY_ROOT}")
-    string(REPLACE "\"" "\\\"" distcheck_repository_root "${distcheck_repository_root}")
-    string(REPLACE "$" "\\$" distcheck_repository_root "${distcheck_repository_root}")
-    string(APPEND CMAKE_OPTS " \"-DBRLCAD_REPOSITORY_ROOT:STRING=${distcheck_repository_root}\"")
+    # Keep machine-specific settings out of the options saved for CI above.
+    # The shared cache replaces each variant's unquoted output argument.
+    string(REPLACE "-DBRLCAD_EXT_DIR=${BRLCAD_EXT_DIR}" "" CMAKE_OPTS "${CMAKE_OPTS_IN}")
+    string(APPEND CMAKE_OPTS " -C \"${distcheck_dependency_cache}\"")
 
     # For configure_file, need to set these as variables not just input parameters
     set(source_dir "${source_dir}")
