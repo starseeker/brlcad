@@ -1,9 +1,15 @@
 puts "*** Testing 'overlay' command ***"
 
+in_sph overlay
+e overlay_sph.s
+autoview
+set overlay_file mged_overlay_input.plot3
+plot $overlay_file
 Z
-overlay mged_plot_test.plot3
+overlay $overlay_file
 make overlay_additional_shape.s epa
 e overlay_additional_shape.s
 ps mged_overlay_test.ps
+file delete -force $overlay_file
 
 puts "*** 'overlay' testing completed ***"
