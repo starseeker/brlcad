@@ -1,9 +1,14 @@
 puts "*** Testing 'loadview' command ***"
 
-utoview
+in_sph loadview
+e loadview_sph.s
+autoview
 ae 35 25 0
-view quat
-loadview mged_saveview_test.rt
-view quat
+# Generate this test's input rather than relying on another test's output.
+set loadview_file mged_loadview_test.rt
+saveview $loadview_file
+ae 90 0 0
+loadview $loadview_file
+file delete -force $loadview_file
 
 puts "*** 'loadview' testing completed ***"

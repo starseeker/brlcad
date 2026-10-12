@@ -157,6 +157,14 @@ if(TARGET mged)
       set(TEST_TIMEOUT 20)
     endif()
 
+    if(TNAME MATCHES "^(clone|rm|killtree|hide|loadview|overlay)$")
+      # Sourcing preserves Tcl substitutions in assertions; MGED's legacy
+      # stdin glob pass can escape them before Tcl evaluates the script.
+      set(TEST_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/regress_${testfile}")
+      set(TEST_EXPECT "'${TNAME}' testing completed")
+      list(APPEND TEST_REJECT "FAIL:")
+    endif()
+
     brlcad_regression_test(
       regress-mged_${TNAME}
       "${TEST_DEPS}"
@@ -188,6 +196,9 @@ set(
   mged_overlap_baseline.plot3
   mged.log
   mged_plot_test.plot3
+  mged_loadview_test.rt
+  mged_overlay_input.plot3
+  mged_overlay_test.ps
   mged_rtcheck_overlaps.plot3
   csg_edit_data.bin
   csg_edit_dsp.bin
