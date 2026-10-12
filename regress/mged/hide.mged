@@ -1,4 +1,4 @@
-puts "*** Testing 'hide' command ***
+puts "*** Testing 'hide' command ***"
 
 in_arb8 hide 1
 in_arb8 hide 2
