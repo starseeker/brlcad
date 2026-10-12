@@ -1,3 +1,67 @@
+commit 342d8a915272ed8b66d07d79fa8b89c870855905
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Sat Oct 10 20:03:02 2026 -0400
+
+    Improve distcheck bext path handling
+
+commit 9e030edd6005e965048c03f3c43c6f7fb12208e9
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Sat Oct 10 11:39:21 2026 -0400
+
+    Update bext logic to make URL modular
+
+commit b5bf1683a2833aaa4987e9ba821041d23d0cbaf2
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Thu Oct 8 16:34:31 2026 -0400
+
+    move extern definition
+
+commit eb7e9cb38cefd8986fa0fba83e221e4971b5569f
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Thu Oct 8 16:31:46 2026 -0400
+
+    no-tk and goto adjustments for FreeBSD building
+
+commit 84be85a74d16bb7df09e1ae887b06c87c05cc675
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Wed Oct 7 11:05:52 2026 -0400
+
+    Make github.com bext sha1 query non-interactive
+    
+    This is an optional check, so we never want it to go interactive if
+    anything is weird with upstream.
+    
+    `credential.helper=` prevents credential-manager/browser prompts,
+    `credential.interactive=false` disables Git credential interaction, and
+    the `GIT_TERMINAL_PROMPT=0` environment variable blocks terminal
+    prompting and helps with older Git versions
+
+commit 3fd9ec8f4b9bb2280724fe4288bc328b52607474
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Tue Oct 6 18:21:05 2026 +0000
+
+    Isolate GCV regression outputs
+    
+    Give each GCV regression target a distinct output path so parallel
+    tests cannot remove one another's results. Validate and clean every
+    input immediately, and update companion-file cleanup paths.
+
+commit 7d2392d75429f1e092bb2af1bcb7e84182c79603
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Tue Oct 6 18:20:41 2026 +0000
+
+    Fix conditional datetime conversion constant
+    
+    Derive nanoseconds per microsecond from the existing unit constants.
+    
+    This avoids an unused file-scope constant in clock_gettime builds.
+
+commit 757bb76203c28d3b17a2310adb712fb722e32838
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Tue Oct 6 01:47:38 2026 -0400
+
+    Update log with commits being incorporated into rel-7-46-0
+
 commit c70bab52c465b64cbef8e46f0bc2cd11a74cc99b
 Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
 Date:   Tue Oct 6 01:45:41 2026 -0400
