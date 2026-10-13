@@ -26,6 +26,7 @@
  */
 
 #include "common.h"
+#include "ged/edit.h"
 
 #include <stdlib.h>
 #include <math.h>
@@ -174,260 +175,43 @@ mged_rot_obj(struct mged_state *s, int iflag, fastf_t *argvect)
 }
 
 
-/* allow precise changes to object rotation */
+static int
+mged_object_transform(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
+{
+    struct cmdtab *ctp = (struct cmdtab *)clientData;
+    MGED_CK_CMD(ctp);
+    struct mged_state *s = ctp->s;
+    bu_vls_trunc(s->gedp->ged_result_str, 0);
+    int ret = ged_edit_session_command(s->gedp, argc, argv);
+    Tcl_AppendResult(interp, bu_vls_cstr(s->gedp->ged_result_str), (char *)NULL);
+    if (ret != BRLCAD_OK)
+        return TCL_ERROR;
+    new_edit_mats(s);
+    return TCL_OK;
+}
+
 int
 f_rot_obj(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    struct cmdtab *ctp = (struct cmdtab *)clientData;
-    MGED_CK_CMD(ctp);
-    struct mged_state *s = ctp->s;
-
-    int iflag = 0;
-    vect_t argvect;
-
-    /* "rotobj" is a deprecated synonym for "orot"; warn once per session */
-    if (argc > 0 && BU_STR_EQUAL(argv[0], "rotobj")) {
-	static int rotobj_warned = 0;
-	if (!rotobj_warned) {
-	    bu_log("DEPRECATION WARNING: command 'rotobj' is deprecated; please use 'rot' instead.\n");
-	    rotobj_warned = 1;
-	}
-    }
-
-    CHECK_DBI_NULL;
-    CHECK_READ_ONLY;
-
-    if (argc < 4 || 5 < argc) {
-	struct bu_vls vls = BU_VLS_INIT_ZERO;
-
-	bu_vls_printf(&vls, "help %s", argv[0]);
-	Tcl_Eval(interp, bu_vls_addr(&vls));
-	bu_vls_free(&vls);
-	return TCL_ERROR;
-    }
-
-    if (not_state(s, ST_O_EDIT, "Object Rotation"))
-	return TCL_ERROR;
-
-    /* Check for -i option */
-    if (argv[1][0] == '-' && argv[1][1] == 'i') {
-	iflag = 1;  /* treat arguments as incremental values */
-	++argv;
-	--argc;
-    }
-
-    if (argc != 4)
-	return TCL_ERROR;
-
-    argvect[0] = atof(argv[1]);
-    argvect[1] = atof(argv[2]);
-    argvect[2] = atof(argv[3]);
-
-    return mged_rot_obj(s, iflag, argvect);
+    return mged_object_transform(clientData, interp, argc, argv);
 }
 
-
-/* allow precise changes to object scaling, both local & global */
 int
 f_sc_obj(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    struct cmdtab *ctp = (struct cmdtab *)clientData;
-    MGED_CK_CMD(ctp);
-    struct mged_state *s = ctp->s;
-
-    mat_t incr;
-    vect_t point, temp;
-
-    CHECK_DBI_NULL;
-    CHECK_READ_ONLY;
-
-    if (argc < 2 || 2 < argc) {
-	struct bu_vls vls = BU_VLS_INIT_ZERO;
-
-	bu_vls_printf(&vls, "help oscale");
-	Tcl_Eval(interp, bu_vls_addr(&vls));
-	bu_vls_free(&vls);
-	return TCL_ERROR;
-    }
-
-    if (not_state(s, ST_O_EDIT, "Object Scaling"))
-	return TCL_ERROR;
-
-    if (atof(argv[1]) <= 0.0) {
-	Tcl_AppendResult(interp, "ERROR: scale factor <=  0\n", (char *)NULL);
-	return TCL_ERROR;
-    }
-
-    s->update_views = 1;
-    dm_set_dirty(DMP, 1);
-
-    MAT_IDN(incr);
-
-    /* switch depending on type of scaling to do */
-    switch (edobj) {
-	default:
-	case BE_O_SCALE:
-	    /* global scaling */
-	    incr[15] = 1.0 / (atof(argv[1]) * MEDIT(s)->model_changes[15]);
-	    break;
-	case BE_O_XSCALE:
-	    /* local scaling ... X-axis */
-	    incr[0] = atof(argv[1]) / MEDIT(s)->acc_sc[0];
-	    MEDIT(s)->acc_sc[0] = atof(argv[1]);
-	    break;
-	case BE_O_YSCALE:
-	    /* local scaling ... Y-axis */
-	    incr[5] = atof(argv[1]) / MEDIT(s)->acc_sc[1];
-	    MEDIT(s)->acc_sc[1] = atof(argv[1]);
-	    break;
-	case BE_O_ZSCALE:
-	    /* local scaling ... Z-axis */
-	    incr[10] = atof(argv[1]) / MEDIT(s)->acc_sc[2];
-	    MEDIT(s)->acc_sc[2] = atof(argv[1]);
-	    break;
-    }
-
-    /* find point the scaling is to take place wrt */
-    VMOVE(temp, MEDIT(s)->e_keypoint);
-
-    MAT4X3PNT(point, MEDIT(s)->model_changes, temp);
-
-    wrt_point(MEDIT(s)->model_changes, incr, MEDIT(s)->model_changes, point);
-    new_edit_mats(s);
-
-    return TCL_OK;
+    return mged_object_transform(clientData, interp, argc, argv);
 }
 
-
-/*
- * Bound to command "translate"
- *
- * Allow precise changes to object translation
- */
 int
 f_tr_obj(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    struct cmdtab *ctp = (struct cmdtab *)clientData;
-    MGED_CK_CMD(ctp);
-    struct mged_state *s = ctp->s;
-
-    int i;
-    mat_t incr, old;
-    vect_t model_sol_pt, model_incr, ed_sol_pt, new_vertex;
-
-    CHECK_DBI_NULL;
-    CHECK_READ_ONLY;
-
-    if (argc < 4 || 4 < argc) {
-	struct bu_vls vls = BU_VLS_INIT_ZERO;
-
-	bu_vls_printf(&vls, "help translate");
-	Tcl_Eval(interp, bu_vls_addr(&vls));
-	bu_vls_free(&vls);
-	return TCL_ERROR;
-    }
-
-    if (s->global_editing_state == ST_S_EDIT) {
-	/* In solid edit mode,
-	 * perform the equivalent of "press sxy" and "p xyz"
-	 */
-	if (be_s_trans(ctp, NULL, 0, NULL) == TCL_ERROR)
-	    return TCL_ERROR;
-	return f_param(clientData, interp, argc, argv);
-    }
-
-    if (not_state(s, ST_O_EDIT, "Object Translation"))
-	return TCL_ERROR;
-
-    /* Remainder of code concerns object edit case */
-
-    s->update_views = 1;
-    dm_set_dirty(DMP, 1);
-
-    MAT_IDN(incr);
-    MAT_IDN(old);
-
-    if ((movedir & (RARROW|UARROW)) == 0) {
-	/* put in object trans mode */
-	movedir = UARROW | RARROW;
-    }
-
-    for (i=0; i<3; i++) {
-	new_vertex[i] = atof(argv[i+1]) * s->dbip->dbi_local2base;
-    }
-
-    VMOVE(model_sol_pt, MEDIT(s)->e_keypoint);
-
-    MAT4X3PNT(ed_sol_pt, MEDIT(s)->model_changes, model_sol_pt);
-    VSUB2(model_incr, new_vertex, ed_sol_pt);
-    MAT_DELTAS_VEC(incr, model_incr);
-    MAT_COPY(old, MEDIT(s)->model_changes);
-    bn_mat_mul(MEDIT(s)->model_changes, incr, old);
-    new_edit_mats(s);
-
-    return TCL_OK;
+    return mged_object_transform(clientData, interp, argc, argv);
 }
 
-
-/*
- * Usage: qorot x y z dx dy dz theta
- *
- * rotate an object through a specified angle
- * about a specified ray.
- */
 int
 f_qorot(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    struct cmdtab *ctp = (struct cmdtab *)clientData;
-    MGED_CK_CMD(ctp);
-    struct mged_state *s = ctp->s;
-
-    mat_t temp;
-    vect_t specified_pt, direc;
-    double ang;
-
-    CHECK_DBI_NULL;
-    CHECK_READ_ONLY;
-
-    if (argc < 8 || 8 < argc) {
-	struct bu_vls vls = BU_VLS_INIT_ZERO;
-
-	bu_vls_printf(&vls, "help qorot");
-	Tcl_Eval(interp, bu_vls_addr(&vls));
-	bu_vls_free(&vls);
-	return TCL_ERROR;
-    }
-
-    if (not_state(s, ST_O_EDIT, "Object Rotation"))
-	return TCL_ERROR;
-
-    if (movedir != ROTARROW) {
-	/* NOT in object rotate mode - put it in obj rot */
-	movedir = ROTARROW;
-    }
-    VSET(specified_pt, atof(argv[1]), atof(argv[2]), atof(argv[3]));
-    VSCALE(specified_pt, specified_pt, s->dbip->dbi_local2base);
-    VSET(direc, atof(argv[4]), atof(argv[5]), atof(argv[6]));
-
-    if (NEAR_ZERO(direc[0], SQRT_SMALL_FASTF) &&
-	NEAR_ZERO(direc[1], SQRT_SMALL_FASTF) &&
-	NEAR_ZERO(direc[2], SQRT_SMALL_FASTF)) {
-	Tcl_AppendResult(interp, "ERROR: magnitude of direction vector >=  0\n", (char *)NULL);
-	return TCL_ERROR;
-    }
-    VUNITIZE(direc);
-
-    ang = atof(argv[7]) * DEG2RAD;
-
-    /* Get matrix for rotation about a point, direction vector and apply to
-     * MEDIT(s)->model_changes matrix
-     */
-    bn_mat_arb_rot(temp, specified_pt, direc, ang);
-    bn_mat_mul2(temp, MEDIT(s)->model_changes);
-
-    new_edit_mats(s);
-
-    return TCL_OK;
+    return mged_object_transform(clientData, interp, argc, argv);
 }
 
 
