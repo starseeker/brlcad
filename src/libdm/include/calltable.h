@@ -177,6 +177,7 @@ struct dm_impl {
     void *dm_udata;		/**< @brief associate general application data here */
     /** @brief singly-linked list of dlist sensors; NULL when empty */
     struct dm_dlist_sensor *dm_dlist_sensors;
+    const struct dm_faceplate_gui *dm_faceplate_gui;
 };
 
 struct fb_impl {
