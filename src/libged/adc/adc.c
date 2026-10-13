@@ -132,6 +132,11 @@ ged_adc_core(struct ged *gedp,
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
+    if (argc == 1) {
+        v->gv_s->gv_adc.draw = !v->gv_s->gv_adc.draw;
+        return BRLCAD_OK;
+    }
+
     if (argc < 2 || 6 < argc) {
 	adc_usage(gedp->ged_result_str, argv[0]);
 	return BRLCAD_ERROR;

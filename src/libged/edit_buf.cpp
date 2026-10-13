@@ -44,6 +44,7 @@
 #include "rt/edit.h"
 #include "rt/func.h"
 #include "rt/functab.h"
+#include "rt/geom.h"
 
 #include "ged/edit.h"
 
@@ -52,6 +53,7 @@
 
 static void _edit_database_changed(struct db_i *, struct directory *, int,
     void *);
+extern void ged_edit_interactive_free(struct ged_edit_interactive *session);
 
 /* ------------------------------------------------------------------ *
  * Ged_Internal destructor — abandons all pending edits on close.
@@ -62,10 +64,12 @@ Ged_Internal::~Ged_Internal()
     if (edit_dbip)
 	(void)db_rm_changed_clbk(edit_dbip, _edit_database_changed, this);
     for (auto &kv : edit_buf) {
-	rt_edit_destroy(kv.second.s);
+	if (kv.second.owns_state)
+	    rt_edit_destroy(kv.second.s);
 	db_free_full_path(&kv.second.dfp);
     }
     edit_buf.clear();
+    ged_edit_interactive_free(edit_interactive);
 }
 
 
@@ -253,7 +257,8 @@ _edit_release_key(struct ged *gedp, const std::string &key,
 	return;
 
     const Ged_Internal::ged_edit_buf_entry final_entry = entry->second;
-    rt_edit_destroy(entry->second.s);
+    if (entry->second.owns_state)
+	rt_edit_destroy(entry->second.s);
     db_free_full_path(&entry->second.dfp);
     _edit_forget_defaults(internal, key);
     internal->edit_buf.erase(entry);
@@ -372,7 +377,8 @@ static std::unordered_map<std::string,
 _edit_store(struct ged *gedp, const struct db_full_path *dfp,
 	struct rt_edit *state, enum ged_edit_session_target target,
 	const std::string &path, struct directory *write_dp,
-	const char *occurrence_name, int occurrence_index, bool make_default)
+	const char *occurrence_name, int occurrence_index, bool make_default,
+	bool owns_state = true)
 {
     Ged_Internal *internal = gedp->i->i;
     Ged_Internal::ged_edit_buf_entry entry;
@@ -380,6 +386,7 @@ _edit_store(struct ged *gedp, const struct db_full_path *dfp,
     db_full_path_init(&entry.dfp);
     db_dup_full_path(&entry.dfp, dfp);
     entry.s = state;
+    entry.owns_state = owns_state;
     entry.write_dp = write_dp;
     entry.target = target;
     if (occurrence_name)
@@ -431,6 +438,11 @@ ged_edit_buf_set(struct ged *gedp, const struct db_full_path *dfp, struct rt_edi
     std::string key = _edit_buf_key(dfp);
     auto it = _edit_find_default(gi, key, GED_EDIT_TARGET_OBJECT);
     if (it != gi->edit_buf.end()) {
+	if (!it->second.owns_state) {
+	    if (it->second.s != s)
+		rt_edit_destroy(s);
+	    return;
+	}
 	const std::string storage_key = it->first;
 	rt_edit_destroy(it->second.s);
 	db_free_full_path(&it->second.dfp);
@@ -515,7 +527,7 @@ ged_edit_buf_promote(struct ged *gedp, const struct db_full_path *dfp)
     Ged_Internal *gi = gedp->i->i;
     std::string key = _edit_buf_key(dfp);
     auto it = _edit_find_default(gi, key, GED_EDIT_TARGET_OBJECT);
-    if (it == gi->edit_buf.end())
+    if (it == gi->edit_buf.end() || !it->second.owns_state)
 	return BRLCAD_ERROR;
 
     const Ged_Internal::ged_edit_buf_entry final_entry = it->second;
@@ -589,7 +601,7 @@ ged_edit_buf_flush(struct ged *gedp)
     bool any_written = false;
     for (const std::string &key : keys) {
 	auto it = gi->edit_buf.find(key);
-	if (it == gi->edit_buf.end())
+	if (it == gi->edit_buf.end() || !it->second.owns_state)
 	    continue;
 
 	const Ged_Internal::ged_edit_buf_entry final_entry = it->second;
@@ -640,6 +652,7 @@ _edit_sessions_close(struct ged *gedp, bool permanent)
     for (const std::string &key : keys)
 	_edit_release_key(gedp, key, GED_EDIT_SESSION_INVALIDATE, nullptr,
 	    GED_EDIT_INVALIDATION_DATABASE_CLOSED);
+    ged_edit_interactive_end(gedp);
 
     if (!permanent)
 	internal->edit_closing = false;
@@ -813,6 +826,28 @@ ged_edit_session_begin(struct ged *gedp, const char *path,
     _edit_notify(gedp, GED_EDIT_SESSION_BEGIN, key, added->second);
     db_free_full_path(&edit_path);
     db_free_full_path(&full_path);
+    return GED_EDIT_OK;
+}
+
+
+enum ged_edit_status
+ged_edit_session_interactive_begin_private(struct ged *gedp,
+    const struct db_full_path *path, enum ged_edit_session_target target,
+    struct rt_edit *state, ged_edit_session_ref *session)
+{
+    const std::string key = _edit_buf_key(path);
+    Ged_Internal *internal = gedp->i->i;
+    if (internal->edit_closing ||
+	_edit_find_default(internal, key, target) != internal->edit_buf.end())
+	return GED_EDIT_CONFLICT;
+    if (!state)
+	return ged_edit_session_default_get(gedp, key.c_str(), target, 1, session);
+
+    _edit_database_observer_ensure(gedp);
+    auto added = _edit_store(gedp, path, state, target, key,
+	DB_FULL_PATH_CUR_DIR(path), NULL, 0, true, false);
+    *session = _edit_ref(internal, added->second);
+    _edit_notify(gedp, GED_EDIT_SESSION_BEGIN, key, added->second);
     return GED_EDIT_OK;
 }
 
@@ -1210,8 +1245,9 @@ ged_edit_session_revert(struct ged *gedp, ged_edit_session_ref session)
 }
 
 
-enum ged_edit_status
-ged_edit_session_commit(struct ged *gedp, ged_edit_session_ref session)
+static enum ged_edit_status
+_edit_session_commit(struct ged *gedp, ged_edit_session_ref session,
+    const fastf_t *matrix)
 {
     if (!gedp || !gedp->i || !gedp->i->i)
 	return GED_EDIT_INVALID;
@@ -1220,34 +1256,87 @@ ged_edit_session_commit(struct ged *gedp, ged_edit_session_ref session)
     if (entry == internal->edit_buf.end())
 	return session.owner == _edit_owner(internal) ? GED_EDIT_STALE :
 	    GED_EDIT_INVALID;
-    if (!entry->second.dirty) {
-	const std::string key = entry->first;
-	const Ged_Internal::ged_edit_buf_entry final_entry = entry->second;
-	rt_edit_destroy(entry->second.s);
-	db_free_full_path(&entry->second.dfp);
-	_edit_forget_defaults(internal, key);
-	internal->edit_buf.erase(entry);
-	_edit_notify(gedp, GED_EDIT_SESSION_COMMIT, final_entry.path,
-	    final_entry);
+    if (entry->second.committing)
+	return GED_EDIT_CONFLICT;
+
+    const std::string key = entry->first;
+    if (entry->second.dirty || matrix) {
+	if (!gedp->dbip || gedp->dbip->dbi_read_only)
+	    return GED_EDIT_ERROR;
+
+	/* The database consumes the internal on write.  Keep the session
+	 * intact until the write succeeds so a failed save can be retried. */
+	struct rt_db_internal copy = RT_DB_INTERNAL_INIT_ZERO;
+	const bool occurrence = entry->second.target == GED_EDIT_TARGET_OCCURRENCE;
+	const bool transform_on_load = matrix && !occurrence && entry->second.owns_state;
+	const int copied = transform_on_load ?
+	    rt_db_get_internal(&copy, entry->second.write_dp, gedp->dbip, matrix) :
+	    rt_generic_xform(&copy, bn_mat_identity, &entry->second.s->es_int,
+		0, gedp->dbip);
+	if (copied < 0) {
+	    rt_db_free_internal(&copy);
+	    return GED_EDIT_ERROR;
+	}
+
+	if (matrix && occurrence) {
+	    struct rt_edit candidate = {};
+	    candidate.es_int = copy;
+	    if (rt_edit_comb_instance_matrix_set(&candidate,
+		    entry->second.occurrence_name.c_str(),
+		    entry->second.occurrence_index, matrix) != BRLCAD_OK) {
+		rt_db_free_internal(&copy);
+		return GED_EDIT_ERROR;
+	    }
+	}
+	if (matrix && !entry->second.owns_state && copy.idb_type == ID_BOT) {
+	    auto *bot = static_cast<struct rt_bot_internal *>(copy.idb_ptr);
+	    if (bot->mode == RT_BOT_SURFACE || bot->mode == RT_BOT_SOLID) {
+		bu_free(bot->thickness, "BOT thickness");
+		bu_free(bot->face_mode, "BOT face mode");
+		bot->thickness = NULL;
+		bot->face_mode = NULL;
+	    } else {
+		if (!bot->thickness)
+		    bot->thickness = static_cast<fastf_t *>(bu_calloc(bot->num_faces,
+			sizeof(fastf_t), "BOT thickness"));
+		if (!bot->face_mode)
+		    bot->face_mode = bu_bitv_new(bot->num_faces);
+	    }
+	}
+
+	entry->second.committing = true;
+	const int result = rt_db_put_internal(entry->second.write_dp,
+	    gedp->dbip, &copy);
+	rt_db_free_internal(&copy);
+	/* Notifications from the write can change other entries. */
+	entry = internal->edit_buf.find(key);
+	if (entry == internal->edit_buf.end())
+	    return result < 0 ? GED_EDIT_ERROR : GED_EDIT_OK;
+	entry->second.committing = false;
+	if (result < 0)
+	    return GED_EDIT_ERROR;
+
+	_edit_release_key(gedp, key, GED_EDIT_SESSION_COMMIT);
+	if (gedp->dbi_state)
+	    static_cast<DbiState *>(gedp->dbi_state)->update();
 	return GED_EDIT_OK;
     }
-    const std::string key = entry->first;
-    const Ged_Internal::ged_edit_buf_entry final_entry = entry->second;
-    entry->second.committing = true;
-    const int result = rt_db_put_internal(entry->second.write_dp, gedp->dbip,
-	&entry->second.s->es_int);
-    entry->second.committing = false;
-    rt_edit_destroy(entry->second.s);
-    db_free_full_path(&entry->second.dfp);
-    _edit_forget_defaults(internal, key);
-    internal->edit_buf.erase(entry);
-    if (result < 0)
-	return GED_EDIT_ERROR;
-    _edit_notify(gedp, GED_EDIT_SESSION_COMMIT, final_entry.path,
-	final_entry);
-    if (gedp->dbi_state)
-	((DbiState *)gedp->dbi_state)->update();
+
+    _edit_release_key(gedp, key, GED_EDIT_SESSION_COMMIT);
     return GED_EDIT_OK;
+}
+
+enum ged_edit_status
+ged_edit_session_commit(struct ged *gedp, ged_edit_session_ref session)
+{
+    return _edit_session_commit(gedp, session, NULL);
+}
+
+enum ged_edit_status
+ged_edit_session_interactive_commit_private(struct ged *gedp,
+    ged_edit_session_ref session, const fastf_t *matrix)
+{
+    return _edit_session_commit(gedp, session, matrix);
 }
 
 
@@ -1261,6 +1350,8 @@ ged_edit_session_cancel(struct ged *gedp, ged_edit_session_ref session)
     if (entry == internal->edit_buf.end())
 	return session.owner == _edit_owner(internal) ? GED_EDIT_STALE :
 	    GED_EDIT_INVALID;
+    if (entry->second.committing)
+	return GED_EDIT_CONFLICT;
     _edit_release_key(gedp, entry->first, GED_EDIT_SESSION_CANCEL);
     return GED_EDIT_OK;
 }

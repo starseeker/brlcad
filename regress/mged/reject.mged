@@ -11,3 +11,13 @@ l reject_arb8.s
 Z
 
 puts "*** 'reject' testing completed ***"
+
+# A working edit remains private until accepted.
+in session_reject.s sph 0 0 0 1
+e session_reject.s
+sed session_reject.s
+translate 10 10 10
+regression_check_vector [db get session_reject.s V] {0 0 0} 0.000001 "working edit changed database"
+reject
+regression_check_vector [db get session_reject.s V] {0 0 0} 0.000001 "reject database result"
+regression_assert {[status state] eq "VIEWING"} "reject did not end session"

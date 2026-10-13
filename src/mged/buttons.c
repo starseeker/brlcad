@@ -755,9 +755,9 @@ be_accept(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
 
     if (s->global_editing_state == ST_S_EDIT) {
 	/* Accept a solid edit */
-	edsol = 0;
-
-	sedit_accept(s);		/* zeros "edsol" var */
+        if (sedit_accept(s) != TCL_OK)
+            return TCL_ERROR;
+        edsol = 0;
 
 	mmenu_set_all(s, MENU_L1, NULL);
 	mmenu_set_all(s, MENU_L2, NULL);
@@ -770,10 +770,10 @@ be_accept(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
 	(void)chg_state(s, ST_S_EDIT, ST_VIEW, "Edit Accept");
     }  else if (s->global_editing_state == ST_O_EDIT) {
 	/* Accept an object edit */
-	edobj = 0;
-	movedir = 0;	/* No edit modes set */
-
-	oedit_accept(s);
+        if (oedit_accept(s) != TCL_OK)
+            return TCL_ERROR;
+        edobj = 0;
+        movedir = 0;
 
 	mmenu_set_all(s, MENU_L2, NULL);
 

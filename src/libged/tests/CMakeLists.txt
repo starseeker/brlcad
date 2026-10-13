@@ -1,10 +1,16 @@
+brlcad_addexec(ged_test_edit_session edit_session.cpp libged TEST)
+if(TARGET ged_test_edit_session)
+  add_dependencies(ged_test_edit_session ged_plugins)
+endif()
+brlcad_add_test(NAME ged_edit_session COMMAND ged_test_edit_session)
+
 brlcad_addexec(ged_test_terminal_columns terminal_columns.cpp libged TEST)
 if(TARGET ged_test_terminal_columns)
   add_dependencies(ged_test_terminal_columns ged_plugins)
 endif()
 brlcad_add_test(NAME ged_terminal_columns COMMAND ged_test_terminal_columns)
 
-brlcad_addexec(ged_test_event test_event.cpp libged TEST)
+brlcad_addexec(ged_test_event test_event.cpp "libged;Threads::Threads" TEST)
 brlcad_add_test(NAME ged_test_event COMMAND ged_test_event)
 if(TARGET ged_test_event)
   add_dependencies(ged_test_event ged_plugins)

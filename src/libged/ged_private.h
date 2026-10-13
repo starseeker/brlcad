@@ -162,6 +162,7 @@ class Ged_Internal {
 	    bool dirty = false;
 	    bool checkpoint_dirty = false;
 	    bool committing = false;
+	    bool owns_state = true;
 	};
 	std::unordered_map<std::string, ged_edit_buf_entry> edit_buf;
 	std::unordered_map<std::string, std::string> edit_defaults;
@@ -184,6 +185,7 @@ class Ged_Internal {
 	std::vector<ged_edit_pending_event> edit_pending_events;
 	struct db_i *edit_dbip = nullptr;
 	bool edit_closing = false;
+	struct ged_edit_interactive *edit_interactive = nullptr;
 
 	uint64_t scene_revision = 0;
 	ged_scene_observer_token scene_next_observer = 1;
@@ -655,6 +657,13 @@ GED_EXPORT extern void            ged_edit_buf_flush(struct ged *gedp);
 GED_EXPORT extern void            ged_edit_buf_notify_update(struct ged *gedp, const struct db_full_path *dfp, int command_id);
 GED_EXPORT extern void            ged_edit_buf_notify_checkpoint(struct ged *gedp, const struct db_full_path *dfp);
 GED_EXPORT extern void            ged_edit_buf_notify_revert(struct ged *gedp, const struct db_full_path *dfp);
+extern enum ged_edit_status ged_edit_session_interactive_begin_private(struct ged *gedp,
+    const struct db_full_path *path, enum ged_edit_session_target target,
+    struct rt_edit *state, ged_edit_session_ref *session);
+/* The matrix replaces the staged occurrence arc or transforms a root object.
+ * The borrowed primitive state is already edited, so its caller passes identity. */
+extern enum ged_edit_status ged_edit_session_interactive_commit_private(struct ged *gedp,
+    ged_edit_session_ref session, const fastf_t *matrix);
 GED_EXPORT extern void            ged_edit_sessions_database_close_private(struct ged *gedp);
 GED_EXPORT extern void            ged_edit_sessions_close_private(struct ged *gedp);
 

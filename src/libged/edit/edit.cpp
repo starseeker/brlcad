@@ -2847,6 +2847,27 @@ ged_edit_core(struct ged *gedp, int argc, const char *argv[])
 	ctx.dp = ctx.geom_specs[0].dp;
     }
 
+    /* The interactive editor owns the lifecycle of its default session.
+     * Resolve aliases of the same primitive to that working copy. */
+    const enum ged_edit_mode interactive_mode = ged_edit_interactive_mode(gedp);
+    bool interactive = false;
+    if (ctx.dp && interactive_mode == GED_EDIT_PRIMITIVE && !ctx.occurrence) {
+	const struct db_full_path *selected = ged_edit_interactive_path(gedp);
+	if (selected && DB_FULL_PATH_CUR_DIR(selected) == ctx.dp) {
+	    char *path = db_path_to_string(selected);
+	    ctx.geom_specs[0].path = path;
+	    bu_free(path, "interactive edit path");
+	    interactive = true;
+	}
+    } else if (ctx.dp && ctx.occurrence && interactive_mode == GED_EDIT_INSTANCE) {
+	interactive = ged_edit_interactive_matches(gedp,
+	    ctx.geom_specs[0].path.c_str(), GED_EDIT_INSTANCE);
+    }
+    if (interactive && ctx.flag_F) {
+	bu_vls_strcat(gedp->ged_result_str, "Finish or reject the active interactive edit first\n");
+	return BRLCAD_ERROR;
+    }
+
     /* -F deliberately abandons only command-selected state.  Public clients
      * may own independent variants for the same path and must retain control
      * of their session lifetimes. */
@@ -2923,6 +2944,21 @@ ged_edit_core(struct ged *gedp, int argc, const char *argv[])
     const char *resolved_type = res_t.empty() ? NULL : res_t.c_str();
 
     std::string cmd_str(argv[0]);
+    if (interactive) {
+	if (cmd_str == "reset")
+	    return ged_edit_interactive_reset(gedp);
+	if (cmd_str == "commit" || cmd_str == "cancel") {
+	    bu_vls_strcat(gedp->ged_result_str, "Use accept or reject to close the interactive edit\n");
+	    return BRLCAD_ERROR;
+	}
+	if (!ctx.flag_i && cmd_str != "checkpoint" && cmd_str != "revert" &&
+	    cmd_str != "status" && cmd_str != "get" && cmd_str != "-h" &&
+	    cmd_str != "--help" && cmd_str != "?") {
+	    bu_vls_strcat(gedp->ged_result_str, "Use edit -i to change the interactive working geometry\n");
+	    return BRLCAD_ERROR;
+	}
+	ctx.flag_i = true;
+    }
     if (ctx.occurrence) {
 	static const std::set<std::string> occurrence_commands = {
 	    "cancel", "checkpoint", "commit", "mat", "reset", "revert",
