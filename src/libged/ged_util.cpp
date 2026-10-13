@@ -421,7 +421,7 @@ _ged_vls_col_pr4v(struct bu_vls *vls,
 		  struct directory **list_of_names,
 		  size_t num_in_list,
 		  int no_decorate,
-		  int ssflag)
+		  int ssflag, size_t terminal_columns)
 {
     size_t lines, i, j, k, this_one;
     size_t namelen;
@@ -439,32 +439,30 @@ _ged_vls_col_pr4v(struct bu_vls *vls,
 		cmpdlen, NULL);
     }
 
-    /*
-     * Traverse the list of names, find the longest name and set the
-     * the column width and number of columns accordingly.  If the
-     * longest name is greater than 80 characters, the number of
-     * columns will be one.
-     */
-    maxnamelen = 0;
+    /* Count decorations as part of the cell.  Keep the historical minimum
+     * spacing, but never require multiple columns in a narrow viewport. */
+    const size_t minimum_name_width = 16;
+    const size_t column_gap = 4;
+    maxnamelen = minimum_name_width;
     for (k = 0; k < num_in_list; k++) {
 	namelen = strlen(list_of_names[k]->d_namep);
-	if (namelen > maxnamelen)
-	    maxnamelen = namelen;
+	if (!no_decorate) {
+	    if (list_of_names[k]->d_flags & RT_DIR_COMB) namelen++;
+	    if (list_of_names[k]->d_flags & RT_DIR_REGION) namelen++;
+	}
+	if (namelen > maxnamelen) maxnamelen = namelen;
     }
-
-    if (maxnamelen <= 16)
-	maxnamelen = 16;
-    cwidth = maxnamelen + 4;
-
-    if (cwidth > 80)
-	cwidth = 80;
-    numcol = _GED_TERMINAL_WIDTH / cwidth;
+    cwidth = maxnamelen + column_gap;
+    if (!terminal_columns) terminal_columns = _GED_TERMINAL_WIDTH;
+    numcol = terminal_columns / cwidth;
+    if (!numcol) numcol = 1;
+    if (numcol > num_in_list && num_in_list) numcol = num_in_list;
 
     /*
      * For the number of (full and partial) lines that will be needed,
      * print in vertical format.
      */
-    lines = (num_in_list + (numcol - 1)) / numcol;
+    lines = num_in_list / numcol + (num_in_list % numcol != 0);
     for (i = 0; i < lines; i++) {
 	for (j = 0; j < numcol; j++) {
 	    this_one = j * lines + i;
