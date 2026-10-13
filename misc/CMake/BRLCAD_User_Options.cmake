@@ -86,7 +86,7 @@ endif(
   AND NOT BRLCAD_BUNDLED_LIBS MATCHES "SYSTEM"
 )
 
-# Single flag for disabling GUI instead of 5.
+# Single flag for disabling GUI support.
 option(BRLCAD_ENABLE_MINIMAL "Skip GUI support and docs. Faster builds." OFF)
 mark_as_advanced(BRLCAD_ENABLE_MINIMAL)
 
@@ -95,6 +95,7 @@ if(BRLCAD_ENABLE_MINIMAL)
   set(BRLCAD_ENABLE_X11 "OFF")
   set(BRLCAD_ENABLE_TK "OFF")
   set(BRLCAD_ENABLE_QT "OFF")
+  set(BRLCAD_ENABLE_FLTK "OFF")
   set(BRLCAD_ENABLE_AQUA "OFF")
   set(BRLCAD_EXTRADOCS "OFF")
 endif(BRLCAD_ENABLE_MINIMAL)
@@ -279,6 +280,9 @@ mark_as_advanced(BRLCAD_ENABLE_STEP)
 # Enable features requiring Qt
 option(BRLCAD_ENABLE_QT "Enable features requiring Qt" OFF)
 mark_as_advanced(BRLCAD_ENABLE_QT)
+
+option(BRLCAD_ENABLE_FLTK "Build libfltkcad and the FLTK geometry editor" OFF)
+mark_as_advanced(BRLCAD_ENABLE_FLTK)
 
 # Enable features requiring OpenSceneGraph
 option(BRLCAD_ENABLE_OSG "Enable features requiring OpenSceneGraph" OFF)

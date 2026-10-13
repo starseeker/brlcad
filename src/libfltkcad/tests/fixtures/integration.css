@@ -1,0 +1,29 @@
+body {
+  background: #f7f7f2;
+  color: #20242a;
+  font: 18px sans-serif;
+  margin: 24px;
+}
+
+h1, h2 {
+  color: #174a70;
+}
+
+a {
+  color: #0868ac;
+}
+
+img {
+  border: 3px solid #174a70;
+  display: block;
+  height: 120px;
+  width: 360px;
+}
+
+.spacer {
+  background: linear-gradient(#dcecf7, #ffffff);
+  border: 2px dashed #4c7898;
+  height: 900px;
+  margin: 24px 0;
+  padding: 18px;
+}

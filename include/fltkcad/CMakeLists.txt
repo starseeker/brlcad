@@ -1,0 +1,26 @@
+set(fltkcad_headers
+  CommandHistory.H
+  Fl_Cad_Quad_View.H
+  Fl_Cad_Terminal.H
+  Fl_Cad_View.H
+  Fl_Ged_Accessibility.H
+  Fl_Ged_Attributes.H
+  Fl_Ged_Combination_Editor.H
+  Fl_Ged_Create_Primitive.H
+  Fl_Ged_Help.H
+  Fl_Ged_Hierarchy.H
+  Fl_Ged_Interaction.H
+  Fl_Ged_Preferences.H
+  Fl_Ged_Primitive_Editor.H
+  Fl_Ged_Render_Tools.H
+  Fl_Ged_Search.H
+  Fl_Ged_Sketch_Editor.H
+  Fl_Ged_Specialist_Tools.H
+  Fl_Ged_Tcl.H
+  Fl_Ged_Transform_Editor.H
+  Fl_Ged_View_Controls.H
+  Fl_Litehtml_View.H
+  defines.h
+)
+brlcad_manage_files(fltkcad_headers ${INCLUDE_DIR}/brlcad/fltkcad REQUIRED libfltkcad)
+cmakefiles(CMakeLists.txt)
