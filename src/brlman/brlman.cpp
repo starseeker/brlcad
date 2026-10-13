@@ -38,9 +38,14 @@
 #include "bnetwork.h"
 #include "bio.h"
 
-#if !defined(USE_QT) && defined(HAVE_TK)
+#if !defined(USE_FLTK) && !defined(USE_QT) && defined(HAVE_TK)
 #  include "tcl.h"
 #  include "tk.h"
+#endif
+
+#ifdef USE_FLTK
+#include <FL/Fl.H>
+#include "fltkcad/Fl_Ged_Help.H"
 #endif
 
 #ifdef USE_QT
@@ -68,13 +73,13 @@
 #include "bu/vls.h"
 
 #include "html_text.h"
-#if !defined(USE_QT) && defined(HAVE_TK)
+#if !defined(USE_FLTK) && !defined(USE_QT) && defined(HAVE_TK)
 #  include "tclcad/setup.h"
 #endif
 
 /* Confine the constraining build conditions here - ultimately, we care
  * about graphical and non-graphical, whatever the reasons. */
-#if defined(HAVE_TK) || defined(USE_QT)
+#if defined(HAVE_TK) || defined(USE_QT) || defined(USE_FLTK)
 #  define MAN_GUI 1
 #endif
 
@@ -684,7 +689,7 @@ find_man_file(const char *man_name, const char *lang, char section, bool html)
 }
 
 
-#if !defined(USE_QT) && defined(HAVE_TK)
+#if !defined(USE_FLTK) && !defined(USE_QT) && defined(HAVE_TK)
 // Tk based GUI
 int
 tk_man_gui(const char *man_name, char man_section, const char *man_file)
@@ -1245,7 +1250,21 @@ main(int argc, char **argv_input)
     }
 
 #ifdef MAN_GUI
-#  if !defined(USE_QT) && defined(HAVE_TK)
+#  if defined(USE_FLTK)
+    Fl_Ged_Help viewer(1000, 700, "BRL-CAD Manual Pages");
+    if (!viewer.manuals(bu_vls_cstr(&lang), man_section)) {
+        bu_log("%s\n", viewer.last_error().c_str());
+        return EXIT_FAILURE;
+    }
+    if (man_name && (!man_file || !viewer.load(man_file))) {
+        bu_log("Unable to load manual page %s%s%s\n", man_name,
+               man_file ? ": " : "", man_file ? viewer.last_error().c_str() : "");
+        return EXIT_FAILURE;
+    }
+    bu_vls_free(&lang);
+    viewer.show();
+    return Fl::run();
+#  elif !defined(USE_QT) && defined(HAVE_TK)
     return tk_man_gui(man_name, man_section, man_file);
 #  else
     return qt_man_gui(man_name, man_section, man_file);

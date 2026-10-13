@@ -5,14 +5,14 @@ check_cxx_symbol_exists(wcwidth "wchar.h" BRLMAN_HAVE_WCWIDTH)
 set(brlman_libs libbu ${IMM32_LIBRARY} ${COMCTL32_LIBRARY})
 
 # Tcl/Tk version of brlman GUI
-if(NOT BRLCAD_ENABLE_QT AND TARGET libtclcad AND TK_LIBRARY)
+if(NOT BRLCAD_ENABLE_FLTK AND NOT BRLCAD_ENABLE_QT AND TARGET libtclcad AND TK_LIBRARY)
   brlcad_adddata(brlman.tcl tclscripts/brlman)
 
   set(brlman_libs libtclcad ${TCL_LIBRARY} ${TK_LIBRARY} ${brlman_libs})
-endif(NOT BRLCAD_ENABLE_QT AND TARGET libtclcad AND TK_LIBRARY)
+endif()
 
 # Qt version of brlman GUI
-if(BRLCAD_ENABLE_QT)
+if(BRLCAD_ENABLE_QT AND NOT BRLCAD_ENABLE_FLTK)
   find_package_qt(REQUIRED)
 
   if(Qt6Widgets_FOUND)
@@ -20,7 +20,11 @@ if(BRLCAD_ENABLE_QT)
   else()
     set(brlman_libs libqtcad Qt5::Widgets Qt5::Gui ${brlman_libs})
   endif(Qt6Widgets_FOUND)
-endif(BRLCAD_ENABLE_QT)
+endif()
+
+if(BRLCAD_ENABLE_FLTK)
+  list(APPEND brlman_libs libfltkcad)
+endif()
 
 # Console subsystem is required for shell invocation and redirected output.
 brlcad_addexec(brlman "brlman.cpp;html_text.cpp;console.cpp" "${brlman_libs};gumbo" "")
@@ -41,7 +45,7 @@ if(BRLCAD_EXTRADOCS)
     COMMAND ${CMAKE_COMMAND} -DBRLMAN=$<TARGET_FILE:brlman>
       -P ${CMAKE_CURRENT_SOURCE_DIR}/console_test.cmake)
 endif()
-if(NOT BRLCAD_ENABLE_QT AND TARGET libtclcad AND TK_LIBRARY)
+if(NOT BRLCAD_ENABLE_FLTK AND NOT BRLCAD_ENABLE_QT AND TARGET libtclcad AND TK_LIBRARY)
   set(reflow_test_command ${TCL_TCLSH} "${CMAKE_CURRENT_SOURCE_DIR}/reflow_test.tcl"
     $<TARGET_FILE:libtclcad> $<TARGET_FILE:asciiquack>)
   if(BRLCAD_X11_PROVIDER_RESOLVED STREQUAL "XMIN")
@@ -63,17 +67,20 @@ if(NOT BRLCAD_ENABLE_QT AND TARGET libtclcad AND TK_LIBRARY)
     VERBATIM)
   set_target_properties(brlman-navigation-test PROPERTIES FOLDER "BRL-CAD Validation Testing")
 endif()
-if(BRLCAD_ENABLE_QT)
+if(BRLCAD_ENABLE_FLTK)
+  target_compile_definitions(brlman PRIVATE USE_FLTK)
+  target_compile_features(brlman PRIVATE cxx_std_17)
+elseif(BRLCAD_ENABLE_QT)
   target_compile_definitions(brlman PRIVATE USE_QT)
-endif(BRLCAD_ENABLE_QT)
-if(TK_LIBRARY)
+endif()
+if(TK_LIBRARY AND NOT BRLCAD_ENABLE_FLTK AND NOT BRLCAD_ENABLE_QT)
   target_compile_definitions(brlman PRIVATE HAVE_TK)
-endif(TK_LIBRARY)
+endif()
 
-if(NOT BRLCAD_ENABLE_QT AND TARGET brlman_tcl_cp)
+if(NOT BRLCAD_ENABLE_FLTK AND NOT BRLCAD_ENABLE_QT AND TARGET brlman_tcl_cp)
   add_dependencies(brlman brlman_tcl_cp)
   add_dependencies(brlman TclIndexBld)
-endif(NOT BRLCAD_ENABLE_QT AND TARGET brlman_tcl_cp)
+endif(NOT BRLCAD_ENABLE_FLTK AND NOT BRLCAD_ENABLE_QT AND TARGET brlman_tcl_cp)
 
 if(TARGET TclIndexBld)
   add_dependencies(brlman TclIndexBld)

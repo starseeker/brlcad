@@ -25,8 +25,12 @@ formats, and *mged*(1)/GED commands. On Unix-like systems it wraps the system
 pages when input and output are terminals. On systems lacking a *man* command,
 *brlman* formats the installed HTML pages for its built-in terminal viewer.
 Redirected output is formatted text without terminal controls. When the GUI
-is explicitly requested, *brlman* launches a graphical HTML viewer. The terminal and HTML pages are generated from the
-same source and contain identical information.
+is explicitly requested, *brlman* launches a graphical HTML viewer. The
+terminal and HTML pages are generated from the same source and contain
+identical information. Builds with FLTK enabled use
+an FLTK/litehtml viewer with a manual section selector, page-name filter,
+in-page search, and Back/Forward navigation. The same viewer is available from
+*fltkged*'s Help menu.
 
 The page to display is given by name. An optional one-character _section_ may
 be supplied either as a positional argument or via *-S*. If no section is
