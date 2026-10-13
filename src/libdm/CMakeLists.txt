@@ -12,6 +12,7 @@ set(
   dm_init.cpp
   dm_plugins.cpp
   dm_util.c
+  faceplate.c
   fb_generic.c
   fb_log.c
   fb_paged_io.c
@@ -56,7 +57,7 @@ endif()
 brlcad_addlib(libdm "${LIBDM_SRCS}" "" "${DM_LOCAL_INCLUDE_DIRS}"
   PUBLIC_LIBS ${LIBDM_PUBLIC_LIBS}
   PRIVATE_LIBS PNG::PNG ${WINSOCK_LIB}
-  UNITY_BUILD_SKIP dm_init.cpp
+  UNITY_BUILD_SKIP dm_init.cpp faceplate.c
 )
 set_target_properties(libdm PROPERTIES
   VERSION 20.0.1
