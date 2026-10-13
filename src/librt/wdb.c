@@ -347,6 +347,8 @@ wdb_init(struct rt_wdb *wdbp, struct db_i *dbip, int mode)
 
     wdbp->type = mode;
     wdbp->dbip = dbip;
+    BN_TOL_INIT_SET_TOL(&wdbp->wdb_tol);
+    BG_TESS_TOL_INIT_SET_TOL(&wdbp->wdb_ttol);
 
     bu_vls_init(&wdbp->wdb_name);
     bu_vls_init(&wdbp->wdb_prestr);
