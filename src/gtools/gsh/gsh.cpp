@@ -34,6 +34,8 @@
 #include <thread>
 
 #include "linenoise.hpp"
+#define LIBTERMIO_IMPLEMENTATION
+#include "libtermio.h"
 
 #include "brlcad_ident.h"
 #include "bu.h"
@@ -438,6 +440,9 @@ GshState::eval(int argc, const char **argv)
     // stash the state of the view info so we can recognize changes.
     view_checkpoint();
 
+    int columns = 0;
+    if (termio_get_winsize(fileno(stdout), NULL, &columns) != 0) columns = 0;
+    ged_set_terminal_columns(gedp, columns > 0 ? (size_t)columns : 0);
     int gret = ged_exec(gedp, argc, argv);
 
     if (!(gret & BRLCAD_ERROR))

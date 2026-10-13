@@ -82,8 +82,8 @@ _ged_process_list(struct ged *gedp)
 	for (int j = 1; j < argc; j++) {
 	    bu_vls_printf(&pline, " %s", argv[j]);
 	}
-	/* TODO - this should be intelligent based on current MGED/console terminal width... */
-	bu_vls_trunc(&pline, 80);
+	size_t columns = ged_terminal_columns(gedp);
+	if (columns < bu_vls_strlen(&pline)) bu_vls_trunc(&pline, (int)columns);
 	bu_vls_printf(&plist, "%s\n", bu_vls_cstr(&pline));
 	bu_vls_free(&pline);
 	bu_vls_free(&cmdroot);

@@ -49,6 +49,8 @@
 #include <QClipboard>
 #include <QCompleter>
 #include <QKeyEvent>
+#include <QFontMetrics>
+#include <QTextDocument>
 #include <QMimeData>
 #include <QPointer>
 #include <QStringListModel>
@@ -578,6 +580,15 @@ std::string QgConsole::historyAt(size_t ind)
 }
 
 //-----------------------------------------------------------------------------
+size_t QgConsole::columns() const
+{
+    const QFontMetrics metrics(this->Implementation->font());
+    const int cell = qMax(1, metrics.horizontalAdvance(QLatin1Char('M')));
+    const int available = this->Implementation->viewport()->width() -
+	2 * this->Implementation->document()->documentMargin();
+    return static_cast<size_t>(qMax(1, available / cell));
+}
+
 void QgConsole::setFont(const QFont& i_font)
 {
     this->Implementation->setFont(i_font);
