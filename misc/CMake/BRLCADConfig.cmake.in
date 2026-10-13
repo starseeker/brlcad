@@ -133,6 +133,9 @@ find_dependency(Threads)
 @BRLCAD_FIND_DEP_NETPBM@
 @BRLCAD_FIND_DEP_JPEG@
 @BRLCAD_FIND_DEP_OPENNURBS@
+if(@_OPENSSL_FOUND@)
+  find_dependency(OpenSSL)
+endif()
 
 
 # Optional deps gated by the build-time feature flags
@@ -158,7 +161,11 @@ if(@BRLCAD_HAVE_QT@ AND _brlcad_need_qt)
   endif()
 endif()
 if(@BRLCAD_HAVE_OPENGL@ AND "@OPENGL_TARGETS@")
-  find_dependency(OpenGL)
+  if("@BRLCAD_X11_PROVIDER_RESOLVED@" STREQUAL "XMIN")
+    find_dependency(Xmin 0.1 CONFIG)
+  else()
+    find_dependency(OpenGL)
+  endif()
 endif()
 if(@BRLCAD_HAVE_GDAL@)
   find_dependency(GDAL QUIET)
