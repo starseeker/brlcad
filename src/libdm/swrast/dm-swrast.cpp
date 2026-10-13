@@ -50,6 +50,8 @@ extern "C" {
 #include "../include/private.h"
 
 #define ENABLE_POINT_SMOOTH 1
+#define SWRAST_MAX_FRAMEBUFFER_DIMENSION 4096
+#define SWRAST_PIXEL_BYTES 4
 
 #define VIEWFACTOR      (1.0/(*dmp->i->dm_vp))
 #define VIEWSIZE        (2.0*(*dmp->i->dm_vp))
@@ -118,10 +120,18 @@ swrast_configureWin(struct dm *dmp, int UNUSED(force))
 	return BRLCAD_ERROR;
     }
 
-    // 4096 is from MAX_WIDTH and MAX_HEIGHT as set in OSMesa's config.h.  We
-    // need to provide enough memory here for OSMesa to do all of its work
-    // (textures, etc.), not just the current dm image.
-    pv->os_b = bu_realloc(pv->os_b, 4096 * 4096 * sizeof(GLubyte)*4, "OSMesa rendering buffer");
+    if (width > SWRAST_MAX_FRAMEBUFFER_DIMENSION ||
+	height > SWRAST_MAX_FRAMEBUFFER_DIMENSION) {
+	bu_log("swrast_configureWin: window exceeds OSMesa dimensions\n");
+	return BRLCAD_ERROR;
+    }
+
+    // OSMesa owns textures and other context storage.  The client buffer only
+    // needs to hold the current framebuffer, so size it to the requested view
+    // instead of reserving the maximum 64 MiB for every swrast instance.
+    size_t buffer_size = (size_t)width * (size_t)height *
+	SWRAST_PIXEL_BYTES * sizeof(GLubyte);
+    pv->os_b = bu_realloc(pv->os_b, buffer_size, "OSMesa rendering buffer");
     if (!pv->os_b) {
 	bu_log("swrast_configureWin: render buffer allocation failed\n");
 	return BRLCAD_ERROR;
@@ -133,6 +143,14 @@ swrast_configureWin(struct dm *dmp, int UNUSED(force))
     }
 
     gl_reshape(dmp, width, height);
+
+    if (dmp->i->fbp &&
+	(fb_getwidth(dmp->i->fbp) != width ||
+	 fb_getheight(dmp->i->fbp) != height) &&
+	fb_configure_window(dmp->i->fbp, width, height) != 0) {
+	bu_log("swrast_configureWin: framebuffer resize failed\n");
+	return BRLCAD_ERROR;
+    }
 
     /* this is where font information is set up, if not already done */
     if (!pv->fs) {
@@ -155,6 +173,10 @@ int
 swrast_close(struct dm *dmp)
 {
     struct swrast_vars *pv = (struct swrast_vars *)dmp->i->dm_vars.priv_vars;
+    if (dmp->i->fbp) {
+	(void)fb_close_existing(dmp->i->fbp);
+	dmp->i->fbp = FB_NULL;
+    }
     if (pv->fs) {
 	(void)swrast_makeCurrent(dmp);
 	glfonsDelete(pv->fs);
@@ -223,7 +245,9 @@ swrast_open(void *ctx, void *UNUSED(interp), int argc, const char **argv)
     int height = (!privars->v->gv_height) ? 512 : privars->v->gv_height;
     privars->v->gv_width = width;
     privars->v->gv_height = height;
-    privars->os_b = bu_realloc(privars->os_b, width * height * sizeof(GLubyte)*4, "OSMesa rendering buffer");
+    privars->os_b = bu_realloc(privars->os_b,
+	(size_t)width * (size_t)height * sizeof(GLubyte) * SWRAST_PIXEL_BYTES,
+	"OSMesa rendering buffer");
     if (!OSMesaMakeCurrent(privars->ctx, privars->os_b, GL_UNSIGNED_BYTE, width, height)) {
 	bu_log("OSMesaMakeCurrent failed!\n");
 	bu_free(dmp->i->dm_vars.pub_vars, "swrast_open: dmp->i->dm_vars.pub_vars");
@@ -491,11 +515,13 @@ swrast_openFb(struct dm *dmp)
     //struct swrast_vars *privars = (struct swrast_vars *)dmp->i->dm_vars.priv_vars;
 
     fb_ps = fb_get_platform_specific(FB_SWFB_MAGIC);
+    if (!fb_ps)
+	return BRLCAD_ERROR;
     //ofb_ps = (struct swrast_fb_info *)fb_ps->data;
     //ofb_ps->glc = privars->qw;
     dmp->i->fbp = fb_open_existing("swrast", dm_get_width(dmp), dm_get_height(dmp), fb_ps);
     fb_put_platform_specific(fb_ps);
-    return 0;
+    return dmp->i->fbp ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
 int
