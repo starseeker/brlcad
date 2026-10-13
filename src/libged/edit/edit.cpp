@@ -210,6 +210,18 @@ _edit_get_obj_keypoint(point_t *kp, const char *name, struct ged *gedp)
 }
 
 
+static struct rt_edit *
+_edit_active_selection(const struct ged_edit_ctx *ctx)
+{
+    if (ctx->occurrence || !ctx->dp)
+	return NULL;
+    const struct db_full_path *selected = ged_edit_interactive_path(ctx->gedp);
+    if (!selected || DB_FULL_PATH_CUR_DIR(selected) != ctx->dp)
+	return NULL;
+    return ged_edit_interactive_edit(ctx->gedp);
+}
+
+
 /**
  * Apply a scripted edit through the authoritative path session.
  *
@@ -228,6 +240,22 @@ _edit_xform_apply(struct ged_edit_ctx *ctx,
 
     if (!gedp || !dp)
 	return BRLCAD_ERROR;
+
+    if (struct rt_edit *active = _edit_active_selection(ctx)) {
+	if (ged_edit_interactive_mode(gedp) != GED_EDIT_PRIMITIVE || !ctx->flag_i) {
+	    bu_vls_strcat(gedp->ged_result_str,
+		"The object is being edited; use edit -i for its working primitive, or accept/reject first\n");
+	    return BRLCAD_ERROR;
+	}
+	for (const auto &option : ctx->options)
+	    rt_edit_set_opt(active, option.first.c_str(), option.second.c_str());
+	if (rt_edit_checkpoint(active) != BRLCAD_OK)
+	    return BRLCAD_ERROR;
+	int result = do_edit(active);
+	if (result != BRLCAD_OK)
+	    rt_edit_revert(active);
+	return result;
+    }
 
     struct db_full_path dfp;
     db_full_path_init(&dfp);
@@ -1608,6 +1636,8 @@ cmd_checkpoint::exec(struct ged *gedp, void *u_data, int argc, const char **argv
 	return BRLCAD_ERROR;
 
     struct ged_edit_ctx *ctx = (struct ged_edit_ctx *)u_data;
+    if (struct rt_edit *active = _edit_active_selection(ctx))
+	return rt_edit_checkpoint(active);
     if (ctx->geom_specs.empty() || ctx->geom_specs[0].path.empty())
 	return BRLCAD_ERROR;
     ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
@@ -1638,6 +1668,8 @@ cmd_revert::exec(struct ged *gedp, void *u_data, int argc, const char **argv)
 	return BRLCAD_ERROR;
 
     struct ged_edit_ctx *ctx = (struct ged_edit_ctx *)u_data;
+    if (struct rt_edit *active = _edit_active_selection(ctx))
+	return rt_edit_revert(active);
     ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
     if (_edit_ctx_session(ctx, &session) != GED_EDIT_OK) {
 	bu_vls_printf(gedp->ged_result_str,
@@ -1671,6 +1703,8 @@ cmd_reset::exec(struct ged *gedp, void *u_data, int argc, const char **argv)
 	return BRLCAD_ERROR;
 
     struct ged_edit_ctx *ctx = (struct ged_edit_ctx *)u_data;
+    if (_edit_active_selection(ctx))
+	return ged_edit_interactive_reset(gedp);
     ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
     const enum ged_edit_status found = _edit_ctx_session(ctx, &session);
     if (found == GED_EDIT_NOT_FOUND)

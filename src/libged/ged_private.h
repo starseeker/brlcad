@@ -183,6 +183,7 @@ class Ged_Internal {
 	std::vector<ged_edit_pending_event> edit_pending_events;
 	struct db_i *edit_dbip = nullptr;
 	bool edit_closing = false;
+	struct ged_edit_interactive *edit_session = nullptr;
 };
 
 #else

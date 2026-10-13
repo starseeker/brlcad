@@ -1,3 +1,9 @@
+brlcad_addexec(ged_test_edit_session edit_session.cpp libged TEST)
+if(TARGET ged_test_edit_session)
+  add_dependencies(ged_test_edit_session ged_plugins)
+endif()
+brlcad_add_test(NAME ged_edit_session COMMAND ged_test_edit_session)
+
 brlcad_addexec(ged_test_terminal_columns terminal_columns.cpp libged TEST)
 if(TARGET ged_test_terminal_columns)
   add_dependencies(ged_test_terminal_columns ged_plugins)

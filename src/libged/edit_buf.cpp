@@ -52,6 +52,7 @@
 
 static void _edit_database_changed(struct db_i *, struct directory *, int,
     void *);
+extern void ged_edit_interactive_free(struct ged_edit_interactive *session);
 
 /* ------------------------------------------------------------------ *
  * Ged_Internal destructor — abandons all pending edits on close.
@@ -59,6 +60,7 @@ static void _edit_database_changed(struct db_i *, struct directory *, int,
 
 Ged_Internal::~Ged_Internal()
 {
+    ged_edit_interactive_free(edit_session);
     if (edit_dbip)
 	(void)db_rm_changed_clbk(edit_dbip, _edit_database_changed, this);
     for (auto &kv : edit_buf) {

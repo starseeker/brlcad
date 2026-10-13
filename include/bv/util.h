@@ -233,7 +233,10 @@ bv_knobs_tran(struct bview *v,
 	int model_flag);
 
 
-/* Update the bview struct's knob rate flags based on the vector values. */
+/** Update rate-active flags for a view or edit knob state. */
+BV_EXPORT extern void bv_knobs_update_rate_flags(struct bview_knobs *k);
+
+/** Update the view's knob rate flags based on its vector values. */
 BV_EXPORT extern void
 bv_update_rate_flags(struct bview *v);
 

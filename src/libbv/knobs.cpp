@@ -359,49 +359,21 @@ bv_knobs_rot(struct bview *v,
 }
 
 void
+bv_knobs_update_rate_flags(struct bview_knobs *k)
+{
+    if (!k) return;
+    k->rot_m_flag = !ZERO(k->rot_m[X]) || !ZERO(k->rot_m[Y]) || !ZERO(k->rot_m[Z]);
+    k->rot_o_flag = !ZERO(k->rot_o[X]) || !ZERO(k->rot_o[Y]) || !ZERO(k->rot_o[Z]);
+    k->rot_v_flag = !ZERO(k->rot_v[X]) || !ZERO(k->rot_v[Y]) || !ZERO(k->rot_v[Z]);
+    k->tra_m_flag = !ZERO(k->tra_m[X]) || !ZERO(k->tra_m[Y]) || !ZERO(k->tra_m[Z]);
+    k->tra_v_flag = !ZERO(k->tra_v[X]) || !ZERO(k->tra_v[Y]) || !ZERO(k->tra_v[Z]);
+    k->sca_flag = !ZERO(k->sca);
+}
+
+void
 bv_update_rate_flags(struct bview *v)
 {
-    if (!ZERO(v->k.rot_m[X])
-	|| !ZERO(v->k.rot_m[Y])
-	|| !ZERO(v->k.rot_m[Z]))
-    {
-	v->k.rot_m_flag = 1;
-    } else {
-	v->k.rot_m_flag = 0;
-    }
-
-    if (!ZERO(v->k.tra_m[X])
-	|| !ZERO(v->k.tra_m[Y])
-	|| !ZERO(v->k.tra_m[Z]))
-    {
-	v->k.tra_m_flag = 1;
-    } else {
-	v->k.tra_m_flag = 0;
-    }
-
-    if (!ZERO(v->k.rot_v[X])
-	|| !ZERO(v->k.rot_v[Y])
-	|| !ZERO(v->k.rot_v[Z]))
-    {
-	v->k.rot_v_flag = 1;
-    } else {
-	v->k.rot_v_flag = 0;
-    }
-
-    if (!ZERO(v->k.tra_v[X])
-	|| !ZERO(v->k.tra_v[Y])
-	|| !ZERO(v->k.tra_v[Z]))
-    {
-	v->k.tra_v_flag = 1;
-    } else {
-	v->k.tra_v_flag = 0;
-    }
-
-    if (!ZERO(v->k.sca)) {
-	v->k.sca_flag = 1;
-    } else {
-	v->k.sca_flag = 0;
-    }
+    if (v) bv_knobs_update_rate_flags(&v->k);
 }
 
 int
