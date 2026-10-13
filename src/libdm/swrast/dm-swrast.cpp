@@ -747,7 +747,8 @@ struct dm_impl dm_swrast_impl = {
     0,				/* Tcl interpreter */
     NULL,                       /* Drawing context */
     NULL,                       /* App data */
-    NULL                        /* dlist sensors */
+    NULL,                       /* dlist sensors */
+    NULL                        /* faceplate GUI */
 };
 
 struct dm dm_swrast = { DM_MAGIC, &dm_swrast_impl, 0 };

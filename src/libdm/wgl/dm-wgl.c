@@ -979,7 +979,8 @@ struct dm_impl dm_wgl_impl = {
     0,				/* Tcl interpreter */
     NULL,                       /* Drawing context */
     NULL,                       /* App data */
-    NULL                        /* dlist sensors */
+    NULL,                       /* dlist sensors */
+    NULL                        /* faceplate GUI */
 };
 
 /*
