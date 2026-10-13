@@ -272,6 +272,8 @@ function(BRLCAD_Summary)
   endif(Qt5Core_DIR)
 
   ext_report("Qt" QtCore_DIR REQUIRED_VARS "BRLCAD_ENABLE_QT")
+  ext_report("FLTK" FLTK_DIR REQUIRED_VARS "BRLCAD_ENABLE_FLTK")
+  ext_report("litehtml" litehtml_DIR REQUIRED_VARS "BRLCAD_ENABLE_FLTK")
   ext_report("Regex Library" REGEX_STATUS)
   ext_report("STEPcode" STEPCODE_STATUS REQUIRED_VARS "BRLCAD_ENABLE_STEP")
   ext_report("Tcl" TCL_LIBRARY REQUIRED_VARS "BRLCAD_ENABLE_TCL")
@@ -361,6 +363,7 @@ function(BRLCAD_Summary)
   set(BRLCAD_X11_SUPPORT_LABEL "X11 support (optional) ")
   set(BRLCAD_ENABLE_OPENGL_LABEL "OpenGL support (optional) ")
   set(BRLCAD_ENABLE_QT_LABEL "Qt support (optional) ")
+  set(BRLCAD_ENABLE_FLTK_LABEL "FLTK support (optional) ")
   set(BRLCAD_ENABLE_RUNTIME_DEBUG_LABEL "Run-time debuggability (optional) ")
   set(BRLCAD_ARCH_BITSETTING_LABEL "Build 32/64-bit release ")
   set(BRLCAD_OPTIMIZED_LABEL "Build with optimization ")
@@ -393,7 +396,7 @@ function(BRLCAD_Summary)
     set(BRLCAD_X11_SUPPORT "System")
   endif()
 
-  set(FEATURE_REPORT_ITEMS BRLCAD_ENABLE_OPENGL BRLCAD_X11_SUPPORT BRLCAD_ENABLE_QT BRLCAD_ENABLE_RUNTIME_DEBUG)
+  set(FEATURE_REPORT_ITEMS BRLCAD_ENABLE_OPENGL BRLCAD_X11_SUPPORT BRLCAD_ENABLE_QT BRLCAD_ENABLE_FLTK BRLCAD_ENABLE_RUNTIME_DEBUG)
 
   set(
     OTHER_REPORT_ITEMS

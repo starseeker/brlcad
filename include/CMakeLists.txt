@@ -11,6 +11,7 @@ add_subdirectory(icv)
 add_subdirectory(nmg)
 add_subdirectory(optical)
 add_subdirectory(qtcad)
+add_subdirectory(fltkcad)
 add_subdirectory(rt)
 add_subdirectory(tclcad)
 
