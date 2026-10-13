@@ -43,6 +43,7 @@
 #include "rt/primitives/pipe.h"
 #include "ged/view.h"
 
+#include "ged/edit.h"
 #include "./mged.h"
 #include "./sedit.h"
 #include "./mged_dm.h"
@@ -507,8 +508,12 @@ reinit_edit_state(struct mged_state *s, struct ged_bv_data *bdata)
 
     /* MEDIT is persistent so Tcl links into it remain safe between edits. */
     Tcl_UnlinkVar(s->interp, "edit_solid_flag");
-    int ret = rt_edit_reinit(MEDIT(s), &bdata->s_fullpath, s->dbip,
-	    &s->tol.tol, view_state->vs_gvp);
+    ged_edit_session_end(s->gedp);
+    enum ged_edit_mode mode = s->global_editing_state == ST_O_EDIT ?
+        GED_EDIT_INSTANCE : GED_EDIT_PRIMITIVE;
+    int ret = ged_edit_session_begin(s->gedp, MEDIT(s), &bdata->s_fullpath,
+        mode, mode == GED_EDIT_INSTANCE ? (size_t)ipathpos : bdata->s_fullpath.fp_len - 1,
+        &s->tol.tol, view_state->vs_gvp);
     if (Tcl_LinkVar(s->interp, "edit_solid_flag",
 		(char *)&MEDIT(s)->edit_flag, TCL_LINK_INT) != TCL_OK)
 	return BRLCAD_ERROR;
@@ -976,51 +981,17 @@ init_oedit(struct mged_state *s)
 
 void oedit_reject(struct mged_state *s);
 
-static void
+static int
 oedit_apply(struct mged_state *s, int continue_editing)
 {
     struct display_list *gdlp;
     struct display_list *next_gdlp;
     struct bv_scene_obj *sp;
-    /* matrices used to accept editing done from a depth
-     * >= 2 from the top of the illuminated path
-     */
-    mat_t topm;	/* accum matrix from pathpos 0 to i-2 */
-    mat_t inv_topm;	/* inverse */
-    mat_t deltam;	/* final "changes":  deltam = (inv_topm)(MEDIT(s)->model_changes)(topm) */
-    mat_t tempm;
-
     if (!illump || !illump->s_u_data)
-	return;
-    struct ged_bv_data *bdata = (struct ged_bv_data *)illump->s_u_data;
-
-    switch (ipathpos) {
-	case 0:
-	    moveHobj(s, DB_FULL_PATH_GET(&bdata->s_fullpath, ipathpos),
-		     MEDIT(s)->model_changes);
-	    break;
-	case 1:
-	    moveHinstance(s, DB_FULL_PATH_GET(&bdata->s_fullpath, ipathpos-1),
-			  DB_FULL_PATH_GET(&bdata->s_fullpath, ipathpos),
-			  MEDIT(s)->model_changes);
-	    break;
-	default:
-	    MAT_IDN(topm);
-	    MAT_IDN(inv_topm);
-	    MAT_IDN(deltam);
-	    MAT_IDN(tempm);
-
-	    (void)db_path_to_mat(s->dbip, &bdata->s_fullpath, topm, ipathpos-1);
-
-	    bn_mat_inv(inv_topm, topm);
-
-	    bn_mat_mul(tempm, MEDIT(s)->model_changes, topm);
-	    bn_mat_mul(deltam, inv_topm, tempm);
-
-	    moveHinstance(s, DB_FULL_PATH_GET(&bdata->s_fullpath, ipathpos-1),
-			  DB_FULL_PATH_GET(&bdata->s_fullpath, ipathpos),
-			  deltam);
-	    break;
+        return TCL_ERROR;
+    if (ged_edit_session_apply(s->gedp, 1) != BRLCAD_OK) {
+        Tcl_AppendResult(s->interp, bu_vls_cstr(s->gedp->ged_result_str), (char *)NULL);
+        return TCL_ERROR;
     }
 
     /*
@@ -1048,51 +1019,26 @@ oedit_apply(struct mged_state *s, int continue_editing)
 
 	gdlp = next_gdlp;
     }
+    return TCL_OK;
 }
 
 
-void
+int
 oedit_accept(struct mged_state *s)
 {
-    struct display_list *gdlp;
-    struct display_list *next_gdlp;
-    struct bv_scene_obj *sp;
-
     if (s->dbip == DBI_NULL)
-	return;
-
-    if (s->dbip->dbi_read_only) {
-	oedit_reject(s);
-
-	gdlp = BU_LIST_NEXT(display_list, (struct bu_list *)ged_dl(s->gedp));
-	while (BU_LIST_NOT_HEAD(gdlp, (struct bu_list *)ged_dl(s->gedp))) {
-	    next_gdlp = BU_LIST_PNEXT(display_list, gdlp);
-
-	    for (BU_LIST_FOR(sp, bv_scene_obj, &gdlp->dl_head_scene_obj)) {
-		if (sp->s_iflag == DOWN)
-		    continue;
-		(void)replot_original_solid(s, sp);
-		sp->s_iflag = DOWN;
-	    }
-
-	    gdlp = next_gdlp;
-	}
-
-	bu_log("Sorry, this database is READ-ONLY\n");
-	pr_prompt(s);
-
-	return;
-    }
-
-    oedit_apply(s, DOWN); /* finished editing */
+        return TCL_ERROR;
+    if (oedit_apply(s, DOWN) != TCL_OK)
+        return TCL_ERROR;
     oedit_reject(s);
+    return TCL_OK;
 }
 
 
 void
 oedit_reject(struct mged_state *s)
 {
-    rt_edit_reset(MEDIT(s));
+    ged_edit_session_end(s->gedp);
     MEDIT(s)->edit_flag = -1;
 }
 
@@ -1147,8 +1093,6 @@ f_eqn(ClientData clientData, Tcl_Interp *UNUSED(interp), int argc, const char *a
 static int
 sedit_apply(struct mged_state *s, int accept_flag)
 {
-    struct directory *dp;
-
     /* reset internal variables */
     if (EDOBJ[MEDIT(s)->es_int.idb_type].ft_prim_edit_reset)
 	(*EDOBJ[MEDIT(s)->es_int.idb_type].ft_prim_edit_reset)(MEDIT(s));
@@ -1161,84 +1105,15 @@ sedit_apply(struct mged_state *s, int accept_flag)
 	return TCL_OK;
     }
 
-    /* write editing changes out to disc */
-    if (!illump->s_u_data) {
-	rt_edit_reset(MEDIT(s));
-	mmenu_set(s, MENU_L1, NULL);
-	mmenu_set(s, MENU_L2, NULL);
-	return TCL_ERROR;
+    if (ged_edit_session_apply(s->gedp, !accept_flag) != BRLCAD_OK) {
+        Tcl_AppendResult(s->interp, bu_vls_cstr(s->gedp->ged_result_str), (char *)NULL);
+        return TCL_ERROR;
     }
-    struct ged_bv_data *bdata = (struct ged_bv_data *)illump->s_u_data;
-    dp = LAST_SOLID(bdata);
-    if (!dp) {
-	/* sanity check, unexpected error */
-	rt_edit_reset(MEDIT(s));
-	mmenu_set(s, MENU_L1, NULL);
-	mmenu_set(s, MENU_L2, NULL);
-	return TCL_ERROR;
-    }
-
-    /* make sure that any BOT solid is minimally legal */
-    if (MEDIT(s)->es_int.idb_type == ID_BOT) {
-	struct rt_bot_internal *bot = (struct rt_bot_internal *)MEDIT(s)->es_int.idb_ptr;
-
-	RT_BOT_CK_MAGIC(bot);
-	if (bot->mode == RT_BOT_SURFACE || bot->mode == RT_BOT_SOLID) {
-	    /* make sure facemodes and thicknesses have been freed */
-	    if (bot->thickness) {
-		bu_free((char *)bot->thickness, "BOT thickness");
-		bot->thickness = NULL;
-	    }
-	    if (bot->face_mode) {
-		bu_free((char *)bot->face_mode, "BOT face_mode");
-		bot->face_mode = NULL;
-	    }
-	} else {
-	    /* make sure face_modes and thicknesses exist */
-	    if (!bot->thickness)
-		bot->thickness = (fastf_t *)bu_calloc(bot->num_faces, sizeof(fastf_t), "BOT thickness");
-	    if (!bot->face_mode) {
-		bot->face_mode = bu_bitv_new(bot->num_faces);
-	    }
-	}
-    }
-
-    /* Scale change on export is 1.0 -- no change */
-    if (rt_db_put_internal(dp, s->dbip, &MEDIT(s)->es_int) < 0) {
-	Tcl_AppendResult(s->interp, "sedit_apply(", dp->d_namep,
-			 "):  solid export failure\n", (char *)NULL);
-	if (accept_flag) {
-	    rt_db_free_internal(&MEDIT(s)->es_int);
-	}
-	rt_edit_reset(MEDIT(s));
-	mmenu_set(s, MENU_L1, NULL);
-	mmenu_set(s, MENU_L2, NULL);
-	return TCL_ERROR;				/* FAIL */
-    }
-
     if (accept_flag) {
-	menu_state->ms_flag = 0;
-	movedir = 0;
-	s->s_edit->es_edclass = EDIT_CLASS_NULL;
-
-	/* Reset the persistent rt_edit to idle: frees es_int, ipe_ptr and all
-	 * per-solid state without freeing the struct itself.  MEDIT(s) remains
-	 * non-NULL so ill_common() and other callers are always safe. */
-	rt_edit_reset(MEDIT(s));
-	MEDIT(s)->edit_flag = -1;
-    } else {
-	/* rt_db_put_internal frees the internal representation as a side effect.
-	 * Since we are in "apply but stay editing" mode (sed_apply command),
-	 * we need es_int to remain valid so the user can keep editing.
-	 * Re-read the solid from disk to restore a clean internal state. */
-	if (rt_db_get_internal(&MEDIT(s)->es_int, LAST_SOLID(bdata),
-			       s->dbip, NULL) < 0) {
-	    Tcl_AppendResult(s->interp, "sedit_apply(",
-			     LAST_SOLID(bdata)->d_namep,
-			     "):  solid reimport failure\n", (char *)NULL);
-	    rt_db_free_internal(&MEDIT(s)->es_int);
-	    return TCL_ERROR;
-	}
+        menu_state->ms_flag = 0;
+        movedir = 0;
+        s->s_edit->es_edclass = EDIT_CLASS_NULL;
+        MEDIT(s)->edit_flag = -1;
     }
 
     mmenu_set(s, MENU_L1, NULL);
@@ -1247,23 +1122,12 @@ sedit_apply(struct mged_state *s, int accept_flag)
 }
 
 
-void
+int
 sedit_accept(struct mged_state *s)
 {
-    if (s->dbip == DBI_NULL)
-	return;
-
-    if (not_state(s, ST_S_EDIT, "Solid edit accept"))
-	return;
-
-    if (s->dbip->dbi_read_only) {
-	sedit_reject(s);
-	bu_log("Sorry, this database is READ-ONLY\n");
-	pr_prompt(s);
-	return;
-    }
-
-    (void)sedit_apply(s, 1);
+    if (s->dbip == DBI_NULL || not_state(s, ST_S_EDIT, "Solid edit accept"))
+        return TCL_ERROR;
+    return sedit_apply(s, 1);
 }
 
 
@@ -1281,7 +1145,7 @@ sedit_reject(struct mged_state *s)
 	struct bv_scene_obj *sp;
 	if (!illump->s_u_data) {
 	    /* No solid data to replot; just reset to idle and clean up menus. */
-	    rt_edit_reset(MEDIT(s));
+	    ged_edit_session_end(s->gedp);
 	    mmenu_set(s, MENU_L1, NULL);
 	    mmenu_set(s, MENU_L2, NULL);
 	    return;
@@ -1310,7 +1174,7 @@ sedit_reject(struct mged_state *s)
 
     /* Reset the persistent rt_edit to idle: frees es_int (the modified copy),
      * ipe_ptr and all per-solid state.  MEDIT(s) stays non-NULL. */
-    rt_edit_reset(MEDIT(s));
+    ged_edit_session_end(s->gedp);
     MEDIT(s)->edit_flag = -1;
 }
 
@@ -1821,7 +1685,8 @@ f_oedit_apply(ClientData clientData, Tcl_Interp *interp, int UNUSED(argc), const
 
     CHECK_DBI_NULL;
     int bbox_keypoint = BU_STR_EQUAL(MEDIT(s)->e_keytag, "bounding-box center");
-    oedit_apply(s, UP); /* apply changes, but continue editing */
+    if (oedit_apply(s, UP) != TCL_OK)
+        return TCL_ERROR;
 
     if (!illump->s_u_data)
 	return TCL_ERROR;
@@ -1850,242 +1715,47 @@ f_oedit_apply(ClientData clientData, Tcl_Interp *interp, int UNUSED(argc), const
     return TCL_OK;
 }
 
-/* Extrude command - project an arb face */
-/* Format: extrude face distance */
-int
-f_extrude(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
+static int
+mged_arb_edit_command(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
-
-    static int face;
-    static fastf_t dist;
-
-    CHECK_DBI_NULL;
-
-    if (argc < 3 || 3 < argc) {
-	struct bu_vls vls = BU_VLS_INIT_ZERO;
-
-	bu_vls_printf(&vls, "help extrude");
-	Tcl_Eval(interp, bu_vls_addr(&vls));
-	bu_vls_free(&vls);
-
-	return TCL_ERROR;
-    }
-
-    if (not_state(s, ST_S_EDIT, "Extrude"))
-	return TCL_ERROR;
-
-    if (MEDIT(s)->es_int.idb_type != ID_ARB8) {
-	Tcl_AppendResult(interp, "Extrude: solid type must be ARB\n", (char *)NULL);
-	return TCL_ERROR;
-    }
-
-    int arb_type = rt_arb_std_type(&MEDIT(s)->es_int, MEDIT(s)->tol);
-
-    if (arb_type != ARB8 && arb_type != ARB6 && arb_type != ARB4) {
-	struct bu_vls tmp_vls = BU_VLS_INIT_ZERO;
-
-	bu_vls_printf(&tmp_vls, "ARB%d: extrusion of faces not allowed\n", arb_type);
-	Tcl_AppendResult(interp, bu_vls_addr(&tmp_vls), (char *)NULL);
-	bu_vls_free(&tmp_vls);
-
-	return TCL_ERROR;
-    }
-
-    face = atoi(argv[1]);
-
-    /* get distance to project face */
-    dist = atof(argv[2]);
-    /* apply MEDIT(s)->e_mat[15] to get to real model space */
-    /* convert from the local unit (as input) to the base unit */
-    dist = dist * MEDIT(s)->e_mat[15] * s->dbip->dbi_local2base;
-
-    struct rt_arb_internal *arb = (struct rt_arb_internal *)MEDIT(s)->es_int.idb_ptr;
-    RT_ARB_CK_MAGIC(arb);
-
-    fastf_t es_peqn[7][4];
-    struct bu_vls error_msg = BU_VLS_INIT_ZERO;
-    if (rt_arb_calc_planes(&error_msg, arb, arb_type, es_peqn, &s->tol.tol)) {
-	Tcl_AppendResult(interp, "\nCannot calculate plane equations for ARB8\n", (char *)NULL);
-	bu_vls_free(&error_msg);
-	return TCL_ERROR;
-    }
-    bu_vls_free(&error_msg);
-
-    if (arb_extrude(arb, face, dist, MEDIT(s)->tol, es_peqn)) {
-	Tcl_AppendResult(interp, "Error extruding ARB\n", (char *)NULL);
-	return TCL_ERROR;
-    }
-
-    /* If the ARB type changed (e.g. ARB4 extruded to ARB6), the editing
-     * menu needs to be refreshed to show the new type's options.  Fire the
-     * ECMD_MENU_REFRESH callback so the application can reinstall the
-     * appropriate menu. */
-    int new_arb_type = rt_arb_std_type(&MEDIT(s)->es_int, MEDIT(s)->tol);
-    if (new_arb_type != arb_type) {
-	bu_clbk_t f = NULL;
-	void *d = NULL;
-	rt_edit_map_clbk_get(&f, &d, MEDIT(s)->m, ECMD_MENU_REFRESH, BU_CLBK_DURING);
-	if (f)
-	    (*f)(0, NULL, d, NULL);
-    }
-
-    /* draw the updated solid */
+    bu_vls_trunc(s->gedp->ged_result_str, 0);
+    int ret = ged_edit_session_command(s->gedp, argc, argv);
+    Tcl_AppendResult(interp, bu_vls_cstr(s->gedp->ged_result_str), (char *)NULL);
+    if (ret != BRLCAD_OK)
+        return TCL_ERROR;
+    sedit_menu(s);
     replot_editing_solid(0, NULL, s, NULL);
     s->update_views = 1;
     dm_set_dirty(DMP, 1);
-
     return TCL_OK;
 }
 
+int
+f_extrude(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
+{
+    return mged_arb_edit_command(clientData, interp, argc, argv);
+}
 
-/* Mirface command - mirror an arb face */
-/* Format: mirror face axis */
 int
 f_mirface(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    struct cmdtab *ctp = (struct cmdtab *)clientData;
-    MGED_CK_CMD(ctp);
-    struct mged_state *s = ctp->s;
-
-    int face;
-
-    if (argc < 3 || 3 < argc) {
-	struct bu_vls vls = BU_VLS_INIT_ZERO;
-
-	bu_vls_printf(&vls, "help mirface");
-	Tcl_Eval(interp, bu_vls_addr(&vls));
-	bu_vls_free(&vls);
-
-	return TCL_ERROR;
-    }
-
-    if (not_state(s, ST_S_EDIT, "Mirface"))
-	return TCL_ERROR;
-
-    if (MEDIT(s)->es_int.idb_type != ID_ARB8) {
-	Tcl_AppendResult(interp, "Mirface: solid type must be ARB\n", (char *)NULL);
-	return TCL_ERROR;
-    }
-
-    struct rt_arb_internal *arb = (struct rt_arb_internal *)MEDIT(s)->es_int.idb_ptr;
-    RT_ARB_CK_MAGIC(arb);
-
-    face = atoi(argv[1]);
-
-    fastf_t es_peqn[7][4];
-    struct bu_vls error_msg = BU_VLS_INIT_ZERO;
-    int arb_type = rt_arb_std_type(&MEDIT(s)->es_int, MEDIT(s)->tol);
-    if (rt_arb_calc_planes(&error_msg, arb, arb_type, es_peqn, &s->tol.tol)) {
-	Tcl_AppendResult(interp, "\nCannot calculate plane equations for ARB8\n", (char *)NULL);
-	bu_vls_free(&error_msg);
-	return TCL_ERROR;
-    }
-    bu_vls_free(&error_msg);
-
-    if (arb_mirror_face_axis(arb, es_peqn, face, argv[2], MEDIT(s)->tol)) {
-	Tcl_AppendResult(interp, "Mirface: mirror operation failed\n", (char *)NULL);
-	return TCL_ERROR;
-    }
-
-    /* draw the updated solid */
-    replot_editing_solid(0, NULL, s, NULL);
-    view_state->vs_flag = 1;
-
-    return TCL_OK;
+    return mged_arb_edit_command(clientData, interp, argc, argv);
 }
 
-
-/* Edgedir command: define the direction of an arb edge being moved
- * Format: edgedir deltax deltay deltaz OR edgedir rot fb
-*/
 int
 f_edgedir(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    struct cmdtab *ctp = (struct cmdtab *)clientData;
-    MGED_CK_CMD(ctp);
-    struct mged_state *s = ctp->s;
-
-    if (argc < 3 || 4 < argc) {
-	struct bu_vls vls = BU_VLS_INIT_ZERO;
-
-	bu_vls_printf(&vls, "help edgedir");
-	Tcl_Eval(interp, bu_vls_addr(&vls));
-	bu_vls_free(&vls);
-
-	return TCL_ERROR;
-    }
-
-    if (not_state(s, ST_S_EDIT, "Edgedir"))
-	return TCL_ERROR;
-
-    return rt_arb_edgedir(MEDIT(s), argc, argv);
+    return mged_arb_edit_command(clientData, interp, argc, argv);
 }
 
-/* Permute command - permute the vertex labels of an ARB
- * Format: permute tuple */
-
-/*
- *	     Minimum and maximum tuple lengths
- *     ------------------------------------------------
- *	Solid	# vertices needed	# vertices
- *	type	 to disambiguate	in THE face
- *     ------------------------------------------------
- *	ARB4		3		    3
- *	ARB5		2		    4
- *	ARB6		2		    4
- *	ARB7		1		    4
- *	ARB8		3		    4
- *     ------------------------------------------------
- */
 int
 f_permute(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    struct cmdtab *ctp = (struct cmdtab *)clientData;
-    MGED_CK_CMD(ctp);
-    struct mged_state *s = ctp->s;
-
-    /*
-     * 1) Why were all vars declared static?
-     * 2) Recompute plane equations?
-     */
-    struct bu_vls vls = BU_VLS_INIT_ZERO;
-    CHECK_DBI_NULL;
-    CHECK_READ_ONLY;
-
-    if (argc < 2 || 2 < argc) {
-	bu_vls_printf(&vls, "help permute");
-	Tcl_Eval(interp, bu_vls_addr(&vls));
-	bu_vls_free(&vls);
-
-	return TCL_ERROR;
-    }
-
-    if (not_state(s, ST_S_EDIT, "Permute"))
-	return TCL_ERROR;
-
-    if (MEDIT(s)->es_int.idb_type != ID_ARB8) {
-	Tcl_AppendResult(interp, "Permute: solid type must be an ARB\n", (char *)NULL);
-	return TCL_ERROR;
-    }
-
-    struct rt_arb_internal *arb = (struct rt_arb_internal *)MEDIT(s)->es_int.idb_ptr;
-    RT_ARB_CK_MAGIC(arb);
-
-    if (arb_permute(arb, argv[1], MEDIT(s)->tol)) {
-	Tcl_AppendResult(interp, "Permute failed.\n", (char *)NULL);
-	return TCL_ERROR;
-    }
-
-    /* draw the updated solid */
-    replot_editing_solid(0, NULL, s, NULL);
-    view_state->vs_flag = 1;
-
-    return TCL_OK;
+    return mged_arb_edit_command(clientData, interp, argc, argv);
 }
-
 
 /*
  * Local Variables:

@@ -24,6 +24,7 @@
  */
 
 #include "common.h"
+#include "ged/edit.h"
 
 #include <string.h>
 
@@ -53,6 +54,8 @@ ged_close_core(struct ged *gedp, int UNUSED(argc), const char **UNUSED(argv))
     /* Stop callbacks and children before dismantling database state they may
      * still reference. */
     ged_subprocesses_terminate(gedp);
+    ged_edit_session_end(gedp);
+    ged_edit_buf_clear(gedp);
 
     /* close current database */
     if (gedp->dbip)

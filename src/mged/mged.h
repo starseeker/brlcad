@@ -614,10 +614,10 @@ void transform_editing_solid(
     struct rt_db_internal *is,		/* input solid */
     int freedbi);
 int replot_editing_solid(int, const char **, void *, void *);
-void sedit_accept(struct mged_state *s);
+int sedit_accept(struct mged_state *s);
 void sedit_mouse(struct mged_state *s, const vect_t mousevec);
 void sedit_reject(struct mged_state *s);
-void oedit_accept(struct mged_state *s);
+int oedit_accept(struct mged_state *s);
 void oedit_reject(struct mged_state *s);
 void objedit_mouse(struct mged_state *s, const vect_t mousevec);
 void label_edited_solid(struct mged_state *s, int *num_lines, point_t *lines, struct rt_point_labels pl[], int max_pl, const mat_t xform, struct rt_db_internal *ip);

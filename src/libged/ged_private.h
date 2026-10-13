@@ -55,6 +55,8 @@
 
 #endif
 
+struct ged_edit_session;
+
 struct ged_qray_color {
     unsigned char r;
     unsigned char g;
@@ -147,8 +149,10 @@ class Ged_Internal {
 	struct ged_edit_buf_entry {
 	    struct db_full_path dfp;
 	    struct rt_edit *s;
+	    struct bn_tol tolerance;
 	};
 	std::unordered_map<std::string, ged_edit_buf_entry> edit_buf;
+	struct ged_edit_session *edit_session = NULL;
 };
 
 #else
@@ -571,13 +575,15 @@ _ged_subcmd2_help(struct ged *gedp, struct bu_opt_desc *gopts, std::map<std::str
  * ged_edit_buf_set    - store/replace entry (takes ownership of s)
  * ged_edit_buf_promote- serialise es_int to disk, remove entry; returns OK/ERROR
  * ged_edit_buf_abandon- call rt_edit_destroy(), remove entry (no disk write)
- * ged_edit_buf_flush  - promote ALL entries to disk (call before db close)
+ * ged_edit_buf_flush  - promote ALL entries to disk
+ * ged_edit_buf_clear  - abandon all entries (call before db close)
  */
 GED_EXPORT extern struct rt_edit *ged_edit_buf_get(struct ged *gedp, const struct db_full_path *dfp);
 GED_EXPORT extern void            ged_edit_buf_set(struct ged *gedp, const struct db_full_path *dfp, struct rt_edit *s);
 GED_EXPORT extern int             ged_edit_buf_promote(struct ged *gedp, const struct db_full_path *dfp);
 GED_EXPORT extern void            ged_edit_buf_abandon(struct ged *gedp, const struct db_full_path *dfp);
 GED_EXPORT extern void            ged_edit_buf_flush(struct ged *gedp);
+GED_EXPORT extern void            ged_edit_buf_clear(struct ged *gedp);
 
 __END_DECLS
 

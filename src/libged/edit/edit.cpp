@@ -44,6 +44,7 @@
 #include "bn/rand.h"
 #include "rt/db4.h"
 #include "rt/edit.h"
+#include "ged/edit.h"
 #include "rt/primitives/arb8.h"
 #include "rt/primitives/tgc.h"
 
@@ -238,18 +239,30 @@ _edit_xform_apply(struct ged_edit_ctx *ctx,
     db_full_path_init(&dfp);
     db_add_node_to_full_path(&dfp, dp);
 
+    struct rt_edit *active = ged_edit_session_edit(gedp);
+    const struct db_full_path *selected = ged_edit_session_path(gedp);
+    if (active && selected && DB_FULL_PATH_CUR_DIR(selected) == dp) {
+        db_free_full_path(&dfp);
+        if (ged_edit_session_mode(gedp) != GED_EDIT_PRIMITIVE || !flag_i) {
+            bu_vls_strcat(gedp->ged_result_str,
+                "The object is being edited; use edit -i for its working primitive, or accept/reject first\n");
+            return BRLCAD_ERROR;
+        }
+        for (const auto &option : ctx->options)
+            rt_edit_set_opt(active, option.first.c_str(), option.second.c_str());
+        if (rt_edit_checkpoint(active) != BRLCAD_OK)
+            return BRLCAD_ERROR;
+        int result = do_edit(active);
+        if (result != BRLCAD_OK)
+            rt_edit_revert(active);
+        return result;
+    }
+
     /* Re-use existing buffer entry, or create a fresh one */
     struct rt_edit *s = ged_edit_buf_get(gedp, &dfp);
     bool is_new = (s == NULL);
 
-    /*
-     * tol must have function scope: rt_edit_create stores &tol in s->tol,
-     * so if tol were declared inside the if(is_new) block it would become a
-     * dangling pointer the moment that block's } was reached — causing any
-     * handler that calls BN_CK_TOL(s->tol) (e.g. arb8's rt_arb_std_type)
-     * to abort.  For reused buffer entries we refresh s->tol here so it
-     * always points to a valid object for the duration of do_edit(s).
-     */
+    /* New entries borrow this tolerance until the buffer takes a copy. */
     struct bn_tol tol = BN_TOL_INIT_TOL;
 
     if (is_new) {
@@ -258,10 +271,6 @@ _edit_xform_apply(struct ged_edit_ctx *ctx,
 	    db_free_full_path(&dfp);
 	    return BRLCAD_ERROR;
 	}
-    } else {
-	/* Refresh the tolerance pointer on reused entries so that any
-	 * handler that dereferences s->tol gets a valid object.       */
-	s->tol = &tol;
     }
 
     /* Apply any dynamic options passed from the command line */
@@ -1362,6 +1371,12 @@ cmd_checkpoint::exec(struct ged *gedp, void *u_data, int argc, const char **argv
     db_full_path_init(&dfp);
     db_add_node_to_full_path(&dfp, ctx->dp);
 
+    const struct db_full_path *selected = ged_edit_session_path(gedp);
+    if (selected && DB_FULL_PATH_CUR_DIR(selected) == ctx->dp) {
+        db_free_full_path(&dfp);
+        return rt_edit_checkpoint(ged_edit_session_edit(gedp));
+    }
+
     /* Use existing buffer entry or create a new one */
     struct rt_edit *s = ged_edit_buf_get(gedp, &dfp);
     bool is_new = (s == NULL);
@@ -1406,6 +1421,12 @@ cmd_revert::exec(struct ged *gedp, void *u_data, int argc, const char **argv)
     db_full_path_init(&dfp);
     db_add_node_to_full_path(&dfp, ctx->dp);
 
+    const struct db_full_path *selected = ged_edit_session_path(gedp);
+    if (selected && DB_FULL_PATH_CUR_DIR(selected) == ctx->dp) {
+        db_free_full_path(&dfp);
+        return rt_edit_revert(ged_edit_session_edit(gedp));
+    }
+
     struct rt_edit *s = ged_edit_buf_get(gedp, &dfp);
     if (!s) {
 	bu_vls_printf(gedp->ged_result_str,
@@ -1447,6 +1468,12 @@ cmd_reset::exec(struct ged *gedp, void *u_data, int argc, const char **argv)
     struct db_full_path dfp;
     db_full_path_init(&dfp);
     db_add_node_to_full_path(&dfp, ctx->dp);
+
+    const struct db_full_path *selected = ged_edit_session_path(gedp);
+    if (selected && DB_FULL_PATH_CUR_DIR(selected) == ctx->dp) {
+        db_free_full_path(&dfp);
+        return ged_edit_session_reset(gedp);
+    }
 
     ged_edit_buf_abandon(gedp, &dfp);
     db_free_full_path(&dfp);

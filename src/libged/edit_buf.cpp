@@ -41,18 +41,34 @@
 #include "./ged_private.h"
 #include "./dbi.h"
 
+extern void ged_edit_session_free(struct ged_edit_session *session);
+
 
 /* ------------------------------------------------------------------ *
  * Ged_Internal destructor — abandons all pending edits on close.
  * ------------------------------------------------------------------ */
 
+static void
+edit_buf_clear(Ged_Internal *state)
+{
+    for (auto &kv : state->edit_buf) {
+        rt_edit_destroy(kv.second.s);
+        db_free_full_path(&kv.second.dfp);
+    }
+    state->edit_buf.clear();
+}
+
 Ged_Internal::~Ged_Internal()
 {
-    for (auto &kv : edit_buf) {
-	rt_edit_destroy(kv.second.s);
-	db_free_full_path(&kv.second.dfp);
-    }
-    edit_buf.clear();
+    ged_edit_session_free(edit_session);
+    edit_buf_clear(this);
+}
+
+void
+ged_edit_buf_clear(struct ged *gedp)
+{
+    if (gedp && gedp->i && gedp->i->i)
+        edit_buf_clear(gedp->i->i);
 }
 
 
@@ -111,7 +127,10 @@ ged_edit_buf_set(struct ged *gedp, const struct db_full_path *dfp, struct rt_edi
     db_full_path_init(&entry.dfp);
     db_dup_full_path(&entry.dfp, dfp);
     entry.s = s;
+    const struct bn_tol default_tolerance = BN_TOL_INIT_TOL;
+    entry.tolerance = s->tol ? *s->tol : default_tolerance;
     gi->edit_buf[key] = entry;
+    s->tol = &gi->edit_buf[key].tolerance;
 }
 
 
