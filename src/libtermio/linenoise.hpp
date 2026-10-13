@@ -127,6 +127,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <sys/select.h>
 #else
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -147,6 +148,7 @@
 #endif
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <errno.h>
 #include <fstream>
 #include <functional>
@@ -1528,7 +1530,7 @@ inline int unicodeIsCombiningChar(unsigned long cp)
 
 /* Get length of previous UTF8 character
 */
-inline int unicodePrevUTF8CharLen(char* buf, int pos)
+inline int unicodePrevUTF8CharLen(const char* buf, int pos)
 {
     int end = pos--;
     while (pos >= 0 && ((unsigned char)buf[pos] & 0xC0) == 0x80) {
@@ -1539,7 +1541,7 @@ inline int unicodePrevUTF8CharLen(char* buf, int pos)
 
 /* Get length of previous UTF8 character
 */
-inline int unicodeUTF8CharLen(char* buf, int buf_len, int pos)
+inline int unicodeUTF8CharLen(const char* buf, int buf_len, int pos)
 {
     if (pos == buf_len) {
 	return 0;
@@ -1596,7 +1598,7 @@ inline int unicodeUTF8CharToCodePoint(
 
 /* Get length of grapheme
 */
-inline int unicodeGraphemeLen(char* buf, int buf_len, int pos)
+inline int unicodeGraphemeLen(const char* buf, int buf_len, int pos)
 {
     if (pos == buf_len) {
 	return 0;
@@ -1617,7 +1619,7 @@ inline int unicodeGraphemeLen(char* buf, int buf_len, int pos)
 
 /* Get length of previous grapheme
 */
-inline int unicodePrevGraphemeLen(char* buf, int pos)
+inline int unicodePrevGraphemeLen(const char* buf, int pos)
 {
     if (pos == 0) {
 	return 0;
@@ -2071,36 +2073,47 @@ inline int linenoiseState::completeLine(char *cbuf, int *c)
 inline void linenoiseState::refreshSingleLine()
 {
     char seq[64];
-    int pcolwid = unicodeColumnPos(prompt_.c_str(), static_cast<int>(prompt_.length()));
     int fd = ofd_;
     std::string ab;
+    if (cols_ <= 0) cols_ = getColumns(ifd_, ofd_);
 
-    if (cols_ <= 0)
-	cols_ = getColumns(ifd_, ofd_);
-
-    while ((pcolwid+unicodeColumnPos(buf_, pos_)) >= cols_) {
-	int glen = unicodeGraphemeLen(buf_, len_, 0);
-	buf_ += glen;
-	len_ -= glen;
-	pos_ -= glen;
+    const char *prompt = prompt_.c_str();
+    int prompt_len = static_cast<int>(prompt_.length());
+    int pcolwid = unicodeColumnPos(prompt, prompt_len);
+    while (pcolwid >= cols_ && prompt_len > 0) {
+	int glen = unicodeGraphemeLen(prompt, prompt_len, 0);
+	if (glen <= 0) break;
+	prompt += glen;
+	prompt_len -= glen;
+	pcolwid = unicodeColumnPos(prompt, prompt_len);
     }
-    while (pcolwid+unicodeColumnPos(buf_, len_) > cols_) {
-	len_ -= unicodePrevGraphemeLen(buf_, len_);
+
+    // Viewport clipping must never modify the command or insertion position.
+    const char *view = buf_;
+    int view_len = len_, view_pos = pos_;
+    while (pcolwid + unicodeColumnPos(view, view_pos) >= cols_ && view_pos > 0) {
+	int glen = unicodeGraphemeLen(view, view_len, 0);
+	if (glen <= 0) break;
+	view += glen;
+	view_len -= glen;
+	view_pos -= glen;
+    }
+    while (pcolwid + unicodeColumnPos(view, view_len) >= cols_ && view_len > 0) {
+	int glen = unicodePrevGraphemeLen(view, view_len);
+	if (glen <= 0) break;
+	view_len -= glen;
     }
 
-    /* Cursor to left edge */
-    snprintf(seq,64,"\r");
-    ab += seq;
-    /* Write the prompt and the current buffer content */
-    ab += prompt_;
-    ab.append(buf_, len_);
-    /* Erase to right */
-    snprintf(seq,64,"\x1b[0K");
-    ab += seq;
-    /* Move cursor to original position. */
-    snprintf(seq,64,"\r\x1b[%dC", (int)(unicodeColumnPos(buf_, pos_)+pcolwid));
-    ab += seq;
-    if (write(fd,ab.c_str(), static_cast<int>(ab.length())) == -1) {} /* Can't recover from write error. */
+    ab = "\r";
+    ab.append(prompt, prompt_len);
+    ab.append(view, view_len);
+    ab += "\x1b[0K\r";
+    int cursor_column = unicodeColumnPos(view, view_pos) + pcolwid;
+    if (cursor_column > 0) {
+	snprintf(seq, sizeof(seq), "\x1b[%dC", cursor_column);
+	ab += seq;
+    }
+    if (write(fd, ab.c_str(), static_cast<int>(ab.length())) == -1) {} /* Can't recover from write error. */
 }
 
 /* Multi line low level line refresh.
@@ -2392,6 +2405,22 @@ inline int linenoiseState::Edit()
 #ifdef _WIN32
 	nread = win32read(cbuf, &c);
 #else
+	/* Resize detection stays on the input thread.  Polling avoids installing
+	 * a process-wide signal handler or repainting the editor concurrently. */
+	struct winsize dimensions;
+	if (ioctl(ofd_, TIOCGWINSZ, &dimensions) == 0 && dimensions.ws_col > 0 &&
+	    cols_ != dimensions.ws_col) {
+	    cols_ = dimensions.ws_col;
+	    RefreshLine();
+	}
+	const int resize_poll_microseconds = 100000;
+	fd_set ready;
+	FD_ZERO(&ready);
+	FD_SET(ifd_, &ready);
+	struct timeval timeout = {0, resize_poll_microseconds};
+	int available = select(ifd_ + 1, &ready, NULL, NULL, &timeout);
+	if (available == 0 || (available < 0 && errno == EINTR)) continue;
+	if (available < 0) return -1;
 	nread = unicodeReadUTF8Char(ifd_,cbuf, &c);
 #endif
 	if (nread <= 0) return (int)len_;
@@ -2564,6 +2593,7 @@ inline bool linenoiseState::Raw(std::string& line)
 	 * reusing the state, we need to reset these. */
 	pos_ = 0;
 	len_ = 0;
+	buf_ = wbuf_;
 	buf_[0] = '\0';
 	wbuf_[0] = '\0';
 

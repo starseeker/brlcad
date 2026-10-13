@@ -456,7 +456,7 @@ ged_ls_core(struct ged *gedp, int argc, const char *argv[])
     else if (ls.aflag || ls.cflag || ls.rflag || ls.sflag)
 	vls_line_dpp(gedp, dirp0, (int)BU_PTBL_LEN(ls.results_obj), ls.aflag, ls.cflag, ls.rflag, ls.sflag, ls.ssflag);
     else {
-	_ged_vls_col_pr4v(gedp->ged_result_str, dirp0, (int)BU_PTBL_LEN(ls.results_obj), 0, ls.ssflag);
+	_ged_vls_col_pr4v(gedp->ged_result_str, dirp0, (int)BU_PTBL_LEN(ls.results_obj), 0, ls.ssflag, ged_terminal_columns(gedp));
 	_ged_results_add(gedp->ged_results, bu_vls_addr(gedp->ged_result_str));
     }
 

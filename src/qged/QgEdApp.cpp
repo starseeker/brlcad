@@ -567,6 +567,8 @@ QgEdApp::run_qcmd(const QString &command)
 	return;
     }
 
+    ged_set_terminal_columns(mdl->gedp, console ? console->columns() : 0);
+
     // make an argv array
     struct bu_vls ged_prefixed = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&ged_prefixed, "%s", cmd);
