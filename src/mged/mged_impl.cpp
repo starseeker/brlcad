@@ -27,6 +27,7 @@
 #include "mged_impl.h"
 #include "mged.h"
 #include "rt/rt_ecmds.h"
+#include "ged/edit.h"
 
 MGED_Internal::MGED_Internal()
 {
@@ -104,6 +105,7 @@ mged_state_destroy(struct mged_state *s)
     bu_vls_free(&s->input_str_prefix);
     bu_vls_free(&s->scratchline);
     bu_vls_free(&s->mged_prompt);
+    if (s->gedp) ged_edit_session_end(s->gedp);
     rt_edit_destroy(MEDIT(s));
     MEDIT(s) = NULL;
 

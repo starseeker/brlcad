@@ -49,6 +49,7 @@
 
 #include "bv/defines.h"
 
+#include "ged/edit.h"
 #include "./ged_private.h"
 #include "./include/plugin.h"
 
@@ -478,6 +479,8 @@ ged_close(struct ged *gedp)
     /* Children and their callbacks must quiesce before either displayed
      * resources or the database they reference are dismantled. */
     ged_subprocesses_terminate(gedp);
+    ged_edit_session_end(gedp);
+    ged_edit_buf_clear(gedp);
 
     if (gedp->dbip) {
 	db_close(gedp->dbip);
