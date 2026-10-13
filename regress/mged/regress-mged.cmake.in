@@ -7,6 +7,12 @@ set(TEST_DB "@TEST_DB@")
 set(TEST_EXPECT "@TEST_EXPECT@")
 set(TEST_REJECT "@TEST_REJECT@")
 set(TEST_SOURCE "@TEST_SOURCE@")
+set(TEST_KEEP_DB "@TEST_KEEP_DB@")
+
+# Separate all mutable files, including fixed-name outputs in older scripts.
+set(TEST_WORKING_DIRECTORY "${CBDIR}/${TNAME}")
+file(REMOVE_RECURSE "${TEST_WORKING_DIRECTORY}")
+file(MAKE_DIRECTORY "${TEST_WORKING_DIRECTORY}")
 
 set(BU_DIR_CACHE ${CBDIR}/cache_${TNAME})
 set(LIBRT_CACHE ${CBDIR}/rtcache_${TNAME})
@@ -30,7 +36,7 @@ if(NOT EXISTS "${MGED_EXEC}")
 endif(NOT EXISTS "${MGED_EXEC}")
 
 # Create the .g file, or copy a test-specific input database.
-set(GFILE "${CBDIR}/${TNAME}.g")
+set(GFILE "${TEST_WORKING_DIRECTORY}/${TNAME}.g")
 execute_process(
   COMMAND "@CMAKE_COMMAND@" -E remove -f "${GFILE}"
 )
@@ -56,29 +62,43 @@ if(mged_result)
   message(FATAL_ERROR "[mged ${TNAME}] Failure: ${mged_result}. See ${LOGFILE} for more info.\n${LOG}")
 endif(mged_result)
 
-# Run the core test.  Tests that service asynchronous events must be sourced
-# as one Tcl command so MGED's stdin handler cannot re-enter the input script.
-if(TEST_SOURCE)
-  execute_process(
-    COMMAND "${MGED_EXEC}" -c "${GFILE}" "source {${TEST_SOURCE}}"
-    RESULT_VARIABLE mged_result
-    OUTPUT_VARIABLE mged_log
-    ERROR_VARIABLE mged_log
-  )
-else()
-  execute_process(
-    COMMAND "${MGED_EXEC}" -c "${GFILE}"
-    INPUT_FILE "${CBDIR}/regress_${TNAME}.mged"
-    RESULT_VARIABLE mged_result
-    OUTPUT_VARIABLE mged_log
-    ERROR_VARIABLE mged_log
-  )
-endif()
+# Source every script as one Tcl command.  This both preserves substitutions
+# in assertions and prevents event servicing from re-entering scripted stdin.
+# MGED can exit successfully after Tcl errors, so require our own completion
+# marker as well as the process status.
+set(DRIVER_CONTENTS [=[
+if {[catch {source {@TEST_SOURCE@}} result options]} {
+    puts stderr "FAIL: regress-mged_@TNAME@: $result"
+    if {[dict exists $options -errorinfo]} {
+        puts stderr [dict get $options -errorinfo]
+    }
+    return
+}
+# MGED can defer a requested quit until the surrounding Tcl command returns.
+if {[info exists mged_shutting_down] && $mged_shutting_down} {
+    return
+}
+puts "PASS regress-mged_@TNAME@"
+]=])
+string(CONFIGURE "${DRIVER_CONTENTS}" DRIVER_CONTENTS @ONLY)
+set(DRIVER "${TEST_WORKING_DIRECTORY}/run.tcl")
+file(WRITE "${DRIVER}" "set regression_fixture_directory {${CBDIR}}\n${DRIVER_CONTENTS}")
+execute_process(
+  COMMAND "${MGED_EXEC}" -c "${GFILE}" "source {${DRIVER}}"
+  WORKING_DIRECTORY "${TEST_WORKING_DIRECTORY}"
+  RESULT_VARIABLE mged_result
+  OUTPUT_VARIABLE mged_log
+  ERROR_VARIABLE mged_log
+)
 file(APPEND "${LOGFILE}" "${mged_log}")
 if(mged_result)
   file(READ "${LOGFILE}" LOG)
   message(FATAL_ERROR "[mged ${TNAME}] Failure: ${mged_result}. See ${LOGFILE} for more info.\n${LOG}")
 endif(mged_result)
+string(FIND "${mged_log}" "PASS regress-mged_${TNAME}" completion_position)
+if(completion_position EQUAL -1)
+  message(FATAL_ERROR "[mged ${TNAME}] Script did not complete. See ${LOGFILE} for more info.\n${mged_log}")
+endif()
 if(TEST_EXPECT AND NOT mged_log MATCHES "${TEST_EXPECT}")
   file(READ "${LOGFILE}" LOG)
   message(FATAL_ERROR "[mged ${TNAME}] Expected output was not found. See ${LOGFILE} for more info.\n${LOG}")
@@ -101,9 +121,9 @@ execute_process(
 execute_process(
   COMMAND "@CMAKE_COMMAND@" -E rm -rf ${LIBRT_CACHE}
 )
-execute_process(
-  COMMAND "@CMAKE_COMMAND@" -E remove -f "${GFILE}"
-)
+if(NOT TEST_KEEP_DB)
+  file(REMOVE "${GFILE}")
+endif()
 
 # Local Variables:
 # tab-width: 8

@@ -4,7 +4,15 @@ in_sph rm 1
 in_sph rm 2
 comb rm_comb1.c u rm_sph1.s
 comb rm_comb2.c u rm_comb1.c u rm_sph2.s
+set original_tree [get rm_comb2.c tree]
+regression_assert {[catch {rm rm_comb2.c rm_sph2.s}]} "rm accepted ambiguous legacy operands"
+regression_assert {[get rm_comb2.c tree] eq $original_tree} "rejected rm changed the combination"
 rm rm_comb2.c/rm_sph2.s
+regression_assert {[get rm_comb2.c tree] eq {l rm_comb1.c}} "rm did not remove only the direct member"
 rm rm_comb1.c/rm_sph1.s
+regression_assert {[get rm_comb1.c tree] eq {}} "rm did not empty the nested combination"
+foreach object {rm_sph1.s rm_sph2.s rm_comb1.c rm_comb2.c} {
+    regression_assert {[exists $object]} "path removal deleted $object"
+}
 
 puts "*** 'rm' testing completed ***"

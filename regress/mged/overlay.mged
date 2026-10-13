@@ -1,15 +1,15 @@
 puts "*** Testing 'overlay' command ***"
 
-in_sph overlay
-e overlay_sph.s
-autoview
-set overlay_file mged_overlay_input.plot3
-plot $overlay_file
+set overlay_file [file join $regression_fixture_directory plot mged_plot_test.plot3]
+regression_assert {[file size $overlay_file] > 0} "plot fixture is empty"
 Z
+plot overlay_empty.plot3
 overlay $overlay_file
+plot overlay_loaded.plot3
+regression_assert {[file size overlay_loaded.plot3] > [file size overlay_empty.plot3]} "overlay added no display vectors"
 make overlay_additional_shape.s epa
 e overlay_additional_shape.s
-ps mged_overlay_test.ps
-file delete -force $overlay_file
+postscript mged_overlay_test.ps
+regression_assert {[file size mged_overlay_test.ps] > 0} "overlay PostScript output is empty"
 
 puts "*** 'overlay' testing completed ***"

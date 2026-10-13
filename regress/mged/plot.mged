@@ -1,8 +1,10 @@
 puts "*** Testing 'plot' command ***"
 
+in_sph plot
+e plot_sph.s
 autoview
 ae 35 25 0
-B clone4.c
 plot mged_plot_test.plot3
+regression_assert {[file size mged_plot_test.plot3] > 0} "plot produced an empty file"
 
 puts "*** 'plot' testing completed ***"

@@ -30,6 +30,29 @@ if {![info exists make_primitives_list]} {
   # A complete list of the primitives to be tested in regression
   set make_primitives_list {arb4 arb5 arb6 arb7 arb8 arbn ars bot ehy ell ell1 epa eto extrude grip half hyp nmg part pipe rcc rec rhc rpc rpp sketch sph tec tgc tor trc}
 
+  proc regression_assert {condition message} {
+      if {![uplevel 1 [list expr $condition]]} {
+          error "FAIL: $message"
+      }
+  }
+
+  proc regression_check_vector {actual expected tolerance label} {
+      regression_assert {[llength $actual] == [llength $expected]} "$label component count: $actual"
+      foreach value $actual reference $expected {
+          regression_assert {abs($value - $reference) <= $tolerance} "$label: expected $expected, got $actual"
+      }
+  }
+
+  # saveview and loadview use the same geometry and deliberately non-stock view.
+  proc regression_saved_view {} {
+      Z
+      e saveview_sph.s
+      autoview
+      ae 35 25 0
+      rot 33 33 31
+      sca 4
+  }
+
   # A convenience routine is defined for cases where one wants to
   # make an instance of each primitive.
 

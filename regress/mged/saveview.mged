@@ -1,9 +1,8 @@
 puts "*** Testing 'saveview' command ***"
 
-autoview
-ae 35 25 0
-rot 33 33 31
-sca 4
+in_sph saveview
+regression_saved_view
 saveview mged_saveview_test.rt
+regression_assert {[file size mged_saveview_test.rt] > 0} "saveview produced an empty script"
 
 puts "*** 'saveview' testing completed ***"

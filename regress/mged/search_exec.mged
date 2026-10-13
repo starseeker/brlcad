@@ -26,7 +26,9 @@ if {![catch {
 
 # Verify that the optimized plain-search path still drains threaded output to
 # the main Tcl interpreter without creating a secondary interpreter.
-echo SEARCH_PLAIN_OUTPUT_HOOK_ALIVE
+# A missing-object lookup emits bu_log output inside sourced scripts too.
+# echo's Tcl result is only printed automatically by the interactive prompt.
+catch {l SEARCH_PLAIN_OUTPUT_HOOK_ALIVE}
 if {[catch {
     search /all.g/component/power.train/r1 -maxdepth 0
 } plain_search_error]} {
@@ -37,7 +39,7 @@ if {[string first SEARCH_PLAIN_OUTPUT_HOOK_ALIVE $search_exec_output] < 0} {
 }
 
 set search_exec_output ""
-echo SEARCH_EXEC_OUTPUT_HOOK_ALIVE
+catch {l SEARCH_EXEC_OUTPUT_HOOK_ALIVE}
 search /all.g/component/power.train/r1 -maxdepth 0 -exec search_exec_global "{}" ";"
 if {[string first SEARCH_EXEC_OUTPUT_HOOK_ALIVE $search_exec_output] < 0} {
     set ::search_exec_precheck_error "invalid output_hook replacement removed the active output hook"
