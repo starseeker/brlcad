@@ -302,6 +302,15 @@ GED_EXPORT void ged_destroy(struct ged *);
 GED_EXPORT extern void ged_init(struct ged *gedp);
 GED_EXPORT extern void ged_free(struct ged *gedp);
 
+/** Set the available columns for human-readable command listings in this
+ * session.  Zero restores the default of 80.  Hosts should supply their current
+ * viewport width before executing a command.  No terminal or environment is
+ * queried by libged, so batch callers retain deterministic output. */
+GED_EXPORT extern void ged_set_terminal_columns(struct ged *gedp, size_t columns);
+/** Return this session's listing width, or 80 for a NULL session. */
+GED_EXPORT extern size_t ged_terminal_columns(const struct ged *gedp);
+
+
 // Associate a callback function pointer for a command.  If mode is less than
 // zero, function will be registered to run BEFORE actual cmd logic is run, and
 // if greater than zero will be registered to run AFTER the cmd logic is run.

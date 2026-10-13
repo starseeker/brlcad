@@ -46,3 +46,34 @@ Per ISO 9126-1, development priorities SHOULD typically be:
 Usability > Reliability > Maintainability > Functionality > Efficiency
 
 See TODO and include/ged.h for additional notes on LIBGED's design.
+
+= Terminal width =
+
+Hosts can call ged_set_terminal_columns before command execution to provide
+available screen columns. The setting belongs to the GED session; zero restores
+80 columns. Libged does not inspect COLUMNS, query a terminal, or install a resize
+signal handler. Batch callers therefore retain a deterministic default. FLTK,
+QGED, and MGED supply their console viewport width; gsh and classic MGED query
+the stdout terminal. Changes take effect on subsequent commands, including
+commands invoked by an interactive script.
+
+The ordinary ls, tops, summary, and dup listings share the width-aware directory
+formatter. Long names are preserved even when a single name exceeds the width.
+Process listings use the session width for their existing line truncation.
+Explicit ls formats (including -p and -l) and machine-readable command results
+are unchanged. Scripts that parse ordinary column listings should request an
+explicit format or split on whitespace rather than assume four columns.
+
+Terminal wrapping and command formatting are separate: a terminal may wrap
+incoming text without changing its bytes, but cannot reconstruct table cells
+from old physical lines. Existing scrollback is not reformatted or rerun on a
+resize. Matrices, analysis tables, material reports, and the legacy joint/button
+column helpers still have their own layouts; changing these requires per-command
+format decisions, especially for output consumed by scripts. The directory
+formatter still measures names in bytes; full Unicode screen-cell accounting
+is a separate concern from providing the current viewport width.
+
+GED subprocess streams are pipes, rather than pseudo-terminals. They can be
+wrapped by the host console but do not receive terminal dimensions or resize
+events. Interactive external programs would need a pseudo-terminal transport
+and corresponding resize forwarding to change their own output layout live.

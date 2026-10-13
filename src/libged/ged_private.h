@@ -113,6 +113,7 @@ class Ged_Internal {
 	std::map<std::string, int> cmd_recursion_depth_cnt;
 
 	std::stack<std::string> exec_stack;
+	size_t terminal_columns = 0;
 
 	std::map<std::string, void *> dm_map;
 
@@ -457,13 +458,13 @@ GED_EXPORT extern int cmpdlen(const void *a, const void *b, void *arg);
 /**
  * Given a pointer to a list of pointers to names and the number of
  * names in that list, sort and print that list in column order over
- * four columns.
+ * the supplied terminal width.
  */
 GED_EXPORT extern void _ged_vls_col_pr4v(struct bu_vls *vls,
 			      struct directory **list_of_names,
 			      size_t num_in_list,
 			      int no_decorate,
-			      int ssflag);
+			      int ssflag, size_t terminal_columns);
 
 
 GED_EXPORT extern int invent_solid(struct ged *gedp, char *name, struct bu_list *vhead, long int rgb, int copy, fastf_t transparency, int dmode, int csoltab);

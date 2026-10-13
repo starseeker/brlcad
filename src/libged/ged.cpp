@@ -492,6 +492,20 @@ ged_close(struct ged *gedp)
 }
 
 void
+ged_set_terminal_columns(struct ged *gedp, size_t columns)
+{
+    if (gedp && gedp->i && gedp->i->i)
+	gedp->i->i->terminal_columns = columns ? columns : _GED_TERMINAL_WIDTH;
+}
+
+size_t
+ged_terminal_columns(const struct ged *gedp)
+{
+    return (gedp && gedp->i && gedp->i->i && gedp->i->i->terminal_columns)
+	? gedp->i->i->terminal_columns : _GED_TERMINAL_WIDTH;
+}
+
+void
 ged_init(struct ged *gedp)
 {
     if (gedp == GED_NULL)
@@ -501,6 +515,7 @@ ged_init(struct ged *gedp)
     BU_GET(gedp->i, struct ged_impl);
     gedp->i->magic = GED_MAGIC;
     gedp->i->i = new Ged_Internal;
+    gedp->i->i->terminal_columns = _GED_TERMINAL_WIDTH;
 
     gedp->dbip = NULL;
     gedp->u_data = NULL;
