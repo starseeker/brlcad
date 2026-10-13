@@ -1,0 +1,123 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: fltkged 0.1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-11 01:50+0000\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "&File/&Open..."
+msgstr ""
+
+msgid "&File/&New Database..."
+msgstr ""
+
+msgid "&File/&Import Database..."
+msgstr ""
+
+msgid "&File/&Export Selected..."
+msgstr ""
+
+msgid "&File/Load &Tcl Script..."
+msgstr ""
+
+msgid "&File/Enable Legacy T&k Scripts"
+msgstr ""
+
+msgid "&File/&Quit"
+msgstr ""
+
+msgid "&Edit/&Refresh Database Panels"
+msgstr ""
+
+msgid "&Edit/&Preferences..."
+msgstr ""
+
+msgid "&Edit/&Create Primitive..."
+msgstr ""
+
+msgid "&Edit/&Search Database..."
+msgstr ""
+
+msgid "&Edit/Edit Selected &Primitive..."
+msgstr ""
+
+msgid "&Edit/Edit Selected &Combination..."
+msgstr ""
+
+msgid "&Edit/Edit Selected &Sketch..."
+msgstr ""
+
+msgid "&Edit/Object and Member &Transform..."
+msgstr ""
+
+msgid "&Tools/&Raytrace and Framebuffer..."
+msgstr ""
+
+msgid "&Tools/Query &Center Ray"
+msgstr ""
+
+msgid "&Tools/&Abort Raytrace"
+msgstr ""
+
+msgid "&Tools/&Analyze Selected"
+msgstr ""
+
+msgid "&Tools/&GQA Selected"
+msgstr ""
+
+msgid "&Tools/Check &Overlaps for Selected"
+msgstr ""
+
+msgid "&Tools/&BOT, NMG, and Material Tools..."
+msgstr ""
+
+msgid "&View/&Single View"
+msgstr ""
+
+msgid "&View/&Quad View"
+msgstr ""
+
+msgid "&View/&Redraw"
+msgstr ""
+
+msgid "&View/&Autoview"
+msgstr ""
+
+msgid "&View/Top"
+msgstr ""
+
+msgid "&View/Front"
+msgstr ""
+
+msgid "&View/Right"
+msgstr ""
+
+msgid "&View/Left"
+msgstr ""
+
+msgid "&View/Azimuth 35, Elevation 25"
+msgstr ""
+
+msgid "&View/Stored Views/&Add Current"
+msgstr ""
+
+msgid "&View/Stored Views/&Next"
+msgstr ""
+
+msgid "&View/Stored Views/&Previous"
+msgstr ""
+
+msgid "&View/Stored Views/&Delete Current"
+msgstr ""
+
+msgid "&Help/&Documentation"
+msgstr ""
+
+msgid "&Help/&About"
+msgstr ""

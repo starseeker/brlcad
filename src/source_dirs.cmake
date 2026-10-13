@@ -67,9 +67,9 @@ set_deps(libfltkcad "libtclcad;libged;libdm;librt;libbv;libbn;libbu")
 
 # Applications
 
-# Note - brlman can be compiled with Tcl, Qt, or no graphical support,
+# Note - brlman can be compiled with FLTK, Tcl, Qt, or no graphical support,
 # so we list libbu explicitly
-set_deps(brlman     "libqtcad;libtclcad;libbu")
+set_deps(brlman     "libfltkcad;libqtcad;libtclcad;libbu")
 set_deps(bwish      "libtclcad")
 set_deps(fb         "libdm")
 set_deps(fbserv     "libdm")
@@ -90,7 +90,13 @@ set_deps(remrt      "libdm;liboptical")
 # defined when the tclscripts directories are configured, and those
 # lists are needed as dependencies for the targets in these
 # directories
-set_deps(tclscripts "libtclcad")
+# Index generation runs the btclsh executable supplied by bwish.
+set_deps(tclscripts "bwish;libtclcad")
+if(BRLCAD_ENABLE_TCL)
+  set_deps(fltkged "libfltkcad;tclscripts")
+else()
+  set_deps(fltkged "libfltkcad")
+endif()
 set_deps(conv       "libtclcad;libged;libgcv") # asc2g/g2asc use Tcl.  List ged and gcv for when Tcl is disabled
 set_deps(adrt       "libtclcad")
 set_deps(isst       "libtclcad;libqtcad")
