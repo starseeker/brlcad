@@ -390,20 +390,38 @@ set mged_help_data(xpush)	$helplib_data(wdb_xpush)
 set mged_help_data(Z)		$helplib_data(dgo_zap)
 set mged_help_data(zoom)	$helplib_data(vo_zoom)
 
+# A frontend may expose its installed GED commands.  Use that inventory for
+# summaries while keeping the full reference available for explicit queries.
+proc mged_help_available {} {
+    # The common help formatters take the name of a global array.
+    global mged_help_data mged_help_available_data
+    array unset mged_help_available_data
+    if {![llength [info commands ::ged::commands]]} {
+        array set mged_help_available_data [array get mged_help_data]
+    } else {
+        foreach name [::ged::commands] {
+            if {[info exists mged_help_data($name)]} {
+                set mged_help_available_data($name) $mged_help_data($name)
+            }
+        }
+    }
+    return mged_help_available_data
+}
+
 proc help {args} {
     global mged_help_data
 
     if {[llength $args] > 0} {
 	return [help_comm mged_help_data $args]
     } else {
-	return [help_comm mged_help_data]
+        return [help_comm [mged_help_available]]
     }
 }
 
 proc ? {} {
     global mged_help_data
 
-    return [?_comm mged_help_data 20 4]
+    return [?_comm [mged_help_available] 20 4]
 }
 
 proc apropos {args} {

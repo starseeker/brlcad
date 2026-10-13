@@ -28,6 +28,7 @@ set(
   CompilerFlags.cmake
   Distcheck.cmake
   Doxygen.cmake
+  FLTKCADTest.cmake
   FindASTYLE.cmake
   FindAdaptagrams.cmake
   FindAppleseed.cmake

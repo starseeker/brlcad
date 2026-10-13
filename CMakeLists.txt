@@ -2941,6 +2941,31 @@ mark_as_advanced(BUILD_TESTING)
 # Set up the BRL-CAD wrapper around find_package
 include(BRLCAD_Find_Package)
 
+if(BRLCAD_ENABLE_FLTK)
+  brlcad_find_package(FLTK CONFIG REQUIRED)
+  brlcad_find_package(litehtml CONFIG REQUIRED)
+  if(FLTK_VERSION VERSION_LESS 1.4)
+    message(FATAL_ERROR "libfltkcad requires FLTK 1.4 or newer")
+  endif()
+
+  foreach(_fltkcad_target fltk::fltk fltk::gl fltk::images litehtml)
+    if(NOT TARGET ${_fltkcad_target})
+      message(FATAL_ERROR "libfltkcad requires the ${_fltkcad_target} package target")
+    endif()
+  endforeach()
+  unset(_fltkcad_target)
+
+  get_target_property(_fltkcad_gl_libs fltk::gl INTERFACE_LINK_LIBRARIES)
+  if(BRLCAD_X11_PROVIDER_RESOLVED STREQUAL "XMIN")
+    if(NOT "Xmin::GL" IN_LIST _fltkcad_gl_libs)
+      message(FATAL_ERROR "BRLCAD_X11_PROVIDER=XMIN requires FLTK built with Xmin support")
+    endif()
+  elseif("Xmin::GL" IN_LIST _fltkcad_gl_libs)
+    message(FATAL_ERROR "Xmin-backed FLTK requires BRLCAD_X11_PROVIDER=XMIN")
+  endif()
+  unset(_fltkcad_gl_libs)
+endif()
+
 
 ###
 # traverse into the source tree with intentional ordering
@@ -3018,6 +3043,11 @@ if(BRLCAD_ENABLE_QT)
   set(BRLCAD_HAVE_QT TRUE)
   # Qt creates deployment support files while configuring the build tree.
   distclean("${BRLCAD_BINARY_DIR}/.qt")
+endif()
+
+set(BRLCAD_HAVE_FLTK FALSE)
+if(TARGET libfltkcad)
+  set(BRLCAD_HAVE_FLTK TRUE)
 endif()
 
 set(BRLCAD_HAVE_STEP FALSE)
