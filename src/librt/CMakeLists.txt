@@ -138,6 +138,7 @@ set(
   dir.c
   dspline.c
   edit.cpp
+  edit_arb.cpp
   fortray.c
   globals.c
   htbl.c

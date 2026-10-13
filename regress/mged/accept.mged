@@ -11,3 +11,13 @@ l accept_arb8.s
 Z
 
 puts "*** 'accept' testing completed ***"
+
+# A working edit remains private until accepted.
+in session_accept.s sph 0 0 0 1
+e session_accept.s
+sed session_accept.s
+translate 10 10 10
+regression_check_vector [db get session_accept.s V] {0 0 0} 0.000001 "working edit changed database"
+accept
+regression_check_vector [db get session_accept.s V] {10 10 10} 0.000001 "accept database result"
+regression_assert {[status state] eq "VIEWING"} "accept did not end session"
