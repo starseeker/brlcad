@@ -95,6 +95,8 @@ public:
 
   /// Returns the current font
   QFont getFont();
+  /// Number of fixed-width character cells that fit the current viewport.
+  size_t columns() const;
   /// Sets current font
   void setFont(const QFont &font);
 

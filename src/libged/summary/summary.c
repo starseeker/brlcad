@@ -159,7 +159,7 @@ summary_dir(struct ged *gedp, int flag, struct bu_vls* specific)
 	    *dirp++ = dp;
     } FOR_ALL_DIRECTORY_END
 
-    _ged_vls_col_pr4v(gedp->ged_result_str, dirp0, (int)(dirp - dirp0), 0, 0);
+    _ged_vls_col_pr4v(gedp->ged_result_str, dirp0, (int)(dirp - dirp0), 0, 0, ged_terminal_columns(gedp));
     bu_free((void *)dirp0, "dir_getspace");
 }
 

@@ -47,6 +47,7 @@
 #endif
 #include "bio.h"
 #include "bresource.h"
+#include "libtermio.h"
 
 
 #include "vmath.h"
@@ -215,6 +216,45 @@ mged_run_on_gui_thread(struct mged_state *s, mged_gui_callback_t callback,
     request.completed.wait(lock, [&request]() { return request.done; });
 }
 
+/* Query on the Tcl owner thread before dispatching work.  Text windows can
+ * have different widths and fonts, so use the active command window. */
+static void
+mged_terminal_columns(struct mged_state *s)
+{
+    int columns = 0;
+    if (!s->gedp) return;
+    if (s->classic_mged && s->interactive) {
+	if (termio_get_winsize(fileno(stdout), NULL, &columns) != 0) columns = 0;
+    }
+#ifdef HAVE_TK
+    else if (s->interactive && curr_cmd_list && tkwin) {
+	struct bu_vls path = BU_VLS_INIT_ZERO;
+	bu_vls_sprintf(&path, ".%s.t", bu_vls_cstr(&curr_cmd_list->cl_name));
+	Tcl_InterpState saved = Tcl_SaveInterpState(s->interp, TCL_OK);
+	Tk_Window text = Tk_NameToWindow(s->interp, bu_vls_cstr(&path), tkwin);
+	if (text) {
+	    Tcl_Obj *args[3] = {Tcl_NewStringObj(bu_vls_cstr(&path), -1),
+		Tcl_NewStringObj("cget", -1), Tcl_NewStringObj("-font", -1)};
+	    for (auto *arg : args) Tcl_IncrRefCount(arg);
+	    if (Tcl_EvalObjv(s->interp, 3, args, TCL_EVAL_GLOBAL) == TCL_OK) {
+		Tk_Font font = Tk_GetFont(s->interp, text, Tcl_GetStringResult(s->interp));
+		if (font) {
+		    const int cell = Tk_TextWidth(font, "M", 1);
+		    /* Text widgets reserve a border and insertion padding. */
+		    const int text_inset = 8;
+		    if (cell > 0) columns = (Tk_Width(text) - text_inset) / cell;
+		    Tk_FreeFont(font);
+		}
+	    }
+	    for (auto *arg : args) Tcl_DecrRefCount(arg);
+	}
+	Tcl_RestoreInterpState(s->interp, saved);
+	bu_vls_free(&path);
+    }
+#endif
+    ged_set_terminal_columns(s->gedp, columns > 0 ? (size_t)columns : 0);
+}
+
 /* Internal C++ async helper.
  *
  * In GUI (non-classic, interactive) mode: runs 'func' in a std::thread while
@@ -241,6 +281,8 @@ run_ged_async(struct mged_state *s, std::function<int()> func)
 	bu_log("mged: refusing re-entrant GED command execution\n");
 	return BRLCAD_ERROR;
     }
+
+    mged_terminal_columns(s);
 
     AsyncCommandState command_state;
 
