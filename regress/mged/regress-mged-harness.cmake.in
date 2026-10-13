@@ -1,0 +1,73 @@
+# BRL-CAD
+#
+# Copyright (c) 2026 United States Government as represented by
+# the U.S. Army Research Laboratory.
+#
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public License
+# version 2.1 as published by the Free Software Foundation.
+#
+# This library is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public
+# License along with this file; see the file named COPYING for more
+# information.
+
+set(CBDIR "@CMAKE_CURRENT_BINARY_DIR@/harness")
+set(CSDIR "@CMAKE_CURRENT_SOURCE_DIR@")
+set(TEST_DB "")
+set(TEST_EXPECT "")
+set(TEST_REJECT "FAIL:")
+set(TEST_KEEP_DB OFF)
+file(MAKE_DIRECTORY "${CBDIR}")
+file(READ "${CSDIR}/regress-mged.cmake.in" harness_template)
+set(CMAKE_CURRENT_BINARY_DIR "${CBDIR}")
+set(CMAKE_CURRENT_SOURCE_DIR "${CSDIR}")
+
+# Exercise the real driver, including frontends that return success after an
+# error or quit.  A completion marker alone must not conceal printed failures.
+foreach(probe success error incomplete assertion printed_failure forged_completion quit exit)
+  set(TNAME "probe_${probe}")
+  set(LOG_FILE "${CBDIR}/${TNAME}.log")
+  set(TEST_SOURCE "${CBDIR}/${TNAME}.tcl")
+  if(probe STREQUAL "success")
+    set(script "set probe_status passed\n")
+  elseif(probe STREQUAL "error")
+    set(script "error {deliberate command error}\n")
+  elseif(probe STREQUAL "incomplete")
+    set(script "if {\n")
+  elseif(probe STREQUAL "assertion")
+    set(script "if {1 != 2} {error {deliberate failed assertion}}\n")
+  elseif(probe STREQUAL "printed_failure")
+    set(script "puts {FAIL: deliberate printed failure}\n")
+  elseif(probe STREQUAL "forged_completion")
+    set(script "puts {PASS regress-mged_${TNAME}}\nerror {deliberate error after completion text}\n")
+  elseif(probe STREQUAL "quit")
+    set(script "quit\n")
+  else()
+    set(script "interp eval \[interp create\] {exit}\n")
+  endif()
+  file(WRITE "${TEST_SOURCE}" "${script}")
+  string(CONFIGURE "${harness_template}" configured_harness @ONLY)
+  set(harness_file "${CBDIR}/${TNAME}.cmake")
+  file(WRITE "${harness_file}" "${configured_harness}")
+  execute_process(
+    COMMAND "@CMAKE_COMMAND@" "-DEXEC=${EXEC}" -P "${harness_file}"
+    RESULT_VARIABLE status
+    OUTPUT_VARIABLE output
+    ERROR_VARIABLE output
+  )
+  if(probe STREQUAL "success")
+    if(NOT status EQUAL 0)
+      message(FATAL_ERROR "Valid script was rejected:\n${output}")
+    endif()
+  elseif(status EQUAL 0)
+    message(FATAL_ERROR "Harness accepted the ${probe} probe:\n${output}")
+  elseif(NOT output MATCHES "Script did not complete|Forbidden output|Failure:")
+    message(FATAL_ERROR "Probe failed outside the script check:\n${output}")
+  endif()
+endforeach()
+file(REMOVE_RECURSE "${CBDIR}")

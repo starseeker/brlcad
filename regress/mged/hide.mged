@@ -3,10 +3,12 @@ puts "*** Testing 'hide' command ***"
 in_arb8 hide 1
 in_arb8 hide 2
 comb hidden.c u hide_arb81.s u hide_arb82.s
-ls hidden*
-hide hide_arb81.s
-hide hidden.c
-ls hidden*
+hide hide_arb81.s hidden.c
+regression_assert {![regexp {hidden\.c} [ls]]} "hidden combination remains in the visible listing"
+regression_assert {[lsearch -exact [ls] hide_arb81.s] < 0} "hidden primitive remains in the visible listing"
+regression_assert {[lsearch -exact [ls] hide_arb82.s] >= 0} "hide changed an unselected primitive"
+regression_assert {[lsearch -exact [ls -a] hide_arb81.s] >= 0} "all-object listing omitted the hidden primitive"
+regression_assert {[exists hidden.c] && [exists hide_arb81.s]} "hide deleted database objects"
 Z
 
 puts "*** 'hide' testing completed ***"

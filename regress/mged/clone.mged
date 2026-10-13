@@ -13,6 +13,15 @@ proc clone_chk {name} {
     }
 }
 
+proc clone_translation_check {copy source offset} {
+    set expected {}
+    foreach coordinate [get $source V] displacement $offset {
+        lappend expected [expr {$coordinate + $displacement}]
+    }
+    set coordinate_tolerance 1.0e-6
+    regression_check_vector [get $copy V] $expected $coordinate_tolerance "clone translation for $copy"
+}
+
 # -----------------------------------------------------------------------
 # BACKWARD COMPATIBILITY: old libged clone syntax (bu_getopt era)
 # All of -a -b -c -i -m -n -p -r -t must work identically.
@@ -25,6 +34,8 @@ puts "BC-2: clone -n -t (translated copies)"
 clone -n 2 -t 100 0 0 clone_sph.s
 clone_chk clone_sph.s100
 clone_chk clone_sph.s200
+clone_translation_check clone_sph.s100 clone_sph.s {100 0 0}
+clone_translation_check clone_sph.s200 clone_sph.s {200 0 0}
 
 puts "BC-3: clone -n -r (rotated copies)"
 in_sph clone "_r"
@@ -72,6 +83,8 @@ clone -n 2 -t 50 0 0 clone_comb.r
 # Deep-copied combinations increment by one; primitives increment by -i.
 clone_chk clone_comb.r1
 clone_chk clone_comb.r2
+regression_assert {[get clone_comb.r1 tree] eq {l clone_sph.s1100}} "combination clone did not reference its copied primitive"
+regression_assert {[get clone_comb.r2 tree] eq {l clone_sph.s1200}} "second combination clone reused the first primitive"
 
 puts "BC-12: clone -i -p -r -n (full old-style invocation)"
 clone -i 5 -p 30 30 30 -r 10 10 15 -n 3 clone_sph.s
@@ -99,6 +112,7 @@ clone_chk clone_top.r1
 puts "NF-4: clone --depth regions"
 clone --depth regions clone_top.r
 clone_chk clone_top.r100
+regression_assert {[get clone_top.r100 tree] eq {l clone_sph.s}} "regions-depth clone did not share the primitive"
 
 puts "NF-5: clone --depth primitives"
 clone --depth primitives clone_sph.s
@@ -106,9 +120,10 @@ clone_chk clone_sph.s1400
 
 puts "NF-6: clone -g (group)"
 in_sph clone "_g1"
-in_sph clone "_g2"
-clone -g clone_group.c clone_sph_g1.s clone_sph_g2.s
+clone -g clone_group.c clone_sph_g1.s
 clone_chk clone_group.c
+regression_assert {[exists -c clone_group.c]} "clone -g did not create a combination"
+regression_assert {[get clone_group.c tree] eq {l clone_sph_g101.s}} "clone group omitted its source copy"
 
 puts "NF-7: clone --xpush"
 clone --xpush clone_top.r
@@ -117,7 +132,10 @@ clone_chk clone_top.r3
 puts "NF-8: clone rect (rectangular grid)"
 in_sph clone "_pr"
 clone rect -n x=2 -d x=200 -n y=2 -d y=200 clone_sph_pr.s
-clone_chk clone_sph_pr.s100
+foreach name {clone_sph_pr.s100 clone_sph_pr.s200 clone_sph_pr.s300 clone_sph_pr.s400} {
+    clone_chk $name
+    regression_assert {[exists -c $name]} "rectangular pattern did not create a wrapper for $name"
+}
 
 puts "NF-9: clone rect -g (rect + group)"
 in_sph clone "_prg"
@@ -131,13 +149,19 @@ clone_chk clone_part_prs.s100
 
 puts "NF-11: clone sph (spherical pattern)"
 in_sph clone "_ps"
-clone sph -n az=3 -d az=120 -n r=1 -d r=500 clone_sph_ps.s
+# Use the equator so all requested azimuths produce distinct copies.
+clone sph -n az=3 -d az=120 --start el=0 -n r=1 -d r=500 clone_sph_ps.s
 clone_chk clone_sph_ps.s100
+clone_chk clone_sph_ps.s200
+clone_chk clone_sph_ps.s300
 
 puts "NF-12: clone sph --align az"
 in_sph clone "_psr"
-clone sph -n az=4 -d az=90 -n r=1 -d r=300 --align az clone_sph_psr.s
+clone sph -n az=4 -d az=90 --start el=0 -n r=1 -d r=300 --align az clone_sph_psr.s
 clone_chk clone_sph_psr.s100
+clone_chk clone_sph_psr.s200
+clone_chk clone_sph_psr.s300
+clone_chk clone_sph_psr.s400
 
 puts "NF-13: clone cyl (cylindrical pattern)"
 in_sph clone "_pc"

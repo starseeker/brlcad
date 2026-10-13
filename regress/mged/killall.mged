@@ -5,23 +5,22 @@ cp killall_1.s killall_2.s
 comb killall_1.c u killall_1.s u killall_2.s
 cp killall_1.c killall_2.c
 comb killall.c u killall_1.c u killall_2.s
-ls killall*
-l killall*
 killall killall_1.s
-ls killall*
-l killall*
+regression_assert {![exists killall_1.s]} "killall left the first primitive"
+foreach combination {killall_1.c killall_2.c} {
+    regression_assert {[get $combination tree] eq {l killall_2.s}} "killall did not remove the primitive reference from $combination"
+}
 killall killall_1.c
-ls killall*
-l killall*
+regression_assert {![exists killall_1.c] && [get killall.c tree] eq {l killall_2.s}} "killall did not remove the nested combination reference"
 killall killall_2.s
-ls killall*
-l killall*
+regression_assert {![exists killall_2.s]} "killall left the second primitive"
+foreach combination {killall_2.c killall.c} {
+    regression_assert {[get $combination tree] eq {}} "killall did not empty $combination"
+}
 killall killall_2.c
-ls killall*
-l killall*
+regression_assert {![exists killall_2.c]} "killall left the second combination"
 killall killall.c
-ls killall*
-l killall*
+regression_assert {![exists killall.c]} "killall left the top combination"
 
 
 puts "*** 'killall' testing completed ***"

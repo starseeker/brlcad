@@ -2,12 +2,10 @@ puts "*** Testing 'kill' command ***"
 
 in_arb8 kill
 comb kill.c u kill_arb8.s
-ls kill.*
-l kill.*
 kill kill_arb8.s
-ls kill.*
-l kill.*
+regression_assert {![exists kill_arb8.s] && [exists kill.c]} "kill did not delete only the primitive"
+regression_assert {[get kill.c tree] eq {l kill_arb8.s}} "kill unexpectedly removed the parent reference"
 kill kill.c
-ls kill.*
+regression_assert {![exists kill.c]} "kill did not delete the combination"
 
 puts "*** 'kill' testing completed ***"

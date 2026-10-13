@@ -117,8 +117,9 @@ if(TARGET mged)
 
     set(TEST_DB "")
     set(TEST_EXPECT "")
-    set(TEST_REJECT "")
-    set(TEST_SOURCE "")
+    set(TEST_REJECT "FAIL:")
+    set(TEST_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/regress_${testfile}")
+    set(TEST_KEEP_DB OFF)
     set(TEST_DEPS "mged;rtarea;rt;rtcheck")
     set(TEST_TIMEOUT 300)
     if(TNAME STREQUAL "search_exec")
@@ -127,42 +128,30 @@ if(TARGET mged)
       list(APPEND TEST_DEPS "m35.g")
     elseif(TNAME STREQUAL "arb")
       set(TEST_EXPECT "'arb' testing completed")
-      set(TEST_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/regress_${testfile}")
     elseif(TNAME MATCHES "^(extrude|facedef|mirface|permute)$")
       set(TEST_EXPECT "'${TNAME}' testing completed")
-      set(TEST_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/regress_${testfile}")
     elseif(TNAME STREQUAL "edgedir")
       set(TEST_EXPECT "'edarb edgedir' testing completed")
-      set(TEST_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/regress_${testfile}")
     elseif(TNAME STREQUAL "killtree")
-      set(TEST_EXPECT "KILL Solid:  killtree_dup.s")
-      set(TEST_REJECT "db_lookup(killtree_dup.s) failed")
+      list(APPEND TEST_REJECT "db_lookup(killtree_dup.s) failed")
     elseif(TNAME STREQUAL "oed")
       set(TEST_EXPECT "PASS oed one-path bounding-box keypoint")
     elseif(TNAME STREQUAL "csg_edit")
       set(TEST_EXPECT "PASS: broad MGED CSG edit coverage completed")
-      set(TEST_REJECT "FAIL:;rt_arb_edit:;rt_edit_knobs_tra:;Incorrect edit flag")
-      set(TEST_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/regress_${testfile}")
+      list(APPEND TEST_REJECT "rt_arb_edit:" "rt_edit_knobs_tra:" "Incorrect edit flag")
     elseif(TNAME STREQUAL "prim_edit")
       set(TEST_EXPECT "Primitive parameter editing testing completed")
-      set(TEST_REJECT "FAIL:")
     elseif(TNAME STREQUAL "sed_reset")
       set(TEST_EXPECT "PASS: 'sed_reset' testing completed")
-      set(TEST_REJECT "FAIL:")
-      set(TEST_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/regress_${testfile}")
     elseif(TNAME STREQUAL "overlap_plotting")
       set(TEST_DB "${CMAKE_SOURCE_DIR}/src/libged/tests/ged_tests.g")
       set(TEST_EXPECT "PASS overlap plotting")
-      set(TEST_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/regress_${testfile}")
       set(TEST_TIMEOUT 20)
     endif()
 
-    if(TNAME MATCHES "^(clone|rm|killtree|hide|loadview|overlay)$")
-      # Sourcing preserves Tcl substitutions in assertions; MGED's legacy
-      # stdin glob pass can escape them before Tcl evaluates the script.
-      set(TEST_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/regress_${testfile}")
-      set(TEST_EXPECT "'${TNAME}' testing completed")
-      list(APPEND TEST_REJECT "FAIL:")
+    if(TNAME STREQUAL "saveview")
+      # loadview opens this database to test a saved view of the same geometry.
+      set(TEST_KEEP_DB ON)
     endif()
 
     brlcad_regression_test(
@@ -172,8 +161,26 @@ if(TARGET mged)
       TIMEOUT "${TEST_TIMEOUT}"
       EXEC mged
     )
+    distclean("${CMAKE_CURRENT_BINARY_DIR}/${TNAME}")
     distclean("${LOG_FILE}")
   endforeach(testfile ${MGED_TESTS})
+
+  set_tests_properties(regress-mged_saveview PROPERTIES FIXTURES_SETUP mged_saved_view)
+  set_tests_properties(regress-mged_loadview PROPERTIES FIXTURES_REQUIRED mged_saved_view)
+  set_tests_properties(regress-mged_plot PROPERTIES FIXTURES_SETUP mged_plot)
+  set_tests_properties(regress-mged_overlay PROPERTIES FIXTURES_REQUIRED mged_plot)
+  brlcad_add_test(NAME regress-mged_saved_view_cleanup COMMAND ${CMAKE_COMMAND} -E rm -f
+    "${CMAKE_CURRENT_BINARY_DIR}/saveview/saveview.g"
+    "${CMAKE_CURRENT_BINARY_DIR}/saveview/mged_saveview_test.rt")
+  set_tests_properties(regress-mged_saved_view_cleanup PROPERTIES FIXTURES_CLEANUP mged_saved_view)
+  brlcad_add_test(NAME regress-mged_plot_cleanup COMMAND ${CMAKE_COMMAND} -E rm -f
+    "${CMAKE_CURRENT_BINARY_DIR}/plot/mged_plot_test.plot3")
+  set_tests_properties(regress-mged_plot_cleanup PROPERTIES FIXTURES_CLEANUP mged_plot)
+
+  brlcad_regression_test(regress-mged-harness "mged"
+    TEST_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/regress-mged-harness.cmake.in"
+    EXEC mged)
+  distclean("${CMAKE_CURRENT_BINARY_DIR}/harness")
 
   # Original shell based test
   if(SH_EXEC)
@@ -210,11 +217,13 @@ distclean(${mged_outfiles})
 
 cmakefiles(
   CMakeLists.txt
+  README
   csg_edit.mged
   mged.tcl
   regression_resources.tcl
   search_exec_procs.tcl
   regress-mged.cmake.in
+  regress-mged-harness.cmake.in
   ${MGED_TESTS}
 )
 
