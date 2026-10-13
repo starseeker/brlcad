@@ -47,6 +47,47 @@ Usability > Reliability > Maintainability > Functionality > Efficiency
 
 See TODO and include/ged.h for additional notes on LIBGED's design.
 
+= Interactive editing =
+
+ged/edit.h provides a per-GED editing session shared by MGED and FLTK. It owns
+selection paths, the selected combination-member occurrence, working primitive
+geometry or instance matrix, keypoints, and accept/apply/reset/reject. Primitive
+operations use librt's editing handlers, menus, and parameter descriptors. The
+session contains no Tcl interpreter or toolkit widgets. MGED borrows its
+persistent rt_edit into the session and retains its native selection, menu,
+and display adapters; other hosts can let the session own rt_edit.
+ged_edit_session_menu_label exposes the active menu heading and operation labels
+for host faceplates; press selects the corresponding operation.
+
+sed path starts primitive-definition editing. oed path starts instance editing;
+oed parent/path child/path selects the matrix at the path boundary. Repeated
+members retain their occurrence identity. Contextual transforms, keypoint,
+press, p, M, knob, and ARB commands act on the working edit. accept writes and
+returns to viewing; sed_apply/oed_apply write and establish a new reset baseline;
+sed_reset/oed_reset reload database geometry; reject abandons changes. A failed
+save retains the working edit. External changes to the selection or its path
+are detected before saving, rather than silently overwritten.
+
+Hosts dispatch through ged_edit_session_exec to route contextual rot/arot/tra/
+sca/scale/keypoint commands to editing or viewing. Direct ged_exec retains the
+ordinary view-command behavior. rset var coords selects model, view, or object
+coordinates; rset var transform selects view or edit transforms. Uniform scale
+is supported for primitives; instance matrices also support three scale factors.
+ged_edit_session_tick advances knob rates from the host event loop. Hosts supply
+the interval and refresh displays when it reports a change.
+
+ged_edit_session_plot supplies transient preview vectors without changing the
+database or persistent display objects. Primitive edits affect every displayed
+use; instance previews affect the selected occurrence and its descendants.
+Owned sessions follow the active ged_gvp. Borrowed sessions retain the host's
+view binding. Views must outlive the edit or be rebound before they are freed.
+
+Scripted edit -i operations on the active primitive share its working geometry;
+checkpoint, revert, and reset use that same context. The ordinary write form
+cannot bypass an active edit. Pending standalone scripted buffers must be
+finished or reset before beginning an interactive session. Closing a database
+abandons both the interactive session and standalone buffers before freeing it.
+
 = Terminal width =
 
 Hosts can call ged_set_terminal_columns before command execution to provide

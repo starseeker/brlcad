@@ -26,6 +26,7 @@
 #include "common.h"
 
 
+#include "ged/edit.h"
 #include "../ged_private.h"
 
 
@@ -50,6 +51,9 @@ ged_oscale_core(struct ged *gedp, int argc, const char *argv[])
     double sf;
 
     static const char *usage = "obj sf [kX kY kZ]";
+
+    if (ged_edit_session_mode(gedp) != GED_EDIT_VIEW && argc == 2)
+	return ged_edit_session_command(gedp, argc, argv);
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_READ_ONLY(gedp, BRLCAD_ERROR);

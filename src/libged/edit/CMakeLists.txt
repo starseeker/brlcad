@@ -35,6 +35,8 @@ ged_plugin_library(ged-edit
   LIBS ${PLUGIN_LIBS}
 )
 
+ged_plugin_library(ged-session session.cpp LIBS ${PLUGIN_LIBS})
+
 cmakefiles(
   CMakeLists.txt
   ged_edit.h

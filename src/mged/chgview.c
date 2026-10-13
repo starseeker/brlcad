@@ -22,6 +22,7 @@
  */
 
 #include "common.h"
+#include "ged/edit.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -855,14 +856,14 @@ f_status(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[]
 	return TCL_OK;
     }
 
-    if (BU_STR_EQUAL(argv[1], "s->dbip->dbi_base2local")) {
+    if ((BU_STR_EQUAL(argv[1], "base2local") || BU_STR_EQUAL(argv[1], "s->dbip->dbi_base2local"))) {
 	bu_vls_printf(&vls, "%f", s->dbip->dbi_base2local);
 	Tcl_AppendResult(interp, bu_vls_addr(&vls), (char *)NULL);
 	bu_vls_free(&vls);
 	return TCL_OK;
     }
 
-    if (BU_STR_EQUAL(argv[1], "s->dbip->dbi_local2base")) {
+    if ((BU_STR_EQUAL(argv[1], "local2base") || BU_STR_EQUAL(argv[1], "s->dbip->dbi_local2base"))) {
 	bu_vls_printf(&vls, "%f", s->dbip->dbi_local2base);
 	Tcl_AppendResult(interp, bu_vls_addr(&vls), (char *)NULL);
 	bu_vls_free(&vls);
@@ -1271,11 +1272,7 @@ static void
 update_knob_rate_flags(struct bview_knobs *k, int is_edit)
 {
     if (!k) return;
-    k->rot_m_flag = (!ZERO(k->rot_m[X]) || !ZERO(k->rot_m[Y]) || !ZERO(k->rot_m[Z]));
-    k->rot_o_flag = (!ZERO(k->rot_o[X]) || !ZERO(k->rot_o[Y]) || !ZERO(k->rot_o[Z]));
-    k->rot_v_flag = (!ZERO(k->rot_v[X]) || !ZERO(k->rot_v[Y]) || !ZERO(k->rot_v[Z]));
-    k->tra_m_flag = (!ZERO(k->tra_m[X]) || !ZERO(k->tra_m[Y]) || !ZERO(k->tra_m[Z]));
-    k->tra_v_flag = (!ZERO(k->tra_v[X]) || !ZERO(k->tra_v[Y]) || !ZERO(k->tra_v[Z]));
+    bv_knobs_update_rate_flags(k);
     if (is_edit) {
 	/* Match earlier behavior: edit scale rate flag only set if > SMALL_FASTF */
 	k->sca_flag = (k->sca > SMALL_FASTF) ? 1 : 0;
@@ -2557,23 +2554,14 @@ cmd_rot(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 
     if ((s->global_editing_state == ST_S_EDIT || s->global_editing_state == ST_O_EDIT) &&
 	mged_variables->mv_transform == 'e') {
-	char coord;
-	mat_t rmat;
-
-	if (ged_rot_args(s->gedp, argc, (const char **)argv, &coord, rmat) != BRLCAD_OK) {
-	    Tcl_DStringInit(&ds);
-	    Tcl_DStringAppend(&ds, bu_vls_addr(s->gedp->ged_result_str), -1);
-	    Tcl_DStringResult(interp, &ds);
-
-	    return TCL_ERROR;
-	}
-
-	struct rt_edit *re = MEDIT(s);
-	int matrix_edit = (s->global_editing_state == ST_O_EDIT);
-	rt_knob_edit_rot(re, coord, view_state->vs_gvp->gv_rotate_about, matrix_edit, rmat);
-	if (matrix_edit)
-	    mged_edit_refresh(s);
-	return TCL_OK;
+        bu_vls_trunc(s->gedp->ged_result_str, 0);
+        int ret = ged_edit_session_command(s->gedp, argc, argv);
+        Tcl_AppendResult(interp, bu_vls_cstr(s->gedp->ged_result_str), (char *)NULL);
+        if (ret != BRLCAD_OK)
+            return TCL_ERROR;
+        if (s->global_editing_state == ST_O_EDIT)
+            mged_edit_refresh(s);
+        return TCL_OK;
     } else {
 	int ret;
 
@@ -2609,22 +2597,14 @@ cmd_arot(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[]
 
     if ((s->global_editing_state == ST_S_EDIT || s->global_editing_state == ST_O_EDIT) &&
 	mged_variables->mv_transform == 'e') {
-	/* Edit-mode arbitrary axis rotation */
-	mat_t rmat;
-
-	if (ged_arot_args(s->gedp, argc, (const char **)argv, rmat) != BRLCAD_OK) {
-	    Tcl_DStringInit(&ds);
-	    Tcl_DStringAppend(&ds, bu_vls_addr(s->gedp->ged_result_str), -1);
-	    Tcl_DStringResult(interp, &ds);
-	    return TCL_ERROR;
-	}
-
-	struct rt_edit *re = MEDIT(s);
-	int matrix_edit = (s->global_editing_state == ST_O_EDIT);
-	rt_knob_edit_rot(re, view_state->vs_gvp->gv_coord, view_state->vs_gvp->gv_rotate_about, matrix_edit, rmat);
-	if (matrix_edit)
-	    mged_edit_refresh(s);
-	return TCL_OK;
+        bu_vls_trunc(s->gedp->ged_result_str, 0);
+        int ret = ged_edit_session_command(s->gedp, argc, argv);
+        Tcl_AppendResult(interp, bu_vls_cstr(s->gedp->ged_result_str), (char *)NULL);
+        if (ret != BRLCAD_OK)
+            return TCL_ERROR;
+        if (s->global_editing_state == ST_O_EDIT)
+            mged_edit_refresh(s);
+        return TCL_OK;
     } else {
 	int ret;
 	Tcl_DStringInit(&ds);
@@ -2652,23 +2632,14 @@ cmd_tra(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 
     if ((s->global_editing_state == ST_S_EDIT || s->global_editing_state == ST_O_EDIT) &&
 	    mged_variables->mv_transform == 'e') {
-	char coord;
-	vect_t tvec;
-
-	if (ged_tra_args(s->gedp, argc, (const char **)argv, &coord, tvec) != BRLCAD_OK) {
-	    Tcl_DString ds;
-	    Tcl_DStringInit(&ds);
-	    Tcl_DStringAppend(&ds, bu_vls_addr(s->gedp->ged_result_str), -1);
-	    Tcl_DStringResult(interp, &ds);
-
-	    return TCL_ERROR;
-	}
-
-	struct rt_edit *re = MEDIT(s);
-	int matrix_edit = (s->global_editing_state == ST_O_EDIT);
-	rt_knob_edit_tran(re, coord, matrix_edit, tvec);
-	if (matrix_edit)
-	    mged_edit_refresh(s);
+        bu_vls_trunc(s->gedp->ged_result_str, 0);
+        int ret = ged_edit_session_command(s->gedp, argc, argv);
+        Tcl_AppendResult(interp, bu_vls_cstr(s->gedp->ged_result_str), (char *)NULL);
+        if (ret != BRLCAD_OK)
+            return TCL_ERROR;
+        if (s->global_editing_state == ST_O_EDIT)
+            mged_edit_refresh(s);
+        return TCL_OK;
     } else {
 	int ret;
 
