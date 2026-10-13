@@ -81,6 +81,8 @@ struct swrastinfo {
 #define CMG(x) ((struct fb_cmap *)((x)->i->if_cmap))->cmg
 #define CMB(x) ((struct fb_cmap *)((x)->i->if_cmap))->cmb
 
+static int swrast_free(struct fb *ifp);
+
 
 static void
 swrast_xmit_scanlines(struct fb *ifp, int ybase, int nlines, int xbase, int npix)
@@ -467,7 +469,7 @@ swrast_close_existing(struct fb *ifp)
 {
     struct swrastinfo *qi = SWRAST(ifp);
     qi->alive = 0;
-    return 0;
+    return swrast_free(ifp);
 }
 
 /*
