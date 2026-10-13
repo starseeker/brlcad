@@ -412,7 +412,7 @@ ged_concat_core(struct ged *gedp, int argc, const char *argv[])
 
     // For compatibility (and because '/' isn't a sane character to use for obj
     // names in any case) clear if such a character was supplied.
-    if (BU_STR_EQUAL(argv[1], "/"))
+    if (argc > 1 && BU_STR_EQUAL(argv[1], "/"))
 	cc_data.affix = std::string("");
 
     // For all incoming objects, compare their names against the current
