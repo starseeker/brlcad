@@ -1,14 +1,25 @@
 puts "*** Testing 'loadview' command ***"
 
-in_sph loadview
-e loadview_sph.s
-autoview
-ae 35 25 0
-# Generate this test's input rather than relying on another test's output.
-set loadview_file mged_loadview_test.rt
-saveview $loadview_file
+set loadview_directory [file join $regression_fixture_directory saveview]
+set loadview_file [file join $loadview_directory mged_saveview_test.rt]
+regression_assert {[file size $loadview_file] > 0} "saved-view fixture is empty"
+opendb [file join $loadview_directory saveview.g]
+regression_saved_view
+set expected_quat [view quat]
+set expected_center [center]
+set expected_size [size]
 ae 90 0 0
+center 0 0 0
+size 10
+Z
 loadview $loadview_file
-file delete -force $loadview_file
+set view_tolerance 1.0e-6
+regression_check_vector [view quat] $expected_quat $view_tolerance "restored orientation"
+# Orthographic saveview backs the ray origin out of the geometry.  Loading
+# may shift the center along the view axis while preserving its projection.
+set projected_center [m2v_point {*}$expected_center]
+regression_check_vector [lrange $projected_center 0 1] {0 0} $view_tolerance "restored projected center"
+regression_check_vector [size] $expected_size $view_tolerance "restored size"
+regression_assert {[lsearch -exact [who] saveview_sph.s] >= 0} "loadview did not restore the displayed object"
 
 puts "*** 'loadview' testing completed ***"

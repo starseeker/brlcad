@@ -1,8 +1,10 @@
 puts "*** Testing 'ps' command ***"
 
+in_sph ps
+e ps_sph.s
 autoview
 ae 35 25 0
-B clone4.c
-ps mged_ps_test.ps
+postscript mged_ps_test.ps
+regression_assert {[file size mged_ps_test.ps] > 0} "ps produced an empty file"
 
 puts "*** 'ps' testing completed ***"

@@ -2,5 +2,9 @@ puts "*** Testing 'make' command ***"
 
 make_all_prims make -1
 make_all_prims make 42 sized_
+foreach primitive $make_primitives_list {
+    regression_assert {[exists -p make_${primitive}.s]} "make did not create $primitive"
+    regression_assert {[exists -p make_sized_${primitive}.s]} "sized make did not create $primitive"
+}
 
 puts "*** 'make' testing completed ***"

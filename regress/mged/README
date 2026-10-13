@@ -1,0 +1,49 @@
+MGED command regression tests
+=============================
+
+Each .mged script runs in a fresh database and working directory named for
+its test.  Fixed-name output files therefore cannot come from another test
+or an earlier run.  Databases and caches are removed after a successful run;
+the saved-view fixture database is retained until its consumer finishes.
+
+The driver sources each script as one Tcl command.  This preserves command
+substitutions in assertions and prevents asynchronous event servicing from
+reading the next scripted stdin command.  Database name patterns must be
+expanded explicitly with commands such as:
+
+    prefix has_ {*}[expand prefix*]
+
+Do not depend on MGED's interactive glob preprocessing to expand patterns
+or evaluate assertions.  regression_assert and regression_check_vector in
+regression_resources.tcl provide shared assertion and numeric comparison
+helpers.  Check resulting geometry, references, visibility, or view state
+where practical, rather than merely listing objects or printing a result.
+
+An uncaught Tcl error prints its error stack and suppresses the driver's
+completion marker.  The CMake harness requires that marker and a successful
+process status, and rejects explicit FAIL: output.  MGED's process status
+alone does not reliably indicate Tcl command failures.  Expected errors
+must be caught and checked by the test; matching every occurrence of ERROR
+would incorrectly reject intentional negative cases and empty primitives.
+regress-mged-harness verifies error, assertion, printed-failure, incomplete
+input, quit, and immediate exit detection using the actual frontend.
+
+Shared file fixtures
+--------------------
+
+CTest declares saveview as the setup for the mged_saved_view fixture and
+loadview as its consumer.  loadview opens the producer's database and checks
+the saved orientation, scale, displayed objects, and projected center.
+Orthographic saveview may move the ray origin along the viewing axis, so
+exact equality of the three-dimensional view center is not required.
+
+Similarly, plot produces the mged_plot fixture consumed by overlay.  Both
+fixtures have cleanup tests that run after their consumers, even when a
+consumer fails.  Selecting either consumer automatically selects its setup
+and cleanup, including when tests run in parallel:
+
+    ctest --test-dir build -R '^regress-mged_(loadview|overlay)$' -j4 --output-on-failure
+
+Fixture paths are supplied by the driver through regression_fixture_directory.
+Do not recreate a missing shared fixture in a consumer: failure to prepare
+the input must remain visible to the test runner.
