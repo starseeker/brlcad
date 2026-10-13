@@ -79,8 +79,14 @@ NPSW=64
 check_command ( ) {
     cmd="$1"
 
-    # make sure command exists and will run without error
-    output="`$MGED -c mged.g $cmd 2>&1`"
+    # Native MGED historically accepts no-argument usage as a successful
+    # invocation.  A libged argc/argv frontend returns errors for missing
+    # required arguments, so its inventory check tests registration directly.
+    if test "$GED_INVENTORY" = 1 ; then
+        output="`$MGED -c mged.g "if {[namespace which -command ::ged::$cmd] eq {}} {error {invalid command}}" 2>&1`"
+    else
+        output="`$MGED -c mged.g $cmd 2>&1`"
+    fi
     if test $? != 0 ; then
 	log "ERROR: $cmd returned non-zero exit status $?"
 	log "Output: $output"
@@ -153,6 +159,13 @@ if test $tcl_core_failed -ne 0 ; then
     exit $tcl_core_failed
 fi
 
+GED_INVENTORY=0
+inventory="`$MGED -c mged.g 'puts [namespace which -command ::ged::commands]' 2>&1`"
+if echo "$inventory" | grep -F -x '::ged::commands' > /dev/null 2>&1 ; then
+    GED_INVENTORY=1
+    log "Checking installed GED commands and help; native MGED no-argument usage checks are separate coverage."
+fi
+
 log "testing mged commands..."
 
 # collect all current commands
@@ -168,6 +181,16 @@ set -f
 FAILED=0
 workers=0
 pids=""
+wait_commands () {
+    for pid in $pids ; do
+        if ! wait "$pid" ; then
+            FAILED="`expr $FAILED + 1`"
+        fi
+    done
+    pids=""
+    workers=0
+}
+
 for cmd in $cmds ; do
     log "...$cmd"
 
@@ -200,17 +223,10 @@ EOF
 
     workers="`expr $workers + 1`"
     if ! test $workers -lt $NPSW ; then
-	for pid in $pids ; do
-	    wait $pid
-	    if test $? != 0 ; then
-		FAILED="`expr $FAILED + 1`"
-	    fi
-	done
-	pids=""
-	workers=0
+        wait_commands
     fi
 done
-
+wait_commands
 
 if test $FAILED -eq 0 ; then
     log "-> mged check succeeded"
