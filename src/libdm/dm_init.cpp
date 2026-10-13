@@ -71,6 +71,14 @@ libdm_init(void)
 {
     bu_vls_init(&init_msgs);
 
+    int plugin_load_mode = BU_RTLD_NOW;
+#ifdef RTLD_DEEPBIND
+    /* A display plugin may intentionally carry an OpenGL implementation that
+     * differs from the host process.  Prefer its dependency scope so an
+     * embedded OSMesa backend cannot intercept another backend's symbols. */
+    plugin_load_mode |= RTLD_DEEPBIND;
+#endif
+
     const char *ppath = bu_dir(NULL, 0, BU_DIR_LIBEXEC, "dm", NULL);
     char **dm_filenames;
     struct bu_vls plugin_pattern = BU_VLS_INIT_ZERO;
@@ -83,7 +91,7 @@ libdm_init(void)
 	void *dl_handle;
 	bool dm_without_fb = false;
 
-	dl_handle = bu_dlopen(pfile, BU_RTLD_NOW);
+	dl_handle = bu_dlopen(pfile, plugin_load_mode);
 	if (!dl_handle) {
 	    const char * const error_msg = bu_dlerror();
 	    if (error_msg)
