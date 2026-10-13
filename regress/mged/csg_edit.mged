@@ -764,9 +764,16 @@ proc csg_matrix_multiply {left right} {
     return $result
 }
 
+# These commands exercise MGED's native Tk/X event adapter.  The direct
+# M/p operations below are portable and retain the same geometry assertions.
+set csg_native_mouse [expr {[llength [info commands _mged_matpick]] > 0}]
+if {!$csg_native_mouse} {
+    puts "COVERAGE: native MGED selection and synthetic X drags are not available"
+}
+
 set csg_matrix_mouse_case_id 0
 proc csg_matrix_mouse_check {label menu_item activate_menu commands expected_matrix} {
-    global csg_matrix_mouse_case_id orig_gui transform
+    global csg_matrix_mouse_case_id orig_gui transform csg_native_mouse
     global csg_mouse_dm_pixels csg_mouse_view_size
     incr csg_matrix_mouse_case_id
 
@@ -774,7 +781,7 @@ proc csg_matrix_mouse_check {label menu_item activate_menu commands expected_mat
     set prim ${stem}.s
     set inner ${stem}_inner.c
     set outer ${stem}_outer.c
-    set saved_orig_gui $orig_gui
+    set saved_orig_gui [expr {[info exists orig_gui] ? $orig_gui : 0}]
 
     set failed [catch {
         Z
@@ -788,28 +795,35 @@ proc csg_matrix_mouse_check {label menu_item activate_menu commands expected_mat
         center 0 0 0
         size $csg_mouse_view_size
         setview 0 0 0
-        dm size $csg_mouse_dm_pixels $csg_mouse_dm_pixels
+        if {$csg_native_mouse} {
+            dm size $csg_mouse_dm_pixels $csg_mouse_dm_pixels
 
-        # The null display manager cannot draw the classic faceplate.  Disable
-        # its hit regions so these events unambiguously target the graphics
-        # area, as they do in the normal Tk configuration.
-        set orig_gui 0
-        _mged_press oill
-        if {[status state] ne "OBJ PICK"} {
-            error "Matrix Illum entered [status state], not OBJ PICK"
-        }
-        # This is the command sequence issued by the Tk matrix-selection
-        # listbox after its ray pick identifies a displayed full path.
-        _mged_ill -e -i 1 /$outer/$inner/$prim
-        if {[status state] ne "OBJ PATH"} {
-            error "Tk object-path selection entered [status state], not OBJ PATH"
-        }
-        _mged_matpick 2
-        if {[status state] ne "OBJ EDIT"} {
-            error "Tk matrix selection entered [status state], not OBJ EDIT"
-        }
-        if {$transform ne "e"} {
-            error "matrix pick left mouse transform set to '$transform', not edit"
+            # The null display manager cannot draw the classic faceplate.  Disable
+            # its hit regions so these events unambiguously target the graphics
+            # area, as they do in the normal Tk configuration.
+            set orig_gui 0
+            _mged_press oill
+            if {[status state] ne "OBJ PICK"} {
+                error "Matrix Illum entered [status state], not OBJ PICK"
+            }
+            # This is the command sequence issued by the Tk matrix-selection
+            # listbox after its ray pick identifies a displayed full path.
+            _mged_ill -e -i 1 /$outer/$inner/$prim
+            if {[status state] ne "OBJ PATH"} {
+                error "Tk object-path selection entered [status state], not OBJ PATH"
+            }
+            _mged_matpick 2
+            if {[status state] ne "OBJ EDIT"} {
+                error "Tk matrix selection entered [status state], not OBJ EDIT"
+            }
+            if {$transform ne "e"} {
+                error "matrix pick left mouse transform set to '$transform', not edit"
+            }
+        } else {
+            oed /$outer/$inner $prim
+            if {[status state] ne "OBJ EDIT"} {
+                error "oed did not enter instance editing"
+            }
         }
         if {[lsearch -exact [mmenu_get 1] $menu_item] < 0} {
             error "matrix edit menu does not contain '$menu_item'"
@@ -856,7 +870,7 @@ proc csg_primitive_pick_mouse_check {} {
     global orig_gui transform
     global csg_bv_coord_half_range csg_mouse_view_size
     set prim csg_primitive_mouse_pick.s
-    set saved_orig_gui $orig_gui
+    set saved_orig_gui [expr {[info exists orig_gui] ? $orig_gui : 0}]
 
     set failed [catch {
         Z
@@ -905,7 +919,7 @@ proc csg_primitive_pick_mouse_check {} {
     }
 }
 
-csg_primitive_pick_mouse_check
+if {$csg_native_mouse} { csg_primitive_pick_mouse_check }
 
 set csg_direct_x [expr {512.0 / $csg_bv_coord_half_range * $csg_mouse_view_size / 2.0}]
 set csg_direct_y [expr {-256.0 / $csg_bv_coord_half_range * $csg_mouse_view_size / 2.0}]
@@ -946,6 +960,7 @@ set csg_drag_y_rotation 5.0
 set csg_drag_xy_rotation [csg_matrix_multiply \
     [csg_matrix_axis_rotation x $csg_drag_x_rotation] \
     [csg_matrix_axis_rotation y $csg_drag_y_rotation]]
+if {$csg_native_mouse} {
 foreach test [list \
     [list {unconstrained translate drag} {XY Move} 0 {{dm am t 100 100} {dm motion 164 36} {dm idle}} [csg_matrix_translation 5 5 0]] \
     [list {unconstrained rotate drag} Rotate 0 {{dm am r 100 100} {dm motion 120 140} {dm idle}} $csg_drag_xy_rotation] \
@@ -962,6 +977,8 @@ foreach test [list \
     csg_matrix_mouse_check {*}$test
 }
 
+}
+
 puts "--- Repeated graphical object transforms ---"
 proc csg_matrix_repeated_mouse_check {} {
     global orig_gui transform csg_mouse_dm_pixels csg_mouse_view_size
@@ -969,7 +986,7 @@ proc csg_matrix_repeated_mouse_check {} {
     set prim csg_matrix_repeat.s
     set inner csg_matrix_repeat_inner.c
     set outer csg_matrix_repeat_outer.c
-    set saved_orig_gui $orig_gui
+    set saved_orig_gui [expr {[info exists orig_gui] ? $orig_gui : 0}]
     set expected [csg_edit_identity_matrix]
     set failed [catch {
         in $prim sph 0 0 0 10
@@ -1024,7 +1041,7 @@ proc csg_matrix_repeated_mouse_check {} {
         puts "  PASS: repeated object mouse rotations/scales"
     }
 }
-csg_matrix_repeated_mouse_check
+if {$csg_native_mouse} { csg_matrix_repeated_mouse_check }
 
 puts "--- All ARB point, edge, and face states ---"
 
@@ -1038,11 +1055,11 @@ proc csg_edit_sed_point {attribute} {
 }
 
 proc csg_arb_repeated_mouse_check {} {
-    global orig_gui csg_bv_coord_half_range csg_mouse_dm_pixels
+    global orig_gui csg_bv_coord_half_range csg_mouse_dm_pixels csg_native_mouse
     global csg_mouse_view_size
     set source csg_lifecycle_arb5.s
     set prim csg_arb_repeat.s
-    set saved_orig_gui $orig_gui
+    set saved_orig_gui [expr {[info exists orig_gui] ? $orig_gui : 0}]
     set expected {}
     set failed [catch {
         cp $source $prim
@@ -1050,8 +1067,10 @@ proc csg_arb_repeated_mouse_check {} {
         center 0 0 0
         size $csg_mouse_view_size
         setview 0 0 0
-        dm size $csg_mouse_dm_pixels $csg_mouse_dm_pixels
-        set orig_gui 0
+        if {$csg_native_mouse} {
+            dm size $csg_mouse_dm_pixels $csg_mouse_dm_pixels
+            set orig_gui 0
+        }
         sed $prim
         press {Move Edges}
         press {Move Point 5}

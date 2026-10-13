@@ -47,3 +47,20 @@ and cleanup, including when tests run in parallel:
 Fixture paths are supplied by the driver through regression_fixture_directory.
 Do not recreate a missing shared fixture in a consumer: failure to prepare
 the input must remain visible to the test runner.
+
+Frontend capabilities
+---------------------
+
+csg_edit runs common editing semantics in both frontends. The presence of
+_mged_matpick identifies native MGED selection and synthetic display-manager
+mouse automation. Those blocks run only in MGED; FLTK logs a COVERAGE message
+for the exclusion. Shared parameter, matrix, mouse-coordinate, and primitive
+checks still run in FLTK. A passing script does not imply that native Tk input
+automation ran in both frontends.
+
+The mged.sh inventory test uses the documented installed GED commands when
+::ged::commands is available, checking registration and help. Native MGED
+retains its no-argument command checks and application command inventory.
+These are distinct coverage modes: missing-argument libged errors do not mean
+a command is absent. Both modes wait for every parallel command check,
+including the final partial batch, before reporting success.

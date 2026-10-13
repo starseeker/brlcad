@@ -101,6 +101,10 @@ puts "glob_compat_mode \$glob_compat_mode "
 
 in half.s half 0 0 1 -1
 r half.r u half.s
+# Fix the projection camera independently of frontend startup/autoview policy.
+press top
+center 0 0 249
+size 4000
 prj_add shaders.half.prj "$EAGLECAD" 512 438
 mater half.r "stack prj shaders.half.prj;plastic di=.8 sp=.3" 76 158 113 0
 
