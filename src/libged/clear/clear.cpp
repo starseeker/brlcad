@@ -27,12 +27,18 @@
 
 #include "../ged_private.h"
 
-// clear is a no-op at the libged level - it's purpose is to support ged_exec
+// clear is a no-op at the libged level - its purpose is to support ged_exec
 // callback hooks that call any application callback functions assigned to this
 // command.
 extern "C" int
-ged_clear_core(struct ged *UNUSED(gedp), int UNUSED(argc), const char **UNUSED(argv))
+ged_clear_core(struct ged *gedp, int argc, const char **argv)
 {
+    GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    if (argc != 1) {
+	bu_vls_printf(gedp->ged_result_str, "Usage: %s\n", argv[0]);
+	return GED_HELP;
+    }
     return BRLCAD_OK;
 }
 
