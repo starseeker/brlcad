@@ -133,6 +133,8 @@ int fb_setup(void) {
     static const int framebuffer_open_error = 12;
     size_t xx, yy;
     int zoom;
+    const char *ipc_addr = getenv(PKG_ADDR_ENVVAR);
+    int inherited_ipc = ipc_addr && ipc_addr[0] != '\0';
 
     /* make sure width/height are set via -g/-G */
     grid_sync_dimensions(viewsize);
@@ -150,8 +152,15 @@ int fb_setup(void) {
      * stamps remain visible.  Disk framebuffers intentionally ignore
      * window configuration and retain the requested image dimensions.
      */
-    xx = width > minimum_framebuffer_dimension ? width : minimum_framebuffer_dimension;
-    yy = height > minimum_framebuffer_dimension ? height : minimum_framebuffer_dimension;
+    /* An inherited IPC endpoint is a one-shot connected channel, not an
+     * address that can be reopened.  It also targets an existing embedded
+     * framebuffer whose exact dimensions are intentional. */
+    xx = inherited_ipc || width > minimum_framebuffer_dimension
+             ? width
+             : minimum_framebuffer_dimension;
+    yy = inherited_ipc || height > minimum_framebuffer_dimension
+             ? height
+             : minimum_framebuffer_dimension;
     if ((size_t)fb_getwidth(fbp) < xx || (size_t)fb_getheight(fbp) < yy) {
 	(void)fb_configure_window(fbp, (int)xx, (int)yy);
 
