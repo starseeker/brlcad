@@ -51,7 +51,7 @@
 #
 # Available components (all lowercase, matching the short library name):
 #   bu bn bg bv nmg brep rt wdb ged analyze gcv icv dm fft optical
-#   pkg render tclcad qtcad
+#   pkg render tclcad qtcad fltkcad
 #
 # Special-purpose components:
 #   static  - request static imported targets (BRLCAD::<name>-static)
@@ -120,6 +120,12 @@ list(INSERT CMAKE_PREFIX_PATH 0 "${_brlcad_prefix}")
 # attributed to the consumer's find_package(BRLCAD) call.
 
 include(CMakeFindDependencyMacro)
+
+# The targets file contains every built library, so its public FLTK target
+# must exist even when the consumer requests only a core BRL-CAD component.
+if(@BRLCAD_HAVE_FLTK@)
+  find_dependency(FLTK CONFIG)
+endif()
 
 find_dependency(Threads)
 
@@ -244,7 +250,7 @@ if(NOT TARGET BRLCAD::brlcad)
   set(_brlcad_all_libs)
   foreach(_lib
       bu bn bg bv nmg brep rt wdb ged analyze gcv icv dm fft optical pkg render
-      tclcad qtcad)
+      tclcad qtcad fltkcad)
     if(_brlcad_want_static AND TARGET BRLCAD::${_lib}-static)
       list(APPEND _brlcad_all_libs BRLCAD::${_lib}-static)
     elseif(TARGET BRLCAD::${_lib})
@@ -261,9 +267,10 @@ endif()
 # 8.  Component validation
 #
 # Known optional components and which build-time flag controls them.
-set(_brlcad_optional_components tclcad qtcad step gdal dm-osmesa opencl)
+set(_brlcad_optional_components tclcad qtcad fltkcad step gdal dm-osmesa opencl)
 set(_brlcad_have_tclcad   @BRLCAD_HAVE_TCL@)
 set(_brlcad_have_qtcad    @BRLCAD_HAVE_QT@)
+set(_brlcad_have_fltkcad  @BRLCAD_HAVE_FLTK@)
 set(_brlcad_have_step     @BRLCAD_HAVE_STEP@)
 set(_brlcad_have_gdal     @BRLCAD_HAVE_GDAL@)
 set(_brlcad_have_dm-osmesa @BRLCAD_HAVE_OSMESA@)
@@ -327,7 +334,7 @@ set(BRLCAD_LIBRARIES BRLCAD::brlcad)
 
 foreach(_lib
     bu bn bg bv nmg brep rt wdb ged analyze gcv icv dm fft optical pkg render
-    tclcad qtcad)
+    tclcad qtcad fltkcad)
   string(TOUPPER "${_lib}" _LIB)
   set(_brlcad_compat_target)
   if(_brlcad_want_static AND TARGET BRLCAD::${_lib}-static)
