@@ -122,6 +122,10 @@ void    termio_set_cbreak(int fd);
 void    termio_set_cbreak_legacy(int fd);
 void    termio_clear_echo(int fd);
 int     termio_is_raw(int fd);
+/* Native consoles and supported pseudoterminals, excluding redirected pipes. */
+int     termio_is_terminal(int fd);
+/* Query after termio_enable_vt_output; a failed native enable stays false. */
+int     termio_has_vt_output(int fd);
 
 int     termio_get_winsize(int fd, int *rows, int *cols);
 int     termio_poll_resize(int fd);
@@ -398,6 +402,7 @@ static int termio_map_csi_number(int v){
 #ifdef LIBTERMIO_WINDOWS
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 #if defined(__CYGWIN__) || defined(__MSYS__)
 #  define LIBTERMIO_HAVE_TERMIOS_FALLBACK 1
@@ -560,12 +565,13 @@ void termio_save_tty(int fd){
 void termio_reset_tty(int fd){
     (void)fd;
     termio_try_stty_restore();
+    /* Reset while VT processing is still enabled on native consoles. */
+    termio_full_write(STDOUT_FILENO, TERMIO_RESET_SEQ, sizeof(TERMIO_RESET_SEQ)-1);
+    termio_disable_mouse_reporting(STDOUT_FILENO);
     if (termio_saved_valid) {
         if (termio_hIn)  SetConsoleMode(termio_hIn,  termio_saved_in_mode);
         if (termio_hOut) SetConsoleMode(termio_hOut, termio_saved_out_mode);
     }
-    termio_full_write(STDOUT_FILENO, TERMIO_RESET_SEQ, sizeof(TERMIO_RESET_SEQ)-1);
-    termio_disable_mouse_reporting(STDOUT_FILENO);
     termio_win_resize_flag=0;
     termio_pending_len=0;
     termio_debug_shutdown();
@@ -580,6 +586,44 @@ void termio_enable_vt_output(int fd_out){
     DWORD desired = mode | ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
     if (SetConsoleMode(termio_hOut, desired))
         termio_vt_output_enabled = 1;
+}
+
+int
+termio_is_terminal(int fd)
+{
+    HANDLE handle = (HANDLE)_get_osfhandle(fd);
+    DWORD mode;
+    if (handle == INVALID_HANDLE_VALUE)
+	return 0;
+    if (GetConsoleMode(handle, &mode))
+	return 1;
+    if (GetFileType(handle) != FILE_TYPE_PIPE)
+	return 0;
+
+    /* MSYS/Cygwin terminals use named pipes. Environment variables alone
+     * cannot distinguish those handles from an ordinary redirected pipe. */
+    union {
+	FILE_NAME_INFO info;
+	unsigned char bytes[sizeof(FILE_NAME_INFO) + MAX_PATH * sizeof(WCHAR)];
+    } name;
+    if (!GetFileInformationByHandleEx(handle, FileNameInfo, &name, (DWORD)sizeof(name)))
+	return 0;
+    size_t length = name.info.FileNameLength / sizeof(WCHAR);
+    if (length >= MAX_PATH)
+	return 0;
+    name.info.FileName[length] = L'\0';
+    return wcsstr(name.info.FileName, L"-pty") &&
+	(wcsstr(name.info.FileName, L"msys-") || wcsstr(name.info.FileName, L"cygwin-"));
+}
+
+int
+termio_has_vt_output(int fd)
+{
+    HANDLE handle = (HANDLE)_get_osfhandle(fd);
+    DWORD mode;
+    if (GetConsoleMode(handle, &mode))
+	return (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0;
+    return termio_is_terminal(fd);
 }
 
 /* Enter raw console */
@@ -786,7 +830,7 @@ static int ti_process_byte(unsigned char b){
             if (b==0x1B){ ti_state=TI_ESC_SEEN; ti_buf[0]=0x1B; ti_len=1; return -1; }
             if (b<0x20){
                 switch(b){
-                    case 0x04: case 0x08: case 0x09: case 0x0A:
+                    case 0x03: case 0x04: case 0x08: case 0x09: case 0x0A:
                     case 0x0B: case 0x0D: case 0x0F: case 0x15:
                     case 0x16: case 0x17: case 0x18: case 0x19:
                     case 0x1F: return b;
@@ -1131,6 +1175,19 @@ void termio_disable_mouse_reporting(int fd){
 /* POSIX no-op VT output enabler */
 void termio_enable_vt_output(int fd_out){ (void)fd_out; }
 
+int
+termio_is_terminal(int fd)
+{
+    return isatty(fd);
+}
+
+int
+termio_has_vt_output(int fd)
+{
+    const char *term = getenv("TERM");
+    return termio_is_terminal(fd) && term && *term && strncmp(term, "dumb", sizeof("dumb")) != 0;
+}
+
 /* POSIX getch with mouse/paste filtering */
 int termio_getch(int fd){
     for(;;){
@@ -1140,7 +1197,7 @@ int termio_getch(int fd){
         if (c!=0x1B){
             if (c<0x20){
                 switch(c){
-                    case 0x04: case 0x08: case 0x09: case 0x0A:
+                    case 0x03: case 0x04: case 0x08: case 0x09: case 0x0A:
                     case 0x0B: case 0x0D: case 0x0F: case 0x15:
                     case 0x16: case 0x17: case 0x18: case 0x19:
                     case 0x1F: return (int)c;
