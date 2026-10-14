@@ -95,7 +95,8 @@ TCLCAD_EXPORT extern void tclcad_set_argv(Tcl_Interp *interp, int argc, const ch
  *
  * libbu, libbn, librt, libged, and Itcl are always initialized.
  *
- * To initialize graphical elements (Tk/Itk), set init_gui to 1.
+ * To initialize graphical elements (Tk, Itk, Iwidgets, and the built-in
+ * tklitehtml widget and browser package), set init_gui to 1.
  */
 TCLCAD_EXPORT extern int tclcad_init(Tcl_Interp *interp, int init_gui, struct bu_vls *tlog);
 

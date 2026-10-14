@@ -39,6 +39,19 @@ single page. The *-k* option searches page names, synopsis text, and brief
 descriptions. The *-K* option searches the full manual page text. When no
 section is selected, all BRL-CAD manual sections are searched.
 
+In the Tcl/Tk graphical viewer, drag to select text, double-click to select
+a word, or triple-click to select a paragraph. Right-click the HTML view
+for Copy, Select All, and Find. On X11, selected text is also available
+for middle-button pasting in other applications; Copy separately updates
+the clipboard.
+
+Control-F (Command-F on macOS) opens a find bar for the displayed page.
+Matches are highlighted as the query changes. F3 and Shift-F3 move to the
+next and previous matches; Return and Shift-Return do the same while the
+find entry has focus. Match case enables case-sensitive searching.
+Escape closes the find bar and clears its highlights. The sidebar search
+continues to search the manual collection.
+
 
 [[options]]
 == OPTIONS

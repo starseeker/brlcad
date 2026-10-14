@@ -25,7 +25,7 @@ wm state . withdrawn
 if {[info exists ::section_number]} {
     set w [ ManBrowser .browser -useToC 1 -defaultDir $::section_number ]
 } else {
-    set w [ ManBrowser .browser -useToC 1 -defaultDir 1 ]
+    set w [ ManBrowser .browser -useToC 1 ]
 }
 $w buttonconfigure 0 -text Close -command ::exit
 

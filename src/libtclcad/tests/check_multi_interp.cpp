@@ -121,13 +121,30 @@ check_initialized(Tcl_Interp *interp, const char *value, bool init_gui)
     if (init_gui &&
 	(!has_command(interp, "frame") ||
 	 !Tcl_PkgPresent(interp, "Tk", "8.6", 0) ||
-	 !Tcl_PkgPresent(interp, "Itk", TCLCAD_ITK_MIN_VERSION, 0))) {
+	 !Tcl_PkgPresent(interp, "Itk", TCLCAD_ITK_MIN_VERSION, 0) ||
+	 !Tcl_PkgPresent(interp, "tklitehtml", "0.1.0", 1) ||
+	 !has_command(interp, "::tklitehtml::browser"))) {
 	std::fprintf(stderr, "libtclcad did not complete GUI initialization\n");
 	return false;
     }
 
     if (init_gui && !check_gui_packages(interp))
 	return false;
+
+    if (init_gui) {
+	if (!eval_ok(interp,
+		"tklitehtml::browser .manual;"
+		"[.manual html] load {<p>Independent manual viewer</p>};"
+		"set manual_text [[.manual html] text];"
+		"destroy .manual;"
+		"string match {*Independent*} $manual_text") ||
+	    !result_is(interp, "1"))
+	    return false;
+    } else if (has_command(interp, "::tklitehtml::widget") ||
+	       has_command(interp, "frame")) {
+	std::fprintf(stderr, "Headless initialization registered GUI commands\n");
+	return false;
+    }
 
     const char *script =
 	"itcl::class MultiInterpClass {"

@@ -216,6 +216,9 @@ endif()
 
 if(_brlcad_want_static)
   if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/BRLCADStaticTargets.cmake")
+    if(@BRLCAD_HAVE_TCL@ AND @BRLCAD_ENABLE_TK@)
+      find_dependency(litehtml CONFIG)
+    endif()
     include("${CMAKE_CURRENT_LIST_DIR}/BRLCADStaticTargets.cmake")
   else()
     message(WARNING
