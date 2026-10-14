@@ -22,9 +22,10 @@ brlman -K keyword
 *brlman* is a manual page viewer for BRL-CAD programs, libraries, file
 formats, and *mged*(1)/GED commands. On Unix-like systems it wraps the system
 *man*(1) command, supplying the paths needed to locate BRL-CAD's installed man
-pages. On systems lacking a *man* command, or when the GUI is explicitly
-requested, *brlman* launches a graphical viewer that displays HTML versions of
-the same documentation. The terminal and HTML pages are generated from the
+pages when input and output are terminals. On systems lacking a *man* command,
+*brlman* formats the installed HTML pages for its built-in terminal viewer.
+Redirected output is formatted text without terminal controls. When the GUI
+is explicitly requested, *brlman* launches a graphical HTML viewer. The terminal and HTML pages are generated from the
 same source and contain identical information.
 
 The page to display is given by name. An optional one-character _section_ may
@@ -50,8 +51,27 @@ section is selected, all BRL-CAD manual sections are searched.
   is available.
 
 *--no-gui*::
-  Disable the graphical viewer. If the terminal *man* command is unavailable,
-  *brlman* will fail. Primarily useful in scripting.
+  Disable the graphical viewer. Use the system *man* command when available
+  on a terminal, otherwise format the installed HTML page.
+
+*--dump*::
+  Write formatted text to standard output without paging, styling, or terminal
+  controls. This is also the default when input or output is not a terminal.
+
+*--width* _columns_::
+  Set a positive text wrapping width and use the built-in HTML formatter.
+  The default is the terminal width for interactive viewing, or 80 columns
+  for dumped output. Literal examples retain their original line breaks and
+  may exceed this width. Tables too wide for columns use individual cells,
+  labeled with column headings where possible.
+
+*--pager*::
+  Use the built-in HTML terminal viewer even if the system *man* command is
+  available. Arrow keys scroll vertically and horizontally; Space and *b*
+  page forward and backward; Home/End or *g*/*G* go to the beginning/end;
+  */* enters a case-sensitive search; *n* finds the next match; *q* quits.
+  The display reflows on terminal resize. Terminals without the required
+  interactive capabilities receive plain formatted output.
 
 *-L* _lg_, *--language* _lg_::
   Two-letter language code (e.g. *en*) used when selecting man pages. If not
@@ -117,6 +137,15 @@ Lists pages whose full text contains the search terms, with higher-ranked
 matches first.
 ====
 
+
+.Dumping a manual as formatted text
+====
+[source,bash]
+----
+brlman --dump --width 72 mged > mged.txt
+----
+Writes readable text without launching a pager or graphical viewer.
+====
 
 [[see_also]]
 == SEE ALSO

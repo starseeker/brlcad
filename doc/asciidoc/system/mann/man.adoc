@@ -4,7 +4,7 @@
 :manmanual: BRL-CAD MGED Commands
 
 == NAME
-man - Opens the graphical man page viewer.
+man - displays a manual page graphically or as formatted text.
 
 == SYNOPSIS
 
@@ -12,7 +12,7 @@ man - Opens the graphical man page viewer.
 ----
 man [cmdname]
 man [-g | --gui] [cmdname]
-man [--no-gui] [-L language] [-S section] [cmdname]
+man [--no-gui | --dump] [--width columns] [-L language] [-S section] [cmdname]
 man [-k|-K] keyword
 man [-h | --help]
 ----
@@ -42,7 +42,14 @@ Print help and exit.
 Force use of the graphical manual page viewer.
 
 *--no-gui*::
-Force command-line viewer mode.
+Return formatted manual text in the command result, including GUI consoles.
+
+*--dump*::
+Return formatted text, equivalent to *--no-gui*. No external pager is launched.
+
+*--width* _columns_::
+Set the positive wrapping width for text output (default: 80). Literal examples
+retain their original line breaks and may exceed this width.
 
 *-L*, *--language* _lang_::
 Select the manual language to request from `brlman`.
@@ -74,7 +81,7 @@ Launches the BRL-CAD manual page viewer on the `view` command page.
 ====
 mged> **man --no-gui -S 1 rt**
 
-Launches `brlman` in non-GUI mode and requests section `1` for `rt`.
+Displays the section `1` manual for `rt` as text in the command console.
 
 ====
 
