@@ -18651,6 +18651,7 @@ test_retained_spatial_presentation_repair(int representationMode)
 	    if (repair.getSubmittedTaskCount() != 1 ||
 		repair.getUpdatedCutCount() != 0 || wait_for_service(service) ||
 		service.drainResults(results) != 1 || results.size() != 1 ||
+		results[0].request.coalesceAssetProducer ||
 		results[0].geometry.activeCut != allocatedCut ||
 		results[0].presentationLayers.empty() ||
 		!viewState.applySourceResult(source, results[0]) ||
