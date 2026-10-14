@@ -129,15 +129,23 @@ tclcad_source_file(Tcl_Interp *interp, const char *filename)
 extern int Itcl_Init(Tcl_Interp *);
 #ifdef HAVE_TK
 extern int Itk_Init(Tcl_Interp *);
+extern int Tklitehtml_Init(Tcl_Interp *);
 #endif
 
 static int
 tclcad_init_gui(Tcl_Interp *interp, struct bu_vls *tlog)
 {
 #ifdef HAVE_TK
-    if (Tk_Init(interp) == TCL_ERROR) {
+    /* Embedding applications may initialize Tk before upgrading to GUI. */
+    if (!Tk_MainWindow(interp) && Tk_Init(interp) == TCL_ERROR) {
 	if (tlog)
 	    bu_vls_printf(tlog, "Tk init ERROR:\n%s\n", Tcl_GetStringResult(interp));
+	return TCL_ERROR;
+    }
+
+    if (Tklitehtml_Init(interp) != TCL_OK) {
+	if (tlog)
+	    bu_vls_printf(tlog, "TkLiteHtml init ERROR:\n%s\n", Tcl_GetStringResult(interp));
 	return TCL_ERROR;
     }
 

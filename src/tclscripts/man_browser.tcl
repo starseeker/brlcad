@@ -34,7 +34,7 @@
 package provide ManBrowser 1.0
 package require Tk
 package require Itcl
-package require hv3
+package require tklitehtml 0.1.0
 package require cadwidgets::Accordion 1.0
 
 if {[llength [info commands manpage_search_terms]] == 0} {
@@ -107,24 +107,24 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 # Loads pages selected graphically or through the command line into HTML browser
 #
 ::itcl::body ManBrowser::loadPage {pageName} {
-# Get page
-    if {[file exists $pageName] && ![file isdirectory $pageName] && ![file executable $pageName]} {set pathname $pageName}
+    set viewer [$this childsite].browser.htmlview
+    if {[file readable $pageName] && [file isfile $pageName]} {
+	set pathname $pageName
+    }
     if {![info exists pathname]} {
-	if {[file exists [file join $path $current_section $pageName.html]]} {
-	    set pathname [file join $path $current_section $pageName.html]
+	set candidate [file join $path $current_section $pageName.html]
+	if {[file readable $candidate] && [file isfile $candidate]} {
+	    set pathname $candidate
 	}
     }
-    if {[info exists pathname]} {
-	set htmlFile [open $pathname]
-	set pageData [read $htmlFile]
-	close $htmlFile
-
-	# Display page
-	set htmlview [[$this childsite].browser.htmlview html]
-	$htmlview reset
-	$htmlview configure -parsemode html
-	$htmlview parse $pageData
+    if {![info exists pathname]} {
+	$viewer error "Cannot read manual page '$pageName'."
+	return 0
     }
+    if {[catch {$viewer goto $pathname}]} {
+	return 0
+    }
+    return 1
 }
 
 ##
@@ -143,7 +143,7 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 #
 ::itcl::body ManBrowser::select {pageName} {
     set result False
-    if {[info exists pages]} {
+    if {[info exists pages($current_section)]} {
     # Select the requested man page
 	set rootName [file rootname [file tail $pageName]]
 	set idx [lsearch -sorted -exact $pages($current_section) $rootName]
@@ -160,7 +160,7 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 	    $toc activate $idx
 	    $toc see $idx
 
-	    loadPage $pageName
+	    set result [loadPage $pageName]
 	}
     }
     return $result
@@ -347,9 +347,7 @@ if {[llength [info commands manpage_search_terms]] == 0} {
     set sfcsman $itk_component(browser)
     pack $sfcsman -expand yes -fill both
 
-    # HTML widget
-    set manhtmlviewer [::hv3::hv3 $sfcsman.htmlview]
-    set manhtml [$manhtmlviewer html]
+    set manhtmlviewer [::tklitehtml::browser $sfcsman.htmlview]
 
     grid $manhtmlviewer -sticky nsew -in $sfcsman
 
@@ -358,27 +356,22 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 
     pack $itk_component(browser) -side left -expand yes -fill both
 
-    # Load Introduction.html if it's there, otherwise load first page
-    if {[file exists [file join $path Introduction.html]]} {
-	loadPage Introduction
+    # Load Introduction.html if it is readable.  Otherwise, load the
+    # first page.
+    set introduction [file join $path Introduction.html]
+    if {[file readable $introduction] && [file isfile $introduction]} {
+	loadPage $introduction
+    } elseif {[info exists pages($current_section)] &&
+	[llength $pages($current_section)] > 0} {
+	loadPage [lindex $pages($current_section) 0]
     } else {
-	if {[info exists pages]} {
-	    loadPage [lindex $pages($current_section) 0]
-	}
+	$manhtmlviewer error \
+	    "No readable manual pages were found in '$path'."
     }
 
     if {$itk_option(-useToC)} {
 	bind $itk_component(manpagelistbox) <<ListboxSelect>> \
 	    [::itcl::code $this loadSelectedPage %W]
-    }
-
-    # bind MouseWheel listener to the widget.document (this is the html
-    # displayed as the current man page so it needs the 'active' listener)
-    bind $manhtml.document <MouseWheel> {
-        # strip the ".document" so that the widget's yview (not the document)
-        # can be updated with the scroll
-        set widget_base [regsub {\.document} %W ""]
-        $widget_base yview scroll [expr {-%D/120}] units
     }
 
     configure -height 600 -width 800

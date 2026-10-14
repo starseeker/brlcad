@@ -1,7 +1,5 @@
 if(BRLCAD_ENABLE_TCL)
-  if(BRLCAD_ENABLE_TK)
-    set(TCL_ENABLE_TK ON)
-  endif(BRLCAD_ENABLE_TK)
+  set(TCL_ENABLE_TK ${BRLCAD_ENABLE_TK})
   find_package_tcl(REQUIRED)
 
   function(tclcad_package_version result package_name)
@@ -57,15 +55,23 @@ set(
   wrapper.c
 )
 
+cmakefiles(${LIBTCLCAD_SRCS})
+if(BRLCAD_ENABLE_TCL AND BRLCAD_ENABLE_TK AND TK_LIBRARY)
+  find_package(gumbo CONFIG REQUIRED HINTS "${BRLCAD_BINARY_DIR}/${LIB_DIR}/cmake/gumbo")
+  find_package(litehtml CONFIG REQUIRED HINTS "${BRLCAD_BINARY_DIR}/${LIB_DIR}/cmake/litehtml")
+endif()
+add_subdirectory(tklitehtml)
+list(APPEND LIBTCLCAD_SRCS ${TKLITEHTML_SOURCES})
+
 if(BRLCAD_ENABLE_TCL)
   # Include directories needed by libtclcad users
   set(TCLCAD_INCLUDE_DIRS ${TCL_INCLUDE_PATH})
-  if(TK_INCLUDE_PATH)
+  if(BRLCAD_ENABLE_TK AND TK_INCLUDE_PATH)
     set(TCLCAD_INCLUDE_DIRS ${TCLCAD_INCLUDE_DIRS} ${TK_INCLUDE_PATH} ${BRLCAD_X11_INCLUDE_DIRS})
-  endif(TK_INCLUDE_PATH)
+  endif(BRLCAD_ENABLE_TK AND TK_INCLUDE_PATH)
 
   # Include directories only needed by the implementation
-  set(TCLCAD_LOCAL_INCLUDE_DIRS ${PNG_INCLUDE_DIRS})
+  set(TCLCAD_LOCAL_INCLUDE_DIRS ${PNG_INCLUDE_DIRS} ${TKLITEHTML_INCLUDE_DIR})
   if(BRLCAD_ENABLE_X11)
     set(TCLCAD_XLIBS ${TCLCAD_XLIBS} ${BRLCAD_X11_LIBRARIES})
   endif(BRLCAD_ENABLE_X11)
@@ -73,9 +79,12 @@ if(BRLCAD_ENABLE_TCL)
   # Note - libtclcad_deps is defined by ${BRLCAD_SOURCE_DIR}/src/source_dirs.cmake
   set(TCLCAD_PUBLIC_LIBS ${libtclcad_deps} ${TCL_LIBRARY})
   set(TCLCAD_PRIVATE_LIBS ${TCLCAD_XLIBS} PNG::PNG)
-  if(TK_LIBRARY)
+  if(TKLITEHTML_SOURCES)
+    list(APPEND TCLCAD_PRIVATE_LIBS litehtml)
+  endif()
+  if(BRLCAD_ENABLE_TK AND TK_LIBRARY)
     set(TCLCAD_PUBLIC_LIBS ${TCLCAD_PUBLIC_LIBS} ${TK_LIBRARY})
-  endif(TK_LIBRARY)
+  endif(BRLCAD_ENABLE_TK AND TK_LIBRARY)
 
   brlcad_addlib(libtclcad "${LIBTCLCAD_SRCS}" "${TCLCAD_INCLUDE_DIRS}" "${TCLCAD_LOCAL_INCLUDE_DIRS}"
     PUBLIC_LIBS ${TCLCAD_PUBLIC_LIBS}
@@ -84,7 +93,7 @@ if(BRLCAD_ENABLE_TCL)
     # dm_draw_viewobjs; when batched after draw.c the DM_VIEW_H guard fires
     # without DM_WITH_RT set and the declaration is lost.
     # bu.c and dm.c both define a non-static register_cmds function.
-    UNITY_BUILD_SKIP view/refresh.c bu.c dm.c
+    UNITY_BUILD_SKIP view/refresh.c bu.c dm.c ${TKLITEHTML_SOURCES}
     # The full static library link is too large for some testing environments -
     # disable this test
     NO_STATIC_LINK_TEST
@@ -103,9 +112,9 @@ if(BRLCAD_ENABLE_TCL)
     if(IWIDGETS_VERSION)
       target_compile_definitions(${pt} PRIVATE IWIDGETS_VERSION=\"${IWIDGETS_VERSION}\")
     endif(IWIDGETS_VERSION)
-    if(TK_LIBRARY)
+    if(BRLCAD_ENABLE_TK AND TK_LIBRARY)
       target_compile_definitions(${pt} PRIVATE HAVE_TK)
-    endif(TK_LIBRARY)
+    endif(BRLCAD_ENABLE_TK AND TK_LIBRARY)
   endforeach(pt ${ptargets})
 
   set_target_properties(libtclcad PROPERTIES VERSION 20.0.1 SOVERSION 20)
@@ -123,7 +132,6 @@ endif(BRLCAD_ENABLE_TCL)
 add_subdirectory(tests)
 
 cmakefiles(
-  ${LIBTCLCAD_SRCS}
   tclcad_private.h
   view/view.h
   CMakeLists.txt
