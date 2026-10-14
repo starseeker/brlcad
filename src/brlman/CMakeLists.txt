@@ -9,10 +9,6 @@ if(NOT BRLCAD_ENABLE_QT AND TARGET libtclcad AND TK_LIBRARY)
   brlcad_adddata(brlman.tcl tclscripts/brlman)
 
   set(brlman_libs libtclcad ${TCL_LIBRARY} ${TK_LIBRARY} ${brlman_libs})
-
-  if(TARGET Tkhtml)
-    set(brlman_libs ${brlman_libs} Tkhtml)
-  endif(TARGET Tkhtml)
 endif(NOT BRLCAD_ENABLE_QT AND TARGET libtclcad AND TK_LIBRARY)
 
 # Qt version of brlman GUI

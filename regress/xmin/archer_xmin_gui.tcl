@@ -105,6 +105,75 @@ proc ::archer::xmin::exercise_dialog {root labels {expected_title ""}} {
     }
 }
 
+proc ::archer::xmin::exercise_html_help {application} {
+    # The browser panes remain useful for reporting missing optional
+    # documentation, so they must always exist.
+    if {[catch {$application component archerHelpToC} toc_frame] ||
+	[catch {$application component archerHelpF} help_frame]} {
+	::gui::test::require {false} \
+	    "Archer help did not create its browser panes"
+    }
+
+    set toc $toc_frame.htmlview
+    set help $help_frame.htmlview
+    set help_toplevel [winfo toplevel $help]
+    wm deiconify $help_toplevel
+    update
+
+    foreach browser [list $toc $help] {
+	::gui::test::require {
+	    [llength [info commands $browser]] == 1 &&
+	    [winfo class [$browser html]] eq "TkLiteHtml"
+	} "Archer help did not create its tklitehtml browser panes"
+    }
+
+    set toc_path [file join [bu_dir doc] html main_menu.html]
+    set help_path [file join [bu_dir doc] html books \
+	BRL-CAD_Tutorial_Series-VolumeI.html]
+    if {![file readable $toc_path] || ![file readable $help_path]} {
+	::gui::test::require {
+	    (![file readable $toc_path] && [$toc error] ne "") ||
+	    (![file readable $help_path] && [$help error] ne "")
+	} "Archer help did not report unavailable documentation"
+	wm withdraw $help_toplevel
+	return
+    }
+    ::gui::test::require {
+	[string first "BRL-CAD" [$toc text]] >= 0 &&
+	[string first "BRL-CAD" [$help text]] >= 0 &&
+	[$help title] ne ""
+    } "Archer help did not load its table of contents and tutorial"
+
+    set initial_location [$help location]
+    set link_command [$toc cget -linkcommand]
+    {*}$link_command $toc [$toc location] {}
+    ::gui::test::require {
+	[$help location] eq [$toc location]
+    } "Archer table-of-contents navigation did not update the help pane"
+    $help back
+    ::gui::test::require {
+	[$help location] eq $initial_location
+    } "Archer help back navigation did not restore the tutorial"
+
+    set missing_path [file join $::env(GUI_TEST_DIR) missing-help.html]
+    Archer::html_help_display $toc $missing_path {}
+    ::gui::test::require {
+	[$help location] eq $initial_location && [$help error] ne ""
+    } "Archer help did not preserve a failed navigation"
+    $help goto $initial_location
+    ::gui::test::require {[$help error] eq ""} \
+	"Archer help did not clear its error after recovery"
+
+    set initial_scroll [lindex [$help yview] 0]
+    event generate [$help html] <Button-5> -x 10 -y 10
+    update
+    set scrolled_view [$help yview]
+    ::gui::test::require {
+	[lindex $scrolled_view 0] > $initial_scroll
+    } "Archer help did not respond to an X11 mouse-wheel event ($initial_scroll -> $scrolled_view)"
+    wm withdraw $help_toplevel
+}
+
 proc ::archer::xmin::compare_manifest {actual} {
     if {![info exists ::env(ARCHER_MENU_MANIFEST)]} {
 	return
@@ -668,6 +737,7 @@ proc ::archer::xmin::run {} {
 
     exercise_dialog $application {Display Center...}
     exercise_dialog $application {File Preferences...} Preferences
+    exercise_html_help $application
     exercise_dialog $application {Help {Archer Help...}} {Archer Help Browser}
     exercise_dialog $application {Help {About Plug-ins...}} {Plug-in Information}
     exercise_dialog $application {Help {About Archer...}} {About Archer}

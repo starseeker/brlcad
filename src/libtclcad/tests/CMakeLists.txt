@@ -12,6 +12,20 @@ if(BRLCAD_ENABLE_TCL)
   brlcad_add_test(NAME tclcad_test_itcl_version COMMAND tclcad_check_itcl)
   brlcad_add_test(NAME tclcad_test_multi_interp COMMAND tclcad_check_multi_interp)
 
+  if(TKLITEHTML_SOURCES)
+    set(widget_tests "${CMAKE_CURRENT_SOURCE_DIR}/../tklitehtml/tests")
+    set(widget_test_command ${TCL_TCLSH} "${widget_tests}/embedded.tcl"
+      $<TARGET_FILE:libtclcad> "${widget_tests}/all.tcl")
+    if(BRLCAD_X11_PROVIDER_RESOLVED STREQUAL "XMIN")
+      brlcad_add_gui_test(NAME tclcad_test_tklitehtml COMMAND ${widget_test_command})
+    else()
+      brlcad_add_test(NAME tclcad_test_tklitehtml COMMAND ${widget_test_command})
+    endif()
+    if(TEST tclcad_test_tklitehtml)
+      set_tests_properties(tclcad_test_tklitehtml PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+    endif()
+  endif()
+
   if(BRLCAD_ENABLE_TK AND
      BRLCAD_X11_PROVIDER_RESOLVED STREQUAL "XMIN" AND
      Xmin_RUN_EXECUTABLE)
