@@ -28,6 +28,8 @@
 #include <string.h>
 #include <ctype.h> /* for isdigit */
 #include <algorithm>
+#include <clocale>
+#include <exception>
 #include <string>
 #include <utility>
 #include <vector>
@@ -64,6 +66,8 @@
 #include "bu/path.h"
 #include "bu/str.h"
 #include "bu/vls.h"
+
+#include "html_text.h"
 #if !defined(USE_QT) && defined(HAVE_TK)
 #  include "tclcad/setup.h"
 #endif
@@ -72,9 +76,6 @@
  * about graphical and non-graphical, whatever the reasons. */
 #if defined(HAVE_TK) || defined(USE_QT)
 #  define MAN_GUI 1
-#endif
-#ifndef HAVE_WINDOWS_H
-#  define MAN_CMDLINE 1
 #endif
 
 /* Supported man sections */
@@ -503,27 +504,27 @@ section_sort_order(char section)
 
 
 static void
-man_file_info(char section, int gui, std::string &dir, std::string &ext)
+man_file_info(char section, bool html, std::string &dir, std::string &ext)
 {
     if (section == 'n') {
 	dir = "mann";
-	ext = gui ? "html" : "nged";
+	ext = html ? "html" : "nged";
     } else {
 	dir = std::string("man") + section;
-	ext = gui ? "html" : std::string(1, section);
+	ext = html ? "html" : std::string(1, section);
     }
 }
 
 
 static bool
-man_section_dir(struct bu_vls *mdir, const char *lang, char section, int gui)
+man_section_dir(struct bu_vls *mdir, const char *lang, char section, bool html)
 {
     const char *ddir = NULL;
     std::string dir;
     std::string ext;
 
-    man_file_info(section, gui, dir, ext);
-    ddir = gui ? bu_dir(NULL, 0, BU_DIR_DOC, "html", NULL) : bu_dir(NULL, 0, BU_DIR_MAN, NULL);
+    man_file_info(section, html, dir, ext);
+    ddir = html ? bu_dir(NULL, 0, BU_DIR_DOC, "html", NULL) : bu_dir(NULL, 0, BU_DIR_MAN, NULL);
 
     bu_vls_sprintf(mdir, "%s/%s/%s", ddir, lang, dir.c_str());
     if (bu_file_directory(bu_vls_cstr(mdir)))
@@ -535,7 +536,7 @@ man_section_dir(struct bu_vls *mdir, const char *lang, char section, int gui)
 
 
 static size_t
-collect_man_pages(std::vector<man_page> &pages, const char *lang, char wanted_section, int gui, int include_full_text)
+collect_man_pages(std::vector<man_page> &pages, const char *lang, char wanted_section, bool html, int include_full_text)
 {
     const char sections[] = BRLCAD_MAN_SECTIONS;
     size_t total = 0;
@@ -552,8 +553,8 @@ collect_man_pages(std::vector<man_page> &pages, const char *lang, char wanted_se
 	char **mfiles = NULL;
 	size_t mcnt = 0;
 
-	man_file_info(section, gui, dir, ext);
-	if (!man_section_dir(&mdir, lang, section, gui)) {
+	man_file_info(section, html, dir, ext);
+	if (!man_section_dir(&mdir, lang, section, html)) {
 	    bu_vls_free(&mdir);
 	    continue;
 	}
@@ -572,10 +573,10 @@ collect_man_pages(std::vector<man_page> &pages, const char *lang, char wanted_se
 		    mp.name = bu_vls_cstr(&mname);
 		    mp.section = section;
 		    mp.path = bu_vls_cstr(&mpath);
-		    mp.summary = summary_from_name_section(page_section_text(raw, "name", gui));
-		    mp.synopsis = page_section_text(raw, "synopsis", gui);
+		    mp.summary = summary_from_name_section(page_section_text(raw, "name", html));
+		    mp.synopsis = page_section_text(raw, "synopsis", html);
 		    if (include_full_text)
-			mp.text = page_plain_text(raw, gui);
+			mp.text = page_plain_text(raw, html);
 		    pages.push_back(mp);
 		    total++;
 		}
@@ -604,13 +605,7 @@ search_man_pages(const char *query, const char *lang, char section, int full_tex
     if (terms.empty())
 	return BRLCAD_ERROR;
 
-#ifdef MAN_CMDLINE
-    int gui_docs = 0;
-#else
-    int gui_docs = 1;
-#endif
-
-    collect_man_pages(pages, lang, section, gui_docs, full_text);
+    collect_man_pages(pages, lang, section, true, full_text);
     for (size_t i = 0; i < pages.size(); i++) {
 	std::vector<std::pair<int, std::string> > fields;
 	int score = -1;
@@ -665,38 +660,26 @@ search_man_pages(const char *query, const char *lang, char section, int full_tex
 }
 
 static char *
-find_man_file(const char *man_name, const char *lang, char section, int gui)
+find_man_file(const char *man_name, const char *lang, char section, bool html)
 {
-    const char *ddir;
+    if (!man_name || !*man_name)
+	return NULL;
+    std::string dir;
+    std::string ext;
+    man_file_info(section, html, dir, ext);
+    const char *root = html ? bu_dir(NULL, 0, BU_DIR_DOC, "html", NULL) :
+	bu_dir(NULL, 0, BU_DIR_MAN, NULL);
     char *ret = NULL;
-    struct bu_vls data_dir = BU_VLS_INIT_ZERO;
-    struct bu_vls file_ext = BU_VLS_INIT_ZERO;
-    struct bu_vls mfile = BU_VLS_INIT_ZERO;
-    if (gui) {
-	bu_vls_sprintf(&file_ext, "html");
-	ddir = bu_dir(NULL, 0, BU_DIR_DOC, "html", NULL);
-	bu_vls_sprintf(&data_dir, "%s", ddir);
+    struct bu_vls file = BU_VLS_INIT_ZERO;
+    bu_vls_sprintf(&file, "%s/%s/%s/%s.%s", root, lang, dir.c_str(), man_name, ext.c_str());
+    if (bu_file_exists(bu_vls_cstr(&file), NULL)) {
+	ret = bu_strdup(bu_vls_cstr(&file));
     } else {
-	if (section != 'n') {
-	    bu_vls_sprintf(&file_ext, "%c", section);
-	} else {
-	    bu_vls_sprintf(&file_ext, "nged");
-	}
-	ddir = bu_dir(NULL, 0, BU_DIR_MAN, NULL);
-	bu_vls_sprintf(&data_dir, "%s", ddir);
+	bu_vls_sprintf(&file, "%s/%s/%s.%s", root, dir.c_str(), man_name, ext.c_str());
+	if (bu_file_exists(bu_vls_cstr(&file), NULL))
+	    ret = bu_strdup(bu_vls_cstr(&file));
     }
-    bu_vls_sprintf(&mfile, "%s/%s/man%c/%s.%s", bu_vls_addr(&data_dir), lang, section, man_name, bu_vls_addr(&file_ext));
-    if (bu_file_exists(bu_vls_addr(&mfile), NULL)) {
-	ret = bu_strdup(bu_vls_addr(&mfile));
-    } else {
-	bu_vls_sprintf(&mfile, "%s/man%c/%s.%s", bu_vls_addr(&data_dir), section, man_name, bu_vls_addr(&file_ext));
-	if (bu_file_exists(bu_vls_addr(&mfile), NULL)) {
-	    ret = bu_strdup(bu_vls_addr(&mfile));
-	}
-    }
-    bu_vls_free(&data_dir);
-    bu_vls_free(&file_ext);
-    bu_vls_free(&mfile);
+    bu_vls_free(&file);
     return ret;
 }
 
@@ -1026,43 +1009,35 @@ qt_man_gui(const char *man_name, char man_section, const char *UNUSED(man_file))
 }
 #endif
 
-#ifndef HAVE_WINDOWS_H
-#  define APIENTRY
-#  define BRLMAN_MAIN main
-#else
-#  define BRLMAN_MAIN WinMain
-#endif
-
-/* main() */
-int APIENTRY
-BRLMAN_MAIN(
-#ifdef HAVE_WINDOWS_H
-    HINSTANCE hInstance,
-    HINSTANCE hPrevInstance,
-    LPSTR lpszCmdLine,
-    int nCmdShow
-#else
-    int argc,
-    const char **argv
-#endif
-    )
+static int
+man_text_width(struct bu_vls *msg, size_t argc, const char **argv, void *value)
 {
+    int count = bu_opt_int(msg, argc, argv, value);
+    if (count > 0 && *(int *)value <= 0) {
+	bu_vls_printf(msg, "Text width must be positive\n");
+	return -1;
+    }
+    return count;
+}
 
-#if !defined(MAN_CMDLINE) && !defined(MAN_GUI)
-    bu_exit(EXIT_FAILURE, "Error: man page display is not supported.");
-#endif
+
+int
+main(int argc, char **argv_input)
+{
+    std::vector<const char *> arguments(argv_input, argv_input + argc);
+    const char **argv = arguments.data();
+    std::setlocale(LC_CTYPE, "");
 
     int i = 0;
     int status = BRLCAD_ERROR;
     int uac = 0;
-#ifndef MAN_CMDLINE
-    int enable_gui = 1;
-#else
     int enable_gui = 0;
-#endif
     int disable_gui = 0;
     int print_help = 0;
     int search_mode = 0;
+    int dump = 0;
+    int pager = 0;
+    int width = 0;
     const char *short_search = NULL;
     const char *full_search = NULL;
     const char *man_cmd = NULL;
@@ -1072,16 +1047,7 @@ BRLMAN_MAIN(
     struct bu_vls search_query = BU_VLS_INIT_ZERO;
     struct bu_vls lang = BU_VLS_INIT_ZERO;
     struct bu_vls optparse_msg = BU_VLS_INIT_ZERO;
-    struct bu_opt_desc d[8];
-
-#ifdef HAVE_WINDOWS_H
-    const char **argv;
-    int argc;
-
-    /* Get our args from the c-runtime. Ignore lpszCmdLine. */
-    argc = __argc;
-    argv = (const char **)__argv;
-#endif
+    struct bu_opt_desc d[11];
 
     /* initialize progname for run-time resource finding */
     bu_setprogname(argv[0]);
@@ -1094,7 +1060,10 @@ BRLMAN_MAIN(
     BU_OPT(d[4], "S", "section",    "#", &bu_opt_man_section, &man_section, "Set section");
     BU_OPT(d[5], "k", "keyword",    "kw",          &bu_opt_str, &short_search, "Search names, synopses, and brief descriptions");
     BU_OPT(d[6], "K", "full-text",  "kw",          &bu_opt_str, &full_search,  "Search full manual page text");
-    BU_OPT_NULL(d[7]);
+    BU_OPT(d[7], "", "dump", "", NULL, &dump, "Write formatted HTML text to stdout without paging");
+    BU_OPT(d[8], "", "width", "columns", &man_text_width, &width, "Set text width (default: terminal width or 80)");
+    BU_OPT(d[9], "", "pager", "", NULL, &pager, "Use the built-in HTML terminal viewer");
+    BU_OPT_NULL(d[10]);
 
     /* Skip first arg */
     argv++; argc--;
@@ -1173,41 +1142,25 @@ BRLMAN_MAIN(
 	}
     }
 
-    if (enable_gui && disable_gui) {
-#if defined(MAN_GUI) && defined(MAN_CMDLINE)
-	bu_log("Warning - gui explicitly enabled *and* disabled? - platform supports both, enabling GUI.\n");
-	disable_gui = 0;
+    if (enable_gui && (disable_gui || dump || pager || width)) {
+	bu_exit(EXIT_FAILURE, "Error: GUI and text output options cannot be combined\n");
+    }
+    if (dump && pager) {
+	bu_exit(EXIT_FAILURE, "Error: --dump and --pager cannot be combined\n");
+    }
+    if (!man_name && !search_mode) {
+#ifdef MAN_GUI
+	if (!disable_gui && !dump && !pager && !width)
+	    enable_gui = 1;
 #endif
-#if !defined(MAN_GUI) && defined(MAN_CMDLINE)
-	bu_log("Warning - gui explicitly enabled *and* disabled? - platform only supports command line, disabling GUI.\n");
-#endif
-#if defined(MAN_GUI) && !defined(MAN_CMDLINE)
-	bu_log("Warning - gui explicitly enabled *and* disabled? - platform only supports GUI viewer, enabling GUI.\n");
-#endif
+	if (!enable_gui)
+	    bu_exit(EXIT_FAILURE, "Error: Please specify man page\n");
     }
 
-    /* If we're not graphical and we don't have a name or search at this point, we're done. */
-    if (!enable_gui && !man_name && !search_mode) {
-	bu_exit(EXIT_FAILURE, "Error: Please specify man page");
-    }
-
-    /* If we're not graphical, make sure we have a man command to use for page display. */
-    if (!enable_gui && !search_mode) {
-#ifndef MAN_CMDLINE
-	bu_exit(EXIT_FAILURE, "Error: Non-graphical man display is not supported.");
-#else
+#ifndef HAVE_WINDOWS_H
+    if (!enable_gui && !dump && !pager && !width && brlman::console_interactive())
 	man_cmd = bu_which("man");
-	if (!man_cmd) {
-	    if (disable_gui) {
-		bu_exit(EXIT_FAILURE, "Error: Graphical man display is disabled, but no man command is available.");
-	    } else {
-		/* Don't have any specific instructions - fall back on gui */
-		bu_log("Warning: Graphical mode was not specified, but no man command is available - enabling GUI.");
-		enable_gui = 1;
-	    }
-	}
 #endif
-    }
 
     /* If we don't have a language, check environment */
     if (!bu_vls_strlen(&lang)) {
@@ -1233,12 +1186,12 @@ BRLMAN_MAIN(
     /* Now we have a lang and name - find the file */
 
     if (man_section != '\0') {
-	man_file = find_man_file(man_name, bu_vls_addr(&lang), man_section, enable_gui);
+	man_file = find_man_file(man_name, bu_vls_addr(&lang), man_section, man_cmd ? 0 : 1);
     } else {
 	const char sections[] = BRLCAD_MAN_SECTIONS;
 	i = 0;
 	while(sections[i] != '\0') {
-	    man_file = find_man_file(man_name, bu_vls_addr(&lang), sections[i], enable_gui);
+	    man_file = find_man_file(man_name, bu_vls_addr(&lang), sections[i], man_cmd ? 0 : 1);
 	    if (man_file) {
 		man_section = sections[i];
 		break;
@@ -1248,22 +1201,47 @@ BRLMAN_MAIN(
     }
 
     if (!enable_gui) {
-#ifdef MAN_CMDLINE
-	if (!man_file) {
+#ifndef HAVE_WINDOWS_H
+	if (man_cmd && man_file) {
+	    execl(man_cmd, man_cmd, man_file, (char *)NULL);
+	    bu_log("Unable to run system man; using the built-in viewer\n");
+	}
+#endif
+	if (man_cmd) {
+	    bu_free((void *)man_file, "man file");
+	    man_file = NULL;
 	    if (man_section != '\0') {
-		bu_exit(EXIT_FAILURE, "No man page found for %s in section %c\n", man_name, man_section);
+		man_file = find_man_file(man_name, bu_vls_addr(&lang), man_section, true);
 	    } else {
-		bu_exit(EXIT_FAILURE, "No man page found for %s\n", man_name);
+		const char sections[] = BRLCAD_MAN_SECTIONS;
+		for (size_t si = 0; sections[si] && !man_file; si++)
+		    man_file = find_man_file(man_name, bu_vls_addr(&lang), sections[si], 1);
 	    }
 	}
-	/* Note - for reasons that are unclear, passing in man_cmd as the first
-	 * argument to execlp will *not* work... */
-	status = execlp("man", man_cmd, man_file, (char *)NULL);
+	if (!man_file) {
+	    if (man_section != '\0')
+		bu_exit(EXIT_FAILURE, "No HTML man page found for %s in section %c\n", man_name, man_section);
+	    bu_exit(EXIT_FAILURE, "No HTML man page found for %s\n", man_name);
+	}
+	std::string html;
+	if (!read_file_to_string(man_file, html))
+	    bu_exit(EXIT_FAILURE, "Unable to read HTML man page for %s\n", man_name);
+	try {
+	    brlman::html_document document(html);
+	    bool ok = dump || !brlman::console_interactive() ?
+		brlman::console_dump(document.format(width ? (size_t)width : brlman::default_width)) :
+		brlman::console_view(document, (size_t)width);
+	    if (!ok)
+		bu_log("Unable to display man page for %s\n", man_name);
+	    status = ok ? EXIT_SUCCESS : EXIT_FAILURE;
+	} catch (const std::exception &error) {
+	    bu_log("Unable to format man page: %s\n", error.what());
+	    status = EXIT_FAILURE;
+	}
+	bu_free((void *)man_file, "man file");
+	bu_vls_free(&lang);
+	bu_vls_free(&search_query);
 	return status;
-#else
-	/* Shouldn't get here - should be caught by above tests */
-	bu_exit(EXIT_FAILURE, "Error: Non-graphical man display is not supported.");
-#endif
     }
 
 #ifdef MAN_GUI

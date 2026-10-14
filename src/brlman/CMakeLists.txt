@@ -1,3 +1,7 @@
+brlcad_find_package(gumbo CONFIG REQUIRED)
+include(CheckCXXSymbolExists)
+check_cxx_symbol_exists(wcwidth "wchar.h" BRLMAN_HAVE_WCWIDTH)
+
 set(brlman_libs libbu ${IMM32_LIBRARY} ${COMCTL32_LIBRARY})
 
 # Tcl/Tk version of brlman GUI
@@ -22,10 +26,25 @@ if(BRLCAD_ENABLE_QT)
   endif(Qt6Widgets_FOUND)
 endif(BRLCAD_ENABLE_QT)
 
-# Building "GUI" doesn't matter except on Windows, but
-# on Windows brlman works only in graphical mode - might
-# as well behave "nicely" there.
-brlcad_addexec(brlman brlman.cpp "${brlman_libs}" GUI)
+# Console subsystem is required for shell invocation and redirected output.
+brlcad_addexec(brlman "brlman.cpp;html_text.cpp;console.cpp" "${brlman_libs};gumbo" "")
+target_include_directories(brlman PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../libtermio)
+if(BRLMAN_HAVE_WCWIDTH)
+  target_compile_definitions(brlman PRIVATE BRLMAN_HAVE_WCWIDTH)
+endif()
+
+brlcad_addexec(brlman_text_test "html_text_test.cpp;html_text.cpp" "gumbo;libbu" TEST)
+if(TARGET brlman_text_test)
+  if(BRLMAN_HAVE_WCWIDTH)
+    target_compile_definitions(brlman_text_test PRIVATE BRLMAN_HAVE_WCWIDTH)
+  endif()
+  brlcad_add_test(NAME brlman-html-text COMMAND brlman_text_test)
+endif()
+if(BRLCAD_EXTRADOCS)
+  brlcad_add_test(NAME brlman-console-output
+    COMMAND ${CMAKE_COMMAND} -DBRLMAN=$<TARGET_FILE:brlman>
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/console_test.cmake)
+endif()
 if(BRLCAD_ENABLE_QT)
   target_compile_definitions(brlman PRIVATE USE_QT)
 endif(BRLCAD_ENABLE_QT)
@@ -45,6 +64,11 @@ endif(TARGET TclIndexBld)
 cmakefiles(
   CMakeLists.txt
   brlman.cpp
+  html_text.h
+  html_text.cpp
+  console.cpp
+  html_text_test.cpp
+  console_test.cmake
   brlman.tcl
 )
 
