@@ -3752,6 +3752,10 @@ lod_restore_capacity_blocked_intermediate(BObolLodServicePrivate *p,
     }
 }
 
+static void
+lod_shared_owner_result_drained_unlocked(BObolLodServicePrivate *p,
+	const BObolLodResult &result);
+
 /* Validate and publish one mailbox value while the service mutex is held.
  * CAPACITY_BLOCKED leaves result intact so the caller can return it to the
  * bounded mailbox after dropping the service lock. */
@@ -3786,8 +3790,12 @@ lod_publish_intermediate_result_unlocked(BObolLodServicePrivate *p,
 	const BObolLodResultSlotMapKey slot =
 	    lod_result_slot_map_key(result);
 	const auto existing = p->resultSlots.find(slot);
-	if (existing != p->resultSlots.end()) {
-	    if (lod_result_supersedes(result, *existing->second)) {
+	    if (existing != p->resultSlots.end()) {
+		if (lod_result_supersedes(result, *existing->second)) {
+		    /* Replacing the queued final payload is equivalent to draining it
+		     * for shared-owner lifetime accounting. */
+		    lod_shared_owner_result_drained_unlocked(
+			p, *existing->second);
 		const SbString oldRequestKey = lod_request_active_key(
 		    existing->second->request);
 		const SbString newRequestKey = lod_request_active_key(
@@ -3929,6 +3937,25 @@ lod_shared_producer_retire_if_unowned_unlocked(
     (void)lod_shared_producer_erase_unlocked(p, producer);
 }
 
+static void
+lod_shared_owner_result_drained_unlocked(BObolLodServicePrivate *p,
+	const BObolLodResult &result)
+{
+    if (!p || !result.request.coalesceAssetProducer)
+	return;
+    const SbString key = lod_request_active_key(result.request);
+    auto producer = p->sharedProducers.find(key.getString());
+    if (producer == p->sharedProducers.end() ||
+	producer->second.state != BObolSharedProducerState::RESULT ||
+	result.generation != producer->second.producerGeneration)
+	return;
+    const auto lease = producer->second.leases.find(result.generation);
+    if (lease != producer->second.leases.end() &&
+	lease->second.deliveredPublication >= producer->second.publication)
+	producer->second.leases.erase(lease);
+    lod_shared_producer_retire_if_unowned_unlocked(p, producer);
+}
+
 static BObolSharedProducer *
 lod_shared_producer_for_task_unlocked(BObolLodServicePrivate *p,
 	uint64_t taskId)
@@ -4037,6 +4064,10 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 		    if (existing != p->resultSlots.end()) {
 			if (lod_result_supersedes(
 				completedResult, *existing->second)) {
+			    /* A newer occurrence-local presentation may overtake an
+			     * undrained shared-owner result in the same result slot. */
+			    lod_shared_owner_result_drained_unlocked(
+				p, *existing->second);
 			    const SbString oldRequestKey =
 				lod_request_active_key(
 				    existing->second->request);
@@ -7599,25 +7630,6 @@ lod_result_estimated_presentation_bytes(const BObolLodResult &result)
     counted = std::max(counted, static_cast<size_t>(
 	std::min<uint64_t>(result.counts.byteCount, SIZE_MAX)));
     return std::max(bytes, counted);
-}
-
-static void
-lod_shared_owner_result_drained_unlocked(BObolLodServicePrivate *p,
-	const BObolLodResult &result)
-{
-    if (!p || !result.request.coalesceAssetProducer)
-	return;
-    const SbString key = lod_request_active_key(result.request);
-    auto producer = p->sharedProducers.find(key.getString());
-    if (producer == p->sharedProducers.end() ||
-	producer->second.state != BObolSharedProducerState::RESULT ||
-	result.generation != producer->second.producerGeneration)
-	return;
-    const auto lease = producer->second.leases.find(result.generation);
-    if (lease != producer->second.leases.end() &&
-	lease->second.deliveredPublication >= producer->second.publication)
-	producer->second.leases.erase(lease);
-    lod_shared_producer_retire_if_unowned_unlocked(p, producer);
 }
 
 enum class BObolSharedReplayFilter : uint8_t {
