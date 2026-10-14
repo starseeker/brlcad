@@ -229,7 +229,7 @@ function(remote_sha1 SHA1_VAR BRANCH)
   endif()
   brlcad_repository_git_command(git_command)
   execute_process(
-    COMMAND "${CMAKE_COMMAND}" -E env GIT_TERMINAL_PROMPT=0 --
+    COMMAND "${CMAKE_COMMAND}" -E env GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=false SSH_ASKPASS=false --
       ${git_command} -c credential.helper= -c credential.interactive=false
       ls-remote "${_BRLCAD_BEXT_REPOSITORY}" "${BRANCH}"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
