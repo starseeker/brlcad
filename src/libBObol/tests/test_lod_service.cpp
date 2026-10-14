@@ -2228,6 +2228,58 @@ test_asset_producer_coalescing(void)
     return 0;
 }
 
+static int
+test_shared_owner_replaced_by_local_result(void)
+{
+    BObolLodService service;
+    ServiceTestContext context;
+    TaskData sharedData{&context, 1};
+    TaskData localData{&context, 2};
+    if (!service.start(1, FALSE)) {
+	printf("FAIL: shared-owner replacement service did not start\n");
+	return 1;
+    }
+
+    BObolLodTask shared;
+    shared.generation = service.beginGeneration();
+    shared.request = make_request("/shared-owner-replacement.bot");
+    shared.request.occurrenceKey =
+	"/assembly/shared-owner-replacement.bot";
+    shared.request.coalesceAssetProducer = TRUE;
+    shared.realize = ready_task;
+    shared.realizeData = &sharedData;
+    if (!service.submitIfNotActive(shared) || wait_for_settled(service, 1) ||
+	service.sharedProducerLeaseCountForDiagnostics() != 1) {
+	printf("FAIL: shared-owner replacement fixture did not retain owner\n");
+	service.stop();
+	return 1;
+    }
+
+    BObolLodTask local = shared;
+    local.request.coalesceAssetProducer = FALSE;
+    local.request.viewRevision++;
+    local.realizeData = &localData;
+    if (!service.submitIfNotActive(local) || wait_for_settled(service, 1)) {
+	printf("FAIL: occurrence-local replacement did not execute\n");
+	service.stop();
+	return 1;
+    }
+
+    std::vector<BObolLodResult> results;
+    if (service.sharedProducerLeaseCountForDiagnostics() != 0 ||
+	service.sharedProducerCountForDiagnostics() != 0 ||
+	service.drainResults(results) != 1 || results.size() != 1 ||
+	results[0].request.coalesceAssetProducer ||
+	results[0].counts.faceCount != 2) {
+	printf("FAIL: replaced shared-owner result retained a producer lease\n");
+	service.stop();
+	return 1;
+    }
+
+    service.stop();
+    return 0;
+}
+
 struct SharedProducerLeaseState {
     std::mutex mutex;
     std::condition_variable cv;
@@ -6239,6 +6291,8 @@ main(int argc, char **argv)
     if (runIsolated(test_pending_active_request_retarget))
 	return 1;
     if (runIsolated(test_asset_producer_coalescing))
+	return 1;
+    if (runIsolated(test_shared_owner_replaced_by_local_result))
 	return 1;
     if (runIsolated(test_shared_producer_two_generation_delivery))
 	return 1;

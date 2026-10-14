@@ -5688,6 +5688,19 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		request.submissionReason =
 		    BOBOL_LOD_SUBMISSION_ASSET_REPLACEMENT;
 	    }
+	    /* Shared-producer coalescing owns immutable asset growth, not the
+	     * renderer snapshot installed in one occurrence.  Another view may have
+	     * advanced the shared mesh far enough to satisfy this delivery while
+	     * this occurrence still holds geometry prepared at an older revision.
+	     * Let its worker rebuild that view-local presentation instead of joining
+	     * the completed asset producer and receiving an endless superseded
+	     * replay. */
+	    if (request.coalesceAssetProducer && activePayload &&
+		activeAssetMatches && activePayload->progressiveMesh &&
+		providerDeliveryCut >= 0 &&
+		mesh_lod_can_draw_request(activePayload->progressiveMesh,
+		    request, providerDeliveryCut))
+		request.coalesceAssetProducer = FALSE;
 	    if (getenv("BOBOL_LOD_TRACE_BUDGET"))
 		bu_log("BObol LoD provider admission object=%s occurrence=%s "
 		       "active=%d requested=%d key_match=%d budget=%zu\n",
