@@ -165,7 +165,7 @@ if {![info exists mged_default(status_bar)]} {
 }
 
 if {![info exists mged_default(faceplate)]} {
-    set mged_default(faceplate) 0
+    set mged_default(faceplate) 1
 }
 
 if {![info exists mged_default(orig_gui)]} {
