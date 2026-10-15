@@ -577,6 +577,14 @@ check_terminal_error_hud(QgView &view, SoBRLDatabaseSource *source)
 	!card->getHUDKit())
 	FAIL("terminal error card should preserve exact failure presentation");
 
+    const uint64_t unchanged_progress_revision =
+	features.presentationRevision();
+    int progress_changed = -1;
+    if (ged_view_lod_progress_sync_changed(&progress_changed, gedp,
+	    view_ctx) != BRLCAD_OK || progress_changed ||
+	features.presentationRevision() != unchanged_progress_revision)
+	FAIL("unchanged retained LoD HUD synchronization should be a no-op");
+
     int progressVisible = 0;
     if (!ged_view_lod_progress_visible_get(&progressVisible, view_ctx) ||
 	!progressVisible)
