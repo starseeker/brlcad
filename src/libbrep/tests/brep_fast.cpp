@@ -390,14 +390,14 @@ main(int argc, const char **argv)
 		triangle_normals + corner * 3 + 3);
 	    expected_commands.push_back(corner ? BV_VLIST_TRI_DRAW :
 		BV_VLIST_TRI_MOVE);
+	    const fastf_t *point = &serial.points[(size_t)indices[corner] * 3];
 	    expected_shaded_points.insert(expected_shaded_points.end(),
-		&serial.points[(size_t)indices[corner] * 3],
-		&serial.points[(size_t)indices[corner] * 3 + 3]);
+		point, point + 3);
 	}
 	expected_commands.push_back(BV_VLIST_TRI_END);
+	const fastf_t *first_point = &serial.points[(size_t)indices[0] * 3];
 	expected_shaded_points.insert(expected_shaded_points.end(),
-	    &serial.points[(size_t)indices[0] * 3],
-	    &serial.points[(size_t)indices[0] * 3 + 3]);
+	    first_point, first_point + 3);
     }
     bool shaded_matches_fast = shaded_ret == BRLCAD_OK &&
 	shaded.commands == expected_commands &&

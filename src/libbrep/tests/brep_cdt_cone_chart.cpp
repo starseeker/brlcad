@@ -197,7 +197,8 @@ exercise_cone(const ON_3dPoint &origin, ON_3dVector axis, double height,
 	    << cut_chart.failure() << std::endl;
 	return false;
     }
-    std::vector<point2d_t> cut_chart_points(cut_chart.points.size());
+    std::unique_ptr<point2d_t[]> cut_chart_points(
+	new point2d_t[cut_chart.points.size()]);
     for (size_t i = 0; i < cut_chart.points.size(); ++i)
 	V2SET(cut_chart_points[i], cut_chart.points[i].first,
 	    cut_chart.points[i].second);
@@ -217,8 +218,8 @@ exercise_cone(const ON_3dPoint &origin, ON_3dVector axis, double height,
 	&cut_faces, &cut_face_count, NULL, NULL, cut_outline.data(),
 	cut_outline.size(), NULL, NULL, 0, NULL, 0,
 	cut_constraints.empty() ? NULL : cut_constraints.data(),
-	cut_chart.constraints.size(), cut_chart_points.data(),
-	cut_chart_points.size(), &cut_report);
+	cut_chart.constraints.size(), cut_chart_points.get(),
+	cut_chart.points.size(), &cut_report);
     bu_free(cut_faces, "crossing cone seam fixture faces");
     if (cut_status != BRLCAD_OK || cut_face_count <= 0) {
 	std::cerr << "repaired cone seam closure did not triangulate: "

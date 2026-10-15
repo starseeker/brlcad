@@ -484,7 +484,8 @@ exercise_offset_full_cylinder_seam()
     }
     const auto opened_hole_triangulates = [](const cdt_face_chart &candidate,
 	    std::string &failure) {
-	std::vector<point2d_t> chart_points(candidate.points.size());
+	std::unique_ptr<point2d_t[]> chart_points(
+	    new point2d_t[candidate.points.size()]);
 	for (size_t i = 0; i < candidate.points.size(); ++i)
 	    V2SET(chart_points[i], candidate.points[i].first,
 		candidate.points[i].second);
@@ -497,7 +498,7 @@ exercise_offset_full_cylinder_seam()
 	};
 	const int status = bg_nested_poly_triangulate_strict(&faces,
 	    &face_count, NULL, NULL, outline.data(), outline.size(), NULL,
-	    NULL, 0, NULL, 0, NULL, 0, chart_points.data(), chart_points.size(),
+	    NULL, 0, NULL, 0, NULL, 0, chart_points.get(), candidate.points.size(),
 	    &report);
 	bu_free(faces, "opened cylinder seam hole triangles");
 	failure = report.message + std::string(" (status ") +
@@ -712,7 +713,8 @@ exercise_offset_full_cylinder_seam()
 	return false;
     }
 
-    std::vector<point2d_t> chart_points(chart.points.size());
+    std::unique_ptr<point2d_t[]> chart_points(
+	new point2d_t[chart.points.size()]);
     for (size_t i = 0; i < chart.points.size(); ++i)
 	V2SET(chart_points[i], chart.points[i].first, chart.points[i].second);
     std::vector<int> outline(chart.outer);
@@ -724,7 +726,7 @@ exercise_offset_full_cylinder_seam()
     };
     const int status = bg_nested_poly_triangulate_strict(&faces,
 	&face_count, NULL, NULL, outline.data(), outline.size(), NULL, NULL,
-	0, NULL, 0, NULL, 0, chart_points.data(), chart_points.size(), &report);
+	0, NULL, 0, NULL, 0, chart_points.get(), chart.points.size(), &report);
     bu_free(faces, "offset cylinder seam triangles");
     if (status != BRLCAD_OK || face_count <= 0) {
 	std::cerr << "offset cylinder seam triangulation failed: "
@@ -893,8 +895,8 @@ exercise_periodic_metric_chart()
 	    "outline: " << seam_hole_chart.failure() << std::endl;
 	return false;
     }
-    std::vector<point2d_t> seam_hole_chart_points(
-	seam_hole_chart.points.size());
+    std::unique_ptr<point2d_t[]> seam_hole_chart_points(
+	new point2d_t[seam_hole_chart.points.size()]);
     for (size_t i = 0; i < seam_hole_chart.points.size(); ++i)
 	V2SET(seam_hole_chart_points[i],
 	    seam_hole_chart.points[i].first,
@@ -909,8 +911,8 @@ exercise_periodic_metric_chart()
     const int seam_hole_status = bg_nested_poly_triangulate_strict(
 	&seam_hole_faces, &seam_hole_face_count, NULL, NULL,
 	seam_hole_outline.data(), seam_hole_outline.size(), NULL, NULL, 0,
-	NULL, 0, NULL, 0, seam_hole_chart_points.data(),
-	seam_hole_chart_points.size(), &seam_hole_report);
+	NULL, 0, NULL, 0, seam_hole_chart_points.get(),
+	seam_hole_chart.points.size(), &seam_hole_report);
     bu_free(seam_hole_faces, "periodic metric seam hole triangles");
     if (seam_hole_status != BRLCAD_OK || seam_hole_face_count <= 0) {
 	std::cerr << "opened periodic metric seam hole did not "
@@ -1010,7 +1012,8 @@ exercise_seamless_cylinder_lift()
 	}
     }
 
-    std::vector<point2d_t> chart_points(chart.points.size());
+    std::unique_ptr<point2d_t[]> chart_points(
+	new point2d_t[chart.points.size()]);
     for (size_t i = 0; i < chart.points.size(); ++i)
 	V2SET(chart_points[i], chart.points[i].first, chart.points[i].second);
     std::vector<int> outline(chart.outer);
@@ -1022,7 +1025,7 @@ exercise_seamless_cylinder_lift()
     };
     const int status = bg_nested_poly_triangulate_strict(&faces,
 	&face_count, NULL, NULL, outline.data(), outline.size(), NULL, NULL,
-	0, NULL, 0, NULL, 0, chart_points.data(), chart_points.size(), &report);
+	0, NULL, 0, NULL, 0, chart_points.get(), chart.points.size(), &report);
     bu_free(faces, "seamless cylinder lift triangles");
     if (status != BRLCAD_OK || face_count <= 0) {
 	std::cerr << "seamless cylinder lift triangulation failed: "
@@ -1102,7 +1105,8 @@ exercise_revolution_cut_lift()
 	}
     }
 
-    std::vector<point2d_t> chart_points(chart.points.size());
+    std::unique_ptr<point2d_t[]> chart_points(
+	new point2d_t[chart.points.size()]);
     for (size_t i = 0; i < chart.points.size(); ++i)
 	V2SET(chart_points[i], chart.points[i].first, chart.points[i].second);
     std::vector<int> outline(chart.outer);
@@ -1114,7 +1118,7 @@ exercise_revolution_cut_lift()
     };
     const int status = bg_nested_poly_triangulate_strict(&faces,
 	&face_count, NULL, NULL, outline.data(), outline.size(), NULL, NULL,
-	0, NULL, 0, NULL, 0, chart_points.data(), chart_points.size(), &report);
+	0, NULL, 0, NULL, 0, chart_points.get(), chart.points.size(), &report);
     bu_free(faces, "revolution cut lift triangles");
     if (status != BRLCAD_OK || face_count <= 0) {
 	std::cerr << "revolution cut lift did not triangulate: "
@@ -1212,7 +1216,8 @@ exercise_cylinder_nesting_repair()
 	return false;
     }
 
-    std::vector<point2d_t> chart_points(chart.points.size());
+    std::unique_ptr<point2d_t[]> chart_points(
+	new point2d_t[chart.points.size()]);
     for (size_t i = 0; i < chart.points.size(); ++i)
 	V2SET(chart_points[i], chart.points[i].first, chart.points[i].second);
     const int *hole_data[1] = {chart.holes[0].data()};
@@ -1224,8 +1229,8 @@ exercise_cylinder_nesting_repair()
     };
     const int status = bg_nested_poly_triangulate_strict(&faces,
 	&face_count, NULL, NULL, chart.outer.data(), chart.outer.size(),
-	hole_data, hole_counts, 1, NULL, 0, NULL, 0, chart_points.data(),
-	chart_points.size(), &report);
+	hole_data, hole_counts, 1, NULL, 0, NULL, 0, chart_points.get(),
+	chart.points.size(), &report);
     bu_free(faces, "cylinder nesting repair triangles");
     if (status != BRLCAD_OK || face_count <= 0) {
 	std::cerr << "repaired cylinder nesting did not triangulate: "
@@ -1352,7 +1357,8 @@ exercise_metric_component_partition()
 	return false;
     }
 
-    std::vector<point2d_t> chart_points(chart.points.size());
+    std::unique_ptr<point2d_t[]> chart_points(
+	new point2d_t[chart.points.size()]);
     for (size_t i = 0; i < chart.points.size(); ++i)
 	V2SET(chart_points[i], chart.points[i].first, chart.points[i].second);
     for (const cdt_face_chart &component : components) {
@@ -1378,7 +1384,7 @@ exercise_metric_component_partition()
 	    hole_data.size(), component.steiner.empty() ? NULL :
 	    component.steiner.data(), component.steiner.size(),
 	    NULL, 0,
-	    chart_points.data(), chart_points.size(), &report);
+	    chart_points.get(), chart.points.size(), &report);
 	bu_free(faces, "metric component partition triangles");
 	if (status != BRLCAD_OK || face_count <= 0) {
 	    std::cerr << "metric chart component did not triangulate: "
@@ -1469,7 +1475,8 @@ exercise_toleranced_endpoint_sample_repair()
 	return false;
     }
 
-    std::vector<point2d_t> chart_points(chart.points.size());
+    std::unique_ptr<point2d_t[]> chart_points(
+	new point2d_t[chart.points.size()]);
     for (size_t i = 0; i < chart.points.size(); ++i)
 	V2SET(chart_points[i], chart.points[i].first, chart.points[i].second);
     std::vector<int> outline(chart.outer);
@@ -1481,7 +1488,7 @@ exercise_toleranced_endpoint_sample_repair()
     };
     const int status = bg_nested_poly_triangulate_strict(&faces,
 	&face_count, NULL, NULL, outline.data(), outline.size(), NULL, NULL,
-	0, NULL, 0, NULL, 0, chart_points.data(), chart_points.size(), &report);
+	0, NULL, 0, NULL, 0, chart_points.get(), chart.points.size(), &report);
     bu_free(faces, "endpoint sample repair triangles");
     if (status != BRLCAD_OK || face_count != 3) {
 	std::cerr << "repaired endpoint sample did not triangulate: "
