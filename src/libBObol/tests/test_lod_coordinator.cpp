@@ -6618,6 +6618,17 @@ test_quality_policy(void)
 	std::fprintf(stderr, "FAIL: interactive entry render-cost budget\n");
 	return 1;
     }
+    if (Policy::stagedInteractiveEntryProgressiveCeiling(
+	    19, 3, 10000000, 57816830.0L, 20.0f) != 18 ||
+	Policy::stagedInteractiveEntryProgressiveCeiling(
+	    19, 3, 10000000, 1000000.0L, 20.0f) != 15 ||
+	Policy::stagedInteractiveEntryProgressiveCeiling(
+	    19, 19, 1000000, 100000000.0L, 20.0f) != 19 ||
+	Policy::stagedInteractiveEntryProgressiveCeiling(
+	    -1, -1, 1000000, 100000000.0L, 20.0f) != -1) {
+	std::fprintf(stderr, "FAIL: staged interactive entry ceiling\n");
+	return 1;
+    }
     const float error =
 	Policy::interactivePixelError(66666668ULL, 60.0f);
     if (error < 1.99f || error > 2.01f ||
