@@ -373,7 +373,7 @@ struct ged_obol_deferred_realization_item {
     ged_obol_deferred_realization_item(void) :
 	source(NULL), snapshotSourceDatabase(NULL),
 	primaryScene(FALSE), allowWireFallback(FALSE),
-	streamBatchQuantum(256),
+	streamBatchQuantum(128),
 	streamMergeMicrosecondsPerItem(0.0),
 	streamMergedOccurrences(0), streamMergeMicroseconds(0)
     {
@@ -9708,12 +9708,12 @@ ged_obol_publish_deferred_realization(
  * when a caller explicitly removes the total item cap: workers can fill a
  * queue while the GUI is busy, and draining that entire backlog in one paint
  * turns "progressive" work into a multi-second input stall. */
-/* One provider is normally one large retained root.  A fixed 64-item quantum
- * made the 16 ms host timer, rather than actual work, the throughput limit;
- * a fixed 512-item quantum occasionally exceeded an input frame when later
- * merges had become more expensive.  Start each stream at 256 and adapt
- * between 64 and this ceiling from its measured atomic merge time. */
-static const size_t GED_OBOL_STREAM_BATCH_QUANTUM_MAX = 2048;
+/* One provider is normally one large retained root.  Small fixed quanta made
+ * the host timer, rather than actual work, the throughput limit, while large
+ * adaptive quanta let scene-map growth monopolize an event-loop turn.  Start
+ * at 128 records and adapt between 16 and 512; cheap streams still consume
+ * successive batches until their pump-wide time allowance expires. */
+static const size_t GED_OBOL_STREAM_BATCH_QUANTUM_MAX = 512;
 static const double GED_OBOL_TIMING_STALL_MILLISECONDS = 25.0;
 
 /*

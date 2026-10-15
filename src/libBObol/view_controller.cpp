@@ -3909,6 +3909,14 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		   static_cast<long long>(retainedAllocationElapsed));
     }
     SbBool boundedScenePass = FALSE;
+    /* The time allowance belongs to the complete controller pump, not to
+     * each database source.  Giving every source a fresh allowance allowed
+     * a multi-source scene to hold the owner thread for tens of milliseconds
+     * even though every individual action honored its local deadline. */
+    const uint64_t submissionPassTimeLimitMicroseconds =
+	this->d->forceTerminalLodRefinement ? 0 :
+	(this->d->lodInteractionSession.active() ? 3000 : 8000);
+    const int64_t submissionPassStarted = bu_gettime();
     if (!this->d->lodInteractionSession.active() &&
 	this->d->lodRetainedViewContinuity.visibilityCensusDeferred()) {
 	/* The motion fast path may have advanced the source cursor to its end
@@ -3921,6 +3929,12 @@ BObolViewController::submitLodRequests(BObolLodService *service,
     }
     for (size_t i = this->d->lodSubmissionSourceIndex;
 	 i < sources.size();) {
+	if (submissionPassTimeLimitMicroseconds) {
+	    const int64_t elapsed = bu_gettime() - submissionPassStarted;
+	    if (elapsed >= 0 && static_cast<uint64_t>(elapsed) >=
+		    submissionPassTimeLimitMicroseconds)
+		break;
+	}
 	const size_t capacity = service->availableResultTaskCapacity();
 	if (!capacity) {
 	    break;
@@ -4203,10 +4217,8 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		this->d->lodRetainedAdmissionQualityEvidence.
 		    maximumNormalizedError());
 	action.setSubmissionTaskLimit(capacity);
-	/* Planning and request construction execute on the host thread.  Keep
-	 * their per-pump slice below a frame even when a nominal 2k window has
-	 * become expensive due to large retained maps.  Deterministic/offline
-	 * callers may explicitly remove this interactive deadline. */
+	/* Planning and request construction execute on the host thread.  Give
+	 * this source only the remainder of the pump-wide allowance. */
 	/* The Qt host deliberately spaces ordinary progressive pumps by one
 	 * 16 ms event-loop interval.  Applying the same 3 ms planning slice to a
 	 * quiet many-leaf view leaves the worker pool empty for most of that
@@ -4220,10 +4232,17 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	 * result reservations, scene budget, and presentation deadline remain the
 	 * independent authorities.  Offline callers continue to request an
 	 * unbounded deterministic slice explicitly. */
-	const uint64_t submissionTimeLimitMicroseconds =
-	    this->d->forceTerminalLodRefinement ? 0 :
-	    (this->d->lodInteractionSession.active() ? 3000 : 8000);
-	action.setSubmissionTimeLimit(submissionTimeLimitMicroseconds);
+	uint64_t sourceSubmissionTimeLimitMicroseconds = 0;
+	if (submissionPassTimeLimitMicroseconds) {
+	    const int64_t elapsed = bu_gettime() - submissionPassStarted;
+	    const uint64_t consumed = elapsed > 0 ?
+		static_cast<uint64_t>(elapsed) : 0;
+	    sourceSubmissionTimeLimitMicroseconds =
+		consumed < submissionPassTimeLimitMicroseconds ?
+		submissionPassTimeLimitMicroseconds - consumed : 1;
+	}
+	action.setSubmissionTimeLimit(
+	    sourceSubmissionTimeLimitMicroseconds);
 	/* Never make a complete many-leaf projection/sort one GUI operation.
 	 * Initial mesh coverage has no user-visible ordering contract; consume
 	 * compact-index order in bounded waves and project each occurrence
@@ -4552,7 +4571,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		action.hasDeferredCompactEntries() ? 1 : 0,
 		action.getCompactEntryNext(),
 		static_cast<unsigned long long>(
-		    submissionTimeLimitMicroseconds),
+		    sourceSubmissionTimeLimitMicroseconds),
 		this->d->forceTerminalLodRefinement ? 1 : 0);
 	if (action.getOneOverBudgetRefinementUsed())
 	    this->d->lodDiscretePopulationTrialPermit.consume();
