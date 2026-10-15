@@ -81,6 +81,14 @@ extern struct bu_structparse mged_vparse[];
 
 void free_all_resources(struct mged_display *dlp);
 
+static int
+retired_color_scheme_key(const char *key)
+{
+    return key && (BU_STR_EQUAL(key, "predictor") ||
+	BU_STR_EQUAL(key, "predictor_a") ||
+	BU_STR_EQUAL(key, "predictor_ia"));
+}
+
 static void
 copy_faceplate_record(int uflag, struct mged_display *src, struct mged_display *dst, int is_adc)
 {
@@ -332,6 +340,8 @@ f_rset (ClientData clientData, Tcl_Interp *interpreter, int argc, const char *ar
 	    break;
 	case 'c':
 	case 'C':
+	    if (argc > 2 && retired_color_scheme_key(argv[2]))
+		break;
 	    mged_vls_struct_parse(s, &vls, "Color Schemes", color_scheme_vparse,
 			  (const char *)color_scheme, argc-1, argv+1);
 	    break;
