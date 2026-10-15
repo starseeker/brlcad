@@ -2012,11 +2012,17 @@ struct BObolLodCoordinator {
 	    std::min(activeMaximum, maximumCut) : activeMaximum;
 	const int affordable = state->cadProgressiveCutWithinRenderCost(
 	    lodInteractiveEntryRenderCostBudget, boundedMaximum);
-	/* A progressive scene cannot render below its minimum population.  If
-	 * even that population exceeds the prediction, cut zero is still the
-	 * least expensive immediate presentation and completed-frame feedback
-	 * will replace the optimistic throughput estimate. */
-	lodInteractiveEntryProgressiveCeiling = std::max(0, affordable);
+	/* A global hierarchy ordinal is a much blunter instrument than the
+	 * aggregate cost model.  Stage a large entry correction according to the
+	 * measured frame miss instead of translating the complete budget deficit
+	 * into an abrupt all-object quality collapse.  Subsequent exact frames may
+	 * continue ratcheting toward the affordable cut. */
+	lodInteractiveEntryProgressiveCeiling =
+	    BObolLodQualityPolicy::stagedInteractiveEntryProgressiveCeiling(
+		boundedMaximum, std::max(0, affordable),
+		state->activeRenderCost(),
+		lodInteractiveCalibratedRenderCostPerSecond,
+		lodInteractiveTargetFps);
     }
     /* A late reusable frame may demonstrate headroom after the ordinary
      * bounded probe series has ended.  Remember the exact camera/policy and

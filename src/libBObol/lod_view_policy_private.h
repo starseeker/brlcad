@@ -1382,6 +1382,32 @@ public:
 	return std::max<size_t>(1, static_cast<size_t>(budget));
     }
 
+    static int stagedInteractiveEntryProgressiveCeiling(
+	int activeMaximum, int affordableCeiling, size_t activeRenderCost,
+	long double calibratedRenderCostPerSecond, float targetFps)
+    {
+	if (activeMaximum < 0 || affordableCeiling < 0)
+	    return affordableCeiling;
+	if (!activeRenderCost ||
+	    !std::isfinite(calibratedRenderCostPerSecond) ||
+	    calibratedRenderCostPerSecond <= 0.0L ||
+	    !std::isfinite(targetFps) || targetFps <= 0.0f)
+	    return std::min(activeMaximum, affordableCeiling);
+
+	const long double predictedNanoseconds =
+	    static_cast<long double>(activeRenderCost) * 1000000000.0L /
+	    calibratedRenderCostPerSecond;
+	const uint64_t boundedNanoseconds = predictedNanoseconds >=
+	    static_cast<long double>(UINT64_MAX) ? UINT64_MAX :
+	    std::max<uint64_t>(1, static_cast<uint64_t>(predictedNanoseconds));
+	const float predictedError = interactivePixelError(
+	    boundedNanoseconds, targetFps);
+	const int stagedCeiling = progressiveCeiling(
+	    activeMaximum, predictedError, activeMaximum);
+	return stagedCeiling < 0 ? activeMaximum :
+	    std::max(affordableCeiling, stagedCeiling);
+    }
+
     /*
      * One pixel is the fast convergence contract, not necessarily the best
      * quiet terminal image.  A small scene can otherwise stop with visibly
