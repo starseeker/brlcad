@@ -544,6 +544,7 @@ struct BObolViewController::Impl : BObolLodCoordinator {
 	this->foregroundActivityDepth = 0;
 	this->foregroundActivityActiveSerial = 0;
 	this->foregroundActivityStartedMicroseconds = 0;
+	this->lastEventLoopHeartbeatMicroseconds = 0;
 	if (changed) {
 	    bobol_identity_advance(this->hostWorkRevision);
 	    if (frameRetired)
@@ -606,6 +607,8 @@ struct BObolViewController::Impl : BObolLodCoordinator {
     uint64_t foregroundActivitySerial = 1;
     uint64_t foregroundActivityActiveSerial = 0;
     int64_t foregroundActivityStartedMicroseconds = 0;
+    uint64_t eventLoopHeartbeatSerial = 1;
+    int64_t lastEventLoopHeartbeatMicroseconds = 0;
     BObolRenderRequestState renderRequest;
     SbBool renderClaimed = FALSE;
     SbBool capacitySampleClaimed = FALSE;

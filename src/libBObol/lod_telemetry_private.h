@@ -174,6 +174,10 @@ public:
     void recordForegroundCommand(const BObolViewController &controller,
 	uint64_t serial, SbBool complete, uint64_t durationMicroseconds,
 	SbBool deferredProgressiveWork) noexcept;
+    void recordEventLoopHeartbeat(uint64_t serial,
+	uint64_t expectedIntervalMicroseconds,
+	uint64_t actualIntervalMicroseconds, uint64_t latenessMicroseconds,
+	SbBool foregroundActivity) noexcept;
     void recordPublication(
 	const BObolLodPublicationTelemetryRecord &publication) noexcept;
     void recordGap(void) noexcept;
