@@ -160,6 +160,7 @@ validate_sanitized_log(const std::string &log,
     bool publication = false;
     bool commandStart = false;
     bool commandComplete = false;
+    bool heartbeat = false;
     bool nonFiniteCameraValid = false;
     bool signalsConsistent = true;
     std::istringstream lines(log);
@@ -321,6 +322,12 @@ validate_sanitized_log(const std::string &log,
 		commandComplete = commandComplete ||
 		    (serial == 1 && phase == "complete" &&
 		     data.at("deferred_progressive_work").is_boolean());
+	    } else if (kind == "event_loop_heartbeat") {
+		heartbeat = data.at("heartbeat_serial").get<uint64_t>() == 1 &&
+		    data.at("expected_interval_us").get<uint64_t>() == 100000 &&
+		    data.at("actual_interval_us").get<uint64_t>() == 0 &&
+		    data.at("late_by_us").get<uint64_t>() == 0 &&
+		    data.at("foreground_activity").is_boolean();
 	    }
 	}
     } catch (const std::exception &error) {
@@ -335,14 +342,15 @@ validate_sanitized_log(const std::string &log,
     if (!schema || !transition || !source || !object || !hiddenObject ||
 	!initialInventoryReset || !incrementalInventoryDelta || !secondObject ||
 	!publication || !commandStart || !commandComplete ||
-	!signalsConsistent) {
+	!heartbeat || !signalsConsistent) {
 	std::fprintf(stderr,
 	    "FAIL: telemetry facts schema=%d transition=%d source=%d object=%d "
 	    "hidden=%d reset=%d delta=%d second=%d publication=%d "
-	    "command_start=%d command_complete=%d signals=%d\n",
+	    "command_start=%d command_complete=%d heartbeat=%d signals=%d\n",
 	    schema, transition, source, object, hiddenObject,
 	    initialInventoryReset, incrementalInventoryDelta, secondObject,
-	    publication, commandStart, commandComplete, signalsConsistent);
+	    publication, commandStart, commandComplete, heartbeat,
+	    signalsConsistent);
 	return 1;
     }
     return 0;
@@ -454,6 +462,7 @@ main(int argc, char **argv)
 	    controller.setLodControlTransitionTracing(TRUE, 16);
 	    controller.beginForegroundActivity();
 	    controller.endForegroundActivity();
+	    controller.noteEventLoopHeartbeat(100000);
 	    controller.setViewportSize(320, 240);
 	    if (source->setCompactInstanceVisibilityOverrideForPathMatch(
 		    occurrencePath.c_str(), BOBOL_COMPACT_PATH_EXACT, FALSE) != 1) {
