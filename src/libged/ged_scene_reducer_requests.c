@@ -199,13 +199,21 @@ _ged_draw_observers_prune(struct ged_drawable *gdp)
 }
 
 
-static void
-_ged_scene_observers_dispatch(struct ged *gedp,
-			      const struct ged_scene_delta *delta)
+struct ged_scene_observer_dispatch_context {
+    struct ged *gedp;
+    const struct ged_scene_delta *delta;
+};
+
+static int
+_ged_scene_observers_dispatch_on_owner(void *data)
 {
+    struct ged_scene_observer_dispatch_context *context =
+	(struct ged_scene_observer_dispatch_context *)data;
+    struct ged *gedp = context->gedp;
+    const struct ged_scene_delta *delta = context->delta;
     struct ged_drawable *gdp = _ged_draw_gdp(gedp);
     if (!gdp || !gdp->gd_draw_observers_init || !delta)
-	return;
+	return 0;
 
     size_t len = BU_PTBL_LEN(&gdp->gd_draw_observers);
     gdp->gd_draw_observer_dispatch_depth++;
@@ -219,6 +227,16 @@ _ged_scene_observers_dispatch(struct ged *gedp,
     }
     gdp->gd_draw_observer_dispatch_depth--;
     _ged_draw_observers_prune(gdp);
+    return 1;
+}
+
+static void
+_ged_scene_observers_dispatch(struct ged *gedp,
+			      const struct ged_scene_delta *delta)
+{
+    struct ged_scene_observer_dispatch_context context = {gedp, delta};
+    (void)ged_exec_owner_invoke(gedp,
+	_ged_scene_observers_dispatch_on_owner, &context);
 }
 
 

@@ -655,6 +655,7 @@ mged_setup(struct mged_state *s)
     mged_global_db_ctx.s = s;
 
     s->gedp = ged_create();
+    (void)ged_exec_owner_dispatch_set(s->gedp, mged_ged_owner_dispatch, s);
     s->gedp->ged_output_handler = mged_output_handler;
     s->gedp->ged_refresh_clientdata = (void *)s;
     s->gedp->ged_refresh_handler = mged_refresh_handler;

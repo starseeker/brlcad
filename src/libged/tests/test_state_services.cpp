@@ -6190,6 +6190,30 @@ struct recording_scene_backend {
     std::vector<std::string> selected_paths;
 };
 
+struct owner_dispatch_probe {
+    size_t calls = 0;
+};
+
+static int
+recording_owner_dispatch(void *client_data, ged_exec_owner_task_t task,
+	void *task_data)
+{
+    owner_dispatch_probe *probe =
+	static_cast<owner_dispatch_probe *>(client_data);
+    if (!probe || !task)
+	return 0;
+    probe->calls++;
+    return task(task_data);
+}
+
+static int
+recording_owner_task(void *task_data)
+{
+    int *calls = static_cast<int *>(task_data);
+    (*calls)++;
+    return 37;
+}
+
 static int
 recording_scene_backend_apply(
     struct ged *UNUSED(gedp),
@@ -6326,11 +6350,26 @@ test_draw(struct ged *gedp)
 	ged_scene_result_destroy(scene_result);
 	return 1;
     }
+    owner_dispatch_probe dispatch_probe;
+    CHECK(ged_exec_owner_dispatch_set(backend_gedp,
+	recording_owner_dispatch, &dispatch_probe) == 1,
+	"headless GED owner must accept an owner-thread dispatcher");
+    int owner_task_calls = 0;
+    CHECK(ged_exec_owner_invoke(backend_gedp, recording_owner_task,
+	&owner_task_calls) == 37 && owner_task_calls == 1 &&
+	dispatch_probe.calls == 1,
+	"owner-thread invocation must preserve task result and execution");
+    CHECK(!ged_exec_active(backend_gedp) &&
+	!ged_exec_cancel_requested(backend_gedp) &&
+	!ged_exec_cancel_request(backend_gedp),
+	"idle GED cancellation state must remain inactive");
     recording_scene_backend recording_backend;
     recording_scene_backend_install(backend_gedp, &recording_backend);
 
     CHECK(recording_backend.snapshot_calls == 1,
 	"backend attachment must consume exactly one semantic snapshot");
+    CHECK(dispatch_probe.calls == 2,
+	"backend snapshot must run through the owner-thread dispatcher");
     CHECK(ged_selection_batch_begin(backend_gedp) == 1,
 	"selection batch begin must succeed on a headless GED owner");
     CHECK(ged_selection_select_path(backend_gedp, NULL,
@@ -6451,6 +6490,8 @@ test_draw(struct ged *gedp)
 	recording_backend.kinds[6] == GED_SCENE_REDUCER_DRAW &&
 	recording_backend.kinds[7] == GED_SCENE_REDUCER_CLEAR,
 	"clear must reach the backend once after semantic retirement");
+    CHECK(dispatch_probe.calls > recording_backend.apply_calls,
+	"backend selection, policy, and scene operations must share the owner dispatcher");
 
     recording_scene_backend replacement_backend;
     recording_scene_backend_install(backend_gedp, &replacement_backend);
@@ -6459,6 +6500,7 @@ test_draw(struct ged *gedp)
     CHECK(replacement_backend.snapshot_calls == 1,
 	"backend replacement must give the new adapter one semantic snapshot");
     ged_scene_backend_set_private(backend_gedp, NULL, NULL);
+    (void)ged_exec_owner_dispatch_set(backend_gedp, NULL, NULL);
     CHECK(replacement_backend.detach_calls == 1,
 	"explicit backend detach must release the active adapter exactly once");
     CHECK(replacement_backend.snapshot_calls == 1,

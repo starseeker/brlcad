@@ -502,6 +502,8 @@ int mged_request_command_interrupt(struct mged_state *s);
 int mged_command_interrupted(struct mged_state *s);
 void mged_run_on_gui_thread(struct mged_state *s, mged_gui_callback_t callback,
 	void *data);
+int mged_ged_owner_dispatch(void *client_data, ged_exec_owner_task_t task,
+	void *task_data);
 
 /* columns.c */
 void vls_col_item(struct bu_vls *str, const char *cp);
