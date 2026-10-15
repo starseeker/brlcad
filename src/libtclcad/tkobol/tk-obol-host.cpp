@@ -178,7 +178,7 @@ public:
 	interp(new_interp), owner_thread(Tcl_GetCurrentThread()), software(use_software),
 	controller(NULL), tkwin(NULL), container(NULL), photo(NULL), opened(false),
 	closing(false), toplevel(false), visible(false), event_queued(false),
-	progressive_timer(NULL),
+	progressive_timer(NULL), heartbeat_timer(NULL),
 	input_dispatch(NULL),
 	input_dispatch_data(NULL), last_motion_x(0), last_motion_y(0),
 	last_motion_valid(false), width(1), height(1)
@@ -342,6 +342,7 @@ public:
 	this->opened = true;
 	this->visible = !is_toplevel || desc->visible != 0;
 	this->closing = false;
+	this->schedule_heartbeat_timer();
 	return this->visible ? this->request("Tk endpoint open") : 1;
     }
 
@@ -356,6 +357,10 @@ public:
 	if (this->progressive_timer) {
 	    Tcl_DeleteTimerHandler(this->progressive_timer);
 	    this->progressive_timer = NULL;
+	}
+	if (this->heartbeat_timer) {
+	    Tcl_DeleteTimerHandler(this->heartbeat_timer);
+	    this->heartbeat_timer = NULL;
 	}
 	this->teardown_request_notifier();
 	this->clear_input_bindings();
@@ -498,6 +503,25 @@ public:
 	    this->controller->isRenderRequested())
 	    this->schedule_progressive_timer();
 	}
+
+    void schedule_heartbeat_timer(void)
+    {
+	if (this->heartbeat_timer || !this->opened || this->closing ||
+	    !this->controller)
+	    return;
+	this->heartbeat_timer = Tcl_CreateTimerHandler(
+	    heartbeat_interval_milliseconds, heartbeat_timer_proc, this);
+    }
+
+    void dispatch_heartbeat_timer(void)
+    {
+	this->heartbeat_timer = NULL;
+	if (!this->opened || this->closing || !this->controller)
+	    return;
+	this->controller->noteEventLoopHeartbeat(
+	    heartbeat_interval_milliseconds * 1000ULL);
+	this->schedule_heartbeat_timer();
+    }
 
     bool setup_request_notifier(void)
     {
@@ -1152,6 +1176,13 @@ input_usage:
 	    host->dispatch_progressive_timer();
 	}
 
+    static void heartbeat_timer_proc(ClientData data)
+    {
+	TkObolEndpointHost *host = static_cast<TkObolEndpointHost *>(data);
+	if (host)
+	    host->dispatch_heartbeat_timer();
+	}
+
 #ifdef TKOBOL_X11
     static void request_pipe_handler(ClientData data, int UNUSED(mask))
     {
@@ -1185,6 +1216,7 @@ input_usage:
     bool visible;
     std::atomic<bool> event_queued;
 	Tcl_TimerToken progressive_timer;
+	Tcl_TimerToken heartbeat_timer;
 	BObolInputEventHandler input_dispatch;
     void *input_dispatch_data;
     int last_motion_x;
@@ -1192,6 +1224,7 @@ input_usage:
     bool last_motion_valid;
     unsigned int width;
     unsigned int height;
+    static constexpr int heartbeat_interval_milliseconds = 100;
 #ifdef TKOBOL_X11
     int request_pipe_read;
     int request_pipe_write;

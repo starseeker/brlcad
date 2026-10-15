@@ -1220,6 +1220,8 @@ public:
     void beginForegroundActivity(void);
     void endForegroundActivity(void);
     SbBool hasForegroundActivity(void) const;
+    /** Record one owner-thread event-loop heartbeat for diagnostics. */
+    void noteEventLoopHeartbeat(uint64_t expectedIntervalMicroseconds);
     /** Publish a semantic edge after an application mutates the compact
      * inventory or visibility journal of an attached database source.  The
      * controller coalesces repeated notifications until its bounded planner
