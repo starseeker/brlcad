@@ -1562,3 +1562,32 @@ BObolViewController::hasForegroundActivity(void) const
     std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
     return this->d->foregroundActivityDepth ? TRUE : FALSE;
 }
+
+void
+BObolViewController::noteEventLoopHeartbeat(
+    uint64_t expectedIntervalMicroseconds)
+{
+    if (!this->d->lodTelemetry)
+	return;
+    const int64_t now = bu_gettime();
+    uint64_t serial = 0;
+    uint64_t actualIntervalMicroseconds = 0;
+    SbBool foregroundActivity = FALSE;
+    {
+	std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+	serial = bobol_nonzero_identity_take(
+	    this->d->eventLoopHeartbeatSerial);
+	if (this->d->lastEventLoopHeartbeatMicroseconds > 0 &&
+	    now >= this->d->lastEventLoopHeartbeatMicroseconds)
+	    actualIntervalMicroseconds = static_cast<uint64_t>(
+		now - this->d->lastEventLoopHeartbeatMicroseconds);
+	this->d->lastEventLoopHeartbeatMicroseconds = now;
+	foregroundActivity = this->d->foregroundActivityDepth ? TRUE : FALSE;
+    }
+    const uint64_t latenessMicroseconds =
+	actualIntervalMicroseconds > expectedIntervalMicroseconds ?
+	actualIntervalMicroseconds - expectedIntervalMicroseconds : 0;
+    this->d->lodTelemetry->recordEventLoopHeartbeat(serial,
+	expectedIntervalMicroseconds, actualIntervalMicroseconds,
+	latenessMicroseconds, foregroundActivity);
+}

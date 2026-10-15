@@ -1583,6 +1583,21 @@ public:
 	    data.take());
     }
 
+    void recordEventLoopHeartbeat(uint64_t serial,
+	uint64_t expectedIntervalMicroseconds,
+	uint64_t actualIntervalMicroseconds, uint64_t latenessMicroseconds,
+	bool foregroundActivity)
+    {
+	TelemetryJsonObject data;
+	data.integer("heartbeat_serial", serial);
+	data.integer("expected_interval_us", expectedIntervalMicroseconds);
+	data.integer("actual_interval_us", actualIntervalMicroseconds);
+	data.integer("late_by_us", latenessMicroseconds);
+	data.boolean("foreground_activity", foregroundActivity);
+	this->sink->write(this->controllerId, "event_loop_heartbeat",
+	    data.take());
+    }
+
     void recordPublication(
 	const BObolLodPublicationTelemetryRecord &publication)
     {
@@ -1965,6 +1980,23 @@ BObolLodTelemetry::recordForegroundCommand(
 	    this->impl->recordForegroundCommand(controller, serial,
 		complete != FALSE, durationMicroseconds,
 		deferredProgressiveWork != FALSE);
+    } catch (...) {
+	if (this->impl)
+	    this->impl->recordGap();
+    }
+}
+
+void
+BObolLodTelemetry::recordEventLoopHeartbeat(uint64_t serial,
+    uint64_t expectedIntervalMicroseconds,
+    uint64_t actualIntervalMicroseconds, uint64_t latenessMicroseconds,
+    SbBool foregroundActivity) noexcept
+{
+    try {
+	if (this->impl)
+	    this->impl->recordEventLoopHeartbeat(serial,
+		expectedIntervalMicroseconds, actualIntervalMicroseconds,
+		latenessMicroseconds, foregroundActivity != FALSE);
     } catch (...) {
 	if (this->impl)
 	    this->impl->recordGap();
