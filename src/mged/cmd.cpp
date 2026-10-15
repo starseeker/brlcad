@@ -561,6 +561,25 @@ mged_search_ged_exec(ClientData cd, Tcl_Interp *interp, int argc, const char **a
 	return TCL_ERROR;
     return (ret == BRLCAD_OK) ? TCL_OK : TCL_ERROR;
 }
+int
+mged_ged_draw_async(struct mged_state *s, int argc, const char *argv[])
+{
+    if (!mged_variables || mged_variables->mv_autosize)
+	return mged_ged_exec_async(s, argc, argv);
+
+    const char **draw_argv = (const char **)bu_calloc(argc + 2,
+	sizeof(const char *), "MGED draw arguments");
+    draw_argv[0] = argv[0];
+    draw_argv[1] = "-R";
+    for (int i = 1; i < argc; i++)
+	draw_argv[i + 1] = argv[i];
+
+    int ret = mged_ged_exec_async(s, argc + 1, draw_argv);
+    bu_free(draw_argv, "MGED draw arguments");
+    return ret;
+}
+
+
 
 
 /* Create (or re-create) the secondary Tcl interpreter used exclusively for
@@ -2909,46 +2928,15 @@ cmd_blast(ClientData clientData, Tcl_Interp *UNUSED(interpreter), int argc, cons
     if (s->gedp == GED_NULL)
 	return TCL_OK;
 
-    ret = run_ged_async(s, [&]() -> int { return ged_exec(s->gedp, argc, argv); });
+    ret = mged_ged_draw_async(s, argc, argv);
     if (ret)
 	return TCL_ERROR;
 
-    /* update and resize the views */
-    struct mged_display *save_m_dmp = s->mged_curr_display;
-    struct cmd_list *save_cmd_list = curr_cmd_list;
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
-	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
-	int non_empty = 0; /* start out empty */
-
-	mged_current_display_set(s, m_dmp);
-
-	if (s->mged_curr_display->display_tie) {
-	    curr_cmd_list = s->mged_curr_display->display_tie;
-	} else {
-	    curr_cmd_list = &head_cmd_list;
-	}
-
-	ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
-
-	non_empty = ged_scene_has_paths(s->gedp,
-	    ged_view_active_ctx(s->gedp), GED_SCENE_DRAW_DEFAULT);
-
-	if (mged_variables->mv_autosize && non_empty) {
-	    struct view_ring *vrp;
-	    const char *av[1] = {"autoview"};
-	    ged_exec_autoview(s->gedp, 1, (const char **)av);
-
-	    (void)mged_svbase(s);
-
-	    for (BU_LIST_FOR(vrp, view_ring, &view_state->vs_headView.l)) {
-		vrp->vr_scale = bv_scale_get(mged_view_state_view(view_state));
-	    }
-	}
-    }
-
-    mged_current_display_set(s, save_m_dmp);
-    curr_cmd_list = save_cmd_list;
-    ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
+    mged_display_repaint_request(s->mged_curr_display,
+	MGED_REPAINT_INTERACTION);
+    if (mged_variables && mged_variables->mv_autosize)
+	mged_draw_autoview_state_sync(s);
 
     return TCL_OK;
 }

@@ -265,4 +265,22 @@ if [ ! -s "$TICK_BASE_OUT" ] || [ ! -s "$TICK_OUT" ] || \
     exit 1
 fi
 
+AUTOSIZE_LOG="${WORKDIR}/mged_obol_autosize.log"
+rm -f "$AUTOSIZE_LOG"
+printf 'dm open --host headless --renderer sw\ndm size 512 512\nset autosize 0\nsize 1234\nZ\ndraw -A region_id -1\nputs OBOL_DRAW_ATTRIBUTE\nwho\nputs OBOL_DRAW_AUTOSIZE_OFF\nsize\nZ\nsize 2345\nB --eager-leaf-expansion all.g\nputs OBOL_BLAST_AUTOSIZE_OFF\nsize\nquit\n' \
+    | "$MGED" -c -a nu -r "$DB" > "$AUTOSIZE_LOG" 2>&1
+
+draw_size=`sed -n '/^OBOL_DRAW_AUTOSIZE_OFF$/{n;p;}' "$AUTOSIZE_LOG"`
+blast_size=`sed -n '/^OBOL_BLAST_AUTOSIZE_OFF$/{n;p;}' "$AUTOSIZE_LOG"`
+attribute_draw=`sed -n '/^OBOL_DRAW_ATTRIBUTE$/{n;p;}' "$AUTOSIZE_LOG"`
+if [ "$attribute_draw" != "all.g" ]; then
+    echo "MGED draw lost legacy attribute-selection compatibility" 1>&2
+    cat "$AUTOSIZE_LOG" 1>&2
+    exit 1
+fi
+if [ "$draw_size" != "1234" ] || [ "$blast_size" != "2345" ]; then
+    echo "MGED draw commands ignored the disabled autosize policy" 1>&2
+    cat "$AUTOSIZE_LOG" 1>&2
+    exit 1
+fi
 exit 0

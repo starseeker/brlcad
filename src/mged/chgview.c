@@ -453,185 +453,65 @@ edit_com(struct mged_state *s,
 	 int argc,
 	 const char *argv[])
 {
-    struct mged_display *save_m_dmp;
-    struct cmd_list *save_cmd_list;
     int ret;
-    int initial_blank_screen = 1;
-
-    int flag_A_attr = 0;
-    int flag_R_noresize = 0;
-    int flag_o_nonunique = 1;
-
-    size_t i;
-    int last_opt = 0;
-    struct bu_vls vls = BU_VLS_INIT_ZERO;
+    int initial_blank_screen;
+    int no_autoview = 0;
 
     CHECK_DBI_NULL;
 
     initial_blank_screen = ged_scene_has_paths(s->gedp,
 	ged_view_active_ctx(s->gedp), GED_SCENE_DRAW_DEFAULT) ? 0 : 1;
 
-    /* check args for "-A" (attributes) and "-o" and "-R" */
-    bu_vls_strcpy(&vls, argv[0]);
-
-    for (i = 1; i < (size_t)argc; i++) {
-	char *ptr_A = NULL;
-	char *ptr_o = NULL;
-	char *ptr_R = NULL;
-	const char *c;
-
-	if (*argv[i] != '-') {
+    for (int i = 1; i < argc && argv[i] && argv[i][0] == '-'; i++) {
+	if (BU_STR_EQUAL(argv[i], "--"))
 	    break;
-	}
-
-	if ((ptr_A = strchr(argv[i], 'A'))) {
-	    flag_A_attr = 1;
-	}
-
-	if ((ptr_o = strchr(argv[i], 'o'))) {
-	    flag_o_nonunique = 2;
-	}
-
-	if ((ptr_R = strchr(argv[i], 'R'))) {
-	    flag_R_noresize = 1;
-	}
-
-	last_opt = i;
-
-	if (!ptr_A && !ptr_o && !ptr_R) {
-	    bu_vls_putc(&vls, ' ');
-	    bu_vls_strcat(&vls, argv[i]);
-	    continue;
-	}
-
-	if (strlen(argv[i]) == (size_t)(1 + (ptr_A != NULL) + (ptr_o != NULL) + (ptr_R != NULL))) {
-	    /* argv[i] is just a "-A" or "-o" or "-R" */
-	    continue;
-	}
-
-	/* copy args other than "-A" or "-o" or "-R" */
-	bu_vls_putc(&vls, ' ');
-	c = argv[i];
-
-	while (*c != '\0') {
-	    if (*c != 'A' && *c != 'o' && *c != 'R') {
-		bu_vls_putc(&vls, *c);
-	    }
-
-	    c++;
+	if (BU_STR_EQUAL(argv[i], "--no-autoview") ||
+	    (argv[i][1] != '-' && strchr(argv[i] + 1, 'R'))) {
+	    no_autoview = 1;
+	    break;
 	}
     }
 
-    if (flag_A_attr) {
-	/* args are attribute name/value pairs */
-	struct bu_attribute_value_set avs;
-	int max_count = 0;
-	int remaining_args = 0;
-	int new_argc = 0;
-	char **new_argv = NULL;
-	struct bu_ptbl *tbl;
-
-	remaining_args = argc - last_opt - 1;
-
-	if (remaining_args < 2 || remaining_args % 2) {
-	    bu_log("Error: must have even number of arguments (name/value pairs)\n");
-	    bu_vls_free(&vls);
-	    return TCL_ERROR;
-	}
-
-	bu_avs_init(&avs, (argc - last_opt) / 2, "edit_com avs");
-	i = 1;
-
-	while (i < (size_t)argc) {
-	    if (*argv[i] == '-') {
-		i++;
-		continue;
-	    }
-
-	    /* this is a name/value pair */
-	    if (flag_o_nonunique == 2) {
-		bu_avs_add_nonunique(&avs, argv[i], argv[i + 1]);
-	    } else {
-		bu_avs_add(&avs, argv[i], argv[i + 1]);
-	    }
-
-	    i += 2;
-	}
-
-	tbl = db_lookup_by_attr(s->dbip, RT_DIR_REGION | RT_DIR_SOLID | RT_DIR_COMB, &avs, flag_o_nonunique);
-	bu_avs_free(&avs);
-
-	if (!tbl) {
-	    bu_log("Error: db_lookup_by_attr() failed!!\n");
-	    bu_vls_free(&vls);
-	    return TCL_ERROR;
-	}
-
-	if (BU_PTBL_LEN(tbl) < 1) {
-	    /* nothing matched, just return */
-	    bu_vls_free(&vls);
-	    return TCL_OK;
-	}
-
-	for (i = 0; i < BU_PTBL_LEN(tbl); i++) {
-	    struct directory *dp;
-
-	    dp = (struct directory *)BU_PTBL_GET(tbl, i);
-	    bu_vls_putc(&vls, ' ');
-	    bu_vls_strcat(&vls, dp->d_namep);
-	}
-
-	max_count = BU_PTBL_LEN(tbl) + last_opt + 1;
-	bu_ptbl_free(tbl);
-	bu_free((char *)tbl, "edit_com ptbl");
-	new_argv = (char **)bu_calloc(max_count + 1, sizeof(char *), "edit_com new_argv");
-	new_argc = bu_argv_from_string(new_argv, max_count, bu_vls_addr(&vls));
-
-	ret = mged_ged_exec_async(s, new_argc, (const char **)new_argv);
-
-	if (ret & BRLCAD_ERROR) {
-	    bu_log("ERROR: %s\n", bu_vls_addr(s->gedp->ged_result_str));
-	    bu_vls_free(&vls);
-	    bu_free((char *)new_argv, "edit_com new_argv");
-	    return ret;
-	} else if (ret & GED_HELP) {
-	    bu_log("%s\n", bu_vls_addr(s->gedp->ged_result_str));
-	    bu_vls_free(&vls);
-	    bu_free((char *)new_argv, "edit_com new_argv");
-	    return ret;
-	}
-
-	bu_vls_free(&vls);
-	bu_free((char *)new_argv, "edit_com new_argv");
-    } else {
-	bu_vls_free(&vls);
-
-	ret = mged_ged_exec_async(s, argc, (const char **)argv);
-
-	if (ret == BRLCAD_ERROR) {
-	    bu_log("ERROR: %s\n", bu_vls_addr(s->gedp->ged_result_str));
-	    return TCL_ERROR;
-	} else if (ret == GED_HELP) {
-	    bu_log("%s\n", bu_vls_addr(s->gedp->ged_result_str));
-	    return TCL_OK;
-	}
+    ret = mged_ged_draw_async(s, argc, argv);
+    if (ret == BRLCAD_ERROR) {
+	bu_log("ERROR: %s\n", bu_vls_addr(s->gedp->ged_result_str));
+	return TCL_ERROR;
+    } else if (ret == GED_HELP) {
+	bu_log("%s\n", bu_vls_addr(s->gedp->ged_result_str));
+	return TCL_OK;
     }
 
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
     mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
-    if (flag_R_noresize) {
-	/* we're done */
-	return TCL_OK;
-    }
+    if (mged_variables && mged_variables->mv_autosize &&
+	initial_blank_screen && !no_autoview)
+	mged_draw_autoview_state_sync(s);
 
-    /* update and resize the views */
+    return TCL_OK;
+}
+
+
+void
+mged_draw_autoview_state_sync(struct mged_state *s)
+{
+    struct mged_display *save_m_dmp;
+    struct cmd_list *save_cmd_list;
+    struct ged_view_context *draw_view;
+    int independent;
 
     save_m_dmp = s->mged_curr_display;
     save_cmd_list = curr_cmd_list;
+    draw_view = ged_view_active_ctx(s->gedp);
+    independent = draw_view && ged_view_context_is_independent(draw_view);
     for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
 	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
 	int non_empty = 0; /* start out empty */
+	struct ged_view_context *display_view = m_dmp->display_view_state->vs_gvp;
+
+	if ((independent && display_view != draw_view) ||
+	    (!independent && ged_view_context_is_independent(display_view)))
+	    continue;
 
 	mged_current_display_set(s, m_dmp);
 
@@ -646,14 +526,8 @@ edit_com(struct mged_state *s,
 	non_empty = ged_scene_has_paths(s->gedp,
 	    ged_view_active_ctx(s->gedp), GED_SCENE_DRAW_DEFAULT);
 
-	/* If we went from blank screen to non-blank, resize */
-	if (mged_variables->mv_autosize && initial_blank_screen && non_empty) {
+	if (non_empty) {
 	    struct view_ring *vrp;
-	    char *av[2];
-
-	    av[0] = "autoview";
-	    av[1] = (char *)0;
-	    ged_exec_autoview(s->gedp, 1, (const char **)av);
 
 	    (void)mged_svbase(s);
 
@@ -667,8 +541,6 @@ edit_com(struct mged_state *s,
     mged_current_display_set(s, save_m_dmp);
     curr_cmd_list = save_cmd_list;
     ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
-
-    return TCL_OK;
 }
 
 int
