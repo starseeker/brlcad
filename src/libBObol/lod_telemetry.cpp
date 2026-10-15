@@ -46,6 +46,9 @@
 namespace {
 
 static constexpr int bobol_lod_telemetry_schema_version = 1;
+static constexpr size_t bobol_lod_telemetry_buffer_bytes = 1024u * 1024u;
+static constexpr std::chrono::milliseconds
+    bobol_lod_telemetry_flush_interval(250);
 static const char *bobol_lod_telemetry_file_environment =
     "BOBOL_LOD_TELEMETRY_FILE";
 static const char *bobol_lod_telemetry_sanitize_environment =
@@ -1213,6 +1216,8 @@ public:
 		path.c_str());
 	    return;
 	}
+	(void)std::setvbuf(this->file, this->fileBuffer.data(), _IOFBF,
+	    this->fileBuffer.size());
 	TelemetryJsonObject schema;
 	schema.integer("version", bobol_lod_telemetry_schema_version);
 	schema.text("format", "jsonl");
@@ -1285,8 +1290,17 @@ public:
 	    record.raw("data", data);
 	    std::string line = record.take();
 	    line.push_back('\n');
-	    if (std::fwrite(line.data(), 1, line.size(), this->file) !=
-		line.size() || std::fflush(this->file) != 0) {
+	    const bool writeFailed =
+		std::fwrite(line.data(), 1, line.size(), this->file) !=
+		line.size();
+	    const auto now = std::chrono::steady_clock::now();
+	    const bool flushDue =
+		now - this->lastFlush >= bobol_lod_telemetry_flush_interval;
+	    const bool flushFailed = !writeFailed && flushDue &&
+		std::fflush(this->file) != 0;
+	    if (flushDue && !flushFailed)
+		this->lastFlush = now;
+	    if (writeFailed || flushFailed) {
 		this->failed.store(true, std::memory_order_relaxed);
 		bu_log("BObol LoD telemetry output failed; logging disabled\n");
 	    }
@@ -1298,10 +1312,12 @@ public:
 private:
     std::string pathValue;
     FILE *file = NULL;
+    std::array<char, bobol_lod_telemetry_buffer_bytes> fileBuffer;
     bool sanitizedValue = false;
     std::atomic_bool failed {false};
     std::mutex mutex;
     std::chrono::steady_clock::time_point started;
+    std::chrono::steady_clock::time_point lastFlush = started;
     uint64_t nextSequence = 1;
     uint64_t nextController = 1;
     size_t activeControllers = 0;
