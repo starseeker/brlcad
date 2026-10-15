@@ -194,6 +194,8 @@ validate_sanitized_log(const std::string &log,
 			 "refinement_cooldown_remaining_us").get<uint64_t>() > 0))
 		    signalsConsistent = false;
 		transition = data.at("transition_serial").get<uint64_t>() > 0 &&
+		    data.contains("duration_us") &&
+		    data.at("duration_us").is_number_unsigned() &&
 		    after.at("control").contains("facts") &&
 		    after.at("control").contains("owner_name") &&
 		    after.at("progress").at("display").contains("class_name") &&

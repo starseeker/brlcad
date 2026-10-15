@@ -1516,7 +1516,8 @@ public:
     }
 
     void recordTransition(const BObolViewController &controller,
-	const BObolLodControlTransitionRecord &transition)
+	const BObolLodControlTransitionRecord &transition,
+	uint64_t durationMicroseconds)
     {
 	if (!this->started) {
 	    TelemetryJsonObject start;
@@ -1529,6 +1530,7 @@ public:
 
 	TelemetryJsonObject data;
 	data.integer("transition_serial", ++this->transitionSerial);
+	data.integer("duration_us", durationMicroseconds);
 	data.text("event",
 	    bobol_lod_control_transition_event_name(transition.event));
 	data.raw("before", telemetry_state(transition.before,
@@ -1908,11 +1910,13 @@ BObolLodTelemetry::~BObolLodTelemetry(void) = default;
 
 void
 BObolLodTelemetry::recordTransition(const BObolViewController &controller,
-    const BObolLodControlTransitionRecord &transition) noexcept
+    const BObolLodControlTransitionRecord &transition,
+    uint64_t durationMicroseconds) noexcept
 {
     try {
 	if (this->impl)
-	    this->impl->recordTransition(controller, transition);
+	    this->impl->recordTransition(controller, transition,
+		durationMicroseconds);
     } catch (...) {
 	if (this->impl)
 	    this->impl->recordGap();

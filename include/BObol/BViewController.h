@@ -1668,7 +1668,8 @@ private:
     void discardLodControlTransition(void) noexcept;
     void recordLodControlTransition(BObolLodControlTransitionEvent event,
 	const BObolLodControlTraceState &before,
-	const BObolLodControlTraceState &after, SbBool force = FALSE);
+	const BObolLodControlTraceState &after, SbBool force = FALSE,
+	uint64_t durationMicroseconds = 0);
     void syncRenderManager(void);
     void prepareViewportRegionPublication(const SbViewportRegion &region,
 	const char *reason, PreparedViewportPublication &publication);
