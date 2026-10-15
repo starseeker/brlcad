@@ -22,6 +22,92 @@
 #include "./ged_scene_backend_private.h"
 #include "./ged_scene_backend_obol_private.h"
 
+struct ged_scene_backend_apply_context {
+    struct ged *gedp;
+    const struct ged_scene_reducer_request *transaction;
+    const struct ged_scene_reducer_result *result;
+};
+
+struct ged_scene_backend_snapshot_context {
+    struct ged *gedp;
+};
+
+struct ged_scene_backend_selection_context {
+    struct ged *gedp;
+    const char *const *added_paths;
+    size_t added_count;
+    const char *const *removed_paths;
+    size_t removed_count;
+    const char *const *selected_paths;
+    size_t selected_count;
+};
+
+struct ged_scene_backend_view_policy_context {
+    struct ged *gedp;
+    struct ged_view_context *view;
+};
+
+static int
+ged_scene_backend_apply_on_owner(void *data)
+{
+    struct ged_scene_backend_apply_context *context =
+	(struct ged_scene_backend_apply_context *)data;
+    Ged_Internal *state = context->gedp->i->i;
+    return state->scene_backend_ops ?
+	(state->scene_backend_ops->apply ?
+	    state->scene_backend_ops->apply(context->gedp,
+		context->transaction, context->result,
+		state->scene_backend_data) : 0) :
+	ged_scene_backend_obol_apply_private(context->gedp,
+	    context->transaction, context->result);
+}
+
+static int
+ged_scene_backend_snapshot_on_owner(void *data)
+{
+    struct ged_scene_backend_snapshot_context *context =
+	(struct ged_scene_backend_snapshot_context *)data;
+    Ged_Internal *state = context->gedp->i->i;
+    return state->scene_backend_ops ?
+	(state->scene_backend_ops->snapshot ?
+	    state->scene_backend_ops->snapshot(context->gedp,
+		state->scene_backend_data) : 0) :
+	ged_scene_backend_obol_snapshot_private(context->gedp);
+}
+
+static int
+ged_scene_backend_selection_on_owner(void *data)
+{
+    struct ged_scene_backend_selection_context *context =
+	(struct ged_scene_backend_selection_context *)data;
+    Ged_Internal *state = context->gedp->i->i;
+    return state->scene_backend_ops ?
+	(state->scene_backend_ops->selection ?
+	    state->scene_backend_ops->selection(context->gedp,
+		context->added_paths, context->added_count,
+		context->removed_paths, context->removed_count,
+		context->selected_paths, context->selected_count,
+		state->scene_backend_data) : 0) :
+	ged_scene_backend_obol_selection_private(context->gedp,
+	    context->added_paths, context->added_count,
+	    context->removed_paths, context->removed_count,
+	    context->selected_paths, context->selected_count);
+}
+
+static int
+ged_scene_backend_view_policy_on_owner(void *data)
+{
+    struct ged_scene_backend_view_policy_context *context =
+	(struct ged_scene_backend_view_policy_context *)data;
+    Ged_Internal *state = context->gedp->i->i;
+    return state->scene_backend_ops ?
+	(state->scene_backend_ops->view_policy ?
+	    state->scene_backend_ops->view_policy(context->gedp, context->view,
+		state->scene_backend_data) : 0) :
+	ged_scene_backend_obol_view_policy_private(context->gedp,
+	    context->view);
+}
+
 extern "C" int
 ged_scene_backend_apply_private(
     struct ged *gedp,
@@ -34,12 +120,11 @@ ged_scene_backend_apply_private(
     if (!state || state->scene_backend_transition)
 	return 0;
 
-    const int changed = state->scene_backend_ops ?
-	(state->scene_backend_ops->apply ?
-	    state->scene_backend_ops->apply(gedp, transaction, result,
-		state->scene_backend_data) : 0) :
-	ged_scene_backend_obol_apply_private(gedp, transaction, result);
-    return changed;
+    struct ged_scene_backend_apply_context context = {
+	gedp, transaction, result
+    };
+    return ged_exec_owner_invoke(gedp, ged_scene_backend_apply_on_owner,
+	&context);
 }
 
 
@@ -52,12 +137,9 @@ ged_scene_backend_snapshot_private(struct ged *gedp)
     if (state->scene_backend_transition)
 	return 0;
 
-    const int changed = state->scene_backend_ops ?
-	(state->scene_backend_ops->snapshot ?
-	    state->scene_backend_ops->snapshot(gedp,
-		state->scene_backend_data) : 0) :
-	ged_scene_backend_obol_snapshot_private(gedp);
-    return changed;
+    struct ged_scene_backend_snapshot_context context = {gedp};
+    return ged_exec_owner_invoke(gedp, ged_scene_backend_snapshot_on_owner,
+	&context);
 }
 
 
@@ -74,15 +156,12 @@ ged_scene_backend_selection_private(
     if (state->scene_backend_transition)
 	return 0;
 
-    const int changed = state->scene_backend_ops ?
-	(state->scene_backend_ops->selection ?
-	    state->scene_backend_ops->selection(gedp, added_paths,
-		added_count, removed_paths, removed_count, selected_paths,
-		selected_count, state->scene_backend_data) : 0) :
-	ged_scene_backend_obol_selection_private(gedp, added_paths,
-	    added_count, removed_paths, removed_count, selected_paths,
-	    selected_count);
-    return changed;
+    struct ged_scene_backend_selection_context context = {
+	gedp, added_paths, added_count, removed_paths, removed_count,
+	selected_paths, selected_count
+    };
+    return ged_exec_owner_invoke(gedp, ged_scene_backend_selection_on_owner,
+	&context);
 }
 
 
@@ -96,12 +175,9 @@ ged_scene_backend_view_policy_private(
     if (state->scene_backend_transition)
 	return 0;
 
-    const int changed = state->scene_backend_ops ?
-	(state->scene_backend_ops->view_policy ?
-	    state->scene_backend_ops->view_policy(gedp, view,
-		state->scene_backend_data) : 0) :
-	ged_scene_backend_obol_view_policy_private(gedp, view);
-    return changed;
+    struct ged_scene_backend_view_policy_context context = {gedp, view};
+    return ged_exec_owner_invoke(gedp,
+	ged_scene_backend_view_policy_on_owner, &context);
 }
 
 
