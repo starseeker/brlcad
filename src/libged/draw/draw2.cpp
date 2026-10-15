@@ -196,11 +196,6 @@ draw_expand_legacy_attr_args(struct ged *gedp, int argc, const char *argv[],
     if (remaining_args < 2 || remaining_args % 2)
 	return 0;
 
-    for (int i = first_arg; i < argc; i++) {
-	if (!argv[i] || argv[i][0] == '-')
-	    return 0;
-    }
-
     int all_look_like_paths = 1;
     for (int i = first_arg; i < argc; i++) {
 	if (!draw_token_looks_like_db_path(gedp, argv[i])) {
