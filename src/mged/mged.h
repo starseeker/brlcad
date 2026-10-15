@@ -496,6 +496,8 @@ void mged_start_log_drain_timer(struct mged_state *s);
 void mged_stop_log_drain_timer(struct mged_state *s);
 void mged_output_cleanup(void);
 int mged_ged_exec_async(struct mged_state *s, int argc, const char *argv[]);
+int mged_ged_draw_async(struct mged_state *s, int argc, const char *argv[]);
+void mged_draw_autoview_state_sync(struct mged_state *s);
 int mged_request_command_interrupt(struct mged_state *s);
 int mged_command_interrupted(struct mged_state *s);
 void mged_run_on_gui_thread(struct mged_state *s, mged_gui_callback_t callback,
