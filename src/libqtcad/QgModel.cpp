@@ -45,8 +45,13 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <thread>
 #include <QAction>
+#include <QCoreApplication>
+#include <QEventLoop>
 #include <QFileInfo>
+#include <QMetaObject>
+#include <QThread>
 #include <QVector>
 
 #include "bu/env.h"
@@ -76,6 +81,23 @@ struct QgModelDrawObserverAccess {
 			     const struct ged_scene_delta *delta,
 			     void *client_data);
 };
+
+static int
+qgmodel_ged_owner_dispatch(void *client_data, ged_exec_owner_task_t task,
+	void *task_data)
+{
+	QgModel *model = static_cast<QgModel *>(client_data);
+	if (!model || !task)
+		return BRLCAD_ERROR;
+	if (QThread::currentThread() == model->thread())
+		return task(task_data);
+
+	int ret = BRLCAD_ERROR;
+	bool invoked = QMetaObject::invokeMethod(model, [&]() {
+		ret = task(task_data);
+	}, Qt::BlockingQueuedConnection);
+	return invoked ? ret : BRLCAD_ERROR;
+}
 
 static void
 qgmodel_append_unique_path(std::vector<std::string> &paths, const char *path)
@@ -400,6 +422,8 @@ QgModel::QgModel(QObject *p, const char *npath)
 	// The session is the sole owner of the GED context for this model.
 	m_session = new QgSession(this);
 	struct ged *gedp = m_session->ged();
+	if (QCoreApplication::instance())
+		ged_exec_owner_dispatch_set(gedp, qgmodel_ged_owner_dispatch, this);
 
 	// Set up the root item
 	rootItem = new QgItem(0, this);
@@ -433,6 +457,8 @@ QgModel::QgModel(QObject *p, const char *npath)
 
 QgModel::~QgModel()
 {
+	if (m_session && m_session->ged())
+		ged_exec_owner_dispatch_set(m_session->ged(), nullptr, nullptr);
 	if (m_session && m_session->ged() && draw_observer_token) {
 		ged_scene_observer_remove(m_session->ged(),
 			draw_observer_token);
@@ -2544,6 +2570,11 @@ int
 QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 {
 	struct ged *gedp = m_session->ged();
+	if (command_running) {
+		if (msg)
+			bu_vls_sprintf(msg, "A GED command is already running\n");
+		return BRLCAD_ERROR;
+	}
 	model_dbip = gedp->dbip;
 	uint64_t draw_rev_before = ged_scene_revision(gedp);
 	uint64_t draw_event_count_before = draw_observer_event_count;
@@ -2571,7 +2602,22 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 
 	draw_observer_defer_depth++;
 	event_observer_defer_depth++;
-	int ret = ged_exec(gedp, argc, argv);
+	command_running = true;
+	int ret = BRLCAD_ERROR;
+	if (ged_exec_owner_dispatch_configured(gedp) &&
+		QThread::currentThread() == thread()) {
+		QEventLoop command_loop;
+		std::thread command_worker([&]() {
+			ret = ged_exec(gedp, argc, argv);
+			QMetaObject::invokeMethod(&command_loop, "quit",
+				Qt::QueuedConnection);
+		});
+		command_loop.exec();
+		command_worker.join();
+	} else {
+		ret = ged_exec(gedp, argc, argv);
+	}
+	command_running = false;
 	/* View and database observers below may synchronously issue their own GED
 	 * commands (for example, a faceplate refreshing its state).  Preserve this
 	 * command's result before those notifications can reuse ged_result_str.

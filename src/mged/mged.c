@@ -2327,6 +2327,19 @@ mged_refresh_pending(struct mged_state *s)
 }
 
 
+static void
+mged_refresh_timing_log(const char *stage, int64_t started)
+{
+    if (!getenv("BOBOL_DRAW_TIMING"))
+	return;
+    const int64_t elapsed = bu_gettime() - started;
+    if (elapsed < 25000)
+	return;
+    bu_log("[obol-timing] MGED refresh: %-24s %8.1f ms\n", stage,
+	(double)elapsed / 1000.0);
+}
+
+
 /**
  * NOTE that this routine is not to be casually used to refresh the screen.
  * The normal procedure is to commit view/scene changes and request refresh
@@ -2350,6 +2363,7 @@ refresh(struct mged_state *s)
     static int cadence_samples = 0;
     int64_t frame_complete = 0;
     int do_time = 0;
+    const int64_t refresh_started = bu_gettime();
 
     if (mged_shutting_down(s))
 	return;
@@ -2357,7 +2371,9 @@ refresh(struct mged_state *s)
     /* Flush any accumulated bu_log output to the command prompt.
      * The log-drain timer handles live streaming during long commands;
      * this call catches anything produced between timer ticks. */
+    int64_t stage_started = bu_gettime();
     mged_pr_output(s->interp);
+    mged_refresh_timing_log("console output", stage_started);
 
     /* Graphics Views */
     for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
@@ -2411,10 +2427,14 @@ refresh(struct mged_state *s)
 	mged_obol_faceplate_sync(s, p);
 
 	if (s->dbip != DBI_NULL) {
+	    stage_started = bu_gettime();
 	    mged_obol_scene_refresh(s);
+	    mged_refresh_timing_log("scene refresh", stage_started);
 	    if (!mged_variables->mv_fb || mged_variables->mv_fb_overlay != 2) {
+		stage_started = bu_gettime();
 		bu_vls_strcpy(&tmp_vls, bu_vls_addr(&overlay_vls));
 		dotitles(s, &tmp_vls);
+		mged_refresh_timing_log("faceplate", stage_started);
 		bu_vls_trunc(&tmp_vls, 0);
 	    }
 	}
@@ -2424,8 +2444,12 @@ refresh(struct mged_state *s)
 	 * was marked dirty), so present unconditionally rather than only when the
 	 * camera moved -- otherwise render-state changes that don't move the camera
 	 * (lighting toggles, faceplate, etc.) would never reach the screen. */
+	stage_started = bu_gettime();
 	(void)bobol_display_endpoint_view_sync(endpoint, view_ctx);
+	mged_refresh_timing_log("endpoint view sync", stage_started);
+	stage_started = bu_gettime();
 	(void)bobol_display_endpoint_request_frame(endpoint, "MGED refresh");
+	mged_refresh_timing_log("frame request", stage_started);
 	bv_refresh_complete(view);
     }
 
@@ -2451,6 +2475,7 @@ refresh(struct mged_state *s)
 
     bu_vls_free(&overlay_vls);
     bu_vls_free(&tmp_vls);
+    mged_refresh_timing_log("total", refresh_started);
 }
 
 
@@ -2541,6 +2566,7 @@ mged_finish(struct mged_state *s, int exitcode)
      * callbacks.  It must therefore run before Tcl_DeleteInterp. */
     if (s->gedp) {
 	struct tclcad_io_data *giod = (struct tclcad_io_data *)s->gedp->ged_io_data;
+	(void)ged_exec_owner_dispatch_set(s->gedp, NULL, NULL);
 	ged_close(s->gedp);
 	s->gedp = GED_NULL;
 	if (giod) {

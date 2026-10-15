@@ -25,6 +25,7 @@
 #include <iostream>
 #include <QTimer>
 #include <QEvent>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QtGlobal>
 #include "QgEdApp.h"
@@ -36,6 +37,33 @@ bool QgEdFilter::eventFilter(QObject *, QEvent *e)
     QgEdApp *c = (QgEdApp *)qApp;
     if (!c || !c->w)
 	return false;
+
+    struct ged *gedp = c->mdl ? c->mdl->ged() : nullptr;
+    if (ged_exec_active(gedp)) {
+	if (e->type() == QEvent::KeyPress) {
+	    QKeyEvent *key_event = static_cast<QKeyEvent *>(e);
+	    if (key_event->key() == Qt::Key_C &&
+		    key_event->modifiers().testFlag(Qt::ControlModifier))
+		ged_exec_cancel_request(gedp);
+	}
+	switch (e->type()) {
+	    case QEvent::KeyPress:
+	    case QEvent::KeyRelease:
+	    case QEvent::Shortcut:
+	    case QEvent::ShortcutOverride:
+	    case QEvent::MouseButtonPress:
+	    case QEvent::MouseButtonRelease:
+	    case QEvent::MouseButtonDblClick:
+	    case QEvent::MouseMove:
+	    case QEvent::Wheel:
+	    case QEvent::ContextMenu:
+	    case QEvent::InputMethod:
+	    case QEvent::Close:
+		return true;
+	    default:
+		break;
+	}
+    }
 
     // TODO - look into QShortcut, see if it might be a better way to manage this
     if (e->type() == QEvent::KeyPress) {

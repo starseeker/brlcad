@@ -545,6 +545,7 @@ private:
 	uint64_t event_observer_event_count = 0;
 	int draw_observer_defer_depth = 0;
 	int event_observer_defer_depth = 0;
+	bool command_running = false;
 	int pending_draw_event_all = 0;
 	int pending_draw_event_view_only = 0;
 	std::vector<std::string> pending_draw_event_paths;

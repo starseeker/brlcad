@@ -34,6 +34,94 @@
 extern "C" void libged_init(void);
 
 extern "C" int
+ged_exec_owner_dispatch_set(struct ged *gedp,
+    ged_exec_owner_dispatch_t dispatch, void *client_data)
+{
+    if (!gedp || !gedp->i || !gedp->i->i)
+	return 0;
+    Ged_Internal *gedip = gedp->i->i;
+    gedip->owner_dispatch = dispatch;
+    gedip->owner_dispatch_data = dispatch ? client_data : NULL;
+    return 1;
+}
+
+extern "C" int
+ged_exec_owner_dispatch_configured(const struct ged *gedp)
+{
+    return gedp && gedp->i && gedp->i->i &&
+	gedp->i->i->owner_dispatch;
+}
+
+extern "C" int
+ged_exec_owner_invoke(struct ged *gedp, ged_exec_owner_task_t task,
+    void *task_data)
+{
+    if (!task)
+	return 0;
+    if (!gedp || !gedp->i || !gedp->i->i)
+	return task(task_data);
+    Ged_Internal *gedip = gedp->i->i;
+    return gedip->owner_dispatch ?
+	gedip->owner_dispatch(gedip->owner_dispatch_data, task, task_data) :
+	task(task_data);
+}
+
+extern "C" int
+ged_exec_cancel_request(struct ged *gedp)
+{
+    if (!gedp || !gedp->i || !gedp->i->i ||
+	!gedp->i->i->exec_active.load(std::memory_order_acquire))
+	return 0;
+    gedp->i->i->exec_cancel_requested.store(true,
+	std::memory_order_release);
+    return 1;
+}
+
+extern "C" int
+ged_exec_cancel_requested(const struct ged *gedp)
+{
+    return gedp && gedp->i && gedp->i->i &&
+	gedp->i->i->exec_active.load(std::memory_order_acquire) &&
+	gedp->i->i->exec_cancel_requested.load(std::memory_order_acquire);
+}
+
+struct ged_exec_callback_context {
+    struct bu_vls *result;
+    bu_clbk_t callback;
+    int argc;
+    const char **argv;
+    struct ged *gedp;
+    void *client_data;
+};
+
+static int
+ged_exec_callback_on_owner(void *data)
+{
+    struct ged_exec_callback_context *context =
+	(struct ged_exec_callback_context *)data;
+    return ged_clbk_exec(context->result, context->gedp,
+	GED_CMD_RECURSION_LIMIT, context->callback, context->argc,
+	context->argv, context->gedp, context->client_data);
+}
+
+static int
+ged_exec_callback(struct ged *gedp, bu_clbk_t callback, void *client_data,
+	int argc, const char *argv[])
+{
+    struct ged_exec_callback_context context = {
+	gedp->ged_result_str, callback, argc, argv, gedp, client_data
+    };
+    return ged_exec_owner_invoke(gedp, ged_exec_callback_on_owner, &context);
+}
+
+extern "C" int
+ged_exec_active(const struct ged *gedp)
+{
+    return gedp && gedp->i && gedp->i->i &&
+	gedp->i->i->exec_active.load(std::memory_order_acquire);
+}
+
+extern "C" int
 ged_exec(struct ged *gedp, int argc, const char *argv[])
 {
     int cret = BRLCAD_OK;
@@ -83,6 +171,11 @@ ged_exec(struct ged *gedp, int argc, const char *argv[])
 
     GED_CK_MAGIC(gedp);
     Ged_Internal *gedip = gedp->i->i;
+    const bool outer_command = gedip->exec_stack.empty();
+    if (outer_command) {
+	gedip->exec_cancel_requested.store(false, std::memory_order_release);
+	gedip->exec_active.store(true, std::memory_order_release);
+    }
     gedip->exec_stack.push(cmdname);
     gedip->cmd_recursion_depth_cnt[cmdname]++;
 
@@ -94,6 +187,10 @@ ged_exec(struct ged *gedp, int argc, const char *argv[])
 	    lexec_stack.pop();
 	}
 	gedp->ged_results->ret = BRLCAD_ERROR;
+	gedip->cmd_recursion_depth_cnt[cmdname]--;
+	gedip->exec_stack.pop();
+	if (outer_command)
+	    gedip->exec_active.store(false, std::memory_order_release);
 	return gedp->ged_results->ret;
     }
 
@@ -103,7 +200,7 @@ ged_exec(struct ged *gedp, int argc, const char *argv[])
     bu_clbk_t f = NULL;
     void *d = NULL;
     if (!gedp->ged_skip_clbks && (ged_clbk_get(&f, &d, gedp, cmdname.c_str(), BU_CLBK_PRE) == BRLCAD_OK) && f) {
-	cret = ged_clbk_exec(gedp->ged_result_str, gedp, GED_CMD_RECURSION_LIMIT, f, argc, argv, gedp, d);
+	cret = ged_exec_callback(gedp, f, d, argc, argv);
 	if (cret != BRLCAD_OK) {
 	    bu_log("error running %s pre-execution callback\n", cmdname.c_str());
 	    gedp->ged_results->ret = cret;
@@ -126,7 +223,7 @@ ged_exec(struct ged *gedp, int argc, const char *argv[])
     // check the return code with ged_results_ret(gedp->results) to learn what
     // it is.
     if (!gedp->ged_skip_clbks && (ged_clbk_get(&f, &d, gedp, cmdname.c_str(), BU_CLBK_POST) == BRLCAD_OK) && f) {
-	cret = ged_clbk_exec(gedp->ged_result_str, gedp, GED_CMD_RECURSION_LIMIT, f, argc, argv, gedp, d);
+	cret = ged_exec_callback(gedp, f, d, argc, argv);
 	if (cret != BRLCAD_OK) {
 	    bu_log("error running %s post-execution callback\n", cmdname.c_str());
 	    gedp->ged_results->ret = cret;
@@ -141,6 +238,8 @@ ged_exec(struct ged *gedp, int argc, const char *argv[])
 
     gedip->cmd_recursion_depth_cnt[cmdname]--;
     gedip->exec_stack.pop();
+    if (outer_command)
+	gedip->exec_active.store(false, std::memory_order_release);
     return gedp->ged_results->ret;
 }
 

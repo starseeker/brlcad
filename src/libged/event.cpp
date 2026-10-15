@@ -504,6 +504,34 @@ ged_event_service_has_live_consumers(struct ged_event_service *state)
 }
 
 
+struct ged_event_dispatch_context {
+    struct ged_event_service *state;
+    enum ged_event_observer_phase phase;
+    const std::vector<struct ged_event> *events;
+    const struct ged_event_result *result;
+};
+
+static int
+ged_event_dispatch_phase_on_owner(void *data)
+{
+    ged_event_dispatch_context *context =
+	static_cast<ged_event_dispatch_context *>(data);
+    struct ged_event_service *state = context->state;
+    const std::vector<struct ged_event> &events = *context->events;
+    if (!state || events.empty())
+	return 0;
+
+    size_t len = state->observers.size();
+    for (size_t i = 0; i < len; i++) {
+	ged_event_observer_entry &entry = state->observers[i];
+	if (entry.removed || entry.phase != context->phase || !entry.func)
+	    continue;
+	entry.func(state->gedp, events.data(), events.size(), context->result,
+		entry.client_data);
+    }
+    return 1;
+}
+
 static void
 ged_event_dispatch_phase(struct ged_event_service *state,
 			 enum ged_event_observer_phase phase,
@@ -512,15 +540,9 @@ ged_event_dispatch_phase(struct ged_event_service *state,
 {
     if (!state || events.empty())
 	return;
-
-    size_t len = state->observers.size();
-    for (size_t i = 0; i < len; i++) {
-	ged_event_observer_entry &entry = state->observers[i];
-	if (entry.removed || entry.phase != phase || !entry.func)
-	    continue;
-	entry.func(state->gedp, events.data(), events.size(), result,
-		entry.client_data);
-    }
+    ged_event_dispatch_context context = {state, phase, &events, result};
+    (void)ged_exec_owner_invoke(state->gedp,
+	ged_event_dispatch_phase_on_owner, &context);
 }
 
 

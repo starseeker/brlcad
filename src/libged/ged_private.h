@@ -40,6 +40,7 @@
 #include "raytrace.h"
 #include "rt/geom.h"
 #include "ged.h"
+#include "ged/commands.h"
 #include "./ged_scene_record_api_private.h"
 #include "include/plugin.h"
 #include "./ged_draw_private.h"
@@ -47,6 +48,7 @@
 
 #ifdef __cplusplus
 
+#include <atomic>
 #include <map>
 #include <stack>
 #include <string>
@@ -191,6 +193,10 @@ class Ged_Internal {
 
 	std::stack<std::string> exec_stack;
 	size_t terminal_columns = 0;
+	ged_exec_owner_dispatch_t owner_dispatch = nullptr;
+	void *owner_dispatch_data = nullptr;
+	std::atomic_bool exec_active {false};
+	std::atomic_bool exec_cancel_requested {false};
 
 	// Persisting state between loadview and preview
 	// commands and subcommands.

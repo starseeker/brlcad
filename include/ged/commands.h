@@ -38,10 +38,41 @@ struct bu_opt_validate_result;
 
 /** @addtogroup ged_plugins */
 /** @{ */
+/** Unit of application-owner-thread work requested by libged. */
+typedef int (*ged_exec_owner_task_t)(void *task_data);
+
+/**
+ * Synchronously run @p task on the thread which owns application display
+ * state.  The dispatcher must not return until the task has completed.
+ */
+typedef int (*ged_exec_owner_dispatch_t)(void *client_data,
+	ged_exec_owner_task_t task, void *task_data);
+
 /** Execute plugin based command */
 #if !defined(GED_PLUGIN) && !defined(GED_EXEC_NORAW)
 GED_EXPORT extern int ged_exec(struct ged *gedp, int argc, const char *argv[]);
 #endif
+
+/** Install or clear the application owner-thread dispatcher. */
+GED_EXPORT extern int ged_exec_owner_dispatch_set(struct ged *gedp,
+	ged_exec_owner_dispatch_t dispatch, void *client_data);
+
+/** Report whether an application owner-thread dispatcher is installed. */
+GED_EXPORT extern int ged_exec_owner_dispatch_configured(
+	const struct ged *gedp);
+
+/** Run a task through the application dispatcher, or directly if unset. */
+GED_EXPORT extern int ged_exec_owner_invoke(struct ged *gedp,
+	ged_exec_owner_task_t task, void *task_data);
+
+/** Request cooperative cancellation of the active outer GED command. */
+GED_EXPORT extern int ged_exec_cancel_request(struct ged *gedp);
+
+/** Report whether the active GED command has been asked to stop. */
+GED_EXPORT extern int ged_exec_cancel_requested(const struct ged *gedp);
+
+/** Report whether an outer GED command is currently executing. */
+GED_EXPORT extern int ged_exec_active(const struct ged *gedp);
 /** @} */
 
 /* LIBGED maintains this list - callers should regard it as read only.  This
