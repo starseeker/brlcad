@@ -60,6 +60,7 @@
 #include "bu/datetime.h"
 #include "bu/vls.h"
 #include "ged/db_index.h"
+#include "ged/display_obol_private.h"
 #include "ged/draw.h"
 #include "ged/event.h"
 #include "ged/scene.h"
@@ -2606,6 +2607,14 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 	int ret = BRLCAD_ERROR;
 	if (ged_exec_owner_dispatch_configured(gedp) &&
 		QThread::currentThread() == thread()) {
+		struct ged_view_context *foreground_view =
+			ged_view_active_ctx(gedp);
+		bobol_display_endpoint_t *foreground_endpoint =
+			foreground_view ? ged_view_context_obol_endpoint_get(
+			    foreground_view) : nullptr;
+		const int foreground_deferred = foreground_endpoint ?
+			bobol_display_endpoint_foreground_activity_begin(
+			    foreground_endpoint) : 0;
 		QEventLoop command_loop;
 		std::thread command_worker([&]() {
 			ret = ged_exec(gedp, argc, argv);
@@ -2614,6 +2623,13 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 		});
 		command_loop.exec();
 		command_worker.join();
+		struct ged_view_context *current_view =
+			ged_view_active_ctx(gedp);
+		if (foreground_deferred && current_view &&
+			ged_view_context_obol_endpoint_get(current_view) ==
+			foreground_endpoint)
+			(void)bobol_display_endpoint_foreground_activity_end(
+			    foreground_endpoint);
 	} else {
 		ret = ged_exec(gedp, argc, argv);
 	}

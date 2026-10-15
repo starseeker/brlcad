@@ -183,6 +183,19 @@ BOBOL_EXPORT int
 bobol_display_endpoint_request_presentation_frame(
 	bobol_display_endpoint_t *endpoint, const char *reason);
 
+/** Defer endpoint background refinement while an application foreground
+ * operation needs the owner thread.  Calls may be nested and must be paired.
+ * Explicit frame requests remain serviceable while refinement is deferred. */
+BOBOL_EXPORT int
+bobol_display_endpoint_foreground_activity_begin(
+	bobol_display_endpoint_t *endpoint);
+
+/** End one foreground activity scope and wake deferred refinement when the
+ * outermost scope completes. */
+BOBOL_EXPORT int
+bobol_display_endpoint_foreground_activity_end(
+	bobol_display_endpoint_t *endpoint);
+
 /** Resize endpoint viewport and host.  Dimensions are physical pixels and
  * device_pixel_ratio must be positive. */
 BOBOL_EXPORT int
