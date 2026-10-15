@@ -295,6 +295,12 @@ run_ged_async(struct mged_state *s, std::function<int()> func)
     Tcl_Obj *saved_result = Tcl_GetObjResult(s->interp);
     Tcl_IncrRefCount(saved_result);
     Tcl_ResetResult(s->interp);
+    struct ged_view_context *foreground_view = ged_view_active_ctx(s->gedp);
+    bobol_display_endpoint_t *foreground_endpoint = foreground_view ?
+	ged_view_context_obol_endpoint_get(foreground_view) : NULL;
+    const int foreground_deferred = foreground_endpoint ?
+	bobol_display_endpoint_foreground_activity_begin(
+	    foreground_endpoint) : 0;
     Tcl_ThreadId main_tid = Tcl_GetCurrentThread();
     std::atomic<bool> done{false};
     std::atomic<int> result{0};
@@ -333,6 +339,12 @@ run_ged_async(struct mged_state *s, std::function<int()> func)
     }
 
     worker.join();
+
+    struct ged_view_context *current_view = ged_view_active_ctx(s->gedp);
+    if (foreground_deferred && current_view &&
+	ged_view_context_obol_endpoint_get(current_view) == foreground_endpoint)
+	(void)bobol_display_endpoint_foreground_activity_end(
+	    foreground_endpoint);
 
     /* Restore the caller's SIGINT */
     (void)signal(SIGINT, prev_sigint);

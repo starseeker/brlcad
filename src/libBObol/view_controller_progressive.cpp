@@ -205,6 +205,14 @@ BObolViewController::advanceProgressiveWork(
     const BObolProgressiveOptions *options,
     BObolProgressiveStatus *status)
 {
+    if (this->hasForegroundActivity()) {
+	BObolProgressiveStatus deferredStatus;
+	deferredStatus.hasMore = this->hasProgressiveWorkPending();
+	if (status)
+	    *status = deferredStatus;
+	return deferredStatus.hasMore ? 1 : 0;
+    }
+
     BObolLodControlTransitionScope controlTransition(this);
     const uint64_t advanceStarted = this->beginRenderTiming();
 
@@ -1495,4 +1503,36 @@ BObolViewController::hasProgressiveWorkPending(void) const
 {
     std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
     return this->d->progressiveWorkPending;
+}
+
+void
+BObolViewController::beginForegroundActivity(void)
+{
+    std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+    if (this->d->foregroundActivityDepth++ == 0)
+	bobol_identity_advance(this->d->hostWorkRevision);
+}
+
+void
+BObolViewController::endForegroundActivity(void)
+{
+    SbBool wakeEndpoint = FALSE;
+    {
+	std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+	if (!this->d->foregroundActivityDepth)
+	    return;
+	if (--this->d->foregroundActivityDepth == 0) {
+	    bobol_identity_advance(this->d->hostWorkRevision);
+	    wakeEndpoint = this->d->progressiveWorkPending;
+	}
+    }
+    if (wakeEndpoint)
+	this->notifyFrameRequest("foreground-activity-complete");
+}
+
+SbBool
+BObolViewController::hasForegroundActivity(void) const
+{
+    std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+    return this->d->foregroundActivityDepth ? TRUE : FALSE;
 }
