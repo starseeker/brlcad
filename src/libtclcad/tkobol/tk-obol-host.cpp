@@ -158,6 +158,29 @@ tk_endpoint_context_manager(void)
 
 class TkObolEndpointHost;
 
+class TkObolProgressiveScheduler {
+public:
+    void add(TkObolEndpointHost *host);
+    void remove(TkObolEndpointHost *host);
+    void request(void);
+
+private:
+    static void timer_proc(ClientData data);
+    void dispatch(void);
+
+    std::vector<TkObolEndpointHost *> hosts;
+    size_t cursor = 0;
+    Tcl_TimerToken timer = NULL;
+    bool dispatching = false;
+};
+
+static TkObolProgressiveScheduler &
+tk_obol_progressive_scheduler(void)
+{
+    static thread_local TkObolProgressiveScheduler scheduler;
+    return scheduler;
+}
+
 struct TkEndpointEvent {
     Tcl_Event header;
     TkObolEndpointHost *host;
@@ -178,7 +201,7 @@ public:
 	interp(new_interp), owner_thread(Tcl_GetCurrentThread()), software(use_software),
 	controller(NULL), tkwin(NULL), container(NULL), photo(NULL), opened(false),
 	closing(false), toplevel(false), visible(false), event_queued(false),
-	progressive_timer(NULL), heartbeat_timer(NULL),
+	heartbeat_timer(NULL),
 	input_dispatch(NULL),
 	input_dispatch_data(NULL), last_motion_x(0), last_motion_y(0),
 	last_motion_valid(false), width(1), height(1)
@@ -342,6 +365,7 @@ public:
 	this->opened = true;
 	this->visible = !is_toplevel || desc->visible != 0;
 	this->closing = false;
+	tk_obol_progressive_scheduler().add(this);
 	this->schedule_heartbeat_timer();
 	return this->visible ? this->request("Tk endpoint open") : 1;
     }
@@ -354,10 +378,7 @@ public:
 	if (Tcl_GetCurrentThread() == this->owner_thread)
 	Tcl_DeleteEvents(delete_event, this);
 	this->event_queued.store(false);
-	if (this->progressive_timer) {
-	    Tcl_DeleteTimerHandler(this->progressive_timer);
-	    this->progressive_timer = NULL;
-	}
+	tk_obol_progressive_scheduler().remove(this);
 	if (this->heartbeat_timer) {
 	    Tcl_DeleteTimerHandler(this->heartbeat_timer);
 	    this->heartbeat_timer = NULL;
@@ -477,19 +498,17 @@ public:
 
     void schedule_progressive_timer(void)
     {
-	if (this->progressive_timer || !this->opened || this->closing ||
-	    !this->visible || !this->controller)
+	if (!this->opened || this->closing || !this->visible ||
+	    !this->controller)
 	    return;
 	/* Match the Qt host's bounded background pump.  An immediate file-event
 	 * chain keeps Tcl_Update() nonempty forever and repaints unchanged pixels;
 	 * a timer yields to the application after every cooperative slice. */
-	this->progressive_timer = Tcl_CreateTimerHandler(16,
-	    progressive_timer_proc, this);
+	tk_obol_progressive_scheduler().request();
 	}
 
     void dispatch_progressive_timer(void)
     {
-	this->progressive_timer = NULL;
 	if (!this->opened || this->closing || !this->visible || !this->controller)
 	    return;
 	if (this->controller->hasProgressiveWorkPending())
@@ -499,10 +518,15 @@ public:
 	    if (this->event_queued.compare_exchange_strong(expected, true))
 		(void)this->queue_frame_event();
 	}
-	if (this->controller->hasProgressiveWorkPending() ||
-	    this->controller->isRenderRequested())
-	    this->schedule_progressive_timer();
 	}
+
+    bool progressive_timer_needed(void) const
+    {
+	return this->opened && !this->closing && this->visible &&
+	    this->controller &&
+	    (this->controller->hasProgressiveWorkPending() ||
+	     this->controller->isRenderRequested());
+    }
 
     void schedule_heartbeat_timer(void)
     {
@@ -1169,13 +1193,6 @@ input_usage:
 	return 1;
 	}
 
-    static void progressive_timer_proc(ClientData data)
-    {
-	TkObolEndpointHost *host = static_cast<TkObolEndpointHost *>(data);
-	if (host)
-	    host->dispatch_progressive_timer();
-	}
-
     static void heartbeat_timer_proc(ClientData data)
     {
 	TkObolEndpointHost *host = static_cast<TkObolEndpointHost *>(data);
@@ -1215,7 +1232,6 @@ input_usage:
     bool toplevel;
     bool visible;
     std::atomic<bool> event_queued;
-	Tcl_TimerToken progressive_timer;
 	Tcl_TimerToken heartbeat_timer;
 	BObolInputEventHandler input_dispatch;
     void *input_dispatch_data;
@@ -1239,6 +1255,76 @@ input_usage:
 	std::string input_command_name;
 	std::string input_bindtag;
 };
+
+void
+TkObolProgressiveScheduler::add(TkObolEndpointHost *host)
+{
+    if (!host || std::find(this->hosts.begin(), this->hosts.end(), host) !=
+	    this->hosts.end())
+	return;
+    this->hosts.push_back(host);
+}
+
+void
+TkObolProgressiveScheduler::remove(TkObolEndpointHost *host)
+{
+    const auto found = std::find(this->hosts.begin(), this->hosts.end(), host);
+    if (found == this->hosts.end())
+	return;
+    const size_t index = static_cast<size_t>(found - this->hosts.begin());
+    this->hosts.erase(found);
+    if (index < this->cursor && this->cursor)
+	this->cursor--;
+    if (this->cursor >= this->hosts.size())
+	this->cursor = 0;
+    if (this->hosts.empty() && this->timer) {
+	Tcl_DeleteTimerHandler(this->timer);
+	this->timer = NULL;
+    }
+}
+
+void
+TkObolProgressiveScheduler::request(void)
+{
+    if (this->timer || this->dispatching || this->hosts.empty())
+	return;
+    this->timer = Tcl_CreateTimerHandler(16, timer_proc, this);
+}
+
+void
+TkObolProgressiveScheduler::dispatch(void)
+{
+    this->timer = NULL;
+    this->dispatching = true;
+    TkObolEndpointHost *selected = NULL;
+    for (size_t offset = 0; offset < this->hosts.size(); ++offset) {
+	const size_t index = (this->cursor + offset) % this->hosts.size();
+	TkObolEndpointHost *candidate = this->hosts[index];
+	if (!candidate || !candidate->progressive_timer_needed())
+	    continue;
+	selected = candidate;
+	this->cursor = (index + 1) % this->hosts.size();
+	break;
+    }
+    if (selected)
+	selected->dispatch_progressive_timer();
+    this->dispatching = false;
+    for (TkObolEndpointHost *host : this->hosts) {
+	if (host && host->progressive_timer_needed()) {
+	    this->request();
+	    break;
+	}
+    }
+}
+
+void
+TkObolProgressiveScheduler::timer_proc(ClientData data)
+{
+    TkObolProgressiveScheduler *scheduler =
+	static_cast<TkObolProgressiveScheduler *>(data);
+    if (scheduler)
+	scheduler->dispatch();
+}
 
 struct TkFactoryKind {
     bool software;
