@@ -1508,24 +1508,50 @@ BObolViewController::hasProgressiveWorkPending(void) const
 void
 BObolViewController::beginForegroundActivity(void)
 {
-    std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
-    if (this->d->foregroundActivityDepth++ == 0)
-	bobol_identity_advance(this->d->hostWorkRevision);
+    uint64_t serial = 0;
+    {
+	std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+	if (this->d->foregroundActivityDepth++ == 0) {
+	    bobol_identity_advance(this->d->hostWorkRevision);
+	    this->d->foregroundActivityStartedMicroseconds = bu_gettime();
+	    this->d->foregroundActivityActiveSerial =
+		bobol_nonzero_identity_take(
+		    this->d->foregroundActivitySerial);
+	    serial = this->d->foregroundActivityActiveSerial;
+	}
+    }
+    if (serial && this->d->lodTelemetry)
+	this->d->lodTelemetry->recordForegroundCommand(
+	    *this, serial, FALSE, 0, FALSE);
 }
 
 void
 BObolViewController::endForegroundActivity(void)
 {
     SbBool wakeEndpoint = FALSE;
+    uint64_t serial = 0;
+    uint64_t durationMicroseconds = 0;
     {
 	std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
 	if (!this->d->foregroundActivityDepth)
 	    return;
 	if (--this->d->foregroundActivityDepth == 0) {
+	    const int64_t completedMicroseconds = bu_gettime();
+	    if (completedMicroseconds >=
+		this->d->foregroundActivityStartedMicroseconds)
+		durationMicroseconds = static_cast<uint64_t>(
+		    completedMicroseconds -
+		    this->d->foregroundActivityStartedMicroseconds);
+	    serial = this->d->foregroundActivityActiveSerial;
+	    this->d->foregroundActivityActiveSerial = 0;
+	    this->d->foregroundActivityStartedMicroseconds = 0;
 	    bobol_identity_advance(this->d->hostWorkRevision);
 	    wakeEndpoint = this->d->progressiveWorkPending;
 	}
     }
+    if (serial && this->d->lodTelemetry)
+	this->d->lodTelemetry->recordForegroundCommand(
+	    *this, serial, TRUE, durationMicroseconds, wakeEndpoint);
     if (wakeEndpoint)
 	this->notifyFrameRequest("foreground-activity-complete");
 }

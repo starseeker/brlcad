@@ -171,6 +171,9 @@ public:
     void recordTransition(const BObolViewController &controller,
 	const BObolLodControlTransitionRecord &transition,
 	uint64_t durationMicroseconds) noexcept;
+    void recordForegroundCommand(const BObolViewController &controller,
+	uint64_t serial, SbBool complete, uint64_t durationMicroseconds,
+	SbBool deferredProgressiveWork) noexcept;
     void recordPublication(
 	const BObolLodPublicationTelemetryRecord &publication) noexcept;
     void recordGap(void) noexcept;

@@ -158,6 +158,8 @@ validate_sanitized_log(const std::string &log,
     bool incrementalInventoryDelta = false;
     bool secondObject = false;
     bool publication = false;
+    bool commandStart = false;
+    bool commandComplete = false;
     bool nonFiniteCameraValid = false;
     bool signalsConsistent = true;
     std::istringstream lines(log);
@@ -196,6 +198,11 @@ validate_sanitized_log(const std::string &log,
 		transition = data.at("transition_serial").get<uint64_t>() > 0 &&
 		    data.contains("duration_us") &&
 		    data.at("duration_us").is_number_unsigned() &&
+		    data.at("progressive_advance_us").is_number_unsigned() &&
+		    data.at("result_processing_us").is_number_unsigned() &&
+		    data.at("provider_us").is_number_unsigned() &&
+		    data.at("submission_us").is_number_unsigned() &&
+		    data.at("presentation_sync_us").is_number_unsigned() &&
 		    after.at("control").contains("facts") &&
 		    after.at("control").contains("owner_name") &&
 		    after.at("progress").at("display").contains("class_name") &&
@@ -304,6 +311,16 @@ validate_sanitized_log(const std::string &log,
 		    replay.at("source").get<bool>() &&
 		    !replay.at("requested").get<bool>() &&
 		    !cursor.at("rescan_pending_after").get<bool>();
+	    } else if (kind == "foreground_command") {
+		const uint64_t serial =
+		    data.at("command_serial").get<uint64_t>();
+		const std::string phase = data.at("phase").get<std::string>();
+		commandStart = commandStart ||
+		    (serial == 1 && phase == "start" &&
+		     data.at("duration_us").get<uint64_t>() == 0);
+		commandComplete = commandComplete ||
+		    (serial == 1 && phase == "complete" &&
+		     data.at("deferred_progressive_work").is_boolean());
 	    }
 	}
     } catch (const std::exception &error) {
@@ -317,9 +334,15 @@ validate_sanitized_log(const std::string &log,
     }
     if (!schema || !transition || !source || !object || !hiddenObject ||
 	!initialInventoryReset || !incrementalInventoryDelta || !secondObject ||
-	!publication || !signalsConsistent) {
+	!publication || !commandStart || !commandComplete ||
+	!signalsConsistent) {
 	std::fprintf(stderr,
-	    "FAIL: telemetry omitted schema, control, or sanitized inventory/visibility facts\n");
+	    "FAIL: telemetry facts schema=%d transition=%d source=%d object=%d "
+	    "hidden=%d reset=%d delta=%d second=%d publication=%d "
+	    "command_start=%d command_complete=%d signals=%d\n",
+	    schema, transition, source, object, hiddenObject,
+	    initialInventoryReset, incrementalInventoryDelta, secondObject,
+	    publication, commandStart, commandComplete, signalsConsistent);
 	return 1;
     }
     return 0;
@@ -429,6 +452,8 @@ main(int argc, char **argv)
 	    controller.clearRenderRequest();
 	    camera->position = SbVec3f(0.0f, 0.0f, 10.0f);
 	    controller.setLodControlTransitionTracing(TRUE, 16);
+	    controller.beginForegroundActivity();
+	    controller.endForegroundActivity();
 	    controller.setViewportSize(320, 240);
 	    if (source->setCompactInstanceVisibilityOverrideForPathMatch(
 		    occurrencePath.c_str(), BOBOL_COMPACT_PATH_EXACT, FALSE) != 1) {

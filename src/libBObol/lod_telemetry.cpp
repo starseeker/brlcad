@@ -1531,6 +1531,16 @@ public:
 	TelemetryJsonObject data;
 	data.integer("transition_serial", ++this->transitionSerial);
 	data.integer("duration_us", durationMicroseconds);
+	data.integer("progressive_advance_us",
+	    controller.getLastProgressiveAdvanceTimeNanoseconds() / 1000);
+	data.integer("result_processing_us",
+	    controller.getLastLodResultProcessingTimeNanoseconds() / 1000);
+	data.integer("provider_us",
+	    controller.getLastProgressiveProviderTimeNanoseconds() / 1000);
+	data.integer("submission_us",
+	    controller.getLastLodSubmissionTimeNanoseconds() / 1000);
+	data.integer("presentation_sync_us",
+	    controller.getLastPresentationSyncTimeNanoseconds() / 1000);
 	data.text("event",
 	    bobol_lod_control_transition_event_name(transition.event));
 	data.raw("before", telemetry_state(transition.before,
@@ -1549,6 +1559,28 @@ public:
 	    transition.event == BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT;
 	if (inspectInventory)
 	    this->recordInventory(controller, inventoryRevision);
+    }
+
+    void recordForegroundCommand(const BObolViewController &controller,
+	uint64_t serial, bool complete, uint64_t durationMicroseconds,
+	bool deferredProgressiveWork)
+    {
+	if (!this->started) {
+	    TelemetryJsonObject start;
+	    start.boolean("sanitized", this->sink->sanitized());
+	    start.raw("camera", telemetry_camera(controller));
+	    this->sink->write(this->controllerId, "controller_start",
+		start.take());
+	    this->started = true;
+	}
+
+	TelemetryJsonObject data;
+	data.integer("command_serial", serial);
+	data.text("phase", complete ? "complete" : "start");
+	data.integer("duration_us", durationMicroseconds);
+	data.boolean("deferred_progressive_work", deferredProgressiveWork);
+	this->sink->write(this->controllerId, "foreground_command",
+	    data.take());
     }
 
     void recordPublication(
@@ -1917,6 +1949,22 @@ BObolLodTelemetry::recordTransition(const BObolViewController &controller,
 	if (this->impl)
 	    this->impl->recordTransition(controller, transition,
 		durationMicroseconds);
+    } catch (...) {
+	if (this->impl)
+	    this->impl->recordGap();
+    }
+}
+
+void
+BObolLodTelemetry::recordForegroundCommand(
+    const BObolViewController &controller, uint64_t serial, SbBool complete,
+    uint64_t durationMicroseconds, SbBool deferredProgressiveWork) noexcept
+{
+    try {
+	if (this->impl)
+	    this->impl->recordForegroundCommand(controller, serial,
+		complete != FALSE, durationMicroseconds,
+		deferredProgressiveWork != FALSE);
     } catch (...) {
 	if (this->impl)
 	    this->impl->recordGap();
