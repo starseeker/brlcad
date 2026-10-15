@@ -46,6 +46,7 @@ class SoBRLViewLodGroup;
  * private implementation name from libBObol. */
 struct BObolLodControlTransitionFrame {
     uint64_t token = 0;
+    int64_t startedMicroseconds = 0;
     BObolLodControlTransitionEvent event =
 	BOBOL_LOD_CONTROL_TRANSITION_UNNAMED;
     SbBool ownerEvent = FALSE;

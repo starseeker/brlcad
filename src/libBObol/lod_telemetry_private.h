@@ -169,7 +169,8 @@ public:
     BObolLodTelemetry &operator=(const BObolLodTelemetry &) = delete;
 
     void recordTransition(const BObolViewController &controller,
-	const BObolLodControlTransitionRecord &transition) noexcept;
+	const BObolLodControlTransitionRecord &transition,
+	uint64_t durationMicroseconds) noexcept;
     void recordPublication(
 	const BObolLodPublicationTelemetryRecord &publication) noexcept;
     void recordGap(void) noexcept;
