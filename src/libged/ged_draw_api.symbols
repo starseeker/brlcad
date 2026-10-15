@@ -55,6 +55,7 @@ ged_view_faceplate_sync
 ged_view_lod_progress_visible_get
 ged_view_lod_progress_visible_set
 ged_view_lod_progress_sync
+ged_view_lod_progress_sync_changed
 ged_view_lighting_sync
 ged_view_shading_sync
 ged_view_display_image_capture

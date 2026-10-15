@@ -2424,8 +2424,6 @@ refresh(struct mged_state *s)
 	 * Realize that data into retained Coin nodes here, on the graphical owner
 	 * thread, before the endpoint traverses the scene. */
 	(void)ged_view_framebuffer_present(s->gedp);
-	mged_obol_faceplate_sync(s, p);
-
 	if (s->dbip != DBI_NULL) {
 	    stage_started = bu_gettime();
 	    mged_obol_scene_refresh(s);
@@ -2438,6 +2436,7 @@ refresh(struct mged_state *s)
 		bu_vls_trunc(&tmp_vls, 0);
 	    }
 	}
+	mged_obol_faceplate_sync(s, p);
 
 	/* Sync the camera (updates it and the tracked headlight), then present a
 	 * frame.  We only reach here when the display is repaint-pending (the view
@@ -2451,6 +2450,14 @@ refresh(struct mged_state *s)
 	(void)bobol_display_endpoint_request_frame(endpoint, "MGED refresh");
 	mged_refresh_timing_log("frame request", stage_started);
 	bv_refresh_complete(view);
+	/* Frame timing can retire the last LoD obligation after the faceplate
+	 * which this frame traversed was prepared.  Publish that semantic edge
+	 * now and schedule exactly one successor frame to remove or update the
+	 * retained status line. */
+	int lod_progress_changed = 0;
+	if (ged_view_lod_progress_sync_changed(&lod_progress_changed, s->gedp,
+		view_ctx) == BRLCAD_OK && lod_progress_changed)
+	    mged_display_repaint_request(p, MGED_REPAINT_VIEW_RECORD);
     }
 
     /* a frame was drawn */

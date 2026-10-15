@@ -326,10 +326,13 @@ main(int ac, char *av[]) {
     changed_grid.res_h = changed_grid.res_h > SMALL_FASTF ?
 	changed_grid.res_h * 2.0 : 2.0;
     bv_grid_state_set(DRAW_TEST_BV(v), &changed_grid);
-    if (ged_view_lod_progress_sync(gedp, v) != BRLCAD_OK ||
+
+    int lod_progress_changed = -1;
+    if (ged_view_lod_progress_sync_changed(&lod_progress_changed, gedp, v) !=
+	    BRLCAD_OK || lod_progress_changed ||
 	faceplate_controller->features().node(grid_handle) != grid_node)
 	bu_exit(EXIT_FAILURE,
-	    "LoD progress synchronization mutated an unrelated grid feature\n");
+	    "unchanged LoD synchronization mutated retained faceplate state\n");
     if (ged_view_faceplate_sync(gedp, v) != BRLCAD_OK ||
 	faceplate_controller->features().node(
 	    faceplate_controller->features().find("_faceplate/grid")) ==

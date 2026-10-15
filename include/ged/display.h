@@ -116,6 +116,16 @@ GED_EXPORT int
 ged_view_lod_progress_sync(struct ged *gedp,
 	struct ged_view_context *view_ctx);
 
+/**
+ * Synchronize progressive-LoD HUD records and report a semantic change.
+ *
+ * Render hosts use this after frame completion to request one final frame
+ * when timing feedback changes or removes the retained status indicator.
+ */
+GED_EXPORT int
+ged_view_lod_progress_sync_changed(int *changed, struct ged *gedp,
+	struct ged_view_context *view_ctx);
+
 /** Synchronize semantic lighting policy into the active presentation. */
 GED_EXPORT int
 ged_view_lighting_sync(struct ged *gedp,
