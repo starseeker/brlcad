@@ -53,6 +53,15 @@ if(NOT BRLCAD_ENABLE_QT AND TARGET libtclcad AND TK_LIBRARY)
   if(TEST brlman-html-reflow)
     set_tests_properties(brlman-html-reflow PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
   endif()
+  # A usable desktop is required; run this explicitly during viewer work.
+  add_custom_target(brlman-navigation-test
+    COMMAND ${TCL_TCLSH} "${CMAKE_CURRENT_SOURCE_DIR}/navigation_test.tcl"
+      $<TARGET_FILE:libtclcad>
+    DEPENDS libtclcad
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    USES_TERMINAL
+    VERBATIM)
+  set_target_properties(brlman-navigation-test PROPERTIES FOLDER "BRL-CAD Validation Testing")
 endif()
 if(BRLCAD_ENABLE_QT)
   target_compile_definitions(brlman PRIVATE USE_QT)
@@ -79,6 +88,7 @@ cmakefiles(
   html_text_test.cpp
   console_test.cmake
   reflow_test.tcl
+  navigation_test.tcl
   brlman.tcl
 )
 

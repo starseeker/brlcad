@@ -35,7 +35,6 @@ package provide ManBrowser 1.0
 package require Tk
 package require Itcl
 package require tklitehtml 0.1.0
-package require cadwidgets::Accordion 1.0
 
 if {[llength [info commands manpage_search_terms]] == 0} {
     set helpcomm_path [file join [bu_dir data] "tclscripts" "helpcomm.tcl"]
@@ -49,14 +48,13 @@ if {[llength [info commands manpage_search_terms]] == 0} {
     inherit iwidgets::Dialog
 
     itk_option define -useToC useToC UseToC 1
-    itk_option define -defaultDir defaultDir DefaultDir 1
+    itk_option define -defaultDir defaultDir DefaultDir ""
 
     public {
 	variable path
 	variable parentName
 	variable disabledPages
 
-	method setManType	{}
 	method loadPage		{pageName}
 	method select		{pageName}
 	method search		{query {mode full}}
@@ -65,14 +63,21 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 	method getPages		{section}
 	method loadSelectedPage	{listbox}
 	method refreshPageList	{}
-	method accordianCallback {_item _state}
+	method selectSection	{}
     }
 
-    # Lists of pages for loading into ToC listbox
     private {
-	common pages
+	common sections {
+	    all {All sections}
+	    man1 {1 - Programs}
+	    man3 {3 - Libraries}
+	    man5 {5 - Formats}
+	    mann {n - MGED commands}
+	}
+	# Each page records its name, section directory, and HTML path.
+	variable pages {}
+	variable listed_pages {}
 	variable current_section
-	variable mAccordianCallbackActive 0
 	variable search_query ""
 	variable search_mode full
     }
@@ -87,20 +92,18 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 ##
 # Populate a section's man page list (man1, man3, man5 or mann).
 ::itcl::body ManBrowser::getPages {section} {
+    set section_pages {}
     set mpath [file join $path $section]
-    if {[file exists $mpath]} {
-	set manFiles [glob -nocomplain -directory $mpath *.html ]
-
-	set mlist [list]
-	foreach manFile $manFiles {
-	    set rootName [file rootname [file tail $manFile]]
-	    # If the page is not disabled, add it
-	    if {![expr [lsearch -sorted -exact $disabledPages $rootName] != -1]} {
-		lappend mlist $rootName
-	    }
-	}
-	set pages($section) [lsort $mlist]
+    if {![file isdirectory $mpath]} {
+	return $section_pages
     }
+    foreach manFile [glob -nocomplain -types f -directory $mpath *.html] {
+	set rootName [file rootname [file tail $manFile]]
+	if {[lsearch -exact $disabledPages $rootName] < 0} {
+	    lappend section_pages [list $rootName $section $manFile]
+	}
+    }
+    return $section_pages
 }
 
 ##
@@ -112,9 +115,13 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 	set pathname $pageName
     }
     if {![info exists pathname]} {
-	set candidate [file join $path $current_section $pageName.html]
-	if {[file readable $candidate] && [file isfile $candidate]} {
-	    set pathname $candidate
+	foreach page $pages {
+	    lassign $page name section candidate
+	    if {$name eq $pageName &&
+		($current_section eq "all" || $section eq $current_section)} {
+		set pathname $candidate
+		break
+	    }
 	}
     }
     if {![info exists pathname]} {
@@ -123,6 +130,10 @@ if {[llength [info commands manpage_search_terms]] == 0} {
     }
     if {[catch {$viewer goto $pathname}]} {
 	return 0
+    }
+    set title [$viewer title]
+    if {$title ne ""} {
+	configure -title $title
     }
     return 1
 }
@@ -135,35 +146,32 @@ if {[llength [info commands manpage_search_terms]] == 0} {
     if {[llength $selection] != 1} {
 	return
     }
-    loadPage [$listbox get $selection]
+    loadPage [lindex [lindex $listed_pages [lindex $selection 0]] 2]
 }
 
 ##
 # Selects page in ToC & loads into HTML browser; used for command line calls
 #
 ::itcl::body ManBrowser::select {pageName} {
-    set result False
-    if {[info exists pages($current_section)]} {
-    # Select the requested man page
-	set rootName [file rootname [file tail $pageName]]
-	set idx [lsearch -sorted -exact $pages($current_section) $rootName]
-
-	if {$idx != -1} {
-	    set result True
-	    set toc $itk_component(manpagelistbox)
-
-	    # Deselect previous selection
-	    $toc selection clear 0 [$toc index end]
-
-	    # Select pageName in table of contents
-	    $toc selection set $idx
-	    $toc activate $idx
-	    $toc see $idx
-
-	    set result [loadPage $pageName]
+    set rootName [file rootname [file tail $pageName]]
+    foreach page $pages {
+	lassign $page name section pathname
+	if {$name ne $rootName ||
+	    ($current_section ne "all" && $section ne $current_section)} {
+	    continue
 	}
+	if {![loadPage $pathname]} {
+	    return 0
+	}
+	if {$itk_option(-useToC)} {
+	    if {[lsearch -exact $listed_pages $page] < 0} {
+		set search_query ""
+	    }
+	    refreshPageList
+	}
+	return 1
     }
-    return $result
+    return 0
 }
 
 ##
@@ -173,39 +181,56 @@ if {[llength [info commands manpage_search_terms]] == 0} {
     if {!$itk_option(-useToC)} {
 	return
     }
-    if {![info exists pages($current_section)]} {
-	return
-    }
-
     set toc $itk_component(manpagelistbox)
     $toc selection clear 0 [$toc index end]
     $toc delete 0 [$toc size]
 
     set query [string trim $search_query]
-    if {$query == ""} {
-	foreach pg $pages($current_section) {
-	    $toc insert end $pg
-	}
-	return
-    }
-
     set ranked {}
-    foreach pg $pages($current_section) {
-	set pagepath [file join $path $current_section $pg.html]
-	set section_label [manpage_search_section_label $current_section]
-	set record [manpage_search_index_file $pg $section_label $pagepath html]
-	if {$record == ""} {
+    foreach page $pages {
+	lassign $page name section pathname
+	if {$current_section ne "all" && $section ne $current_section} {
 	    continue
 	}
-	set score [manpage_search_rank_record $query $search_mode $record]
+	set score 0
+	if {$query ne ""} {
+	    set section_label [manpage_search_section_label $section]
+	    set record [manpage_search_index_file $name $section_label $pathname html]
+	    if {$record eq ""} {
+		continue
+	    }
+	    set score [manpage_search_rank_record $query $search_mode $record]
+	}
 	if {$score >= 0} {
-	    lappend ranked [list $score $pg]
+	    lappend ranked [list $score $page]
 	}
     }
 
-    foreach result [lsort -decreasing -integer -index 0 $ranked] {
-	$toc insert end [lindex $result 1]
+    set listed_pages {}
+    set viewer [$this childsite].browser.htmlview
+    set location [$viewer location]
+    set selected_path ""
+    if {$location ne ""} {
+	set selected_path [::tklitehtml::local_path $location]
     }
+    foreach result [lsort -decreasing -integer -index 0 $ranked] {
+	set page [lindex $result 1]
+	lassign $page name section pathname
+	lappend listed_pages $page
+	$toc insert end "$name ([manpage_search_section_label $section])"
+	if {[file normalize $pathname] eq $selected_path} {
+	    set index [expr {[$toc size] - 1}]
+	    $toc selection set $index
+	    $toc activate $index
+	    $toc see $index
+	}
+    }
+}
+
+::itcl::body ManBrowser::selectSection {} {
+    set index [$itk_component(section_selector) current]
+    set current_section [lindex [dict keys $sections] $index]
+    refreshPageList
 }
 
 ##
@@ -219,13 +244,17 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 	set search_mode full
     }
     refreshPageList
+    if {!$itk_option(-useToC) || [string trim $query] eq ""} {
+	return
+    }
 
     set toc $itk_component(manpagelistbox)
     if {[$toc size] > 0} {
+	$toc selection clear 0 end
 	$toc selection set 0
 	$toc activate 0
 	$toc see 0
-	loadPage [$toc get 0]
+	loadSelectedPage $toc
     }
 }
 
@@ -247,16 +276,19 @@ if {[llength [info commands manpage_search_terms]] == 0} {
     # pages that shouldn't be listed should be added here.
     set disabledPages [list Introduction]
 
-    # Build the lists of files
-    getPages "man1"
-    getPages "man3"
-    getPages "man5"
-    getPages "mann"
+    foreach section [dict keys $sections] {
+	if {$section ne "all"} {
+	    lappend pages {*}[getPages $section]
+	}
+    }
+    set pages [lsort -dictionary -index 0 $pages]
 
-    # unless we know better, set the current section to man1
-    set current_section man$itk_option(-defaultDir)
-    if {$itk_option(-defaultDir) == ""} {
-	set current_section "man1"
+    set current_section all
+    if {$itk_option(-defaultDir) ne ""} {
+	set current_section [manpage_search_section_dir $itk_option(-defaultDir)]
+    }
+    if {![dict exists $sections $current_section]} {
+	error "Manual section must be 1, 3, 5, or n"
     }
 
     $this hide 1
@@ -280,10 +312,21 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 
     # Table of Contents
     if {$itk_option(-useToC)} {
+	set index_width 16
 
 	itk_component add toc_panel {
 	    ::tk::frame $parent.toc_panel
 	} {}
+
+	itk_component add section_selector {
+	    ::ttk::combobox $itk_component(toc_panel).section_selector \
+		-state readonly -width $index_width -values [dict values $sections]
+	} {}
+	$itk_component(section_selector) current \
+	    [lsearch -exact [dict keys $sections] $current_section]
+	bind $itk_component(section_selector) <<ComboboxSelected>> \
+	    [::itcl::code $this selectSection]
+	pack $itk_component(section_selector) -side top -fill x
 
 	itk_component add search_frame {
 	    ::tk::frame $itk_component(toc_panel).search_frame
@@ -292,7 +335,7 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 	label $search_frame.label -text "Search:"
 	entry $search_frame.entry \
 	    -textvariable [::itcl::scope search_query] \
-	    -width 16
+	    -width $index_width
 	frame $search_frame.controls
 	checkbutton $search_frame.controls.full \
 	    -text "Full text" \
@@ -314,34 +357,28 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 	bind $search_frame.entry <Return> [::itcl::code $this refreshPageList]
 	pack $search_frame -side top -fill x
 
-	itk_component add treeAccordian {
-	    ::cadwidgets::Accordion $itk_component(toc_panel).treeAccordian
+	itk_component add index_frame {
+	    ::tk::frame $itk_component(toc_panel).index_frame
 	} {}
-	$itk_component(treeAccordian) addTogglePanelCallback [::itcl::code $this accordianCallback]
-	$itk_component(treeAccordian) insert 0 "MGED (mann)"
-	$itk_component(treeAccordian) insert 0 "Conventions (man5)"
-	$itk_component(treeAccordian) insert 0 "Libraries (man3)"
-	$itk_component(treeAccordian) insert 0 "Programs (man1)"
 
 	itk_component add toc_scrollbar {
-	    ::ttk::scrollbar $itk_component(treeAccordian).toc_scrollbar
+	    ::ttk::scrollbar $itk_component(index_frame).toc_scrollbar
 	} {}
 
 	itk_component add manpagelistbox {
-	    ::tk::listbox $itk_component(treeAccordian).manpagelistbox -bd 2 \
-		-width 16 \
+	    ::tk::listbox $itk_component(index_frame).manpagelistbox -bd 2 \
+		-width $index_width \
 		-exportselection false \
-		-yscroll "$itk_component(treeAccordian).toc_scrollbar set"
+		-yscrollcommand [list $itk_component(toc_scrollbar) set]
 	} {}
 
-	$itk_component(treeAccordian).toc_scrollbar configure -command "$itk_component(treeAccordian).manpagelistbox yview"
-
-	if {$current_section == "man1"} {$itk_component(treeAccordian) togglePanel "Programs (man1)"}
-	if {$current_section == "man3"} {$itk_component(treeAccordian) togglePanel "Libraries (man3)"}
-	if {$current_section == "man5"} {$itk_component(treeAccordian) togglePanel "Conventions (man5)"}
-	if {$current_section == "mann"} {$itk_component(treeAccordian) togglePanel "MGED (mann)"}
-
-	pack $itk_component(treeAccordian) -side top -expand yes -fill both
+	$itk_component(toc_scrollbar) configure \
+	    -command [list $itk_component(manpagelistbox) yview]
+	grid $itk_component(manpagelistbox) -row 0 -column 0 -sticky nsew
+	grid $itk_component(toc_scrollbar) -row 0 -column 1 -sticky ns
+	grid columnconfigure $itk_component(index_frame) 0 -weight 1
+	grid rowconfigure $itk_component(index_frame) 0 -weight 1
+	pack $itk_component(index_frame) -side top -expand yes -fill both
 	pack $itk_component(toc_panel) -side left -expand no -fill y
     }
 
@@ -349,32 +386,39 @@ if {[llength [info commands manpage_search_terms]] == 0} {
     itk_component add browser {
 	::tk::frame $parent.browser
     } {}
-    set sfcsman $itk_component(browser)
-    pack $sfcsman -expand yes -fill both
+    set browser_frame $itk_component(browser)
 
-    set manhtmlviewer [::tklitehtml::browser $sfcsman.htmlview]
+    set manhtmlviewer [::tklitehtml::browser $browser_frame.htmlview]
 
-    grid $manhtmlviewer -sticky nsew -in $sfcsman
+    grid $manhtmlviewer -sticky nsew -in $browser_frame
 
-    grid columnconfigure $sfcsman 0 -weight 1
-    grid rowconfigure $sfcsman 0 -weight 1
+    grid columnconfigure $browser_frame 0 -weight 1
+    grid rowconfigure $browser_frame 0 -weight 1
 
     pack $itk_component(browser) -side left -expand yes -fill both
 
+    set first_page ""
+    foreach page $pages {
+	lassign $page name section pathname
+	if {$current_section eq "all" || $section eq $current_section} {
+	    set first_page $pathname
+	    break
+	}
+    }
     # Load Introduction.html if it is readable.  Otherwise, load the
-    # first page.
+    # first page in the selected section.
     set introduction [file join $path Introduction.html]
     if {[file readable $introduction] && [file isfile $introduction]} {
 	loadPage $introduction
-    } elseif {[info exists pages($current_section)] &&
-	[llength $pages($current_section)] > 0} {
-	loadPage [lindex $pages($current_section) 0]
+    } elseif {$first_page ne ""} {
+	loadPage $first_page
     } else {
 	$manhtmlviewer error \
 	    "No readable manual pages were found in '$path'."
     }
 
     if {$itk_option(-useToC)} {
+	refreshPageList
 	bind $itk_component(manpagelistbox) <<ListboxSelect>> \
 	    [::itcl::code $this loadSelectedPage %W]
     }
@@ -386,43 +430,6 @@ if {[llength [info commands manpage_search_terms]] == 0} {
     configure -width [expr {min($default_width, $max_width)}] \
 	-height [expr {min($default_height, $max_height)}]
     return $this
-}
-
-::itcl::body ManBrowser::accordianCallback {_item _state} {
-    if {$mAccordianCallbackActive} { return }
-    set mAccordianCallbackActive 1
-
-    #puts "got callback: $_item, $_state"
-
-    if {$_item == "Programs (man1)"} {
-	set current_section "man1"
-	configure -title "BRL-CAD Manual Page Browser (man1)"
-    }
-    if {$_item == "Libraries (man3)"} {
-	set current_section "man3"
-	configure -title "BRL-CAD Manual Page Browser (man3)"
-    }
-    if {$_item == "Conventions (man5)"} {
-	set current_section "man5"
-	configure -title "BRL-CAD Manual Page Browser (man5)"
-    }
-    if {$_item == "MGED (mann)"} {
-	set current_section "mann"
-	configure -title "BRL-CAD Manual Page Browser (mann)"
-    }
-
-    set childsite [$itk_component(treeAccordian) itemChildsite $_item]
-
-    refreshPageList
-    grid $itk_component(manpagelistbox) $itk_component(toc_scrollbar) -sticky nsew -in $childsite
-
-    grid columnconfigure $childsite 0 -weight 1
-    grid rowconfigure $childsite 0 -weight 1
-
-    raise $itk_component(manpagelistbox)
-    raise $itk_component(toc_scrollbar)
-
-    set mAccordianCallbackActive 0
 }
 
 # Local Variables:
