@@ -180,6 +180,33 @@ test document-1.5 {an oversized load preserves the current document} -setup {
     deleteWidget
 } -result {1 1 Original 1}
 
+test document-1.6 {exposures during page replacement and clear remain safe} -setup {
+    set paintingErrors {}
+    set previousBgerror [interp bgerror {}]
+    interp bgerror {} {apply {{message options} {
+        lappend ::paintingErrors $message
+    }}}
+    set widget [makeWidget]
+    $widget load {<p style="font: 48px serif">Original frame</p>}
+    update
+} -body {
+    set replacements 20
+    for {set iteration 1} {$iteration <= $replacements} {incr iteration} {
+        # An exposure can repaint the old frame before a queued page update.
+        event generate $widget <Expose>
+        $widget load "<title>Replacement $iteration</title><p style='font: 24px monospace'>Replacement frame</p>"
+        update
+        event generate $widget <Expose>
+        $widget clear
+        update
+    }
+    list [$widget text] [$widget title] $paintingErrors
+} -cleanup {
+    deleteWidget
+    interp bgerror {} $previousBgerror
+    unset paintingErrors previousBgerror
+} -result {{} {} {}}
+
 test search-1.1 {search option terminator permits a leading hyphen} -setup {
     set widget [makeWidget]
     $widget load {<p>-needle and needle</p>}
@@ -696,6 +723,29 @@ test lifecycle-1.1 {clear and command deletion release widget-owned resources} -
 } -cleanup {
     deleteWidget
 } -result {1 1 0 0}
+
+test lifecycle-1.2 {window and command deletion release images and helper commands} -setup {
+    set originalImages [lsort [image names]]
+} -body {
+    set results {}
+    foreach deletion {window command} {
+        set widget [makeWidget]
+        $widget load {<p>Temporary frame</p>}
+        update
+        if {$deletion eq "window"} {
+            destroy $widget
+        } else {
+            rename $widget {}
+        }
+        update
+        lappend results \
+            [expr {[lsort [image names]] eq $originalImages}] \
+            [expr {[llength [info commands .html*]] == 0}]
+    }
+    set results
+} -cleanup {
+    deleteWidget
+} -result {1 1 1 1}
 
 proc finishTests {} {
     set failed $::tcltest::numTests(Failed)
