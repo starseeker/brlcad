@@ -162,7 +162,7 @@ True if the object is a combination and has _n_ nodes. This option also supports
 Returns TRUE if the object has parameter _param_. Unlike *-attr*, which looks only at general attributes stored as metadata on objects, the *-param* filters based only on the internal geometric object's characteristics. If a specific value is also supplied for the parameter with an equal condition, TRUE is returned if the object both has the parameter and the parameter is set to value _val._ In the case of >, <, >=, and <= there are two possibilities - if _val_ is numerical a numerical comparison is performed, otherwise a string comparison is performed. Both _attrib_ and _val_ are treated as patterns under shell pattern matching rules when a string comparison is performed, but in numerical mode only the parameter name is pattern matched.
 +
 The following table outlines what parameters are visible to the *-param* option. Because BRL-CAD uses the same internal containers for some types, some parameters will be present even when they do not make sense for the specific subtype. Examples include using arb8's container for arb4 and tgc for rcc. Note: there are also a number of primitives whose parameters are not exposed in a way that that *-param* can access them: arbn, ars, brep, bspline, dsp, metaball, nmg, pipe, pnts, and poly.
-
++
 .Primitive Parameters
 [cols="2*"]
 |===
@@ -236,7 +236,7 @@ True if the size of the object is within the range specified. NOTE: for combs, e
 
 *-stdattr*::
 Returns TRUE if an object has ONLY standard attributes associated with it. Standard attributes in BRL-CAD are:
-
++
 .Standard Attributes
 [cols="2*"]
 |===
@@ -262,7 +262,7 @@ Returns TRUE if an object has ONLY standard attributes associated with it. Stand
 
 *-type* _pattern_::
 Returns TRUE if the type of the object matches _pattern._ Pattern evaluation is done using shell pattern matching. Types recognized include:
-
++
 .Primitives
 [cols="6*"]
 [%noheader]
@@ -316,9 +316,7 @@ Returns TRUE if the type of the object matches _pattern._ Pattern evaluation is 
 |
 |
 |===
-
-
-
++
 .Combinations
 [cols="2*"]
 |===
@@ -330,10 +328,6 @@ Returns TRUE if the type of the object matches _pattern._ Pattern evaluation is 
 |region
 |r, reg, region
 |===
-
-
-+
-
 +
 As a convenience, the *-type* option will also recognize the pattern *shape*, which will match any object that is _not_ a combination, region, annotation, constraint, grip or joint.
 +
@@ -737,75 +731,39 @@ At max verbosity, print the total number of items found in the search, the boole
 ====
 There are two available methods for working with sets of *search* results. The first is the *exec* option, which is used in the following example to search for all regions below subtractions or intersections in the m35.g example model in BRL-CAD and draw the objects' wireframes in the display manager:
 
-
 ....
-
-	  
-	    mged> search all.g -type region -and ( -below -bool - -or -below -bool + ) -exec draw "{}" ";"
-	    mged> autoview
-	  
-	
+mged> search all.g -type region -and ( -below -bool - -or -below -bool + ) -exec draw "{}" ";"
+mged> autoview
 ....
-
-
 
 Another possibility, especially useful for doing multiple sequential operations which would be awkward to write out in a single search line, is to assign the results of a search command to a Tcl variable. To illustrate, let's randomize the colors of all regions in the "cab" assembly of the m35.g example model and then assign a glass shader with transparency as a follow-on step.
 
 First, we collect the set of search results into a Tcl variable:
 
-
 ....
-
-	  
-	    mged>  set glob_compat_mode 0
-	    mged>  set search_results [search cab -type region]
-	  
-	
+mged> set glob_compat_mode 0
+mged> set search_results [search cab -type region]
 ....
-
-
 
 Next we randomize the colors using Tcl's functionality (here we use random numbers and avoid any value less than 30 to keep objects more visible):
 
-
 ....
-
-	  
-	    mged>  foreach i $search_results {attr set $i color [expr {int(rand()*225)+30}]/[expr {int(rand()*225)+30}]/[expr {int(rand()*225)+30}]}
-	  
-	
+mged> foreach i $search_results {attr set $i color [expr {int(rand()*225)+30}]/[expr {int(rand()*225)+30}]/[expr {int(rand()*225)+30}]}
 ....
-
-
 
 Finally, we add transparency to the same regions:
 
-
 ....
-
-	  
-	    mged>  foreach i $search_results {attr set $i shader {glass {tr 0.7 ri 1}}}
-	  
-	
+mged> foreach i $search_results {attr set $i shader {glass {tr 0.7 ri 1}}}
 ....
-
-
-
 
 [NOTE]
 ====
 Remember when setting region colors to check for the presence of a __regionid_colortable__ attribute on the _GLOBAL object - if such a table is present (the m35.g sample model has one, for example) you need to remove that table (and for MGED wireframes, re-open the database) before the colors on the individual regions will "take":
 
-
 ....
-
-	    
-	      mged>  attr rm _GLOBAL regionid_colortable
-	    
-	  
+mged> attr rm _GLOBAL regionid_colortable
 ....
-
-
 
 ====
 
