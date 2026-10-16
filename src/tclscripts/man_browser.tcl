@@ -288,26 +288,31 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 	itk_component add search_frame {
 	    ::tk::frame $itk_component(toc_panel).search_frame
 	} {}
-	label $itk_component(search_frame).label -text "Search:"
-	entry $itk_component(search_frame).entry \
+	set search_frame $itk_component(search_frame)
+	label $search_frame.label -text "Search:"
+	entry $search_frame.entry \
 	    -textvariable [::itcl::scope search_query] \
 	    -width 16
-	checkbutton $itk_component(search_frame).full \
+	frame $search_frame.controls
+	checkbutton $search_frame.controls.full \
 	    -text "Full text" \
 	    -variable [::itcl::scope search_mode] \
 	    -onvalue full \
 	    -offvalue short \
 	    -command [::itcl::code $this refreshPageList]
-	button $itk_component(search_frame).clear \
+	button $search_frame.controls.clear \
 	    -text "Clear" \
 	    -command [::itcl::code $this search "" short]
-	pack $itk_component(search_frame).label -side left
-	pack $itk_component(search_frame).entry -side left -fill x -expand yes
-	pack $itk_component(search_frame).full -side left
-	pack $itk_component(search_frame).clear -side left
-	bind $itk_component(search_frame).entry <KeyRelease> [::itcl::code $this refreshPageList]
-	bind $itk_component(search_frame).entry <Return> [::itcl::code $this refreshPageList]
-	pack $itk_component(search_frame) -side top -fill x
+	# A second row keeps the secondary controls from widening the sidebar.
+	grid $search_frame.label -row 0 -column 0 -sticky w
+	grid $search_frame.entry -row 0 -column 1 -sticky ew
+	grid $search_frame.controls -row 1 -column 0 -columnspan 2 -sticky ew
+	grid columnconfigure $search_frame 1 -weight 1
+	pack $search_frame.controls.full -side left
+	pack $search_frame.controls.clear -side right
+	bind $search_frame.entry <KeyRelease> [::itcl::code $this refreshPageList]
+	bind $search_frame.entry <Return> [::itcl::code $this refreshPageList]
+	pack $search_frame -side top -fill x
 
 	itk_component add treeAccordian {
 	    ::cadwidgets::Accordion $itk_component(toc_panel).treeAccordian
@@ -381,7 +386,12 @@ if {[llength [info commands manpage_search_terms]] == 0} {
         $widget_base yview scroll [expr {-%D/120}] units
     }
 
-    configure -height 600 -width 800
+    # Give the manual room to read while respecting smaller displays.
+    set default_width 1200
+    set default_height 800
+    lassign [wm maxsize $itk_component(hull)] max_width max_height
+    configure -width [expr {min($default_width, $max_width)}] \
+	-height [expr {min($default_height, $max_height)}]
     return $this
 }
 
