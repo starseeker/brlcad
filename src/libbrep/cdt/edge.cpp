@@ -1500,10 +1500,10 @@ split_edge_seg(struct ON_Brep_CDT_State *s_cdt, bedge_seg_t *bseg,
 	const double edge_length = 0.5 *
 	    (edge_point.DistanceTo(*bseg1->e_start) +
 	     edge_point.DistanceTo(*bseg1->e_end));
-	const auto miss = [&](cpolyedge_t *candidate) {
+	const auto miss = [&](cpolyedge_t *trim_segment) {
 	    fastf_t trim_parameter = 0.0;
 	    ON_2dPoint uv = get_trim_midpt(&trim_parameter, s_cdt,
-		candidate, edge_point, edge_length,
+		trim_segment, edge_point, edge_length,
 		edge.m_tolerance);
 	    const ON_Surface *surface = trim->SurfaceOf();
 	    if (!surface || !uv.IsValid())
