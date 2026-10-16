@@ -1386,6 +1386,8 @@ private:
             "/* asciiquack default stylesheet (minimal) */\n"
             "body{font-family:sans-serif;max-width:900px;margin:0 auto;padding:1em 2em;"
               "line-height:1.6;color:#333}\n"
+            // Manual pages should use the full width as the viewer grows.
+            "body.manpage{max-width:none}\n"
             "h1,h2,h3,h4,h5,h6{color:#2c5282;line-height:1.2;margin-top:1.4em}\n"
             "h1{font-size:2em;border-bottom:2px solid #2c5282;padding-bottom:.25em}\n"
             "h2{font-size:1.6em;border-bottom:1px solid #ccc}\n"

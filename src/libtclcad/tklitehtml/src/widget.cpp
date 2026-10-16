@@ -51,6 +51,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
@@ -83,6 +84,7 @@ constexpr char   kFileScheme[]       = "file://";
 constexpr char   kDefaultBackground[] = "white";
 constexpr char   kFindBackground[]    = "#fff29a";
 constexpr char   kCurrentBackground[] = "#ffbf69";
+constexpr char   kFrameImageType[]    = "tklitehtmlframe";
 constexpr std::size_t kDefaultMaxDocumentBytes = 16U * 1024U * 1024U;
 constexpr std::size_t kDefaultMaxImagePixels    = 16U * 1024U * 1024U;
 constexpr std::size_t kDefaultMaxViewportPixels = 16U * 1024U * 1024U;
@@ -167,6 +169,20 @@ void replace_obj(Tcl_Obj*& destination, Tcl_Obj* value)
         Tcl_DecrRefCount(destination);
     }
     destination = value;
+}
+
+int eval_command(Tcl_Interp* interp, std::initializer_list<Tcl_Obj*> arguments)
+{
+    for(auto* argument : arguments)
+    {
+        Tcl_IncrRefCount(argument);
+    }
+    const int result = Tcl_EvalObjv(interp, static_cast<int>(arguments.size()), arguments.begin(), TCL_EVAL_GLOBAL);
+    for(auto* argument : arguments)
+    {
+        Tcl_DecrRefCount(argument);
+    }
+    return result;
 }
 
 std::string trim_font_family(std::string family)
@@ -290,11 +306,13 @@ class HtmlWidget final : public litehtml::document_container
 {
   public:
     static int create(Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+    static void register_frame_image();
 
-    HtmlWidget(Tcl_Interp* interp, Tk_Window window) :
+    HtmlWidget(Tcl_Interp* interp, Tk_Window window, std::string canvas_command) :
         interp_(interp),
         window_(window),
-        display_(Tk_Display(window))
+        display_(Tk_Display(window)),
+        canvas_command_(std::move(canvas_command))
     {
     }
 
@@ -304,7 +322,9 @@ class HtmlWidget final : public litehtml::document_container
         {
             Tcl_CancelIdleCall(redraw_idle, this);
         }
+        destroy_frame_image();
         document_.reset();
+        frame_document_.reset();
         clear_images();
         clear_highlights();
         clear_text_colors();
@@ -331,6 +351,13 @@ class HtmlWidget final : public litehtml::document_container
     static void redraw_idle(ClientData client_data);
     static void image_changed(ClientData client_data, int, int, int, int, int, int);
     static void backing_image_changed(ClientData, int, int, int, int, int, int);
+    static int frame_created(Tcl_Interp* interp, const char*, int objc, Tcl_Obj* const objv[],
+                             const Tk_ImageType*, Tk_ImageMaster master, ClientData* client_data);
+    static ClientData frame_acquired(Tk_Window, ClientData client_data);
+    static void frame_displayed(ClientData client_data, Display*, Drawable drawable,
+                                 int image_x, int image_y, int width, int height, int drawable_x, int drawable_y);
+    static void frame_released(ClientData client_data, Display*);
+    static void frame_deleted(ClientData client_data);
 
     int command(int objc, Tcl_Obj* const objv[]);
     int configure(int objc, Tcl_Obj* const objv[]);
@@ -352,7 +379,11 @@ class HtmlWidget final : public litehtml::document_container
     void handle_event(XEvent* event);
     void schedule_redraw(bool layout = false);
     void redraw();
+    void paint_frame(Drawable drawable, int image_x, int image_y, int width, int height,
+                      int drawable_x, int drawable_y);
     int  ensure_backing_image();
+    int  ensure_frame_image();
+    void destroy_frame_image();
     void destroy_backing_image();
     int  resize_canvas();
     int  upload_canvas();
@@ -462,6 +493,7 @@ class HtmlWidget final : public litehtml::document_container
     XColor*  background_       = nullptr;
 
     std::string base_url_;
+    std::string canvas_command_;
     std::string document_base_url_;
     std::string html_source_;
     std::string user_stylesheet_;
@@ -469,6 +501,7 @@ class HtmlWidget final : public litehtml::document_container
     std::string title_;
 
     litehtml::document::ptr  document_;
+    litehtml::document::ptr  frame_document_;
     std::vector<TextRun>     text_runs_;
     std::vector<std::size_t> text_run_lookup_;
     std::map<std::string, Highlight> highlights_;
@@ -487,6 +520,8 @@ class HtmlWidget final : public litehtml::document_container
     std::string                backing_image_name_;
     Tk_PhotoHandle             backing_photo_ = nullptr;
     Tk_Image                   backing_image_ = nullptr;
+    std::string                frame_image_name_;
+    Tk_ImageMaster             frame_master_ = nullptr;
 
     std::vector<litehtml::position> clip_stack_;
     Tk_Cursor                      cursor_ = None;
@@ -514,16 +549,31 @@ int HtmlWidget::create(Tcl_Interp* interp, int objc, Tcl_Obj* const objv[])
         return TCL_ERROR;
     }
 
-    const char* path   = Tcl_GetString(objv[1]);
-    Tk_Window   window = Tk_CreateWindowFromPath(interp, main_window, path, nullptr);
+    const char* path = Tcl_GetString(objv[1]);
+    std::string canvas_command = std::string(path) + ".__canvas";
+    // A canvas owns the platform buffering; our frame image paints its
+    // background and text into the same drawable through public Tk APIs.
+    if(eval_command(interp, {Tcl_NewStringObj("canvas", -1), objv[1],
+                             Tcl_NewStringObj("-borderwidth", -1), Tcl_NewIntObj(0),
+                             Tcl_NewStringObj("-highlightthickness", -1), Tcl_NewIntObj(0)}) != TCL_OK)
+    {
+        return TCL_ERROR;
+    }
+    Tk_Window window = Tk_NameToWindow(interp, path, main_window);
     if(window == nullptr)
     {
+        return TCL_ERROR;
+    }
+    if(eval_command(interp, {Tcl_NewStringObj("rename", -1), objv[1],
+                             Tcl_NewStringObj(canvas_command.c_str(), -1)}) != TCL_OK)
+    {
+        Tk_DestroyWindow(window);
         return TCL_ERROR;
     }
 
     try
     {
-        auto widget = std::make_unique<HtmlWidget>(interp, window);
+        auto widget = std::make_unique<HtmlWidget>(interp, window, std::move(canvas_command));
         Tk_SetClass(window, "TkLiteHtml");
         widget->background_ = Tk_GetColor(interp, window, Tk_GetUid(kDefaultBackground));
         if(widget->background_ == nullptr)
@@ -592,6 +642,9 @@ void HtmlWidget::command_deleted(ClientData client_data)
 {
     auto* widget = static_cast<HtmlWidget*>(client_data);
     widget->command_token_ = nullptr;
+    // Detach image instances before widget deletion can release their
+    // last reference from inside Tk's image cleanup callback.
+    widget->destroy_frame_image();
     if(widget->window_ != nullptr)
     {
         widget->destroying_ = true;
@@ -673,6 +726,71 @@ void HtmlWidget::image_changed(ClientData client_data, int, int, int, int, int, 
 }
 
 void HtmlWidget::backing_image_changed(ClientData, int, int, int, int, int, int) {}
+
+void HtmlWidget::register_frame_image()
+{
+    // Tk retains image type records for the lifetime of the process.
+    static Tk_ImageType type = [] {
+        Tk_ImageType image_type{};
+        image_type.name = kFrameImageType;
+        image_type.createProc = frame_created;
+        image_type.getProc = frame_acquired;
+        image_type.displayProc = frame_displayed;
+        image_type.freeProc = frame_released;
+        image_type.deleteProc = frame_deleted;
+        return image_type;
+    }();
+    Tk_CreateImageType(&type);
+}
+
+int HtmlWidget::frame_created(Tcl_Interp* interp, const char*, int objc, Tcl_Obj* const objv[],
+                               const Tk_ImageType*, Tk_ImageMaster master, ClientData* client_data)
+{
+    Tcl_CmdInfo command{};
+    if(objc != 1 || !Tcl_GetCommandInfo(interp, Tcl_GetString(objv[0]), &command) ||
+       command.objProc != widget_command)
+    {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("a frame image requires an HTML widget", -1));
+        return TCL_ERROR;
+    }
+    auto* widget = static_cast<HtmlWidget*>(command.objClientData);
+    widget->frame_master_ = master;
+    *client_data = widget;
+    return TCL_OK;
+}
+
+ClientData HtmlWidget::frame_acquired(Tk_Window, ClientData client_data)
+{
+    // Canvas image instances must release the widget before it is freed.
+    Tcl_Preserve(client_data);
+    return client_data;
+}
+
+void HtmlWidget::frame_displayed(ClientData client_data, Display*, Drawable drawable,
+                                  int image_x, int image_y, int width, int height, int drawable_x, int drawable_y)
+{
+    auto* widget = static_cast<HtmlWidget*>(client_data);
+    Tcl_Preserve(widget);
+    try
+    {
+        widget->paint_frame(drawable, image_x, image_y, width, height, drawable_x, drawable_y);
+    } catch(...)
+    {
+        exception_result(widget->interp_, "frame painting");
+        Tcl_BackgroundException(widget->interp_, TCL_ERROR);
+    }
+    Tcl_Release(widget);
+}
+
+void HtmlWidget::frame_released(ClientData client_data, Display*)
+{
+    Tcl_Release(client_data);
+}
+
+void HtmlWidget::frame_deleted(ClientData client_data)
+{
+    static_cast<HtmlWidget*>(client_data)->frame_master_ = nullptr;
+}
 
 int HtmlWidget::command(int objc, Tcl_Obj* const objv[])
 {
@@ -1226,6 +1344,9 @@ void HtmlWidget::redraw()
     }
     reset_clip();
     paint_text_.clear();
+    // Tk may repaint the previous frame before the next redraw idle.
+    // Keep its fonts alive when a page is replaced or cleared.
+    frame_document_ = document_;
     const litehtml::web_color background(static_cast<litehtml::byte>(background_->red >> 8),
                                          static_cast<litehtml::byte>(background_->green >> 8),
                                          static_cast<litehtml::byte>(background_->blue >> 8));
@@ -1241,7 +1362,24 @@ void HtmlWidget::redraw()
         Tcl_BackgroundException(interp_, TCL_ERROR);
         return;
     }
-    Tk_RedrawImage(backing_image_, 0, 0, canvas_width_, canvas_height_, Tk_WindowId(window_), 0, 0);
+    if(ensure_frame_image() != TCL_OK)
+    {
+        Tcl_BackgroundException(interp_, TCL_ERROR);
+        return;
+    }
+    Tk_ImageChanged(frame_master_, 0, 0, canvas_width_, canvas_height_, canvas_width_, canvas_height_);
+}
+
+void HtmlWidget::paint_frame(Drawable drawable, int image_x, int image_y, int width, int height,
+                              int drawable_x, int drawable_y)
+{
+    if(backing_image_ == nullptr)
+    {
+        return;
+    }
+    Tk_RedrawImage(backing_image_, image_x, image_y, width, height, drawable, drawable_x, drawable_y);
+    const int offset_x = drawable_x - image_x;
+    const int offset_y = drawable_y - image_y;
     for(const auto& text : paint_text_)
     {
         TextColor* color = text_color_for(text.color);
@@ -1249,8 +1387,9 @@ void HtmlWidget::redraw()
         {
             continue;
         }
-        Tk_DrawChars(display_, Tk_WindowId(window_), color->gc, text.font->tk_font, text.text.c_str(),
-                     static_cast<int>(text.text.size()), text.x, text.y + text.font->metrics.ascent);
+        Tk_DrawChars(display_, drawable, color->gc, text.font->tk_font, text.text.c_str(),
+                     static_cast<int>(text.text.size()), saturating_add(text.x, offset_x),
+                     saturating_add(saturating_add(text.y, offset_y), text.font->metrics.ascent));
     }
 }
 
@@ -1261,17 +1400,9 @@ int HtmlWidget::ensure_backing_image()
         return TCL_OK;
     }
     backing_image_name_ = internal_image_name("backing", 0);
-    Tcl_Obj* arguments[4] = {Tcl_NewStringObj("image", -1), Tcl_NewStringObj("create", -1),
-                             Tcl_NewStringObj("photo", -1), Tcl_NewStringObj(backing_image_name_.c_str(), -1)};
-    for(auto* argument : arguments)
-    {
-        Tcl_IncrRefCount(argument);
-    }
-    const int result = Tcl_EvalObjv(interp_, 4, arguments, TCL_EVAL_GLOBAL);
-    for(auto* argument : arguments)
-    {
-        Tcl_DecrRefCount(argument);
-    }
+    const int result = eval_command(interp_, {Tcl_NewStringObj("image", -1), Tcl_NewStringObj("create", -1),
+                                             Tcl_NewStringObj("photo", -1),
+                                             Tcl_NewStringObj(backing_image_name_.c_str(), -1)});
     if(result != TCL_OK)
     {
         return TCL_ERROR;
@@ -1286,6 +1417,41 @@ int HtmlWidget::ensure_backing_image()
     }
     Tcl_ResetResult(interp_);
     return TCL_OK;
+}
+
+int HtmlWidget::ensure_frame_image()
+{
+    if(frame_master_ != nullptr)
+    {
+        return TCL_OK;
+    }
+    frame_image_name_ = internal_image_name("frame", 0);
+    if(eval_command(interp_, {Tcl_NewStringObj("image", -1), Tcl_NewStringObj("create", -1),
+                              Tcl_NewStringObj(kFrameImageType, -1), Tcl_NewStringObj(frame_image_name_.c_str(), -1),
+                              Tcl_NewStringObj(Tk_PathName(window_), -1)}) != TCL_OK)
+    {
+        return TCL_ERROR;
+    }
+    const int result = eval_command(interp_, {Tcl_NewStringObj(canvas_command_.c_str(), -1),
+                                             Tcl_NewStringObj("create", -1), Tcl_NewStringObj("image", -1),
+                                             Tcl_NewIntObj(0), Tcl_NewIntObj(0),
+                                             Tcl_NewStringObj("-anchor", -1), Tcl_NewStringObj("nw", -1),
+                                             Tcl_NewStringObj("-image", -1),
+                                             Tcl_NewStringObj(frame_image_name_.c_str(), -1)});
+    if(result != TCL_OK)
+    {
+        destroy_frame_image();
+    }
+    return result;
+}
+
+void HtmlWidget::destroy_frame_image()
+{
+    if(!frame_image_name_.empty())
+    {
+        Tk_DeleteImage(interp_, frame_image_name_.c_str());
+        frame_image_name_.clear();
+    }
 }
 
 void HtmlWidget::destroy_backing_image()
@@ -2924,6 +3090,7 @@ int widget_factory(ClientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv
 
 int register_widget_command(Tcl_Interp* interp)
 {
+    HtmlWidget::register_frame_image();
     if(Tcl_CreateObjCommand(interp, "::tklitehtml::widget", widget_factory, nullptr, nullptr) == nullptr)
     {
         return TCL_ERROR;
