@@ -41,6 +41,19 @@ if(BRLCAD_EXTRADOCS)
     COMMAND ${CMAKE_COMMAND} -DBRLMAN=$<TARGET_FILE:brlman>
       -P ${CMAKE_CURRENT_SOURCE_DIR}/console_test.cmake)
 endif()
+if(NOT BRLCAD_ENABLE_QT AND TARGET libtclcad AND TK_LIBRARY)
+  set(reflow_test_command ${TCL_TCLSH} "${CMAKE_CURRENT_SOURCE_DIR}/reflow_test.tcl"
+    $<TARGET_FILE:libtclcad> $<TARGET_FILE:asciiquack>)
+  if(BRLCAD_X11_PROVIDER_RESOLVED STREQUAL "XMIN")
+    brlcad_add_gui_test(NAME brlman-html-reflow SCREEN 2560x1200x24
+      COMMAND ${reflow_test_command})
+  else()
+    brlcad_add_test(NAME brlman-html-reflow COMMAND ${reflow_test_command})
+  endif()
+  if(TEST brlman-html-reflow)
+    set_tests_properties(brlman-html-reflow PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+  endif()
+endif()
 if(BRLCAD_ENABLE_QT)
   target_compile_definitions(brlman PRIVATE USE_QT)
 endif(BRLCAD_ENABLE_QT)
@@ -65,6 +78,7 @@ cmakefiles(
   console.cpp
   html_text_test.cpp
   console_test.cmake
+  reflow_test.tcl
   brlman.tcl
 )
 

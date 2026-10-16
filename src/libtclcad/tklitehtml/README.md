@@ -9,9 +9,10 @@ The renderer deliberately has a small dependency surface: Tcl/Tk and
 litehtml. It does not use Cairo, Pango, or a platform graphics API
 directly. Backgrounds, images, borders, gradients, and highlights are
 composed into an RGBA buffer and uploaded through Tk's photo API; text
-measurement and drawing use Tk's public font APIs. This keeps the
-implementation applicable to X11, Windows, macOS Aqua, and other Tk
-ports.
+measurement and drawing use Tk's public font APIs. A canvas image paints
+the background and text together, letting Tk buffer each complete frame
+through its portable API. This keeps the implementation applicable to
+X11, Windows, macOS Aqua, and other Tk ports.
 
 ## Build
 
