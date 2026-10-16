@@ -1125,6 +1125,64 @@ telemetry_signals(const BObolLodControlTraceState &state)
 }
 
 static std::string
+telemetry_structural_reducer(const BObolLodControlTraceState &state)
+{
+    const uint64_t blockers = state.structuralSuccessorBlockerMask;
+    TelemetryJsonObject blockerState;
+    blockerState.boolean("no_frontier",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_NO_FRONTIER);
+    blockerState.boolean("projection_inexact",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_PROJECTION_INEXACT);
+    blockerState.boolean("auto_submit_disabled",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_AUTO_SUBMIT_DISABLED);
+    blockerState.boolean("service_unavailable",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_SERVICE_UNAVAILABLE);
+    blockerState.boolean("interaction_active",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_INTERACTION_ACTIVE);
+    blockerState.boolean("census_incomplete",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_CENSUS_INCOMPLETE);
+    blockerState.boolean("submission_active",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_SUBMISSION_ACTIVE);
+    blockerState.boolean("presentation_barrier",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_PRESENTATION_BARRIER);
+    blockerState.boolean("triangle_recovery",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_TRIANGLE_RECOVERY);
+    blockerState.boolean("residency_busy",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_RESIDENCY_BUSY);
+    blockerState.boolean("population_unsettled",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_POPULATION_UNSETTLED);
+    blockerState.boolean("result_work",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_RESULT_WORK);
+
+    TelemetryJsonObject result;
+    result.boolean("occurrence_coverage_exact",
+	state.structuralOccurrenceCoverageExact != FALSE);
+    result.boolean("projection_exact",
+	state.structuralProjectionExact != FALSE);
+    result.integer("projection_visible_count",
+	state.structuralProjectionVisibleCount);
+    result.integer("unresolved_occurrence_count",
+	state.structuralUnresolvedOccurrenceCount);
+    result.boolean("population_settled",
+	state.structuralPopulationSettled != FALSE);
+    result.boolean("complete_visible_count_valid",
+	state.structuralCompleteVisibleCountValid != FALSE);
+    result.boolean("mesh_first_scene_safe",
+	state.structuralMeshFirstSceneSafe != FALSE);
+    result.boolean("point_aggregation_owner",
+	state.structuralPointAggregationOwner != FALSE);
+    result.boolean("point_policy_exhausted",
+	state.structuralPointPolicyExhausted != FALSE);
+    result.boolean("external_producers_settled",
+	state.structuralExternalProducersSettled != FALSE);
+    result.boolean("successor_base_ready",
+	state.structuralSuccessorBaseReady != FALSE);
+    result.integer("blocker_mask", blockers);
+    result.raw("blockers", blockerState.take());
+    return result.take();
+}
+
+static std::string
 telemetry_state(const BObolLodControlTraceState &state, bool sanitize)
 {
     const BObolLodConvergenceStatus &status = state.convergence;
@@ -1151,6 +1209,7 @@ telemetry_state(const BObolLodControlTraceState &state, bool sanitize)
     result.raw("gpu", telemetry_gpu(status));
     result.raw("pending", telemetry_pending(state));
     result.raw("submission", telemetry_submission(state));
+    result.raw("structural_reducer", telemetry_structural_reducer(state));
     result.raw("signals", telemetry_signals(state));
     result.integer("presentation_transaction_serial",
 	status.presentationTransactionSerial);

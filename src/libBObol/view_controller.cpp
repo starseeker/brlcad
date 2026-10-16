@@ -993,6 +993,9 @@ BObolLodControlTraceState::BObolLodControlTraceState(void) :
     submissionDeltaEntryCount(0),
     structuralRepairFrontierCount(0),
     structuralRepairCoverageCostReservation(0),
+    structuralProjectionVisibleCount(0),
+    structuralUnresolvedOccurrenceCount(0),
+    structuralSuccessorBlockerMask(0),
     submissionPassMissingMeshBudgetBlockedCount(0),
     lastSubmissionVisitedMeshCount(0),
     lastSubmissionSubmittedTaskCount(0),
@@ -1003,6 +1006,15 @@ BObolLodControlTraceState::BObolLodControlTraceState(void) :
     interactionActive(FALSE),
     structuralRepairTerminalProxy(FALSE),
     structuralRepairPointRelaxation(FALSE),
+    structuralOccurrenceCoverageExact(FALSE),
+    structuralProjectionExact(FALSE),
+    structuralPopulationSettled(FALSE),
+    structuralCompleteVisibleCountValid(FALSE),
+    structuralMeshFirstSceneSafe(FALSE),
+    structuralPointAggregationOwner(FALSE),
+    structuralPointPolicyExhausted(FALSE),
+    structuralExternalProducersSettled(FALSE),
+    structuralSuccessorBaseReady(FALSE),
     submissionPassAdmittedWork(FALSE),
     submissionPassCutAdvanced(FALSE),
     submissionPassRefinementPending(FALSE),
@@ -1073,6 +1085,12 @@ controller_lod_control_trace_state_equal(
 	    right.structuralRepairFrontierCount &&
 	left.structuralRepairCoverageCostReservation ==
 	    right.structuralRepairCoverageCostReservation &&
+	left.structuralProjectionVisibleCount ==
+	    right.structuralProjectionVisibleCount &&
+	left.structuralUnresolvedOccurrenceCount ==
+	    right.structuralUnresolvedOccurrenceCount &&
+	left.structuralSuccessorBlockerMask ==
+	    right.structuralSuccessorBlockerMask &&
 	left.submissionPassMissingMeshBudgetBlockedCount ==
 	    right.submissionPassMissingMeshBudgetBlockedCount &&
 	left.lastSubmissionVisitedMeshCount ==
@@ -1090,6 +1108,23 @@ controller_lod_control_trace_state_equal(
 	    right.structuralRepairTerminalProxy &&
 	left.structuralRepairPointRelaxation ==
 	    right.structuralRepairPointRelaxation &&
+	left.structuralOccurrenceCoverageExact ==
+	    right.structuralOccurrenceCoverageExact &&
+	left.structuralProjectionExact == right.structuralProjectionExact &&
+	left.structuralPopulationSettled ==
+	    right.structuralPopulationSettled &&
+	left.structuralCompleteVisibleCountValid ==
+	    right.structuralCompleteVisibleCountValid &&
+	left.structuralMeshFirstSceneSafe ==
+	    right.structuralMeshFirstSceneSafe &&
+	left.structuralPointAggregationOwner ==
+	    right.structuralPointAggregationOwner &&
+	left.structuralPointPolicyExhausted ==
+	    right.structuralPointPolicyExhausted &&
+	left.structuralExternalProducersSettled ==
+	    right.structuralExternalProducersSettled &&
+	left.structuralSuccessorBaseReady ==
+	    right.structuralSuccessorBaseReady &&
 	left.submissionPassAdmittedWork ==
 	    right.submissionPassAdmittedWork &&
 	left.submissionPassCutAdvanced == right.submissionPassCutAdvanced &&
@@ -7873,6 +7908,115 @@ BObolViewController::captureLodControlTraceState(void) const
 	this->d->lodStructuralRepair.frontierCount();
     state.structuralRepairCoverageCostReservation =
 	this->d->lodStructuralRepair.coverageCostReservation();
+    const BObolViewLodState *viewLodState = this->d->viewAttachment ?
+	this->d->viewAttachment->getViewLodState() : NULL;
+    size_t subpixelOccurrences = 0;
+    size_t structuralBoxes = 0;
+    const bool exactOccurrenceCoverage = viewLodState &&
+	viewLodState->lastCadPresentationOccurrenceCoverage(
+	    subpixelOccurrences, structuralBoxes);
+    const size_t terminalFailures = viewLodState ?
+	viewLodState->cadOccurrenceTerminalFailureCount() : 0;
+    const size_t unresolvedStructuralCount =
+	structuralBoxes > terminalFailures ?
+	    structuralBoxes - terminalFailures : 0;
+    BObolViewLodState::CadStructuralProjectionHistogram projection;
+    const bool exactStructuralProjection = viewLodState &&
+	viewLodState->lastCadStructuralProjectionHistogram(projection);
+    const bool externalProducersSettled =
+	this->d->lodAvailabilityLedger.providerPendingCount() == 0;
+    const std::vector<SoBRLDatabaseSource *> structuralSources =
+	controller_render_database_source_roots(this);
+    const bool structuralPopulationSettled =
+	controller_lod_structural_population_settled(
+	    structuralSources, externalProducersSettled);
+    const bool meshFirstSceneSafe =
+	controller_lod_mesh_first_scene_safe(structuralSources);
+    const size_t maximumFirstWaveOccurrences =
+	BObolLodAdmissionPlanner::structuralFirstWaveOccurrenceLimit(
+	    this->d->lodAdmissionEvidence.capacity().currentBudget());
+    const bool pointAggregationOwnsStructuralFrontier =
+	!meshFirstSceneSafe &&
+	BObolLodAdmissionPlanner::pointAggregationApplicable(
+	    exactStructuralProjection ? projection.visibleCount : 0) &&
+	this->d->structuralPointAggregationRequired(
+	    maximumFirstWaveOccurrences) &&
+	maximumFirstWaveOccurrences != SIZE_MAX;
+    const size_t unaggregatableStructuralCount =
+	exactStructuralProjection ?
+	    BObolLodAdmissionPlanner::unaggregatableStructuralCount(
+		projection.cumulativeCount, projection.visibleCount) : 0;
+    const bool pointPolicyExhausted = BObolLodAdmissionPlanner::
+	pointPolicyExhaustedForStructuralFrontier(
+	    BObolLodAdmissionPlanner::pointAtMaximumPixelThreshold(
+		this->d->lodPresentationPointProxyPixelThreshold),
+	    pointAggregationOwnsStructuralFrontier,
+	    exactStructuralProjection, unresolvedStructuralCount,
+	    unaggregatableStructuralCount);
+    const BObolLodGenerationWorkStatus generationWork = this->d->lodService ?
+	this->d->lodService->generationWorkStatus(
+	    this->d->lodActiveGeneration) : BObolLodGenerationWorkStatus();
+    const bool unresolvedStructuralPresentation =
+	exactOccurrenceCoverage && unresolvedStructuralCount > 0;
+    const bool structuralResidencyAvailable =
+	BObolLodAvailabilityScheduler::structuralRepairMayOwn(
+	    this->d->lodAvailabilityLedger.residentGrowthPending(),
+	    this->d->lodAvailabilityLedger.residencyDrainActive());
+    uint64_t structuralBlockers = 0;
+    if (!unresolvedStructuralPresentation)
+	structuralBlockers |= BOBOL_LOD_STRUCTURAL_SUCCESSOR_NO_FRONTIER;
+    if (!exactStructuralProjection)
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_PROJECTION_INEXACT;
+    if (!this->d->lodAutoSubmit)
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_AUTO_SUBMIT_DISABLED;
+    if (!this->d->lodService)
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_SERVICE_UNAVAILABLE;
+    if (this->d->lodInteractionSession.active())
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_INTERACTION_ACTIVE;
+    if (!this->d->lodCoveragePolicy.hasCompleteVisibleCount())
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_CENSUS_INCOMPLETE;
+    if (this->d->lodSubmissionPass.active())
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_SUBMISSION_ACTIVE;
+    if (this->d->lodPresentationTransaction.barrierPending())
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_PRESENTATION_BARRIER;
+    if (this->d->lodPointQualityPhase.triangleRecoveryPending())
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_TRIANGLE_RECOVERY;
+    if (!structuralResidencyAvailable)
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_RESIDENCY_BUSY;
+    if (!structuralPopulationSettled)
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_POPULATION_UNSETTLED;
+    if (generationWork.hasResultWork())
+	structuralBlockers |= BOBOL_LOD_STRUCTURAL_SUCCESSOR_RESULT_WORK;
+    state.structuralProjectionVisibleCount = projection.visibleCount;
+    state.structuralUnresolvedOccurrenceCount = unresolvedStructuralCount;
+    state.structuralSuccessorBlockerMask = structuralBlockers;
+    state.structuralOccurrenceCoverageExact =
+	exactOccurrenceCoverage ? TRUE : FALSE;
+    state.structuralProjectionExact =
+	exactStructuralProjection ? TRUE : FALSE;
+    state.structuralPopulationSettled =
+	structuralPopulationSettled ? TRUE : FALSE;
+    state.structuralCompleteVisibleCountValid =
+	this->d->lodCoveragePolicy.hasCompleteVisibleCount() ? TRUE : FALSE;
+    state.structuralMeshFirstSceneSafe = meshFirstSceneSafe ? TRUE : FALSE;
+    state.structuralPointAggregationOwner =
+	pointAggregationOwnsStructuralFrontier ? TRUE : FALSE;
+    state.structuralPointPolicyExhausted =
+	pointPolicyExhausted ? TRUE : FALSE;
+    state.structuralExternalProducersSettled =
+	externalProducersSettled ? TRUE : FALSE;
+    state.structuralSuccessorBaseReady =
+	structuralBlockers == 0 ? TRUE : FALSE;
     state.submissionPassMissingMeshBudgetBlockedCount =
 	this->d->lodRetainedPass.missingMeshBudgetBlockedCount();
     state.lastSubmissionVisitedMeshCount =
