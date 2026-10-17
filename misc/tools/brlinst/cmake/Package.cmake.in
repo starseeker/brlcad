@@ -1,0 +1,35 @@
+if(NOT IS_DIRECTORY "${CPACK_TEMPORARY_DIRECTORY}")
+  message(FATAL_ERROR "brlinst requires CPack External staging")
+endif()
+set(_brlinst_output "${CPACK_TOPLEVEL_DIRECTORY}/${CPACK_PACKAGE_FILE_NAME}.@BRLINST_FORMAT@")
+# CPack owns and clears CPACK_TOPLEVEL_DIRECTORY for every packaging run.
+set(_brlinst_config "@BRLINST_CONFIG@")
+if(@BRLI_FILTER_SHORTCUTS@)
+  # Only the generated BRL-CAD defaults use this filter. User-supplied product
+  # configurations remain strict and report missing targets as errors.
+  file(READ "${_brlinst_config}" _brlinst_product)
+  string(JSON _brlinst_count LENGTH "${_brlinst_product}" shortcuts)
+  set(_brlinst_links "[]")
+  if(_brlinst_count GREATER 0)
+    math(EXPR _brlinst_last "${_brlinst_count} - 1")
+    foreach(_brlinst_index RANGE 0 ${_brlinst_last})
+      string(JSON _brlinst_link GET "${_brlinst_product}" shortcuts ${_brlinst_index})
+      string(JSON _brlinst_target GET "${_brlinst_link}" target)
+      if(EXISTS "${CPACK_TEMPORARY_DIRECTORY}/${_brlinst_target}")
+        string(JSON _brlinst_next LENGTH "${_brlinst_links}")
+        string(JSON _brlinst_links SET "${_brlinst_links}" ${_brlinst_next} "${_brlinst_link}")
+      endif()
+    endforeach()
+  endif()
+  string(JSON _brlinst_product SET "${_brlinst_product}" shortcuts "${_brlinst_links}")
+  set(_brlinst_config "${CPACK_TOPLEVEL_DIRECTORY}/brlinst-product.json")
+  file(WRITE "${_brlinst_config}" "${_brlinst_product}\n")
+endif()
+execute_process(
+  COMMAND "@BRLINST_EXECUTABLE@" --format "@BRLINST_FORMAT@" --config "${_brlinst_config}"
+    --source "${CPACK_TEMPORARY_DIRECTORY}" --output "${_brlinst_output}"
+  RESULT_VARIABLE _brlinst_result)
+if(NOT _brlinst_result EQUAL 0)
+  message(FATAL_ERROR "brlinst failed with exit code ${_brlinst_result}")
+endif()
+set(CPACK_EXTERNAL_BUILT_PACKAGES "${_brlinst_output}")
