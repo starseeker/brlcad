@@ -161,7 +161,7 @@ class TkObolEndpointHost;
 class TkObolProgressiveScheduler {
 public:
     void add(TkObolEndpointHost *host);
-    void remove(TkObolEndpointHost *host);
+    void removeHost(TkObolEndpointHost *host);
     void request(void);
 
 private:
@@ -378,7 +378,7 @@ public:
 	if (Tcl_GetCurrentThread() == this->owner_thread)
 	Tcl_DeleteEvents(delete_event, this);
 	this->event_queued.store(false);
-	tk_obol_progressive_scheduler().remove(this);
+	tk_obol_progressive_scheduler().removeHost(this);
 	if (this->heartbeat_timer) {
 	    Tcl_DeleteTimerHandler(this->heartbeat_timer);
 	    this->heartbeat_timer = NULL;
@@ -1287,7 +1287,7 @@ TkObolProgressiveScheduler::add(TkObolEndpointHost *host)
 }
 
 void
-TkObolProgressiveScheduler::remove(TkObolEndpointHost *host)
+TkObolProgressiveScheduler::removeHost(TkObolEndpointHost *host)
 {
     const auto found = std::find(this->hosts.begin(), this->hosts.end(), host);
     if (found == this->hosts.end())

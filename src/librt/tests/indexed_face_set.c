@@ -401,14 +401,12 @@ check_database_object(const char *database, const char *object)
 	if (set.indices[i] >= 0)
 	    referenced[set.indices[i]] = 1;
     }
-    int have_referenced_bounds = 0;
     for (size_t i = 0; i < set.point_count; i++) {
 	if (!referenced[i])
 	    continue;
-	if (!have_referenced_bounds) {
+	if (!referenced_count) {
 	    VMOVE(mesh_min, set.points[i]);
 	    VMOVE(mesh_max, set.points[i]);
-	    have_referenced_bounds = 1;
 	} else {
 	    VMINMAX(mesh_min, mesh_max, set.points[i]);
 	}
@@ -420,15 +418,13 @@ check_database_object(const char *database, const char *object)
      * mesh which was actually tested and found open. */
     if (set.point_count <= 1024)
 	closed_check = face_set_closed_volume(&set, &volume);
-    const int source_bounds = rt_bound_internal(dbip, dp, source_min,
-	source_max) == 0;
     bu_log("%s: points=%zu referenced=%zu indices=%zu closed_check=%d "
 	"volume=%.17g "
 	"mesh_min=(%.17g %.17g %.17g) mesh_max=(%.17g %.17g %.17g)",
 	object, set.point_count, referenced_count, set.index_count, closed_check,
 	volume,
 	V3ARGS(mesh_min), V3ARGS(mesh_max));
-    if (source_bounds)
+    if (rt_bound_internal(dbip, dp, source_min, source_max) == 0)
 	bu_log(" source_min=(%.17g %.17g %.17g) "
 	    "source_max=(%.17g %.17g %.17g)",
 	    V3ARGS(source_min), V3ARGS(source_max));
