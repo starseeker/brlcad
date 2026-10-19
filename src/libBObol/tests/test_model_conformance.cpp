@@ -431,7 +431,7 @@ cad_timing_evidence_scenario(void)
 	}) || !scenario.step("CompleteReusableCadReplay", [&]() {
 	    evidence.noteCadPresentation(replayNanoseconds, pointThreshold,
 		renderCost, false, uploadBytes);
-	}, [replayNanoseconds](const ConformanceState &,
+	}, [](const ConformanceState &,
 		const ConformanceState &after) {
 	    return after.evidenceValid &&
 		after.evidenceValue == replayNanoseconds;
@@ -539,7 +539,7 @@ presentation_barrier_scenario(void)
 	(void)transaction.arm(
 	    BObolLodPresentationTransaction::REASON_CUT_PRESENTATION,
 	    FirstCompletedRenderSerial, FirstViewEpoch, FirstPolicyEpoch);
-    }, [FirstRequiredRenderSerial](const ConformanceState &,
+    }, [](const ConformanceState &,
 	    const ConformanceState &after) {
 	return after.transactionBarrierPending &&
 	    after.requiredRenderSerial == FirstRequiredRenderSerial;

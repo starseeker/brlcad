@@ -354,9 +354,9 @@ public:
     int faceCount(void) const { return static_cast<int>(faces.size()); }
     SbBool featurePosition(SoBRLIndexedEditManipulator::Domain domain,
 	int index, SbVec3f &position) const;
-    ManipulatorGeometry buildGeometry(SbBool visible,
-	SoBRLIndexedEditManipulator::Domain domain, int selectedIndex,
-	int hoverIndex, int activeIndex) const;
+    ManipulatorGeometry buildGeometry(SbBool isVisible,
+	SoBRLIndexedEditManipulator::Domain domain, int selectedFeatureIndex,
+	int hoverFeatureIndex, int activeFeatureIndex) const;
 };
 
 
@@ -578,12 +578,12 @@ SoBRLIndexedEditManipulator::faceCount(void) const
 
 
 ManipulatorGeometry
-SoBRLIndexedEditManipulator::Private::buildGeometry(SbBool visible,
-	SoBRLIndexedEditManipulator::Domain domain, int selectedIndex,
-	int hoverIndex, int activeIndex) const
+SoBRLIndexedEditManipulator::Private::buildGeometry(SbBool isVisible,
+	SoBRLIndexedEditManipulator::Domain domain, int selectedFeatureIndex,
+	int hoverFeatureIndex, int activeFeatureIndex) const
 {
     ManipulatorGeometry geometry;
-    if (!visible || points.empty())
+    if (!isVisible || points.empty())
 	return geometry;
 
     geometry.owners.reserve(MAX_INDEXED_MANIPULATOR_CHILD_COUNT);
@@ -648,7 +648,7 @@ SoBRLIndexedEditManipulator::Private::buildGeometry(SbBool visible,
     geometry.owners.push_back(std::move(pointRootOwner));
 
     const int emphasis[3] = {
-	selectedIndex, hoverIndex, activeIndex
+	selectedFeatureIndex, hoverFeatureIndex, activeFeatureIndex
     };
     const SbColor emphasisColors[3] = {
 	SbColor(1.0f, 1.0f, 1.0f), SbColor(1.0f, 1.0f, 0.2f),
