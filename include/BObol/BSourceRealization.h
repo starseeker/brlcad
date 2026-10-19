@@ -30,7 +30,7 @@
 #include <vector>
 
 class SoBRLDatabaseSource;
-class BObolCompactOccurrenceStream;
+struct BObolCompactOccurrenceStream;
 struct db_i;
 
 typedef int (*BObolSourceWarmManifestProbe)(

@@ -406,7 +406,7 @@ private:
     class Rate {
     public:
 	bool observe(const WorkRank &rank, int64_t nowMicroseconds,
-	    int64_t episodeStartMicroseconds)
+	    int64_t episodeBeginMicroseconds)
 	{
 	    if (!rank.present || rank.total == 0) {
 		const bool changed = this->observing;
@@ -423,11 +423,11 @@ private:
 		this->sampleCompleted = completed;
 		this->sampleMicroseconds = nowMicroseconds;
 		if (!this->rateAvailable && completed > 0 &&
-		    episodeStartMicroseconds > 0 &&
-		    nowMicroseconds - episodeStartMicroseconds >=
+		    episodeBeginMicroseconds > 0 &&
+		    nowMicroseconds - episodeBeginMicroseconds >=
 			minimumRateIntervalMicroseconds) {
 		    this->updateRate(static_cast<long double>(
-			nowMicroseconds - episodeStartMicroseconds) /
+			nowMicroseconds - episodeBeginMicroseconds) /
 			static_cast<long double>(completed));
 		}
 		return true;

@@ -321,7 +321,7 @@ test_concurrent_producers(void)
     std::vector<std::thread> producers;
     producers.reserve(producerCount);
     for (size_t producer = 0; producer < producerCount; producer++) {
-	producers.emplace_back([producer, itemsPerProducer, &stream,
+	producers.emplace_back([producer, &stream,
 			   &producersDone]() {
 	    const size_t base = producer * itemsPerProducer;
 	    const size_t batchSize = 31;
