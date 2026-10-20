@@ -11,8 +11,7 @@
 
 #include "common.h"
 
-#include <string.h>
-#include <stdlib.h>
+#include <vector>
 
 #include "bu/cmd.h"
 #include "bu/vls.h"
@@ -23,13 +22,21 @@
 #include "../ged_private.h"
 #include "rt/functab.h"
 
-static void repair_usage(struct bu_vls *log_str, const char *cmd) {
-    bu_vls_printf(log_str, "Usage: %s [-h] [-o output] object\n", cmd);
+static void
+repair_usage(struct bu_vls *log_str, const char *cmd)
+{
+    bu_vls_printf(log_str, "Usage: %s [-h] [-o output] [repair options] object\n", cmd);
 }
 
 extern "C" int
 ged_repair(struct ged *gedp, int argc, const char *argv[])
 {
+    GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
+    GED_CHECK_READ_ONLY(gedp, BRLCAD_ERROR);
+    GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
+
+    bu_vls_trunc(gedp->ged_result_str, 0);
+
     struct rt_db_internal intern;
     struct directory *dp = RT_DIR_NULL;
     const char *objname = NULL;
@@ -42,32 +49,35 @@ ged_repair(struct ged *gedp, int argc, const char *argv[])
     BU_OPT(d[1], "o", "output-name", "<name>", bu_opt_vls, &out_name, "Output object name");
     BU_OPT_NULL(d[2]);
 
-    int original_argc = argc;
-    const char **original_argv = (const char **)bu_calloc(argc + 1, sizeof(char *), "argv copy");
-    for (int i = 0; i < argc; i++) original_argv[i] = argv[i];
+    /* Only primitive-specific options belong in ft_repair's argument list.
+     * Parse a copy since bu_opt_parse reorders its input array. */
+    std::vector<const char *> repair_args(argv + 1, argv + argc);
+    argc = repair_args.empty() ? 0 :
+        bu_opt_parse(gedp->ged_result_str, repair_args.size(), repair_args.data(), d);
+    if (argc < 0) {
+        bu_vls_free(&out_name);
+        return BRLCAD_ERROR;
+    }
+    repair_args.resize(argc);
 
-    int ac = bu_opt_parse(NULL, argc, argv, d);
-    argc = ac;
-
-    if (print_help || argc < 2) {
-        repair_usage(gedp->ged_result_str, original_argv[0]);
-        bu_free(original_argv, "argv copy");
+    if (print_help || !argc) {
+        repair_usage(gedp->ged_result_str, argv[0]);
         bu_vls_free(&out_name);
         return GED_HELP;
     }
 
-    for (int i = 1; i < argc; i++) {
-        if (argv[i][0] == '-') continue;
-        dp = db_lookup(gedp->dbip, argv[i], LOOKUP_QUIET);
+    for (int i = 0; i < argc; i++) {
+        if (repair_args[i][0] == '-') continue;
+        dp = db_lookup(gedp->dbip, repair_args[i], LOOKUP_QUIET);
         if (dp != RT_DIR_NULL) {
-            objname = argv[i];
+            objname = repair_args[i];
+            repair_args.erase(repair_args.begin() + i);
             break;
         }
     }
 
     if (!objname || dp == RT_DIR_NULL) {
         bu_vls_printf(gedp->ged_result_str, "{\"status\":\"error\",\"message\":\"No valid object specified for repair\"}");
-        bu_free(original_argv, "argv copy");
         bu_vls_free(&out_name);
         return BRLCAD_ERROR;
     }
@@ -79,7 +89,6 @@ ged_repair(struct ged *gedp, int argc, const char *argv[])
     if (!in_place_repair) {
         if (db_lookup(gedp->dbip, bu_vls_cstr(&out_name), LOOKUP_QUIET) != RT_DIR_NULL) {
             bu_vls_printf(gedp->ged_result_str, "{\"status\":\"error\",\"message\":\"Object %s already exists!\"}", bu_vls_cstr(&out_name));
-            bu_free(original_argv, "argv copy");
             bu_vls_free(&out_name);
             return BRLCAD_ERROR;
         }
@@ -88,7 +97,6 @@ ged_repair(struct ged *gedp, int argc, const char *argv[])
     RT_DB_INTERNAL_INIT(&intern);
     if (rt_db_get_internal(&intern, dp, gedp->dbip, bn_mat_identity) < 0) {
         bu_vls_printf(gedp->ged_result_str, "{\"status\":\"error\",\"message\":\"Failed to get object\"}");
-        bu_free(original_argv, "argv copy");
         bu_vls_free(&out_name);
         return BRLCAD_ERROR;
     }
@@ -96,12 +104,12 @@ ged_repair(struct ged *gedp, int argc, const char *argv[])
     if (!EDOBJ[intern.idb_type].ft_repair) {
         bu_vls_printf(gedp->ged_result_str, "{\"status\":\"error\",\"message\":\"Repair operation not supported for this object type\"}");
         rt_db_free_internal(&intern);
-        bu_free(original_argv, "argv copy");
         bu_vls_free(&out_name);
         return BRLCAD_ERROR;
     }
 
-    int ret = EDOBJ[intern.idb_type].ft_repair(&log_str, &intern, NULL, original_argc, original_argv);
+    int ret = EDOBJ[intern.idb_type].ft_repair(&log_str, &intern, NULL,
+            repair_args.size(), repair_args.data());
 
     if (ret == 0) {
         struct directory *out_dp = dp;
@@ -113,7 +121,6 @@ ged_repair(struct ged *gedp, int argc, const char *argv[])
                 bu_vls_printf(gedp->ged_result_str, "{\"status\":\"error\",\"message\":\"Failed to add new directory entry\"}");
                 bu_vls_free(&log_str);
                 rt_db_free_internal(&intern);
-                bu_free(original_argv, "argv copy");
                 bu_vls_free(&out_name);
                 return BRLCAD_ERROR;
             }
@@ -123,7 +130,6 @@ ged_repair(struct ged *gedp, int argc, const char *argv[])
             bu_vls_printf(gedp->ged_result_str, "{\"status\":\"error\",\"message\":\"Failed to write repaired object back to database\"}");
             bu_vls_free(&log_str);
             rt_db_free_internal(&intern);
-            bu_free(original_argv, "argv copy");
             bu_vls_free(&out_name);
             return BRLCAD_ERROR;
         }
@@ -139,7 +145,6 @@ ged_repair(struct ged *gedp, int argc, const char *argv[])
 
     bu_vls_free(&log_str);
     rt_db_free_internal(&intern);
-    bu_free(original_argv, "argv copy");
     bu_vls_free(&out_name);
 
     return (ret == 0 || ret == 1) ? BRLCAD_OK : BRLCAD_ERROR;
