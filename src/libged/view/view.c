@@ -777,30 +777,14 @@ ged_view_core(struct ged *gedp, int argc, const char *argv[])
 
     gd.gopts = d;
 
-    // High level options are only defined prior to the subcommand
-    int cmd_pos = -1;
-    for (int i = 0; i < argc; i++) {
-	if (bu_cmd_valid(_view_cmds, argv[i]) == BRLCAD_OK) {
-	    cmd_pos = i;
-	    break;
-	}
-    }
-
-    // Clear out any high level opts prior to subcommand
-    int acnt = (cmd_pos >= 0) ? cmd_pos : argc;
-    int ac_ret = bu_opt_parse(NULL, acnt, argv, d);
-    if (ac_ret) {
+    argc = bu_opt_parse_leading(NULL, argc, argv, d);
+    int cmd_pos = (argc > 0 && bu_cmd_valid(_view_cmds, argv[0]) == BRLCAD_OK) ? 0 : -1;
+    if (argc < 0 || (argc > 0 && cmd_pos < 0)) {
 	help = 1;
-    } else {
-	for (int i = 0; i < acnt; i++) {
-	    argc--; argv++;
-	}
     }
 
     if (help) {
 	if (cmd_pos >= 0) {
-	    argc = argc - cmd_pos;
-	    argv = &argv[cmd_pos];
 	    _ged_subcmd_help(gedp, (struct bu_opt_desc *)d, (const struct bu_cmdtab *)_view_cmds, "view", "[options] subcommand [args]", &gd, argc, argv);
 	} else {
 	    _ged_subcmd_help(gedp, (struct bu_opt_desc *)d, (const struct bu_cmdtab *)_view_cmds, "view", "[options] subcommand [args]", &gd, 0, NULL);
