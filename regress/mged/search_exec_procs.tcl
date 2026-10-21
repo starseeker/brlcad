@@ -73,6 +73,19 @@ proc search_exec_alias_query {path} {
     return 1
 }
 
+proc search_exec_remat_precheck {} {
+    if {[llength [info commands remat]]} {
+	set ::search_exec_precheck_error "remat unexpectedly loaded before -exec"
+    }
+    attr set r1 material_id 1
+}
+
+proc search_exec_remat_check {} {
+    if {[attr get r1 material_id] ne "47"} {
+	set ::search_exec_precheck_error "search -exec did not autoload remat"
+    }
+}
+
 # Regression support for a "search -exec that creates a matching child"
 # infinite loop.  A proc that wraps each matched comb (comb -w) inserts a new
 # non-region comb named <name>.c as a child of the comb being walked.  If the

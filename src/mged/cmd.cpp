@@ -525,23 +525,14 @@ mged_ged_exec_async(struct mged_state *s, int argc, const char *argv[])
 /* All remaining MGED command functions require C linkage because they are
  * called through Tcl command dispatch (function pointers stored with
  * Tcl_CreateCommand) and directly by name from other .c translation units. */
-/* Tcl command "_mged_ged_exec" registered inside the search interpreter.
- * Bridges Tcl scripts running in the search interpreter to the GED command
- * system so that GED commands (draw, ls, attr, ...) are reachable from
- * within Tcl scripts executed by search -exec. */
 static int
-mged_search_ged_exec(ClientData cd, Tcl_Interp *interp, int argc, const char **argv)
+mged_search_exec_ged(struct mged_state *s, Tcl_Interp *interp, int argc,
+	const char **argv)
 {
-    struct mged_state *s = (struct mged_state *)cd;
     MGED_CK_STATE(s);
 
-    if (argc < 2) {
-	Tcl_AppendResult(interp, "Usage: _mged_ged_exec cmd [args...]", (char *)NULL);
-	return TCL_ERROR;
-    }
-
     s->gedp->ged_skip_clbks++;
-    int ret = ged_exec(s->gedp, argc - 1, argv + 1);
+    int ret = ged_exec(s->gedp, argc, argv);
     s->gedp->ged_skip_clbks--;
 
     const char *result = bu_vls_cstr(s->gedp->ged_result_str);
@@ -552,6 +543,50 @@ mged_search_ged_exec(ClientData cd, Tcl_Interp *interp, int argc, const char **a
     if (ret & GED_UNKNOWN)
 	return TCL_ERROR;
     return (ret == BRLCAD_OK) ? TCL_OK : TCL_ERROR;
+}
+
+
+/* Tcl command "_mged_ged_exec" registered inside the search interpreter.
+ * Bridges unqualified commands handled by unknown to the GED command system. */
+static int
+mged_search_ged_exec(ClientData cd, Tcl_Interp *interp, int argc, const char **argv)
+{
+    struct mged_state *s = (struct mged_state *)cd;
+
+    if (argc < 2) {
+	Tcl_AppendResult(interp, "Usage: _mged_ged_exec cmd [args...]", (char *)NULL);
+	return TCL_ERROR;
+    }
+
+    return mged_search_exec_ged(s, interp, argc - 1, argv + 1);
+}
+
+
+static int
+mged_search_ged_cmd(ClientData cd, Tcl_Interp *interp, int argc, const char **argv)
+{
+    return mged_search_exec_ged((struct mged_state *)cd, interp, argc, argv);
+}
+
+
+static int
+register_search_ged_commands(Tcl_Interp *interp, struct mged_state *s)
+{
+    const char * const *commands = NULL;
+    size_t command_count = ged_cmd_list(&commands);
+
+    for (size_t command_index = 0; command_index < command_count; command_index++) {
+	Tcl_CmdInfo command_info;
+	if (Tcl_GetCommandInfo(interp, commands[command_index], &command_info))
+	    continue;
+	if (Tcl_GetVar2Ex(interp, "auto_index", commands[command_index], TCL_GLOBAL_ONLY))
+	    continue;
+	if (!Tcl_CreateCommand(interp, commands[command_index], mged_search_ged_cmd,
+		(ClientData)s, (Tcl_CmdDeleteProc *)NULL))
+	    return TCL_ERROR;
+    }
+
+    return TCL_OK;
 }
 
 
@@ -617,13 +652,25 @@ _create_search_interp(struct mged_state *s)
 	Tcl_DecrRefCount(snap);
     }
 
-    /* Override the Tcl 'unknown' handler AFTER snapshot replay so that any
-     * command not found in this interpreter's command table is forwarded to
-     * GED.  This makes all GED commands transparently callable by name from
-     * Tcl scripts.  Installing it here (after replay) ensures the snapshot's
+    /* Native GED commands are not part of the interpreter snapshot.  Add
+     * shims for commands that do not conflict with Tcl or indexed procedures
+     * so scripts can both invoke them and discover them with info command. */
+    if (register_search_ged_commands(search_interp, s) != TCL_OK) {
+	bu_log("search interp: failed to register GED commands: %s\n",
+	       Tcl_GetStringResult(search_interp));
+	Tcl_DeleteInterp(search_interp);
+	return NULL;
+    }
+
+    /* Override the Tcl 'unknown' handler AFTER snapshot replay.  Preserve
+     * Tcl's autoload behavior for indexed MGED procedures before forwarding
+     * unresolved commands to GED.  Installing it here ensures the snapshot's
      * standard Tcl 'unknown' does not overwrite this bridge. */
     if (Tcl_Eval(search_interp,
 		 "proc unknown {cmd args} {\n"
+		 "    if {[auto_load $cmd [uplevel 1 {namespace current}]]} {\n"
+		 "        return [uplevel 1 [list $cmd {*}$args]]\n"
+		 "    }\n"
 		 "    _mged_ged_exec $cmd {*}$args\n"
 		 "}") != TCL_OK) {
 	bu_log("search interp: failed to install unknown proc: %s\n",
