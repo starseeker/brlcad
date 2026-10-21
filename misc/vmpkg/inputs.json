@@ -1,0 +1,17 @@
+{
+  "rocky": {
+    "url": "https://download.rockylinux.org/pub/rocky/8.10/isos/x86_64/Rocky-8.10-x86_64-dvd1.iso",
+    "sha256": "260e253a09146c85b253d0cccf1e3fb05dc514b5cd5791f87132055a3094cb24",
+    "checksum_source": "https://download.rockylinux.org/pub/rocky/8.10/isos/x86_64/CHECKSUM"
+  },
+  "cmake": {
+    "url": "https://cmake.org/files/v3.31/cmake-3.31.8-linux-x86_64.tar.gz",
+    "sha256": "630615d8e98ac33eba7fbe472626dff5c899c85af3c024585ae109166a6909d0",
+    "checksum_source": "https://cmake.org/files/v3.31/cmake-3.31.8-SHA-256.txt"
+  },
+  "epel_key": {
+    "url": "https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-8",
+    "sha256": "cd1db21a863185127f2e3b264c97fb1c6c44c316385707999041ea475c110d1c",
+    "key_documentation": "https://docs.fedoraproject.org/en-US/epel/getting-started/"
+  }
+}
