@@ -27,6 +27,10 @@ Technically, _MGED_ can be opened without a database file being supplied, but un
 
 Options that affect per-session appearance (variables, grid, colour) are applied _after_ any `.mgedrc` file is processed, so command-line flags always take precedence over saved settings.
 
+MGED options must precede the database name. Arguments after the database name
+belong to the command, including any command options. Use `--` to end MGED option
+processing explicitly.
+
 
 [[options]]
 == OPTIONS
