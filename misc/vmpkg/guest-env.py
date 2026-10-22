@@ -43,13 +43,18 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import zipfile
 
 from vmpkg import HERE, digest, download, package_roots, read_inputs, run
 
 RECEIPT = Path('/opt/vmpkg/environment.json')
 TOOLS = Path('/opt/vmpkg-tools/cmake')
-PYTHON_TOOLS = Path('/opt/vmpkg-tools/bin')
+BUILD_TOOLS = Path('/opt/vmpkg-tools/bin')
 PYTHON_INTERPRETER = '/usr/bin/python3.11'
+ROCKY_SIGNING_KEY = Path('/etc/pki/rpm-gpg/RPM-GPG-KEY-rockyofficial')
+RPM_MULTILIB_EXCLUDE = '*.i686'
+BUILDER_ARCHIVES = ('cmake', 'ninja')
+NINJA_EXECUTABLE_MODE = 0o755
 
 
 def inventory():
@@ -63,25 +68,38 @@ def base_policy():
             ('inputs.json', 'base-packages.txt', 'kickstart.cfg.in')}
 
 
+def import_signing_keys(epel_key):
+    run(['rpmkeys', '--import', ROCKY_SIGNING_KEY, epel_key])
+
+
 def lock(args):
-    if args.role == 'builder' and (args.cmake is None or
-            digest(args.cmake) != read_inputs()['cmake']['sha256']):
-        raise ValueError('Builder bundles require the pinned --cmake archive')
+    archives = {}
+    if args.role == 'builder':
+        for name in BUILDER_ARCHIVES:
+            archive = getattr(args, name)
+            if archive is None or digest(archive) != read_inputs()[name]['sha256']:
+                raise ValueError('Builder bundles require the pinned --' + name + ' archive')
+            archives[name] = archive.resolve()
+        if len({archive.name for archive in archives.values()}) != len(archives):
+            raise ValueError('Builder archive basenames must be distinct')
     bundle = args.bundle.resolve()
     if bundle.exists():
         raise ValueError('Use a new bundle directory')
     bundle.mkdir(parents=True)
     key = download(read_inputs()['epel_key'], bundle)
-    run(['rpmkeys', '--import', key])
+    import_signing_keys(key)
     rpms = bundle / 'rpms'
     rpms.mkdir()
     repos = bundle / 'repos'
     repos.mkdir()
     shutil.copyfile(HERE / 'rocky.repo', repos / 'rocky.repo')
     roots = package_roots(HERE / (args.role + '-packages.txt'))
+    # Resolve the install transaction to retain conditional dependencies and
+    # upgrades required by packages already installed in the base image.
     run(['dnf', '-y', '--setopt=reposdir=' + str(repos), '--disablerepo=*',
          '--enablerepo=vmpkg-*', '--setopt=install_weak_deps=False',
-         'download', '--resolve', '--alldeps', '--destdir=' + str(rpms)] + roots)
+         '--exclude=' + RPM_MULTILIB_EXCLUDE, 'install', '--downloadonly',
+         '--destdir=' + str(rpms)] + roots)
     packages = sorted(rpms.glob('*.rpm'))
     if not packages:
         raise ValueError('DNF did not download any packages')
@@ -97,11 +115,9 @@ def lock(args):
             'rpm', '-qp', '--qf', '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}',
             str(path)]).decode()} for path in packages}
     }
-    if args.role == 'builder':
-        cmake = read_inputs()['cmake']
-        archive = args.cmake.resolve()
+    for name, archive in archives.items():
         shutil.copyfile(archive, bundle / archive.name)
-        manifest['cmake'] = {'file': archive.name, 'sha256': cmake['sha256']}
+        manifest[name] = {'file': archive.name, 'sha256': read_inputs()[name]['sha256']}
     (bundle / 'lock.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
     print('Preserve the entire bundle; lock.json identifies the resolved environment.')
 
@@ -132,11 +148,13 @@ def validate_bundle(bundle):
     for name, item in manifest['rpms'].items():
         if Path(name).name != name or digest(bundle / 'rpms' / name) != item['sha256']:
             raise ValueError('RPM checksum mismatch: ' + name)
-    cmake = manifest.get('cmake')
-    if manifest['role'] == 'builder' and (not cmake or Path(cmake['file']).name != cmake['file'] or
-            cmake['sha256'] != read_inputs()['cmake']['sha256'] or
-            digest(bundle / cmake['file']) != cmake['sha256']):
-        raise ValueError('CMake input differs from the pinned input')
+    if manifest['role'] == 'builder':
+        for name in BUILDER_ARCHIVES:
+            archive = manifest.get(name)
+            if (not archive or Path(archive['file']).name != archive['file'] or
+                    archive['sha256'] != read_inputs()[name]['sha256'] or
+                    digest(bundle / archive['file']) != archive['sha256']):
+                raise ValueError(name + ' input differs from the pinned input')
     return manifest
 
 
@@ -144,12 +162,12 @@ def verify(args=None):
     receipt = json.loads(RECEIPT.read_text())
     if inventory() != receipt['installed_rpms']:
         raise ValueError('Installed RPMs differ from the provisioned environment')
-    if (receipt['role'] == 'builder' and
-            digest(TOOLS / 'bin/cmake') != receipt['cmake_executable_sha256']):
-        raise ValueError('Installed CMake executable changed')
     if receipt['role'] == 'builder':
+        for name, executable in [('cmake', TOOLS / 'bin/cmake'), ('ninja', BUILD_TOOLS / 'ninja')]:
+            if digest(executable) != receipt.get(name + '_executable_sha256'):
+                raise ValueError('Installed ' + name + ' executable changed')
         for name in ('python', 'python3'):
-            if os.readlink(PYTHON_TOOLS / name) != PYTHON_INTERPRETER:
+            if os.readlink(BUILD_TOOLS / name) != PYTHON_INTERPRETER:
                 raise ValueError('Build Python selection changed')
     return receipt
 
@@ -162,7 +180,7 @@ def install(args):
         if verify()['lock_sha256'] != lock_hash:
             raise ValueError('Guest was provisioned using a different lock; use a fresh base guest')
         return
-    run(['rpmkeys', '--import', signing_key(bundle)])
+    import_signing_keys(signing_key(bundle))
     if inventory() != manifest['base_rpms']:
         raise ValueError('Base RPM inventory differs from the resolver guest; use the same base image')
     packages = sorted((bundle / 'rpms').glob('*.rpm'))
@@ -175,9 +193,15 @@ def install(args):
         run(['tar', '-xzf', bundle / manifest['cmake']['file'], '--strip-components=1', '-C', TOOLS])
         run([TOOLS / 'bin/cmake', '--version'])
         receipt['cmake_executable_sha256'] = digest(TOOLS / 'bin/cmake')
-        PYTHON_TOOLS.mkdir(exist_ok=False)
+        BUILD_TOOLS.mkdir(exist_ok=False)
+        ninja = BUILD_TOOLS / 'ninja'
+        with zipfile.ZipFile(bundle / manifest['ninja']['file']) as archive:
+            ninja.write_bytes(archive.read('ninja'))
+        ninja.chmod(NINJA_EXECUTABLE_MODE)
+        run([ninja, '--version'])
+        receipt['ninja_executable_sha256'] = digest(ninja)
         for name in ('python', 'python3'):
-            (PYTHON_TOOLS / name).symlink_to(PYTHON_INTERPRETER)
+            (BUILD_TOOLS / name).symlink_to(PYTHON_INTERPRETER)
     RECEIPT.write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
     shutil.copyfile(bundle / 'lock.json', HERE / 'environment-lock.json')
 
@@ -188,6 +212,7 @@ def main():
     lock_parser = actions.add_parser('lock')
     lock_parser.add_argument('--bundle', type=Path, required=True)
     lock_parser.add_argument('--cmake', type=Path)
+    lock_parser.add_argument('--ninja', type=Path)
     lock_parser.add_argument('--role', choices=['builder', 'runtime'], default='builder')
     lock_parser.set_defaults(function=lock)
     install_parser = actions.add_parser('install')

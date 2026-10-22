@@ -11,8 +11,9 @@ media/output locations. No images or private keys are stored here.
 
 ## Inputs and environment policy
 
-`inputs.json` pins the Rocky DVD, Kitware CMake 3.31.8 binary archive, and EPEL 8
-public signing key by SHA-256 and records their upstream sources. Retrieval verifies the pinned
+`inputs.json` pins the Rocky DVD, Kitware CMake 3.31.8 and Ninja 1.11.1 binary
+archives, and EPEL 8 public signing key by SHA-256 and records their upstream
+sources. Retrieval verifies the pinned
 bytes, including cached downloads. An upstream replacement fails verification;
 review and update the pins deliberately. HTTPS and the checked-in hashes are
 the trust anchors for these downloads. There is no automatic checksum refresh.
@@ -28,13 +29,17 @@ package roots. `rocky.repo` restricts initial builder/runtime package resolution
 to Rocky 8.10 BaseOS, AppStream, and PowerTools, plus a restricted EPEL 8 source
 for `xcb-util-cursor` and its development package. The pinned Qt revision needs
 that library, which Rocky 8 does not supply. No other EPEL packages participate.
-The EPEL key is retrieved and checked against its pin before import, and the
-base inventory includes that imported key. These online repositories can change. **A package list alone is not a version lock.** The separate `lock`
+The Rocky key shipped by the pinned base image and the checksummed EPEL key
+are imported before recording the base inventory. Resolution selects only
+x86-64 and architecture-independent RPMs. These online repositories can change.
+**A package list alone is not a version lock.** The separate `lock`
 operation saves every resolved RPM, its NEVRA, its SHA-256, the base inventory,
-and repository policy in `lock.json`. Keep this entire bundle as a release
+and repository policy in `lock.json`. It downloads DNF's proposed install
+transaction, including upgrades and conditional dependencies needed on the
+base image. Keep this entire bundle as a release
 input. Installing it disables all online repositories and verifies signatures,
 checksums, package membership, and the original base inventory. Subsequent
-builds verify the installed inventory and CMake executable against a receipt.
+builds verify the installed inventory and CMake/Ninja executables against a receipt.
 
 A first resolution must run on a disposable base guest, because FreeBSD has no
 native DNF solver. No guessed transitive version lock is checked in. Save the
@@ -42,7 +47,8 @@ first successful lock and its RPM bytes in external artifact storage; future
 releases can deliberately reuse or replace them. Recreate the base guest if
 base inputs change. Changing a package policy requires a new lock.
 
-The builder selects GCC Toolset 13, Python 3.11, Ninja, and the pinned CMake.
+The builder selects GCC Toolset 13, Python 3.11, and the pinned CMake and Ninja.
+Rocky 8's Ninja 1.8.2 cannot handle LLVM's generated dependency-log rules.
 The runtime role includes graphics libraries and smoke-test tools, with no
 compiler or development headers. Both use the same base image. This records
 and replays build inputs; byte-identical package reproduction is not promised.
@@ -146,7 +152,8 @@ vmpkg_host=127.0.0.1
 vmpkg_port=2222
 vmpkg_key="$vmpkg_root/builder-key"
 scp -i "$vmpkg_key" -P "$vmpkg_port" \
-    "$vmpkg_root/cache/cmake-3.31.8-linux-x86_64.tar.gz" "builder@$vmpkg_host:"
+    "$vmpkg_root/cache/cmake-3.31.8-linux-x86_64.tar.gz" \
+    "$vmpkg_root/cache/ninja-linux.zip" "builder@$vmpkg_host:"
 ssh -i "$vmpkg_key" -p "$vmpkg_port" "builder@$vmpkg_host"
 ```
 
@@ -155,7 +162,7 @@ Inside that guest, resolve both bundles **before installing either**:
 ```sh
 sudo python3 /opt/vmpkg/guest-env.py lock --role builder \
     --bundle /var/tmp/builder-bundle \
-    --cmake "$PWD/cmake-3.31.8-linux-x86_64.tar.gz"
+    --cmake "$PWD/cmake-3.31.8-linux-x86_64.tar.gz" --ninja "$PWD/ninja-linux.zip"
 sudo python3 /opt/vmpkg/guest-env.py lock --role runtime \
     --bundle /var/tmp/runtime-bundle
 sudo tar -C /var/tmp -czf /var/tmp/builder-bundle.tar.gz builder-bundle
@@ -163,7 +170,7 @@ sudo tar -C /var/tmp -czf /var/tmp/runtime-bundle.tar.gz runtime-bundle
 ```
 
 Copy both archives back to external host storage with SCP. Their embedded lock
-checksums protect RPM/CMake contents; preserve an independent archive checksum
+checksums protect RPM and tool contents; preserve an independent archive checksum
 with the release records as well. The resolver can now be stopped and retained
 for diagnostics.
 
@@ -205,8 +212,8 @@ sh /opt/vmpkg/build.sh --sources "$PWD/sources.tar.gz" \
 
 `everything` requests the Appleseed and OSPRay stacks as well as standard bext
 groups, including LLVM. `bundled` selects standard groups without those two
-experimental stacks. BRL-CAD's enabled features still follow its configure
-options; building an optional dependency does not automatically enable every
+experimental stacks and does not build LLVM. BRL-CAD's enabled features follow
+its configure options; building an optional dependency does not enable every
 BRL-CAD experimental feature.
 
 The script activates GCC Toolset, sets a conservative x86-64 compiler baseline,
