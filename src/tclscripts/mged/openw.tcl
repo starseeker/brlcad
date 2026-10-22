@@ -284,7 +284,7 @@ proc mged_open_manual {parent screen} {
 	return
     }
 
-    ia_man $parent $screen
+    ::brlcad::mged::manual::init $parent $screen
 }
 
 proc gui { args } {

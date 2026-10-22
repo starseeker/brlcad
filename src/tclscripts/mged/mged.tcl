@@ -515,12 +515,15 @@ proc echo args {
 #==============================================================================
 # HTML support
 #==============================================================================
-namespace eval ::mged::manual {
+namespace eval ::brlcad::mged::manual {
+    namespace export init
+
+    variable message ""
     variable back_history
     variable suppress_history
 }
 
-proc ::mged::manual::file_uri {path} {
+proc ::brlcad::mged::manual::file_uri {path} {
     set uri_path [string map {\\ /} [file normalize $path]]
     if {[string index $uri_path 0] ne "/"} {
 	set uri_path /$uri_path
@@ -529,7 +532,7 @@ proc ::mged::manual::file_uri {path} {
     return file://[string map {%2F /} $uri_path]
 }
 
-proc ::mged::manual::local_path {location} {
+proc ::brlcad::mged::manual::local_path {location} {
     set uri [::tkhtml::uri $location]
     set scheme [$uri scheme]
     set authority [$uri authority]
@@ -549,16 +552,16 @@ proc ::mged::manual::local_path {location} {
     return [file normalize $path]
 }
 
-proc ::mged::manual::request_error {handle error_message} {
-    global message
+proc ::brlcad::mged::manual::request_error {handle error_message} {
+    variable message
 
     set message $error_message
     $handle configure -mimetype text/plain
     $handle finish $error_message
 }
 
-proc ::mged::manual::request {handle} {
-    global message
+proc ::brlcad::mged::manual::request {handle} {
+    variable message
 
     set location [$handle cget -uri]
     if {[catch {set path [local_path $location]} path_error]} {
@@ -581,7 +584,7 @@ proc ::mged::manual::request {handle} {
     $handle finish $data
 }
 
-proc ::mged::manual::remember_location {viewer} {
+proc ::brlcad::mged::manual::remember_location {viewer} {
     variable back_history
     variable suppress_history
 
@@ -599,7 +602,7 @@ proc ::mged::manual::remember_location {viewer} {
     }
 }
 
-proc ::mged::manual::go_back {viewer} {
+proc ::brlcad::mged::manual::go_back {viewer} {
     variable back_history
     variable suppress_history
 
@@ -618,7 +621,7 @@ proc ::mged::manual::go_back {viewer} {
     }
 }
 
-proc ::mged::manual::go_to {viewer screen} {
+proc ::brlcad::mged::manual::go_to {viewer screen} {
     global ::tk::Priv
 
     set initial_path [pwd]
@@ -642,7 +645,7 @@ proc ::mged::manual::go_to {viewer screen} {
 	"Cannot read file $filename." error 0 OK
 }
 
-proc ::mged::manual::cleanup {viewer destroyed_widget} {
+proc ::brlcad::mged::manual::cleanup {viewer destroyed_widget} {
     variable back_history
     variable suppress_history
 
@@ -653,8 +656,10 @@ proc ::mged::manual::cleanup {viewer destroyed_widget} {
     unset -nocomplain suppress_history($viewer)
 }
 
-proc ia_man {parent screen} {
-    global mged_html_dir message
+proc ::brlcad::mged::manual::init {parent screen} {
+    global mged_html_dir
+    variable back_history
+    variable suppress_history
 
     package require hv3
 
@@ -667,25 +672,29 @@ proc ia_man {parent screen} {
     pack $w.f -side top -fill x
 
     set viewer [::hv3::hv3 $w.html \
-	-requestcmd ::mged::manual::request]
+	-requestcmd ::brlcad::mged::manual::request]
     button $w.f.close -text Close -command [list destroy $w]
     button $w.f.goto -text "Go To" \
-	-command [list ::mged::manual::go_to $viewer $screen]
+	-command [list ::brlcad::mged::manual::go_to $viewer $screen]
     button $w.f.back -text "Back" \
-	-command [list ::mged::manual::go_back $viewer]
+	-command [list ::brlcad::mged::manual::go_back $viewer]
 
     pack $w.f.close $w.f.goto $w.f.back -side left -fill x -expand yes
-    label $w.message -textvariable message -anchor w
+    label $w.message -textvariable ::brlcad::mged::manual::message -anchor w
     pack $w.message -side top -anchor w -fill x
     pack $viewer -side top -fill both -expand yes
 
-    set ::mged::manual::back_history($viewer) {}
-    set ::mged::manual::suppress_history($viewer) 0
-    bind $viewer <<Goto>> +[list ::mged::manual::remember_location $viewer]
-    bind $viewer <Destroy> +[list ::mged::manual::cleanup $viewer %W]
+    set back_history($viewer) {}
+    set suppress_history($viewer) 0
+    bind $viewer <<Goto>> +[list ::brlcad::mged::manual::remember_location $viewer]
+    bind $viewer <Destroy> +[list ::brlcad::mged::manual::cleanup $viewer %W]
 
     set contents [file join $mged_html_dir contents.html]
-    $viewer goto [::mged::manual::file_uri $contents]
+    $viewer goto [file_uri $contents]
+}
+
+proc ia_man {parent screen} {
+    tailcall ::brlcad::mged::manual::init $parent $screen
 }
 
 #==============================================================================

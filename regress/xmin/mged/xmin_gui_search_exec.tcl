@@ -81,6 +81,9 @@ proc ::mged::xmin::search_exec::request_interrupt {} {
     variable command_widget
     variable interrupt_requested
 
+    # The display pane may own focus after the drawing checks.
+    focus -force $command_widget
+    update
     event generate $command_widget <Control-c>
     set interrupt_requested 1
 }

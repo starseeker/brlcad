@@ -118,7 +118,7 @@ proc lbdcHack {w x y t id type path} {
 		matrix_illum $path $item
 	    }
 	    bf {
-		bot_face_sel_apply $item
+		::brlcad::mged::bot_face::apply $item
 	    }
 	}
     } else {
@@ -153,7 +153,7 @@ proc lbdcHack {w x y t id type path} {
 		set mged_gui($id,mgs_pos) $item
 	    }
 	    bf {
-		bot_face_sel_apply $item
+		::brlcad::mged::bot_face::apply $item
 	    }
 	}
 

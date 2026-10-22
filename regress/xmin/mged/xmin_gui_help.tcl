@@ -168,11 +168,16 @@ proc ::mged::xmin::help::exercise_html_manual {top} {
 	[winfo exists $fallback] && [winfo ismapped $fallback] &&
 	[winfo exists $viewer] && [$viewer title] eq "Table of Contents"
     } "Manual did not load MGED's internal HTML viewer"
+    ::gui::test::require {
+	[namespace exists ::brlcad::mged::manual] &&
+	[$fallback.message cget -textvariable] eq
+	    "::brlcad::mged::manual::message"
+    } "Manual did not keep its implementation state in its namespace"
 
     set special_path [file join [pwd] {manual path} {contents#1.html}]
     ::gui::test::require {
-	[::mged::manual::local_path \
-	    [::mged::manual::file_uri $special_path]] eq \
+	[::brlcad::mged::manual::local_path \
+	    [::brlcad::mged::manual::file_uri $special_path]] eq \
 	[file normalize $special_path]
     } "internal Manual viewer did not preserve special path characters"
 
