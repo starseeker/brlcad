@@ -44,11 +44,12 @@ if {[string first SEARCH_EXEC_OUTPUT_HOOK_ALIVE $search_exec_output] < 0} {
 }
 output_hook
 
-# remat is normally autoloaded from re_procs.tcl.  The search interpreter's
-# unknown-command bridge must try Tcl autoloading before falling back to GED.
-search_exec_remat_precheck
+# Verify our bundled tcl scripts are behaving and available (re_procs.tcl, cycle.tcl, etc.).
+# The search interpreter's unknown-command bridge must try Tcl autoloading before falling back to GED.
+search_exec_bundled_precheck
 search r1 -maxdepth 0 -exec remat "{}" 47 ";"
 search_exec_remat_check
+search r1 -maxdepth 0 -exec check_cycle "" "{}" ";"
 
 search /all.g/component/power.train/r2 -maxdepth 0 -exec ::search_exec_test::nested::mark "{}" ";"
 search /all.g/component/power.train/r6 -maxdepth 0 -exec search_exec_proc_alias "{}" ";"

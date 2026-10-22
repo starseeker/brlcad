@@ -73,9 +73,12 @@ proc search_exec_alias_query {path} {
     return 1
 }
 
-proc search_exec_remat_precheck {} {
+proc search_exec_bundled_precheck {} {
     if {[llength [info commands remat]]} {
 	set ::search_exec_precheck_error "remat unexpectedly loaded before -exec"
+    }
+    if {[llength [info commands check_cycle]]} {
+	set ::search_exec_precheck_error "check_cycle unexpectedly loaded before -exec"
     }
     attr set r1 material_id 1
 }
