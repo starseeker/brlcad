@@ -610,7 +610,7 @@ _create_search_interp(struct mged_state *s)
      *     from the main interp can call package commands if needed
      *   - the _mged_ged_exec bridge and unknown forwarder (installed below)
      *
-     * tclcad_init would additionally load Itcl, Ged_Init, Bu_Init, etc.  In
+     * tclcad_init would additionally load Itcl, Ged_Init, etc.  In
      * Tcl 8.6 that causes global side-effects (shared literal tables, Itcl
      * class registries) that corrupt the per-thread Tcl object allocator of
      * the MAIN interpreter, causing a crash the next time the main interp
@@ -619,6 +619,13 @@ _create_search_interp(struct mged_state *s)
      * needed here. */
     if (Tcl_Init(search_interp) != TCL_OK) {
 	bu_log("search interp: Tcl_Init error: %s\n",
+	       Tcl_GetStringResult(search_interp));
+	Tcl_DeleteInterp(search_interp);
+	return NULL;
+    }
+
+    if (Bu_Init(search_interp) == TCL_ERROR || Bn_Init(search_interp) == TCL_ERROR) {
+	bu_log("search interp: libbu/libbn Tcl init error: %s\n",
 	       Tcl_GetStringResult(search_interp));
 	Tcl_DeleteInterp(search_interp);
 	return NULL;
