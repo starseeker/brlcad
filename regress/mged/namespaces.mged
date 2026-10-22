@@ -216,6 +216,23 @@ foreach module $output_modules {
 unset canonical_command component exports legacy_command legacy_helpers
 unset legacy_state module module_namespace output_modules
 
+foreach command {
+    ::brlcad::mged::bot_face::init
+    ::brlcad::mged::bot_face::apply
+    ::brlcad::mged::bot_face::abort
+    bot_face_select bot_face_sel_apply bot_face_sel_abort
+} {
+    if {![llength [info commands $command]] && ![auto_load $command]} {
+	error "FAIL missing BoT face selection command $command"
+    }
+}
+foreach command {::brlcad::mged::bot_face::apply bot_face_sel_apply} {
+    if {![catch {$command {1 2}} message] ||
+	$message ne "BOT face does not have 3 vertices"} {
+	error "FAIL $command did not validate the face: $message"
+    }
+}
+
 set object namespaces_sphere.s
 ::brlcad::mged in $object sph 0 0 0 1
 
@@ -230,7 +247,7 @@ if {[::brlcad::ged attr get $object namespace_test] ne "canonical"} {
     error "FAIL raw GED namespace did not preserve command results"
 }
 
-set matches [::brlcad::ged glob namespaces_*]
+set matches [::brlcad::ged glob {list namespaces_*}]
 if {[lsearch -exact $matches $object] < 0} {
     error "FAIL raw GED glob did not find $object: $matches"
 }

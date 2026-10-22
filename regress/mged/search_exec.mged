@@ -51,7 +51,7 @@ output_hook
 search_exec_bundled_precheck
 search r1 -maxdepth 0 -exec remat "{}" 47 ";"
 search_exec_remat_check
-search r1 -maxdepth 0 -exec check_cycle "" "{}" ";"
+search r1 -maxdepth 0 -exec search_exec_cycle_check "{}" ";"
 
 search /all.g/component/power.train/r2 -maxdepth 0 -exec ::search_exec_test::nested::mark "{}" ";"
 search /all.g/component/power.train/r6 -maxdepth 0 -exec search_exec_proc_alias "{}" ";"
