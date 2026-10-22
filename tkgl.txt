@@ -1,0 +1,375 @@
+Portable Tk OpenGL display and framebuffer plan
+==============================================
+
+Objective
+---------
+
+Extract the reusable Tk hosting work from brlobol9 and integrate it with
+the existing libdm drawing and framebuffer interfaces.  Provide one
+portable Tk interface for MGED, Archer, and Rtwizard, with native OpenGL
+and software rendering through the starseeker/osmesa fork.  Obol must be
+able to use the same host without becoming a dependency of this work.
+
+Legacy requests for the X display manager must select the OSMesa-backed
+implementation with fast drawing enabled on every supported platform.
+The fast drawing implementation must reuse the existing swrast algorithm
+and preserve the applicable behavior of the older X drawing path.
+
+This plan is based on source inspection.  Native macOS operation and
+complete application compatibility remain to be demonstrated.
+
+Existing work to reuse
+---------------------
+
+On brlobol9:
+
+  src/libtclcad/tkobol/vendor/togl/
+    Modified Tcl3D/Togl host for native OpenGL contexts.
+
+  src/libtclcad/tkobol/tk-obol-host.cpp
+    Embedded and top-level hosting, widget ownership, notifications,
+    input forwarding, and Tk-photo software presentation.  Extract the
+    toolkit responsibilities from the Obol controller integration.
+
+  src/libtclcad/tests/ and src/mged/mged_tkobol_*
+    Existing lifecycle, thread-affinity, widget, and framebuffer tests
+    that can supply cases for renderer-independent tests.
+
+On main:
+
+  include/dm/extgl.h and src/libdm/dm-extgl.cpp
+    Toolkit-neutral callbacks for a host-owned native OpenGL context,
+    with existing shared OpenGL drawing and memory-framebuffer support.
+
+  src/libdm/swrast/ and src/libdm/tkswrast/
+    OSMesa rendering and an existing Tk-photo presentation wrapper.
+
+  src/libdm/dm-gl_lod.cpp
+    swrast_drawVList_fast already transforms and clips wireframe
+    segments and rasterizes directly into the OSMesa RGBA backing buffer.
+
+  src/libdm/dm-gl.c and src/libged/dm/dm.c
+    The fast_wireframe setting and its libged command interface already
+    exist.  swrast enables fast_wireframe by default.  Existing commands
+    include:
+
+      dm set fast_wireframe 1
+      dm set fast_wireframe 0
+      dm set fast_wireframe
+      dm set --dm <instance> fast_wireframe 1
+
+  src/libdm/X/dm-X.c and src/libdm/X/if_X24.c
+    References for legacy X vector drawing and framebuffer behavior,
+    respectively.  Their roles must be assessed separately.
+
+The existing fast implementation needs integration and a compatibility
+audit, rather than replacement with a newly invented rasterizer.  Its
+dispatch currently requires the backend name swrast, while the Tk wrapper
+renames the backend tkswrast.  It is also reached through selected
+scene-object drawing paths; direct vlist and display-list callers need
+separate attention.  Several draw regression tests disable fast_wireframe
+explicitly, so those tests do not establish fast-mode compatibility.
+
+Proposed architecture and selection behavior
+-------------------------------------------
+
+Use a small optional Tk host component below the application adapters.
+It must not depend on libtclcad, libged, or Obol.  Keep libdm's non-Tk
+configurations usable.  Choose final library names and placement during
+implementation; tkgl is the proposed public Tk backend name.
+
+The host owns widget lifetime, geometry, notifications, redraw scheduling,
+and presentation.  The renderer owns drawing state and rendering
+resources.  Application adapters retain editing, navigation, bindings,
+and application-specific refresh policy.
+
+  Native mode:   Tk native GL host -> extgl/shared GL drawing -> swap
+  Software mode: OSMesa/swrast drawing -> backing pixels -> Tk photo
+  Fast mode:     Existing direct wireframe rasterization into the same
+                 software backing buffer, with supported OSMesa drawing
+                 used for other operations as required.
+
+Recommended selection semantics:
+
+  Request                    Renderer             fast_wireframe
+  -------------------------  -------------------  --------------
+  Legacy X                   OSMesa               1
+  tkgl, automatic            Native, or OSMesa    0
+  tkgl, native explicitly     Native required      0
+  tkgl, software explicitly   OSMesa               0
+  tkgl, software-fast         OSMesa               1
+
+These are proposed modes, not existing command syntax.  Preserve the
+existing swrast default for existing swrast callers.  Set the new Tk
+interface's policy explicitly rather than inheriting accidental defaults.
+The X request selects software regardless of native GL availability;
+fast_wireframe remains an inspectable and adjustable DM setting.
+
+Resolve compatibility aliases centrally in libdm.  Opening, validation,
+enumeration, graphics-system reporting, and default selection must agree.
+Define compatibility handling for ogl/wgl requests when the new backend
+is ready to replace them.  Diagnostics should expose the selected
+renderer, requested fast setting, and whether the optimized path applies.
+
+Select the renderer at creation.  Automatic native initialization failure
+may retry using software after complete cleanup and with a useful reason
+available in diagnostics.  An explicit native request reports failure.
+Live migration between context families is outside the initial scope.
+
+System OpenGL and OSMesa drawing must keep their correct headers and
+symbol linkage.  The osmesa fork enables mgl name prefixing by default;
+making an OSMesa context current does not redirect system GL entry points.
+Reuse drawing sources through appropriately configured targets, without
+introducing a speculative general GL dispatch framework.
+
+Implementation order
+--------------------
+
+1. Establish contracts, baseline cases, and source provenance.
+
+   Inventory display-manager and framebuffer consumers, accepted options,
+   backend-name checks, and application binding/refresh expectations.
+   Include command-line consumers before planning removal of old plugins.
+   Identify which legacy options require compatibility mappings and which
+   represent platform facilities needing explicit documentation.
+
+   Capture representative wireframe, shaded, editing, text, multipane,
+   capture, and raytrace-framebuffer behavior.  Record wireframe drawing
+   and complete-frame presentation timings for substantial models.
+
+   Pin the osmesa and Togl source revisions used for implementation.
+   Review the actual imported files' licenses, retain notices, and register
+   vendored material with BRL-CAD's legal/build infrastructure.  Keep one
+   documented Togl baseline and an auditable set of local adaptations.
+
+   Completion: a concrete acceptance matrix, baseline cases, and bounded
+   extraction scope, with X -> OSMesa + fast_wireframe=1 recorded as a
+   required behavior.
+
+2. Demonstrate native Aqua and software hosting in a small prototype.
+
+   Adapt Netgen's Cocoa Togl implementation to an embedded test widget.
+   Carry over the required brlobol9 hosting fixes and callback behavior.
+   Exercise multiple widgets, resize, map/unmap, destruction, focus,
+   Retina dimensions, and movement between displays.
+
+   Also demonstrate OSMesa pixels in an ordinary Aqua Tk photo widget.
+   Verify the supported Tk versions; isolate the native implementation's
+   private Tk header/structure dependencies.  Use an OpenGL compatibility
+   context suitable for libdm's existing fixed-function drawing.
+
+   Completion: evidence that both presentation paths can satisfy the host
+   contract on macOS.  This resolves the largest platform uncertainty
+   before broad application changes.
+
+3. Extract and validate the common Tk host.
+
+   Separate toolkit work from Obol's controller, semantic input actions,
+   and progressive-rendering machinery.  Reuse the Tk-photo presentation
+   and relevant lifecycle lessons from the existing tkswrast wrapper.
+
+   Give the host only the callbacks needed by its actual consumers.
+   Preserve widget paths, top-level versus embedded behavior, and the
+   Tcl widget-command ownership needed by application wrappers.
+
+   All Tk operations and context use must occur on the owner thread.
+   Coalesce redraw requests, avoid drawing invisible widgets, and cancel
+   queued events/timers before freeing their data.  Close renderer
+   resources before destroying the context they need.  Initialization
+   failures must unwind partially created widgets and renderer state.
+
+   Build the software presentation path without native OpenGL or Qt.
+   Native Windows/Aqua builds must not require BRL-CAD X11 libraries.
+   Linux X11 Tk still requires its X display for visible widgets.
+
+   Completion: independently usable native/software widgets with tested
+   creation, resize, notification, and teardown behavior.
+
+4. Integrate the existing fast swrast path and implement the X mapping.
+
+   Replace renderer-name tests with explicit implementation state or
+   capabilities.  The existing optimization must remain reachable through
+   a Tk wrapper or compatibility alias.  Remove the duplicated private
+   swrast structure layout used to access the backing pixels.
+
+   Trace ordinary libdm vlist, scene-object, and display-list calls from
+   MGED and TclCAD.  Route eligible wireframes through the existing fast
+   implementation consistently.  Preserve the effective loaded matrix,
+   including object/edit transforms, rather than assuming a view matrix
+   always describes the drawing operation.
+
+   Audit points and point size, line width/style, model/display matrices,
+   perspective eye-plane clipping, window and Z clipping, colors, and
+   drawing order against the legacy X behavior.  Fix demonstrated gaps.
+   Fast wireframe output need not match the full shaded GL path; its
+   reference behavior is the intended X-compatible wireframe contract.
+
+   Define when fast rasterization is applicable and how unsupported
+   operations receive correct software rendering.  Never silently discard
+   an unsupported vlist command.  Coordinate OSMesa rendering and direct
+   buffer writes so clears, text, overlays, and captures see the completed
+   image, including correct stride, orientation, alpha, and depth behavior.
+
+   Implement X alias resolution and preserve the existing libged setting.
+   Add focused fast-mode tests rather than changing full-GL reference
+   images to hide differences.
+
+   Completion: X callers use the actual fast software path through both
+   modern and legacy drawing entry points, without requiring system GL.
+
+5. Complete the native and full-software libdm adapters.
+
+   Use extgl and swrast as the rendering foundations.  Implement the host
+   glue for dimensions, make-current, presentation, and capture.  Complete
+   text rendering/measurement, faceplates, display lists and sharing,
+   lighting, transparency, depth, and hidden-line behavior as applicable.
+
+   Keep native context sharing within compatible native contexts and
+   software sharing within compatible software contexts.  Requests that
+   cannot be honored must not leave shared geometry resources corrupted.
+
+   Add explicit mode selection, accurate capabilities, and diagnostics.
+   Finish automatic fallback only after each explicit mode works.  Verify
+   mixed native/software widgets in one process to catch GL symbol or
+   context-state interference.
+
+   Completion: the new Tk backend satisfies the ordinary libdm drawing
+   contract in native, full-software, and fast-software configurations.
+
+6. Complete embedded and standalone framebuffer presentation.
+
+   Build on the existing memory framebuffer, extgl presentation callback,
+   and swrast framebuffer facilities.  Reuse the same Tk host for an
+   embedded image or a standalone framebuffer window.  Keep pixel storage
+   and presentation ownership clear, and initialize Tk only when needed.
+
+   Verify incremental writes, refresh, readback, clear, zoom/pan, colormaps,
+   resizing, and capture.  Exercise CAD geometry with framebuffer underlay,
+   overlay, interlay, and framebuffer-off behavior in every rendering mode.
+
+   Provide the framebuffer device needed by fbserv and Rtwizard.  Integrate
+   Tk event processing with existing service/poll loops on the owning
+   thread without changing framebuffer protocols, authentication, or
+   endpoint ownership.  Preserve headless memory-framebuffer operation.
+
+   Completion: both embedded raytrace output and a standalone framebuffer
+   client work through the portable implementation.
+
+7. Integrate MGED and demonstrate X compatibility end to end.
+
+   Preserve attach/release, widget IDs and paths, pane selection, existing
+   bindings, resize/map/unmap processing, and refresh behavior.  Preserve
+   editing transforms, highlights, rubber bands, ADC, axes, text, shared
+   geometry, capture, and embedded raytrace output.
+
+   Test single and multiple panes, repeated attachment/release, closing
+   windows during queued work, and hidden panes.  Verify that an ordinary
+   legacy X attachment selects OSMesa fast drawing and that changing
+   fast_wireframe still works.  Do not import Obol's input semantics or
+   progressive-rendering policy into MGED as part of this migration.
+
+   Completion: representative interactive MGED workflows pass in all
+   three rendering configurations on each platform.
+
+8. Integrate TclCAD/Archer and then Rtwizard.
+
+   Update TclCAD's accepted backend types and replace feature decisions
+   based on ogl/wgl names with actual capabilities.  Preserve widget
+   command ownership and existing application bindings.  Validate Archer
+   wireframe/shaded views, picking, highlighting, editing, text, capture,
+   pane layouts, and raytrace framebuffer display.
+
+   Replace Rtwizard's platform-specific framebuffer device selection with
+   the portable device.  Verify progressive image updates, window closure,
+   saving images, and server cleanup using its existing service protocol.
+
+   Once the host interface is stable, adapt the Obol branch to consume it
+   through an Obol-specific adapter.  Keep its controller integration and
+   progressive scheduling there.  The main-branch implementation must
+   remain independently buildable without importing the larger rework.
+
+   Completion: all three requested applications use the shared host, and
+   Obol can reuse that host without maintaining a separate toolkit layer.
+
+9. Validate platform coverage, performance, and packaging.
+
+   Add tests alongside each implementation stage.  Before changing
+   defaults, run the complete matrix on Linux/X11, Windows, and
+   macOS/Aqua with the supported Tcl/Tk versions and relevant macOS
+   architectures.  Cover native, software-full, software-fast, software
+   builds without system GL or Qt, and mixed renderer instances.
+
+   Test automatic native failure/fallback, explicit-native failure,
+   repeated lifecycle operations, resizing, input coordinates at display
+   scale, framebuffer composition, and captures.  Ensure tests verify
+   actual fast-path execution as well as the setting's reported value.
+
+   Compare geometry and application behavior against the baselines.
+   Use suitable image tolerances across native drivers; account for the
+   osmesa fork's build/math settings when defining software references.
+   Benchmark rasterization and complete-frame latency separately, since
+   Tk-photo copies and presentation can dominate the finished frame.
+
+   Validate installed plugins, dependencies, runtime discovery, and clean
+   packages.  Keep non-Tk and headless builds working.  For finalized code
+   changes run regress-repository and regress-licenses, along with the
+   focused functional checks.
+
+   Completion: reproducible platform results and no material regression
+   in required behavior or interactive performance.
+
+10. Switch defaults and retire redundant implementations.
+
+   Prefer the portable backend after the acceptance matrix passes.
+   Preserve X as the OSMesa fast-mode compatibility request and retain
+   documented handling for ogl/wgl callers.  Keep aliases separate from
+   renderer capability reporting so new code need not inspect old names.
+
+   Remove old GLX/WGL/X display and framebuffer implementations only when
+   their remaining consumers and required options have been migrated or
+   explicitly addressed.  Consolidate tkswrast's presentation code into
+   the shared implementation and retain compatible access where needed.
+
+   Update user manuals, command help, build options, legal registration,
+   packaging, and troubleshooting.  Document renderer selection, software
+   fallback, fast_wireframe behavior, and remaining platform dependencies.
+
+   Completion: one maintained Tk hosting implementation, complete native
+   and software application workflows, and working legacy X selection.
+
+Milestones and scope boundaries
+------------------------------
+
+The first platform milestone is the Aqua native/software prototype.  The
+first useful migration milestone is a portable Tk host with the existing
+fast swrast algorithm correctly exposed to legacy X callers.  Full libdm
+and framebuffer support precede application default changes.  Removal of
+old implementations is the final step, after consumer and feature parity.
+
+This effort does not require Obol scene-graph adoption, new geometry
+generation, a modern shader rewrite, Metal rendering, or changes to
+Rtwizard's network protocol.  It consolidates hosting and presentation
+while preserving BRL-CAD's existing rendering interfaces and workflows.
+
+Upstream references
+-------------------
+
+OSMesa fork and build configuration:
+  https://github.com/starseeker/osmesa
+  https://github.com/starseeker/osmesa/blob/main/CMakeLists.txt
+
+Netgen Togl Cocoa implementation and subtree license:
+  https://github.com/NGSolve/netgen/tree/master/ng/Togl2.1
+  https://github.com/NGSolve/netgen/blob/master/ng/Togl2.1/togl.c
+  https://github.com/NGSolve/netgen/blob/master/ng/Togl2.1/toglNSOpenGL.c
+  https://github.com/NGSolve/netgen/blob/master/ng/Togl2.1/LICENSE
+
+MacPorts packaging of Netgen Togl with native Quartz support:
+  https://github.com/macports/macports-ports/blob/master/x11/Togl/Portfile
+
+Apple NSOpenGL API status:
+  https://developer.apple.com/documentation/appkit/nsopenglview
+
+The Cocoa implementation supplies an existing native integration, but
+Apple marks NSOpenGL deprecated.  Keeping the software host independent
+of native GL preserves the portable fallback described in this plan.
