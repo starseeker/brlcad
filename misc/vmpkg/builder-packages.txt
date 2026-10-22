@@ -29,7 +29,6 @@ make
 mesa-libEGL-devel
 mesa-libGL-devel
 mesa-libGLU-devel
-ninja-build
 openssl-devel
 patch
 perl

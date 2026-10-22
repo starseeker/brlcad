@@ -42,6 +42,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import stat
 import tarfile
 import tempfile
 import unittest
@@ -72,6 +73,17 @@ class InputsTest(unittest.TestCase):
         self.assertIn('set default="0"', rendered)
         self.assertIn('inst.stage2=hd:LABEL=Rocky', rendered)
         self.assertIn('inst.ks=hd:LABEL=OEMDRV:/ks.cfg', rendered)
+
+    def test_read_only_boot_menu_is_rewritten(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'grub.cfg'
+            path.write_text('set default="1"\nset timeout=60\n'
+                            'linuxefi /vmlinuz inst.stage2=hd:LABEL=Rocky quiet\n')
+            read_only_mode = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
+            path.chmod(read_only_mode)
+            vmpkg.rewrite_boot_menu(path, True)
+            self.assertIn('inst.ks=hd:LABEL=OEMDRV:/ks.cfg', path.read_text())
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), read_only_mode)
 
     def test_checked_download_rejects_corruption(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -140,6 +152,7 @@ class RpmLockTest(unittest.TestCase):
         key = self.bundle / 'test-key'
         key.write_bytes(b'pinned public key')
         inputs = vmpkg.read_inputs()
+        self.inputs = inputs
         inputs['epel_key'] = {'url': 'https://example.invalid/test-key', 'sha256': vmpkg.digest(key)}
         key_policy = patch.object(guest_env, 'read_inputs', return_value=inputs)
         key_policy.start()
@@ -155,6 +168,47 @@ class RpmLockTest(unittest.TestCase):
 
     def test_valid_bundle(self):
         self.assertEqual(guest_env.validate_bundle(self.bundle), self.manifest)
+
+    def make_builder_bundle(self):
+        self.manifest['role'] = 'builder'
+        self.manifest['roots'] = vmpkg.package_roots(vmpkg.HERE / 'builder-packages.txt')
+        for name in guest_env.BUILDER_ARCHIVES:
+            archive = self.bundle / (name + '.archive')
+            archive.write_bytes(('pinned ' + name).encode())
+            checksum = vmpkg.digest(archive)
+            self.inputs[name]['sha256'] = checksum
+            self.manifest[name] = {'file': archive.name, 'sha256': checksum}
+        (self.bundle / 'lock.json').write_text(json.dumps(self.manifest))
+
+    def test_valid_builder_bundle(self):
+        self.make_builder_bundle()
+        self.assertEqual(guest_env.validate_bundle(self.bundle), self.manifest)
+
+    def test_modified_ninja_archive_rejected(self):
+        self.make_builder_bundle()
+        (self.bundle / self.manifest['ninja']['file']).write_bytes(b'modified')
+        with self.assertRaisesRegex(ValueError, 'ninja input'):
+            guest_env.validate_bundle(self.bundle)
+
+    def test_missing_ninja_pin_rejected(self):
+        self.make_builder_bundle()
+        del self.manifest['ninja']
+        (self.bundle / 'lock.json').write_text(json.dumps(self.manifest))
+        with self.assertRaisesRegex(ValueError, 'ninja input'):
+            guest_env.validate_bundle(self.bundle)
+
+    def test_builder_archives_cannot_overwrite_each_other(self):
+        archives = {}
+        for name in guest_env.BUILDER_ARCHIVES:
+            path = self.bundle / name / 'archive'
+            path.parent.mkdir()
+            path.write_bytes(name.encode())
+            self.inputs[name]['sha256'] = vmpkg.digest(path)
+            archives[name] = path
+        args = argparse.Namespace(role='builder', bundle=self.bundle / 'new-bundle', **archives)
+        with self.assertRaisesRegex(ValueError, 'basenames must be distinct'):
+            guest_env.lock(args)
+        self.assertFalse(args.bundle.exists())
 
     def test_modified_rpm_rejected(self):
         (self.bundle / 'rpms/example.rpm').write_bytes(b'modified')

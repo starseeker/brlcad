@@ -49,6 +49,7 @@ import re
 import select
 import shlex
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -204,6 +205,18 @@ def unattended_menu(text, grub):
     return text
 
 
+def rewrite_boot_menu(path, grub):
+    text = unattended_menu(path.read_text(), grub)
+    mode = stat.S_IMODE(path.stat().st_mode)
+    # ISO extraction preserves read-only permissions. Keep that mode in the
+    # remastered image while allowing the host copy to be edited.
+    path.chmod(mode | stat.S_IWUSR)
+    try:
+        path.write_text(text)
+    finally:
+        path.chmod(mode)
+
+
 def prepare(args):
     work = external_path(args.work)
     if args.disk_gib < MIN_DISK_GIB:
@@ -229,7 +242,7 @@ def prepare(args):
     for entry, grub in [('isolinux/isolinux.cfg', False), ('EFI/BOOT/grub.cfg', True)]:
         target = work / Path(entry).name
         run(['xorriso', '-osirrox', 'on', '-indev', iso, '-extract', '/' + entry, target])
-        target.write_text(unattended_menu(target.read_text(), grub))
+        rewrite_boot_menu(target, grub)
         maps.extend(['-map', target, '/' + entry])
     run(['xorriso', '-indev', iso, '-outdev', work / 'install.iso',
          '-boot_image', 'any', 'replay'] + maps)
