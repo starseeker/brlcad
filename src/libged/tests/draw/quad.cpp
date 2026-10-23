@@ -46,6 +46,17 @@ extern "C" int unpack_apng(const char *src_dir, const char *apng_name, const cha
 extern "C" void ged_changed_callback(struct db_i *dbip, struct directory *dp, int mode, void *u_data);
 
 
+static void
+set_view_aet(struct ged *gedp, const char *view, const char *az, const char *el, const char *twist)
+{
+    /* Option parsing reorders the array, so each view needs fresh arguments. */
+    const char *args[] = {"view", "-V", view, "aet", az, el, twist};
+    const int argc = sizeof(args) / sizeof(args[0]);
+    if (ged_exec_view(gedp, argc, args) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "Unable to set view %s orientation: %s\n", view, bu_vls_cstr(gedp->ged_result_str));
+}
+
+
 void
 dm_refresh(struct ged *gedp, int vnum)
 {
@@ -489,33 +500,10 @@ main(int ac, char *av[]) {
     }
 
     /* Set distinct view az/el for each of the four quad views */
-    s_av[0] = "view";
-    s_av[1] = "-V";
-    s_av[2] = "V0";
-    s_av[3] = "aet";
-    s_av[4] = "35";
-    s_av[5] = "25";
-    s_av[6] = "0";
-    s_av[7] = NULL;
-    ged_exec_view(gedp, 7, s_av);
-
-    s_av[2] = "V1";
-    s_av[4] = "90";
-    s_av[5] = "0";
-    s_av[6] = "0";
-    ged_exec_view(gedp, 7, s_av);
-
-    s_av[2] = "V2";
-    s_av[4] = "0";
-    s_av[5] = "90";
-    s_av[6] = "0";
-    ged_exec_view(gedp, 7, s_av);
-
-    s_av[2] = "V3";
-    s_av[4] = "0";
-    s_av[5] = "0";
-    s_av[6] = "90";
-    ged_exec_view(gedp, 7, s_av);
+    set_view_aet(gedp, "V0", "35", "25", "0");
+    set_view_aet(gedp, "V1", "90", "0", "0");
+    set_view_aet(gedp, "V2", "0", "90", "0");
+    set_view_aet(gedp, "V3", "0", "0", "90");
 
 
     /************************************/
