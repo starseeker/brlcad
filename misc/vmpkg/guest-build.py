@@ -107,6 +107,7 @@ def build(args):
     logged(configure, 'bext-configure', logs)
     logged(['cmake', '--build', bext_build, '--parallel', '1'], 'bext-build', logs)
     brlcad_build = root / 'brlcad-build'
+    os.environ['CTEST_PARALLEL_LEVEL'] = str(args.jobs)
     logged(['cmake', '-S', sources / 'brlcad', '-B', brlcad_build, '-G', 'Ninja',
             '-DCMAKE_BUILD_TYPE=Release', '-DBRLCAD_EXT_DIR=' + str(bext_output),
             '-DBRLCAD_ENABLE_QT=ON', '-DBRLCAD_X11_PROVIDER=SYSTEM',
@@ -116,7 +117,7 @@ def build(args):
             'regress-licenses', '--parallel', str(args.jobs)], 'repository-checks', logs)
     os.environ['LIBGL_ALWAYS_SOFTWARE'] = '1'
     with virtual_display(logs / 'Xvfb.log'):
-        logged(['ctest', '--test-dir', brlcad_build, '--output-on-failure',
+        logged(['cmake', '--build', brlcad_build, '--target', 'check',
                 '--parallel', str(args.jobs)], 'tests', logs)
     for generator, suffix in [('RPM', '.rpm'), ('TGZ', '.tar.gz'), ('TBZ2', '.tar.bz2')]:
         staging = root / ('package-' + generator.lower())

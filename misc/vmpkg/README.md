@@ -225,7 +225,12 @@ outputs, and logs remain. Changing sources, options, or environment requires a
 new work directory; rerunning the identical command resumes a failed build.
 
 It then builds BRL-CAD with Qt and system X11, runs repository/license targets
-and CTest under Xvfb with software GL, and packages RPM, TGZ, and TBZ2 separately.
+and the `check` target under Xvfb with software GL, and packages RPM, TGZ, and
+TBZ2 separately. The `check` target selects BRL-CAD's production validation
+tests; unfiltered CTest also includes intentionally failing and resource-heavy
+tests that are not release gates. The job limit also sets
+`CTEST_PARALLEL_LEVEL` before configuration and validation so test processes
+respect the guest's memory budget.
 Successful package staging trees are removed between formats. Output includes
 package checksums, source-archive identity, revision IDs, and environment lock.
 Command output and resource records are in `release-build/logs`; resource files
