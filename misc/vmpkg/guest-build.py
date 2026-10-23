@@ -57,6 +57,38 @@ def logged(command, name, logs, cwd=None):
 
 
 
+def package_build(root, logs):
+    brlcad_build = root / 'brlcad-build'
+    output = root / 'output'
+    checksums = output / 'SHA256SUMS'
+    checksums.unlink(missing_ok=True)
+    archive_formats = [('TGZ', '.tar.gz'), ('TBZ2', '.tar.bz2')]
+    for config, label, destination, generators in [
+            ('CPackConfig.cmake', 'package', output, [('RPM', '.rpm')] + archive_formats),
+            ('CPackSourceConfig.cmake', 'package-source', output / 'source',
+             archive_formats + [('ZIP', '.zip')])]:
+        destination.mkdir(exist_ok=True)
+        for generator, suffix in generators:
+            name = label + '-' + generator.lower()
+            staging = root / name
+            logged(['cpack', '--config', brlcad_build / config,
+                    '-G', generator, '-B', staging], name, logs)
+            packages = list(staging.glob('*' + suffix))
+            if not packages:
+                raise ValueError('CPack produced no ' + name + ' package')
+            for package in packages:
+                package.replace(destination / package.name)
+            shutil.rmtree(staging)
+    pending_checksums = output / '.SHA256SUMS.tmp'
+    with pending_checksums.open('w') as stream:
+        for artifact in sorted(output.rglob('*')):
+            if artifact not in (checksums, pending_checksums) and artifact.is_file():
+                stream.write(digest(artifact) + '  ' +
+                             artifact.relative_to(output).as_posix() + '\n')
+    pending_checksums.replace(checksums)
+    print('Packages: ' + str(output))
+
+
 def build(args):
     if os.geteuid() == 0:
         raise ValueError('Run builds as the builder account')
@@ -119,21 +151,7 @@ def build(args):
     with virtual_display(logs / 'Xvfb.log'):
         logged(['cmake', '--build', brlcad_build, '--target', 'check',
                 '--parallel', str(args.jobs)], 'tests', logs)
-    for generator, suffix in [('RPM', '.rpm'), ('TGZ', '.tar.gz'), ('TBZ2', '.tar.bz2')]:
-        staging = root / ('package-' + generator.lower())
-        logged(['cpack', '--config', brlcad_build / 'CPackConfig.cmake',
-                '-G', generator, '-B', staging], 'package-' + generator.lower(), logs)
-        packages = list(staging.glob('*' + suffix))
-        if not packages:
-            raise ValueError('CPack produced no ' + generator + ' package')
-        for package in packages:
-            package.replace(output / package.name)
-        shutil.rmtree(staging)
-    with (output / 'SHA256SUMS').open('w') as checksums:
-        for artifact in sorted(output.iterdir()):
-            if artifact.name != 'SHA256SUMS' and artifact.is_file():
-                checksums.write(digest(artifact) + '  ' + artifact.name + '\n')
-    print('Packages: ' + str(output))
+    package_build(root, logs)
     print('Logs: ' + str(logs))
 
 
