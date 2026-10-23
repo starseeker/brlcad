@@ -225,20 +225,28 @@ outputs, and logs remain. Changing sources, options, or environment requires a
 new work directory; rerunning the identical command resumes a failed build.
 
 It then builds BRL-CAD with Qt and system X11, runs repository/license targets
-and the `check` target under Xvfb with software GL, and packages RPM, TGZ, and
-TBZ2 separately. The `check` target selects BRL-CAD's production validation
+and the `check` target under Xvfb with software GL, and packages binary RPM,
+TGZ, and TBZ2 files plus source TGZ, TBZ2, and ZIP archives separately. These
+use the same CPack configurations as the `package` and `package_source`
+targets. The `check` target selects BRL-CAD's production validation
 tests; unfiltered CTest also includes intentionally failing and resource-heavy
 tests that are not release gates. The job limit also sets
 `CTEST_PARALLEL_LEVEL` before configuration and validation so test processes
 respect the guest's memory budget.
-Successful package staging trees are removed between formats. Output includes
-package checksums, source-archive identity, revision IDs, and environment lock.
+Successful package staging trees are removed between formats. Binary packages
+are saved directly in `output`; source packages are saved in `output/source`.
+The recursive `output/SHA256SUMS` covers both sets of packages and their
+provenance files, including source-archive identity, revision IDs, and the
+environment lock.
 Command output and resource records are in `release-build/logs`; resource files
 come from GNU time and do not measure the sum of all concurrent process memory.
 Use guest/host memory and disk monitoring during the first full run as well.
 
-Copy `release-build/output` and `release-build/logs` to external host storage
-before discarding a build guest. bext's `bext-output` can also be retained for
+Copy all of `release-build/output` and `release-build/logs` to external host
+storage and verify `sha256sum -c SHA256SUMS` from the copied output directory
+before discarding a build guest. These packages are the persistent release
+artifacts; VM disks and intermediate build trees can then be discarded.
+bext's `bext-output` can also be retained for
 future builds with identical inputs; the guest script currently builds its own
 output tree and does not automatically select external dependency caches.
 

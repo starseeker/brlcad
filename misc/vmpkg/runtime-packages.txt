@@ -9,6 +9,7 @@ libXext
 libXfixes
 libXi
 libXrender
+libglvnd-opengl
 libstdc++
 libxcb
 libxkbcommon
@@ -17,6 +18,7 @@ mesa-dri-drivers
 mesa-libEGL
 mesa-libGL
 mesa-libGLU
+pcre2-utf16
 python3.11
 xcb-util-cursor
 xcb-util

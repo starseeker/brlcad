@@ -97,8 +97,11 @@ if {[catch {
 } message]} {puts stderr $message; exit 1}
 q
 """
-            subprocess.run([prefix / 'bin/mged', '-c', root / 'smoke.g'], input=commands,
-                           text=True, check=True, timeout=COMMAND_TIMEOUT_SECONDS)
+            script = root / 'smoke.tcl'
+            script.write_text(commands)
+            # Source Tcl directly to avoid MGED's command-input escaping.
+            subprocess.run([prefix / 'bin/mged', '-c', root / 'smoke.g', 'source', script],
+                           check=True, timeout=COMMAND_TIMEOUT_SECONDS)
             run([prefix / 'bin/rt', '-s', '32', '-o', root / 'smoke.pix',
                  root / 'smoke.g', 'smoke.r'], timeout=COMMAND_TIMEOUT_SECONDS)
             run([prefix / 'bin/g2asc', root / 'smoke.g', root / 'smoke.asc'],
