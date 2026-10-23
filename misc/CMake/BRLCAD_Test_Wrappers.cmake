@@ -54,6 +54,11 @@ else(NOT N EQUAL 0)
   set(JFLAG)
 endif(NOT N EQUAL 0)
 
+# An explicit environment limit belongs to CTest; -j would override it.
+if(DEFINED ENV{CTEST_PARALLEL_LEVEL})
+  set(JFLAG)
+endif()
+
 if("${CONFIG}" STREQUAL "")
   set(CONFIG "\"${CMAKE_BUILD_TYPE}\"")
 endif("${CONFIG}" STREQUAL "")
