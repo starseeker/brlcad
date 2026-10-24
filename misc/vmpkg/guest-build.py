@@ -45,7 +45,8 @@ from pathlib import Path
 import shutil
 import subprocess
 
-from vmpkg import HERE, digest, extract_archive, virtual_display
+import bext
+from vmpkg import HERE, digest, extract_archive, virtual_display, write_checksums
 
 
 def logged(command, name, logs, cwd=None):
@@ -54,7 +55,6 @@ def logged(command, name, logs, cwd=None):
         subprocess.run(['/usr/bin/time', '-v', '-o', str(logs / (name + '.resources'))] +
                        [str(value) for value in command], cwd=cwd, check=True,
                        stdout=output, stderr=subprocess.STDOUT)
-
 
 
 def package_build(root, logs):
@@ -79,31 +79,31 @@ def package_build(root, logs):
             for package in packages:
                 package.replace(destination / package.name)
             shutil.rmtree(staging)
-    pending_checksums = output / '.SHA256SUMS.tmp'
-    with pending_checksums.open('w') as stream:
-        for artifact in sorted(output.rglob('*')):
-            if artifact not in (checksums, pending_checksums) and artifact.is_file():
-                stream.write(digest(artifact) + '  ' +
-                             artifact.relative_to(output).as_posix() + '\n')
-    pending_checksums.replace(checksums)
+    write_checksums(output)
     print('Packages: ' + str(output))
 
 
-def build(args):
-    if os.geteuid() == 0:
-        raise ValueError('Run builds as the builder account')
+def builder_receipt():
     spec = importlib.util.spec_from_file_location('guest_env', HERE / 'guest-env.py')
     environment = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(environment)
     receipt = environment.verify()
     if receipt['role'] != 'builder':
         raise ValueError('A builder RPM bundle must be installed before building')
+    return receipt
+
+
+def prepare_work(args, receipt, environment, dependencies):
     root = args.work.resolve()
+    store = args.bext_store.resolve()
+    if store.is_relative_to(root) or root.is_relative_to(store):
+        raise ValueError('Keep --bext-store separate from the disposable work directory')
     root.mkdir(parents=True, exist_ok=True)
     fingerprint = digest(args.sources)
-    recipe = {'sources_sha256': fingerprint, 'jobs': args.jobs, 'profile': args.profile,
-              'lock_sha256': receipt['lock_sha256'],
-              'cflags': os.environ.get('CFLAGS', ''), 'cxxflags': os.environ.get('CXXFLAGS', '')}
+    recipe = {'sources_sha256': fingerprint, 'stage': args.stage, 'profile': args.profile,
+              'environment': environment,
+              'bext_store': str(store),
+              'bext_artifact': dependencies}
     identity = root / 'recipe.json'
     if identity.exists():
         if json.loads(identity.read_text()) != recipe:
@@ -119,54 +119,92 @@ def build(args):
     output = root / 'output'
     output.mkdir(exist_ok=True)
     shutil.copyfile(HERE / 'environment-lock.json', output / 'environment-lock.json')
-    (output / 'provenance.json').write_text(json.dumps({
-        'sources_sha256': fingerprint, 'environment': receipt,
-        'build_jobs': args.jobs, 'profile': args.profile,
-        'brlcad_ref': subprocess.check_output(['git', '-C', sources / 'brlcad', 'rev-parse', 'HEAD']).decode().strip(),
-        'bext_ref': subprocess.check_output(['git', '-C', sources / 'bext', 'rev-parse', 'HEAD']).decode().strip()
-    }, indent=2) + '\n')
-    if not (sources / 'bext/CMake/BextReleaseBuild.cmake').is_file():
-        raise ValueError('Source snapshot needs bext release-build support')
-    bext_build, bext_output = root / 'bext-build', root / 'bext-output'
-    configure = ['cmake', '-S', sources / 'bext', '-B', bext_build, '-G', 'Ninja',
-                 '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_INSTALL_PREFIX=' + str(bext_output),
-                 '-DENABLE_ALL=ON', '-DGIT_SHALLOW_CLONE=ON',
-                 '-DEXT_BUILD_ALWAYS=OFF', '-DBEXT_DISCARD_WORK=ON',
-                 '-DBEXT_BUILD_JOBS=' + str(args.jobs), '-DBEXT_LINK_JOBS=1',
-                 '-DPython3_EXECUTABLE=/usr/bin/python3.11']
-    if args.profile == 'everything':
-        configure += ['-DUSE_APPLESEED=ON', '-DUSE_OSPRAY=ON']
-    logged(configure, 'bext-configure', logs)
-    logged(['cmake', '--build', bext_build, '--parallel', '1'], 'bext-build', logs)
+    provenance = {'sources_sha256': fingerprint, 'environment': receipt,
+                  'build_jobs': args.jobs, 'profile': args.profile, 'stage': args.stage}
+    for name in ('brlcad', 'bext'):
+        if (sources / name).is_dir():
+            provenance[name + '_ref'] = subprocess.check_output(
+                ['git', '-C', sources / name, 'rev-parse', 'HEAD']).decode().strip()
+    return root, provenance
+
+
+def build_brlcad(root, jobs, bext_output):
+    sources, logs = root / 'sources', root / 'logs'
+    if not (sources / 'brlcad/CMakeLists.txt').is_file():
+        raise ValueError('BRL-CAD build needs a BRL-CAD source snapshot')
     brlcad_build = root / 'brlcad-build'
-    os.environ['CTEST_PARALLEL_LEVEL'] = str(args.jobs)
+    os.environ['CTEST_PARALLEL_LEVEL'] = str(jobs)
     logged(['cmake', '-S', sources / 'brlcad', '-B', brlcad_build, '-G', 'Ninja',
             '-DCMAKE_BUILD_TYPE=Release', '-DBRLCAD_EXT_DIR=' + str(bext_output),
             '-DBRLCAD_ENABLE_QT=ON', '-DBRLCAD_X11_PROVIDER=SYSTEM',
             '-DPython3_EXECUTABLE=/usr/bin/python3.11'], 'brlcad-configure', logs)
-    logged(['cmake', '--build', brlcad_build, '--parallel', str(args.jobs)], 'brlcad-build', logs)
+    logged(['cmake', '--build', brlcad_build, '--parallel', str(jobs)], 'brlcad-build', logs)
     logged(['cmake', '--build', brlcad_build, '--target', 'regress-repository',
-            'regress-licenses', '--parallel', str(args.jobs)], 'repository-checks', logs)
+            'regress-licenses', '--parallel', str(jobs)], 'repository-checks', logs)
     os.environ['LIBGL_ALWAYS_SOFTWARE'] = '1'
     with virtual_display(logs / 'Xvfb.log'):
         logged(['cmake', '--build', brlcad_build, '--target', 'check',
-                '--parallel', str(args.jobs)], 'tests', logs)
-    package_build(root, logs)
-    print('Logs: ' + str(logs))
+                '--parallel', str(jobs)], 'tests', logs)
+
+
+def build(args):
+    if os.geteuid() == 0:
+        raise ValueError('Run builds as the builder account')
+    receipt = builder_receipt()
+    environment = bext.environment_identity(receipt)
+    dependencies = None
+    if args.bext_artifact:
+        artifact = args.bext_artifact.resolve()
+        bext_output, dependency_receipt = bext.restore(
+            artifact, environment, args.profile, args.bext_store)
+        dependencies = {'receipt_sha256': digest(artifact / bext.RECEIPT_FILE),
+                        'archive_sha256': dependency_receipt['archives'][bext.PAYLOAD_FILE]}
+    root, provenance = prepare_work(args, receipt, environment, dependencies)
+    if args.bext_artifact is None:
+        artifact, bext_output, dependency_receipt = bext.build(
+            root / 'sources/bext', root, environment, args.profile,
+            args.bext_store.resolve(), args.jobs, logged)
+        print('Dependency artifact: ' + str(artifact))
+    output = root / 'output'
+    shutil.copyfile(artifact / bext.RECEIPT_FILE, output / bext.RECEIPT_FILE)
+    provenance['bext_ref'] = dependency_receipt['bext_ref']
+    provenance['bext_artifact'] = {
+        'recipe_sha256': dependency_receipt['recipe_sha256'],
+        'receipt_sha256': digest(artifact / bext.RECEIPT_FILE),
+        'archive_sha256': dependency_receipt['archives'][bext.PAYLOAD_FILE],
+        'bext_ref': dependency_receipt['bext_ref']}
+    bext.write_json(output / 'provenance.json', provenance)
+    if args.stage != 'bext':
+        build_brlcad(root, args.jobs, bext_output)
+    bext.validate_prefix(bext_output, dependency_receipt['files'])
+    if args.stage != 'bext':
+        package_build(root, root / 'logs')
+    else:
+        write_checksums(output)
+    print('Logs: ' + str(root / 'logs'))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('stage', nargs='?', choices=['all', 'bext', 'brlcad'], default='all')
     parser.add_argument('--sources', type=Path, required=True)
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--jobs', type=int, default=4)
     parser.add_argument('--profile', choices=['bundled', 'everything'], default='bundled')
+    parser.add_argument('--bext-artifact', type=Path,
+                        help='Published bext artifact directory; never rebuild dependencies')
+    parser.add_argument('--bext-store', type=Path, default=bext.STORE_DEFAULT,
+                        help='Stable dependency prefix parent, shared by producer and consumer')
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error('--jobs must be positive')
+    if args.stage == 'brlcad' and args.bext_artifact is None:
+        parser.error('brlcad requires --bext-artifact')
+    if args.stage == 'bext' and args.bext_artifact is not None:
+        parser.error('bext produces an artifact; use brlcad or all to consume one')
     try:
         build(args)
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         parser.exit(1, str(error) + '\nSee the work directory logs for command output.\n')
 
 

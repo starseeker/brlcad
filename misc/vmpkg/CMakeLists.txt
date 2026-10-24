@@ -39,6 +39,7 @@ cmakefiles(
   .gitignore
   README.md
   base-packages.txt
+  bext.py
   build.sh
   builder-packages.txt
   guest-build.py
@@ -48,6 +49,7 @@ cmakefiles(
   rocky.repo
   runtime-packages.txt
   smoke.py
+  test_bext.py
   test_vmpkg.py
   vmpkg.py
 )

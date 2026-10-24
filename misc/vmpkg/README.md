@@ -222,7 +222,8 @@ directories, and builds one dependency
 at a time with bounded inner parallelism. Completed working trees are discarded;
 Tcl/Tk/Itk trees are deferred until dependency finalization. Sources, completed
 outputs, and logs remain. Changing sources, options, or environment requires a
-new work directory; rerunning the identical command resumes a failed build.
+new work directory; rerunning with the same inputs resumes a failed build.
+The job limit can change without invalidating the build recipe.
 
 It then builds BRL-CAD with Qt and system X11, runs repository/license targets
 and the `check` target under Xvfb with software GL, and packages binary RPM,
@@ -246,9 +247,76 @@ Copy all of `release-build/output` and `release-build/logs` to external host
 storage and verify `sha256sum -c SHA256SUMS` from the copied output directory
 before discarding a build guest. These packages are the persistent release
 artifacts; VM disks and intermediate build trees can then be discarded.
-bext's `bext-output` can also be retained for
-future builds with identical inputs; the guest script currently builds its own
-output tree and does not automatically select external dependency caches.
+The full build also publishes `release-build/bext-artifact`, independently of
+the BRL-CAD packages. Retain that entire directory to reuse the dependencies.
+
+## Build and reuse dependencies separately
+
+Export separate source snapshots on the host:
+
+```sh
+python3 misc/vmpkg/vmpkg.py snapshot --bext ../bext \
+    --output "$vmpkg_root/bext-sources.tar.gz"
+python3 misc/vmpkg/vmpkg.py snapshot --brlcad . \
+    --output "$vmpkg_root/brlcad-sources.tar.gz"
+```
+
+Transfer the bext snapshot to a provisioned builder, then build dependencies:
+
+```sh
+sh /opt/vmpkg/build.sh bext --sources "$PWD/bext-sources.tar.gz" \
+    --work "$PWD/dependency-build" --jobs 1 --profile bundled
+```
+
+Copy the entire `dependency-build/bext-artifact` directory to persistent host
+storage and verify `sha256sum -c SHA256SUMS` there. It contains:
+
+* `bext.tar.gz`: the finalized `install` and `noinstall` trees, installation
+  manifest, and content stamp. Build tools in `noinstall` are required even
+  though they are excluded from BRL-CAD release packages.
+* `bext-sources.tar.gz`: the dependency source snapshot captured before
+  configuration populates submodules or generates files.
+* `bext-receipt.json`: source and recipe identities, builder environment,
+  compiler identities and flags, profile, archive checksums, and the complete
+  prefix inventory, including file contents, executable bits, and symlinks.
+* `environment-lock.json`, build logs/resource records, and `SHA256SUMS`.
+
+In a fresh clone of the same provisioned builder, transfer that artifact
+directory and a BRL-CAD snapshot. No bext checkout or build tree is required:
+
+```sh
+sh /opt/vmpkg/build.sh brlcad --sources "$PWD/brlcad-sources.tar.gz" \
+    --bext-artifact "$PWD/bext-artifact" \
+    --work "$PWD/brlcad-build" --jobs 1 --profile bundled
+```
+
+This command verifies and restores the artifact, then builds, checks, and
+packages BRL-CAD without configuring or building bext. Mismatched environments,
+profiles, prefixes, checksums, or existing prefix contents fail explicitly;
+there is no dependency-build or network-fetch fallback. An `everything`
+artifact can serve a `bundled` consumer, while the reverse is rejected.
+
+The default dependency store is `$HOME/.local/share/vmpkg/bext`, with a prefix
+per recipe digest. Both producer and consumer can set `--bext-store`, but they
+must use the same absolute store path: this first version preserves the
+installation prefix recorded in RPATHs and configuration files. Arbitrary
+relocation is not supported. Restored prefixes are read-only, and BRL-CAD
+stages private copies. Prefix contents are verified again before packaging.
+Different BRL-CAD work directories can consume the same dependency artifact.
+
+The bext recipe excludes BRL-CAD sources and execution job counts. Changes to
+bext sources or dependency pins, its build driver/configuration, the builder
+lock, compiler identities or relevant environment flags select a new recipe.
+Reusing an artifact is explicit rather than an automatic cache search. The
+default `all` stage preserves the combined-source workflow above; it can also
+consume `--bext-artifact` instead of building dependencies.
+
+Each BRL-CAD output includes the dependency receipt and records the exact
+dependency archive and receipt checksums. Keep the corresponding artifact
+alongside release provenance so the dependency sources and environment remain
+available. Existing work directories from the earlier combined recipe format
+require a new work directory. Existing VM templates need the updated scripts
+installed before using these commands; new seeds include them automatically.
 
 ## Test the installed packages
 
@@ -283,7 +351,7 @@ snapshots if their old blocks defeat the desired reclamation.
 ## Offline checks
 
 ```sh
-python3 misc/vmpkg/test_vmpkg.py -v
+python3 -m unittest discover -s misc/vmpkg -p 'test_*.py' -v
 python3 ../bext/CMake/tests/test_release_build.py -v
 sh -n misc/vmpkg/build.sh
 cmake --build .build --target regress-repository regress-licenses
@@ -291,5 +359,7 @@ cmake --build .build --target regress-repository regress-licenses
 
 The focused tests cover archive boundaries, input checksum failures, Kickstart
 rendering, VM command construction, RPM-lock integrity, successful work cleanup,
-failed-install retention, deferred cleanup, and build resumption. They do not
+failed-install retention, deferred cleanup, and build resumption. Artifact tests
+compile a small dependency and two independent consumers, exercise restoration
+without the producer tree, and reject corrupted or incompatible inputs. They do not
 substitute for the first actual installer and full-stack build trials.

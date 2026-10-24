@@ -84,6 +84,16 @@ def digest(path):
     return result.hexdigest()
 
 
+def write_checksums(output):
+    checksums = output / 'SHA256SUMS'
+    pending = output / '.SHA256SUMS.tmp'
+    with pending.open('w') as stream:
+        for artifact in sorted(output.rglob('*')):
+            if artifact not in (checksums, pending) and artifact.is_file():
+                stream.write(digest(artifact) + '  ' + artifact.relative_to(output).as_posix() + '\n')
+    pending.replace(checksums)
+
+
 def extract_archive(archive, destination):
     with tarfile.open(archive, 'r:*') as source:
         # Git snapshots may contain symlinks. Require link targets to stay
@@ -365,17 +375,21 @@ def snapshot_one(source, target, origin):
 
 
 def snapshot(args):
+    components = [(name, source) for name, source in [('brlcad', args.brlcad), ('bext', args.bext)]
+                  if source is not None]
+    if not components:
+        raise ValueError('Select --brlcad, --bext, or both for a source snapshot')
     args.output = external_path(args.output)
     if args.output.exists():
         raise ValueError('Source archive already exists')
     with tempfile.TemporaryDirectory(prefix='vmpkg-sources-') as temporary:
         root = Path(temporary)
         revisions = {}
-        for name, source in [('brlcad', args.brlcad), ('bext', args.bext)]:
+        for name, source in components:
             revisions[name] = snapshot_one(source, root / name, 'https://github.com/BRL-CAD/' + name)
         (root / 'revisions.json').write_text(json.dumps(revisions, indent=2) + '\n')
         with tarfile.open(args.output, 'w:gz') as archive:
-            for name in ('brlcad', 'bext', 'revisions.json'):
+            for name in list(revisions) + ['revisions.json']:
                 archive.add(root / name, arcname=name)
     print(digest(args.output) + '  ' + str(args.output))
 
@@ -412,8 +426,8 @@ def main():
     clone_parser.add_argument('--output', type=Path, required=True)
     clone_parser.set_defaults(function=clone)
     snapshot_parser = actions.add_parser('snapshot', help='Export current sources, including local changes')
-    snapshot_parser.add_argument('--brlcad', type=Path, required=True)
-    snapshot_parser.add_argument('--bext', type=Path, required=True)
+    snapshot_parser.add_argument('--brlcad', type=Path)
+    snapshot_parser.add_argument('--bext', type=Path)
     snapshot_parser.add_argument('--output', type=Path, required=True)
     snapshot_parser.set_defaults(function=snapshot)
     args = parser.parse_args()
