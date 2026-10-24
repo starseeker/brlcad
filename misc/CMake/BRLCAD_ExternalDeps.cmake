@@ -625,6 +625,14 @@ function(initialize_tp_files)
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
       )
     endif("${CMAKE_VERSION}" VERSION_LESS "3.24")
+    # Shared dependency caches may be read-only.  Only our private copies
+    # must permit exclusions and path rewriting; preserve their execute bits.
+    if(UNIX)
+      execute_process(
+        COMMAND chmod -R u+w "${CMAKE_BINARY_DIR}/${sd}"
+        COMMAND_ERROR_IS_FATAL ANY
+      )
+    endif(UNIX)
     message("Expanding ${sd}.tar in build directory... done.")
     # Copying complete - remove the archive file
     execute_process(COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_BINARY_DIR}/${sd}.tar)
