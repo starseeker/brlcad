@@ -1,3 +1,35 @@
+commit 799f00615acafb1ab03865b68ce86545c95896dd
+Author: f4alt <christopherjmacgregor@gmail.com>
+Date:   Thu Oct 22 11:43:49 2026 -0400
+
+    search/exec interp still needs to init Bu + Bn
+    
+    Some of our procs (cycle_check, near, etc.) rely on those
+
+commit 4e8d81e273fdf00329ff4e5505b4626de98f8c83
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Wed Oct 21 19:50:37 2026 -0400
+
+    Fix Tcl autoloading in search -exec
+    
+    Preserve Tcl autoload semantics in the worker interpreter before
+    falling back to GED dispatch. Register non-conflicting GED command
+    shims so autoloaded MGED procedures can discover native dependencies.
+    
+    Add coverage for invoking remat through search -exec.
+
+commit ab22ecb2080791330c6ffa4ab9053b396912d5e0
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Wed Oct 14 11:51:04 2026 -0400
+
+    Work harder to keep git non-interactive
+
+commit 2dda6d3505b9558ec71c09ce0d297a4763d9097b
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Tue Oct 20 20:29:32 2026 +0000
+
+    Fix repair command option parsing
+
 commit 342d8a915272ed8b66d07d79fa8b89c870855905
 Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
 Date:   Sat Oct 10 20:03:02 2026 -0400
