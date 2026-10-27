@@ -49,7 +49,7 @@
 #include <FL/Fl_Preferences.H>
 #include <FL/Fl_Tabs.H>
 #include <FL/Fl_Tile.H>
-#include <FL/Fl_Terminal.H>
+#include <FL/Fl_Text_Display.H>
 #include <FL/fl_ask.H>
 
 #include <algorithm>
@@ -1523,6 +1523,9 @@ public:
     int scrollback = settings.scrollback_lines;
     preferences.get("command_history", history, history);
     preferences.get("scrollback_lines", scrollback, scrollback);
+    int wrap_history = settings.wrap_history;
+    preferences.get("wrap_history", wrap_history, wrap_history);
+    settings.wrap_history = wrap_history != 0;
     settings.command_history = static_cast<std::size_t>(
       std::clamp(history, 1, kMaximumPreferenceHistory));
     settings.scrollback_lines =
@@ -1555,6 +1558,7 @@ public:
     terminal_limits.command_history = settings.command_history;
     terminal_limits.scrollback_lines = settings.scrollback_lines;
     terminal_->limits(terminal_limits);
+    terminal_->wrap_history(settings.wrap_history);
 
     if (!save) {
       return;
@@ -1579,6 +1583,7 @@ public:
     save_value("faceplate_font_size", settings.faceplate_font_size);
     save_value("command_history", static_cast<int>(settings.command_history));
     save_value("scrollback_lines", settings.scrollback_lines);
+    save_value("wrap_history", settings.wrap_history);
     if (saved && preferences.flush() < 0) {
       saved = false;
     }

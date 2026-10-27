@@ -45,6 +45,7 @@ public:
     int faceplate_font_size = 0; ///< Zero selects automatic sizing and wrapping.
     std::size_t command_history = 1000;
     int scrollback_lines = 10000;
+    bool wrap_history = true;
   };
 
   using ChangedHandler = std::function<void(const Settings& settings)>;

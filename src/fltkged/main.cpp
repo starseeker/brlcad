@@ -27,7 +27,6 @@
 
 #include <FL/Fl.H>
 #include <FL/Fl_Preferences.H>
-#include <FL/Fl_Terminal.H>
 
 #include <algorithm>
 #include <chrono>
@@ -195,9 +194,7 @@ int main(int argc, char** argv)
     if (window.execute("ert -P 1") != 0) {
       std::cerr << "Unable to start embedded raytrace: "
                 << window.last_error() << '\n';
-      if (const char* output = window.terminal().output().text(); output) {
-        std::cerr << output << '\n';
-      }
+      std::cerr << window.terminal().text() << '\n';
       return EXIT_FAILURE;
     }
     bool updated = false;
@@ -211,9 +208,7 @@ int main(int argc, char** argv)
     if (!updated) {
       window.execute("rtabort");
       std::cerr << "Embedded raytrace produced no framebuffer update\n";
-      if (const char* output = window.terminal().output().text(); output) {
-        std::cerr << output << '\n';
-      }
+      std::cerr << window.terminal().text() << '\n';
       return EXIT_FAILURE;
     }
   }

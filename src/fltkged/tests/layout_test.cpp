@@ -25,7 +25,7 @@
 #include "bv/defines.h"
 #include "dm/faceplate.h"
 #include "ged.h"
-#include <FL/Fl_Terminal.H>
+#include <FL/Fl_Text_Display.H>
 #include <FL/Fl_Menu_Bar.H>
 #include <string>
 #include <FL/Fl.H>
@@ -132,9 +132,7 @@ int main(int, char** argv)
   window.terminal().input("pending");
   bu_log("terminal diagnostic hook test\n");
   Fl::wait(0.04);
-  const char* output = window.terminal().output().text(true);
-  const bool logged = output && std::string(output).find("terminal diagnostic hook test") != std::string::npos;
-  std::free(const_cast<char*>(output));
+  const bool logged = window.terminal().text().find("terminal diagnostic hook test") != std::string::npos;
   require(logged && window.terminal().input() == "pending",
           "library diagnostics did not reach the terminal or disturbed pending input");
   window.combined(true);

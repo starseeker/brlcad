@@ -29,7 +29,7 @@
 #include "dm/faceplate.h"
 #include <FL/Fl.H>
 #include <FL/Fl_Preferences.H>
-#include <FL/Fl_Terminal.H>
+#include <FL/Fl_Text_Display.H>
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Menu_Bar.H>
 #include <cstdio>
@@ -79,14 +79,11 @@ void check_clear(FltkGedWindow& window, const std::string& command)
   terminal.append("output to clear\nmore output\n");
   terminal.input(command);
   terminal.submit();
-  const char* captured = terminal.output().text(true);
-  const std::string screen = captured ? captured : "";
-  std::free(const_cast<char*>(captured));
-  require(terminal.output().cursor_row() == 0 && terminal.input().empty() &&
-          terminal.output().cursor_col() == static_cast<int>(terminal.prompt().size()),
+  const std::string screen = terminal.text();
+  require(screen == terminal.prompt() && terminal.input().empty() &&
+          terminal.output().insert_position() == static_cast<int>(terminal.prompt().size()),
           "clear did not leave a clean screen and usable prompt for '" + command +
-          "': row " + std::to_string(terminal.output().cursor_row()) +
-          ", column " + std::to_string(terminal.output().cursor_col()) + "\n" + screen);
+          "': " + screen);
   require(terminal.history_at(terminal.history_size() - 1) == command,
           "clear erased command history");
 }
@@ -278,9 +275,7 @@ int main(int argc, char** argv)
           "failed draw changed the camera");
   execute(window, std::string("search . -name ") + kGeometry +
                   " -exec echo frontend_search_exec {} ;");
-  const char* output = window.terminal().output().text(true);
-  const bool executed = output && std::string(output).find("frontend_search_exec") != std::string::npos;
-  std::free(const_cast<char*>(output));
+  const bool executed = window.terminal().text().find("frontend_search_exec") != std::string::npos;
   require(executed, "search -exec did not execute its command");
   if (tcl_available) check_editor_guards(window, database.path());
   check_edit_session(window);

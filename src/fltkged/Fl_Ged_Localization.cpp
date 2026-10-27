@@ -26,13 +26,13 @@
 #if defined(FLTKGED_HAVE_GETTEXT)
 #  include <cstdlib>
 #  include <libintl.h>
-#endif
 
 namespace {
 
 constexpr const char* kTranslationDomain = "fltkged";
 
 } // namespace
+#endif
 
 void fltkged::initialize_locale()
 {

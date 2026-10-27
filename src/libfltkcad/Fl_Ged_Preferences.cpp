@@ -22,6 +22,7 @@
 #include "fltkcad/Fl_Ged_Preferences.H"
 
 #include <FL/Fl_Button.H>
+#include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Input.H>
 #include <FL/fl_ask.H>
 
@@ -34,7 +35,7 @@
 namespace {
 
 constexpr int kWindowWidth = 430;
-constexpr int kWindowHeight = 292;
+constexpr int kWindowHeight = 326;
 constexpr int kMargin = 12;
 constexpr int kRowHeight = 26;
 constexpr int kRowGap = 8;
@@ -106,6 +107,7 @@ public:
     faceplate_font_size_ = make_input("Status font (auto or size)");
     command_history_ = make_input("Command history");
     scrollback_lines_ = make_input("Terminal scrollback");
+    wrap_history_ = new Fl_Check_Button(0, 0, 1, kRowHeight, "Wrap historical output");
     cancel_ = new Fl_Button(0, 0, kButtonWidth, kRowHeight, "Cancel");
     apply_ = new Fl_Button(0, 0, kButtonWidth, kRowHeight, "Apply and Save");
     cancel_->callback(cancel_callback, this);
@@ -127,6 +129,7 @@ public:
       std::to_string(value.faceplate_font_size).c_str());
     command_history_->value(std::to_string(value.command_history).c_str());
     scrollback_lines_->value(std::to_string(value.scrollback_lines).c_str());
+    wrap_history_->value(value.wrap_history);
     last_error_.clear();
   }
 
@@ -156,6 +159,7 @@ public:
       return fail("Terminal scrollback must be between 1 and 1000000 lines");
     }
 
+    replacement.wrap_history = wrap_history_->value() != 0;
     settings_ = replacement;
     last_error_.clear();
     if (changed_handler_) {
@@ -182,6 +186,8 @@ public:
       input->resize(input_x, row_y, input_width, kRowHeight);
       row_y += kRowHeight + kRowGap;
     }
+    wrap_history_->resize(kMargin, row_y, kWindowWidth - 2 * kMargin, kRowHeight);
+    row_y += kRowHeight + kRowGap;
     const int apply_x = kWindowWidth - kMargin - kButtonWidth;
     apply_->resize(apply_x, row_y, kButtonWidth, kRowHeight);
     cancel_->resize(apply_x - kButtonGap - kButtonWidth, row_y,
@@ -216,6 +222,7 @@ public:
   Fl_Input* faceplate_font_size_ = nullptr;
   Fl_Input* command_history_ = nullptr;
   Fl_Input* scrollback_lines_ = nullptr;
+  Fl_Check_Button* wrap_history_ = nullptr;
   Fl_Button* cancel_ = nullptr;
   Fl_Button* apply_ = nullptr;
   Settings settings_;

@@ -107,8 +107,9 @@ explicit format or split on whitespace rather than assume four columns.
 
 Terminal wrapping and command formatting are separate: a terminal may wrap
 incoming text without changing its bytes, but cannot reconstruct table cells
-from old physical lines. Existing scrollback is not reformatted or rerun on a
-resize. Matrices, analysis tables, material reports, and the legacy joint/button
+from old physical lines. The FLTK console can visually wrap existing scrollback
+at the new viewport width without changing its text or table layout. Commands
+are not rerun on resize. Matrices, analysis tables, material reports, and the legacy joint/button
 column helpers still have their own layouts; changing these requires per-command
 format decisions, especially for output consumed by scripts. The directory
 formatter still measures names in bytes; full Unicode screen-cell accounting

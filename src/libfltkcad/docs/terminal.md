@@ -1,17 +1,19 @@
 # Command terminal
 
-`Fl_Cad_Terminal` edits commands directly in `Fl_Terminal`. The prompt, pending
-command, cursor, and output share one terminal surface. Asynchronous output
-restores the pending command and insertion point, including wrapped input.
-Very long commands display the portion containing the cursor. Submitted
-commands and output use FLTK's bounded scrollback.
+`Fl_Cad_Terminal` is a command console built with standard `Fl_Text_Display`
+and `Fl_Text_Buffer` widgets. The transcript, prompt, and pending command share
+one text view. The transcript is protected from editing. Asynchronous output
+preserves the pending command, insertion point, and selections in history.
+Mouse selection, copying, and scrolling use FLTK's text widget behavior.
 
 Enter submits; Up/Down and Control-P/N navigate history; Tab completes.
 Left/Right, Home/End, Control-A/E/B/F, Backspace, and Delete edit the command.
 Control-U/K/W erase the prefix, suffix, or preceding word. Control-L clears the
 screen and Control-C cancels input and calls the optional interrupt handler.
 Control-V, Shift-Insert, and the middle mouse button paste. Select output with
-the mouse and use Control-Shift-C to copy. Pasted newlines stay in the pending
+the mouse and use Control-Shift-C to copy. Shift navigation selects pending
+input; pasting or deleting replaces that selection, and Control-X cuts it.
+Pasted newlines stay in the pending
 command until Enter submits it.
 
 The widget deliberately does not depend on libged. Applications provide a
@@ -36,18 +38,26 @@ multi-step commands such as libged's `GED_MORE` flow.
 
 ## Width and colors
 
-Input and new output wrap at the current viewport width on every resize,
-including width changes that leave the height unchanged. `columns()` reports
-that width in character cells. FLTK's ring buffer retains its widest allocation
-so resizing never truncates older output. Old rows retain their original line
-breaks and can be read with the horizontal scrollbar; resizing does not rerun
-commands or reformat tables already printed.
+Historical output and pending input wrap to the current viewport by default,
+including long words and object names. Resizing changes only their display:
+explicit newlines, table rows, and copied text retain their original content.
+Widening the view reverses visual wrapping without rerunning commands.
+`wrap_history(false)` disables wrapping and enables horizontal scrolling.
+Fltkged exposes this as the persistent **Wrap historical output** preference.
+`columns()` reports the current viewport width in character cells.
 
 The widget defaults to black text on white. `colors(foreground, background)`
-changes the default palette and updates existing text using the old defaults.
-ANSI color and cursor sequences continue to be handled by `Fl_Terminal`.
-The bext FLTK wrapping patch supplies an output margin independent of history
-storage; an unpatched FLTK package does not provide this API.
+updates both new and existing text using the default palette. ANSI SGR colors
+(base, bright, indexed, and RGB), bold, italic, underline, and strikeout are
+translated into native text styles. Carriage return, backspace, and erase to
+end of line support progress output. Escape sequences may span appends.
+Other terminal cursor controls and OSC sequences are ignored: this widget is
+a command transcript, rather than a full-screen terminal emulator. Up to 62
+distinct text styles are retained; additional styles use the default palette.
+
+No terminal wrapping patch or private FLTK API is required. `output()` returns
+the native text view for focus and selection; `text()` returns a snapshot of
+the transcript and live prompt/input with their original newlines.
 
 Fltkged passes `columns()` to `ged_set_terminal_columns()` before executing
 commands. Libged's default width remains 80 for callers that do not supply a
@@ -57,15 +67,17 @@ selection, and command parsing.
 ## Failure and performance behavior
 
 The default limits retain 1,000 submitted commands and 10,000 output lines.
+Retained output is also bounded to 16 MiB, including unterminated lines.
 Input is limited to 64 KiB, one `append()` call to 4 MiB, prompts to 4 KiB, and
 completion results to 200 candidates. Oversized values are truncated or
 rejected with a diagnostic available from `last_error()`; output receives an
-explicit truncation marker. Appends are passed to FLTK in bounded chunks.
+explicit truncation marker. Limits count logical lines and bytes, so resizing
+does not discard history.
 
 Command, completion, interrupt, and error callback exceptions are caught so they do not
 unwind through the FLTK event loop. Applications should still split sustained
 high-volume output into event-loop-sized batches—the per-call limit prevents a
-single accidental allocation, while `Fl_Terminal`'s scrollback limit bounds
+single accidental allocation, while the transcript line and byte limits bound
 retained history.
 
 ## Build and test
