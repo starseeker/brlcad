@@ -30,7 +30,7 @@
 #include <string>
 #include <vector>
 
-class Fl_Terminal;
+class Fl_Text_Display;
 
 class FLTKCAD_EXPORT Fl_Cad_Terminal : public Fl_Group
 {
@@ -45,7 +45,8 @@ public:
   struct Limits
   {
     std::size_t command_history = 1000;
-    int scrollback_lines = 10000;
+    int scrollback_lines = 10000; ///< Logical lines, independent of visual wrapping.
+    std::size_t max_scrollback_bytes = 16U * 1024U * 1024U; ///< Bounds unterminated output too.
     std::size_t max_input_bytes = 64U * 1024U;
     std::size_t max_append_bytes = 4U * 1024U * 1024U;
     std::size_t max_prompt_bytes = 4U * 1024U;
@@ -94,8 +95,14 @@ public:
   bool consolidate_history(std::size_t begin, std::size_t end);
   bool consolidate_history(std::size_t begin, std::size_t end, const std::string& command);
 
-  Fl_Terminal& output() noexcept;
-  const Fl_Terminal& output() const noexcept;
+  /// The text view exposes native selection, copying, and focus handling.
+  Fl_Text_Display& output() noexcept;
+  const Fl_Text_Display& output() const noexcept;
+  /// Transcript and current prompt/input, with only their original newlines.
+  std::string text() const;
+  /// Apply viewport wrapping to all text; disabling it permits horizontal scrolling.
+  void wrap_history(bool enabled);
+  bool wrap_history() const noexcept;
 
   void resize(int x, int y, int width, int height) override;
 

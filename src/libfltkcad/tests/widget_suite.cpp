@@ -36,6 +36,7 @@
 #include <FL/Fl.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Choice.H>
+#include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Group.H>
 #include <FL/Fl_Input.H>
@@ -581,6 +582,9 @@ int main(int argc, char** argv)
       });
     auto* first = find_widget<Fl_Input>(preferences, "Background top");
     auto* history = find_widget<Fl_Input>(preferences, "Command history");
+    auto* wrapping = find_widget<Fl_Check_Button>(preferences, "Wrap historical output");
+    if (!wrapping || !wrapping->value()) return fail("console wrapping preference is missing");
+    wrapping->value(0);
     if (!first || !history) {
       return fail("preference controls were not found");
     }
@@ -588,7 +592,7 @@ int main(int argc, char** argv)
     history->value("250");
     if (!preferences.apply() || !applied || changed.background_first.red != 12 ||
         changed.background_first.green != 34 ||
-        changed.background_first.blue != 56 || changed.command_history != 250) {
+        changed.background_first.blue != 56 || changed.command_history != 250 || changed.wrap_history) {
       return fail("valid preferences were not applied: " +
                   preferences.last_error());
     }
