@@ -21,6 +21,13 @@ libtclcad when Tcl/Tk is enabled. `tclcad_init(interp, 1, ...)` initializes
 TkLiteHtml in that interpreter. No separate widget module or Tcl script
 is needed at runtime. Headless initialization does not initialize Tk.
 
+The widget supports litehtml v0.10, supplied by bext, and the newer
+API with redraw callbacks. CMake detects which API is available when
+configuring. BRL-CAD discovers litehtml through its usual bext package
+handling and `FindLITEHTML.cmake`, which uses the installed CMake package
+and its Gumbo dependency when available. Installations without package
+configuration files are also supported.
+
 This directory can also be copied and built independently. It only
 requires Tcl/Tk 8.6 and an installed litehtml CMake package:
 

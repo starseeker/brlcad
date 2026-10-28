@@ -36,6 +36,7 @@
 #endif
 
 #include "widget.h"
+#include "litehtml_compat.h"
 
 #include <litehtml.h>
 #include <litehtml/url.h>
@@ -106,7 +107,7 @@ constexpr unsigned int kColorComponentMaximum = 255U;
 
 int to_int(litehtml::pixel_t value)
 {
-    const double number = std::round(value.value());
+    const double number = std::round(static_cast<double>(value));
     if(!std::isfinite(number))
     {
         return 0;
@@ -1276,33 +1277,43 @@ void HtmlWidget::handle_event(XEvent* event)
         return;
     }
 
-    auto redraw_box = [this](const litehtml::position&) { schedule_redraw(); };
+#if TKLITEHTML_REDRAW_CALLBACK
+    auto redraw = [this](const litehtml::position&) { schedule_redraw(); };
+#else
+    litehtml::position::vector redraw;
+#endif
     switch(event->type)
     {
     case MotionNotify:
         document_->on_mouse_over(event->xmotion.x + scroll_x_, event->xmotion.y + scroll_y_, event->xmotion.x,
-                                 event->xmotion.y, redraw_box);
+                                 event->xmotion.y, redraw);
         break;
     case LeaveNotify:
-        document_->on_mouse_leave(redraw_box);
+        document_->on_mouse_leave(redraw);
         break;
     case ButtonPress:
         if(event->xbutton.button == Button1)
         {
             document_->on_lbutton_down(event->xbutton.x + scroll_x_, event->xbutton.y + scroll_y_, event->xbutton.x,
-                                       event->xbutton.y, redraw_box);
+                                       event->xbutton.y, redraw);
         }
         break;
     case ButtonRelease:
         if(event->xbutton.button == Button1)
         {
             document_->on_lbutton_up(event->xbutton.x + scroll_x_, event->xbutton.y + scroll_y_, event->xbutton.x,
-                                     event->xbutton.y, redraw_box);
+                                     event->xbutton.y, redraw);
         }
         break;
     default:
         break;
     }
+#if !TKLITEHTML_REDRAW_CALLBACK
+    if(!redraw.empty())
+    {
+        schedule_redraw();
+    }
+#endif
 }
 
 void HtmlWidget::schedule_redraw(bool layout)
@@ -2868,7 +2879,7 @@ void HtmlWidget::draw_borders(litehtml::uint_ptr, const litehtml::borders& borde
     const int width  = to_int(position.width);
     const int height = to_int(position.height);
     const auto draw_border = [&](const litehtml::border& border, int bx, int by, int bw, int bh) {
-        if(border.width.value() > 0.0F && border.style != litehtml::border_style_none &&
+        if(static_cast<float>(border.width) > 0.0F && border.style != litehtml::border_style_none &&
            border.style != litehtml::border_style_hidden)
         {
             fill_rectangle(border.color, bx, by, bw, bh);

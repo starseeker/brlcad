@@ -40,6 +40,7 @@ set(
   FindLEMON.cmake
   FindLMDB.cmake
   FindLibUV.cmake
+  FindLITEHTML.cmake
   FindMANIFOLD.cmake
   FindMMESH.cmake
   FindNETPBM.cmake

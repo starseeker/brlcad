@@ -59,6 +59,32 @@ else()
 endif()
 
 if(TARGET tklitehtml OR (BRLCAD_ENABLE_TCL AND BRLCAD_ENABLE_TK AND TK_LIBRARY))
+  # litehtml does not export a package version. Probe the API so both
+  # v0.10 and newer installations work, including after a dependency update.
+  function(tklitehtml_check_api)
+    include(CheckCXXSourceCompiles)
+    include(CMakePushCheckState)
+    cmake_push_check_state(RESET)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+    if(TARGET LITEHTML::LITEHTML)
+      set(CMAKE_REQUIRED_LIBRARIES LITEHTML::LITEHTML)
+    else()
+      set(CMAKE_REQUIRED_LIBRARIES litehtml)
+    endif()
+    unset(TKLITEHTML_REDRAW_CALLBACK CACHE)
+    check_cxx_source_compiles("
+#include <litehtml.h>
+void mouse_leave(litehtml::document& document)
+{
+    document.on_mouse_leave([](const litehtml::position&) {});
+}
+" TKLITEHTML_REDRAW_CALLBACK)
+    configure_file(src/litehtml_compat.h.in litehtml_compat.h)
+    cmake_pop_check_state()
+  endfunction()
+  tklitehtml_check_api()
+
   # Embed the helpers so the built-in and standalone packages initialize
   # identically, without needing to locate a separate Tcl script at runtime.
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS library/tklitehtml.tcl)
@@ -103,6 +129,6 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   endif()
 else()
   cmakefiles(${tklitehtml_sources}
-    CMakeLists.txt LICENSE README.md library/tklitehtml.tcl src/library_script.h.in
+    CMakeLists.txt LICENSE README.md library/tklitehtml.tcl src/library_script.h.in src/litehtml_compat.h.in
     tests/all.tcl tests/performance.tcl tests/embedded.tcl)
 endif()
