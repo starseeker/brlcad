@@ -3302,6 +3302,11 @@ endforeach(ad ${ALL_DIRS})
 # (or at least REALLY slows things down) if we want to include bext as part of the
 # overall release tarballs.  May have to look into a custom solution to do the
 # job more efficiently
+if(BRLINST_HOST_BINARY_DIR)
+  set(BRLINST_BUILTIN_INTEGRATION ON)
+  include("${CMAKE_SOURCE_DIR}/misc/tools/brlinst/cmake/BRLCAD.cmake")
+  brlinst_brlcad_configure()
+endif()
 include(BRLCAD_CPack)
 
 # Some files to ignore for distcheck.  The files and directories prefixed with

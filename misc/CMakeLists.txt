@@ -25,8 +25,8 @@ brlcad_adddata(profont/ProFont.ttf fonts)
 brlcad_adddata(osifont/osifont-lgpl3fe.ttf fonts)
 
 if(TARGET archer)
-  brlcad_adddata(nsis/brlcad.ico icons)
-  brlcad_adddata(nsis/archer.ico icons)
+  brlcad_adddata(cpack/icons/brlcad.ico icons)
+  brlcad_adddata(cpack/icons/archer.ico icons)
 endif(TARGET archer)
 
 add_subdirectory(CMake)
@@ -117,21 +117,21 @@ set(
   macosx/openUp.c
   mime.types
   mime_cad.types
-  nsis/archer.ico
-  nsis/brlcad.ico
-  nsis/header.bmp
-  nsis/side.bmp
-  nsis/uninstall.ico
+  cpack/exe/header.bmp
+  cpack/exe/sidebar.bmp
+  cpack/exe/uninstall.ico
+  cpack/icons/archer.ico
+  cpack/icons/brlcad.ico
+  cpack/msi/banner.bmp
+  cpack/msi/dialog.bmp
+  cpack/msi/license.rtf
+  cpack/msi/product.ico
   profont/LICENSE
   profont/profont-IIx-charmap.png
   profont/profont_IIx_readme.pdf
   profont/readme.txt
   osifont/README.md
   uncpowerplant2g.sh
-  wix/License.rtf
-  wix/brlcad_banner.bmp
-  wix/brlcad_dialog.bmp
-  wix/brlcad_product.ico
 )
 cmakefiles(${misc_ignore_files})
 

@@ -28,6 +28,9 @@ function(brlinst_add_package)
       set(_brlinst_target package-brlinst-msi)
     endif()
     set(_brlinst_script "${CMAKE_CURRENT_BINARY_DIR}/BrlinstPackage-${BRLINST_FORMAT}.cmake")
+    set(BRLINST_FORMATS "${BRLINST_FORMAT}")
+    set(BRLINST_HOST_BINARY_DIR)
+    set(BRLINST_HOST_CONFIG)
     configure_file("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Package.cmake.in" "${_brlinst_script}" @ONLY)
     add_custom_target(${_brlinst_target}
       COMMAND "${CMAKE_CPACK_COMMAND}" --config "${CMAKE_BINARY_DIR}/CPackConfig.cmake"

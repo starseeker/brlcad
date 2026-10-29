@@ -122,7 +122,7 @@ void schema(Model &m) {
                             str("Description", 255, false, false, "Formatted", true)});
     add("CustomAction",
         {str("Action", 72, false, true), num("Type", false), str("Source", 72, true, false, "CustomSource"),
-         str("Target", 255, true, false, "CustomTarget")});
+         str("Target", 255, true, false, "Formatted")});
     for (auto name :
          {"InstallUISequence", "InstallExecuteSequence", "AdminUISequence", "AdminExecuteSequence"})
         add(name, {str("Action", 72, false, true), str("Condition", 255, true, false, "Condition"),
@@ -233,7 +233,13 @@ std::string license_rtf(const std::string &text) {
         throw Error("MSI license text exceeds 60 KB after RTF encoding");
     return r;
 }
-void wizard(Model &m, const Json &product) {
+void wizard(Model &m, const PackageInput &input) {
+    const auto &product = input.product;
+    const bool classic = product.contains("branding") && product["branding"].value("style", "") == "classic";
+    constexpr int classic_dialog_width = 370;
+    constexpr int classic_dialog_height = 270;
+    constexpr int classic_image_height = 234;
+    constexpr int classic_banner_height = 44;
     auto row = [&](const char *t, Json r) { m.table(t).rows.push_back(std::move(r)); };
     auto control = [&](const char *d, const char *id, const char *type, int x, int y, int w, int h,
                        Json property, Json text, Json next = nullptr, int attributes = 3) {
@@ -242,24 +248,52 @@ void wizard(Model &m, const Json &product) {
     auto event = [&](const char *d, const char *c, const char *ev, const char *arg,
                      const char *condition = "1",
                      int order = 1) { row("ControlEvent", {d, c, ev, arg, condition, order}); };
-    auto dialog = [&](const char *id, const char *first, const char *title, int attributes = 3) {
-        row("Dialog", {id, 50, 50, 400, 300, attributes, "[ProductName] Setup", first,
+    enum class PageStyle { full_image, interior };
+    auto dialog = [&](const char *id, const char *first, const char *title, int attributes = 3,
+                      PageStyle style = PageStyle::interior) {
+        const int width = classic ? classic_dialog_width : 400;
+        const int height = classic ? classic_dialog_height : 300;
+        row("Dialog", {id, 50, 50, width, height, attributes, "[ProductName] Setup", first,
                        std::string(first) == "Cancel"  ? "Cancel"
                        : std::string(first) == "Retry" ? "Retry"
+                       : std::string(first) == "Finish" ? "Finish"
                                                        : "Next",
-                       "Cancel"});
-        control(id, "Title", "Text", 20, 15, 360, 30, nullptr, std::string("{\\TitleFont}") + title);
-        control(id, "Line", "Line", 0, 260, 400, 0, nullptr, nullptr);
+                       std::string(first) == "Finish" ? "Finish" : "Cancel"});
+        if (!classic) {
+            control(id, "Title", "Text", 20, 15, 360, 30, nullptr,
+                    std::string("{\\TitleFont}") + title);
+            control(id, "Line", "Line", 0, 260, 400, 0, nullptr, nullptr);
+            return;
+        }
+        if (style == PageStyle::full_image) {
+            if (!input.branding.msi_dialog.empty())
+                control(id, "DialogBitmap", "Bitmap", 0, 0, classic_dialog_width, classic_image_height,
+                        nullptr, "WixUIDialogBmp", nullptr, 1);
+            control(id, "Title", "Text", 135, 20, 220, 40, nullptr,
+                    std::string("{\\TitleFont}") + title, nullptr, 65539);
+        } else {
+            if (!input.branding.msi_banner.empty())
+                control(id, "BannerBitmap", "Bitmap", 0, 0, classic_dialog_width, classic_banner_height,
+                        nullptr, "WixUIBannerBmp", nullptr, 1);
+            control(id, "Title", "Text", 15, 6, 220, 15, nullptr,
+                    std::string("{\\TitleFont}") + title, nullptr, 65539);
+            control(id, "BannerLine", "Line", 0, classic_banner_height, classic_dialog_width, 0, nullptr,
+                    nullptr);
+        }
+        control(id, "Line", "Line", 0, classic_image_height, classic_dialog_width, 0, nullptr, nullptr);
     };
     auto cancel = [&](const char *d, const char *next) {
-        control(d, "Cancel", "PushButton", 315, 273, 65, 18, nullptr, "Cancel", next);
+        control(d, "Cancel", "PushButton", classic ? 304 : 315, classic ? 243 : 273,
+                classic ? 56 : 65, classic ? 17 : 18, nullptr, "Cancel", next);
         event(d, "Cancel", "EndDialog", "Exit");
     };
     auto buttons = [&](const char *d, const char *back, const char *next, const char *label = "Next >") {
-        control(d, "Next", "PushButton", 240, 273, 65, 18, nullptr, label, "Cancel");
+        control(d, "Next", "PushButton", classic ? 236 : 240, classic ? 243 : 273,
+                classic ? 56 : 65, classic ? 17 : 18, nullptr, label, "Cancel");
         cancel(d, back ? "Back" : "Next");
         if (back) {
-            control(d, "Back", "PushButton", 165, 273, 65, 18, nullptr, "< Back", "Next");
+            control(d, "Back", "PushButton", classic ? 180 : 165, classic ? 243 : 273,
+                    classic ? 56 : 65, classic ? 17 : 18, nullptr, "< Back", "Next");
             event(d, "Back", "NewDialog", back);
         }
         if (next)
@@ -268,23 +302,30 @@ void wizard(Model &m, const Json &product) {
     row("TextStyle", {"BodyFont", "Segoe UI", 9, nullptr, 0});
     row("TextStyle", {"TitleFont", "Segoe UI", 12, nullptr, 1});
     row("Property", {"DefaultUIFont", "BodyFont"});
-    dialog("WelcomeDlg", "Next", "Welcome");
-    control("WelcomeDlg", "Body", "Text", 20, 60, 360, 160, nullptr,
-            formatted_literal(product.value("welcome", "Install this version alongside other versions.")) +
-                "\r\n\r\nThis wizard installs [ProductName].");
+    dialog("WelcomeDlg", "Next", "Welcome", 3, PageStyle::full_image);
+    control("WelcomeDlg", "Body", "Text", classic ? 125 : 20, classic ? 72 : 60,
+            classic ? 230 : 360, classic ? 120 : 160, nullptr,
+            "This wizard installs [ProductName].\r\n\r\n" +
+                formatted_literal(product.value("welcome", "Install this version alongside other versions.")),
+            nullptr, classic ? 65539 : 3);
     buttons("WelcomeDlg", nullptr, "LicenseDlg");
     dialog("LicenseDlg", "Next", "License information");
-    control("LicenseDlg", "License", "ScrollableText", 20, 55, 360, 195, nullptr,
-            license_rtf(product.at("licenseText").get<std::string>()), "Next", 7);
+    const auto license = input.branding.msi_license.empty()
+                             ? license_rtf(product.at("licenseText").get<std::string>())
+                             : read_text(input.branding.msi_license, 60000);
+    control("LicenseDlg", "License", "ScrollableText", 20, classic ? 58 : 55, classic ? 330 : 360,
+            classic ? 166 : 195, nullptr, license, "Next", 7);
     buttons("LicenseDlg", "WelcomeDlg", "ScopeDlg");
     // Scope and optional integrations are selected before costing, so MSI redirects all known folders and
     // registry roots consistently. The next group of pages edits the destination.
     dialog("ScopeDlg", "Scope", "Who should have access?");
-    control("ScopeDlg", "Scope", "RadioButtonGroup", 20, 65, 360, 70, "BRLINSTSCOPE", nullptr, "Back");
+    control("ScopeDlg", "Scope", "RadioButtonGroup", 20, 65, classic ? 330 : 360, 70,
+            "BRLINSTSCOPE", nullptr, "Back");
     row("RadioButton", {"BRLINSTSCOPE", 1, "user", 0, 0, 350, 20, "Only my account", nullptr});
     row("RadioButton", {"BRLINSTSCOPE", 2, "machine", 0, 35, 350, 20,
                         "Everyone (requires administrator permission)", nullptr});
-    control("ScopeDlg", "Body", "Text", 20, 155, 360, 75, nullptr,
+    control("ScopeDlg", "Body", "Text", 20, classic ? 145 : 155, classic ? 330 : 360,
+            classic ? 70 : 75, nullptr,
             "Choose shortcuts and PATH next. To change scope or options after choosing a destination, cancel "
             "and restart setup.");
     buttons("ScopeDlg", "LicenseDlg", nullptr);
@@ -293,27 +334,29 @@ void wizard(Model &m, const Json &product) {
     event("ScopeDlg", "Next", "[MSIINSTALLPERUSER]", "{}", "BRLINSTSCOPE = \"machine\"", 3);
     event("ScopeDlg", "Next", "NewDialog", "OptionsDlg", "1", 4);
     dialog("DestinationDlg", "Path", "Choose the destination");
-    control("DestinationDlg", "Body", "Text", 20, 60, 360, 60, nullptr,
+    control("DestinationDlg", "Body", "Text", 20, 60, classic ? 330 : 360, 60, nullptr,
             "Choose a new or empty folder on a local fixed drive. Each version needs its own directory.");
-    control("DestinationDlg", "Path", "PathEdit", 20, 135, 360, 20, "INSTALLDIR", nullptr, "Next");
+    control("DestinationDlg", "Path", "PathEdit", 20, classic ? 125 : 135, classic ? 330 : 360, 20,
+            "INSTALLDIR", nullptr, "Next");
     buttons("DestinationDlg", nullptr, nullptr);
     event("DestinationDlg", "Next", "SetTargetPath", "INSTALLDIR", "1", 1);
     event("DestinationDlg", "Next", "NewDialog", "ReadyDlg", "1", 2);
     dialog("OptionsDlg", "Menu", "Choose shortcuts and PATH");
-    control("OptionsDlg", "Menu", "CheckBox", 20, 65, 360, 20, "BRLINST_STARTMENU",
+    control("OptionsDlg", "Menu", "CheckBox", 20, 65, classic ? 330 : 360, 20, "BRLINST_STARTMENU",
             "Create Start Menu shortcuts", "Desktop");
-    control("OptionsDlg", "Desktop", "CheckBox", 20, 100, 360, 20, "BRLINST_DESKTOP",
+    control("OptionsDlg", "Desktop", "CheckBox", 20, 100, classic ? 330 : 360, 20, "BRLINST_DESKTOP",
             "Create desktop shortcuts", "Path");
-    control("OptionsDlg", "Path", "CheckBox", 20, 135, 360, 20, "BRLINST_PATH",
+    control("OptionsDlg", "Path", "CheckBox", 20, 135, classic ? 330 : 360, 20, "BRLINST_PATH",
             "Add this version's bin directory to PATH", "Back");
-    control("OptionsDlg", "Body", "Text", 20, 185, 360, 55, nullptr,
+    control("OptionsDlg", "Body", "Text", 20, classic ? 175 : 185, classic ? 330 : 360,
+            classic ? 45 : 55, nullptr,
             "Existing PATH entries stay in their current order. Other versions remain installed.");
     for (auto p : {"BRLINST_STARTMENU", "BRLINST_DESKTOP", "BRLINST_PATH"})
         row("CheckBox", {p, "1"});
     buttons("OptionsDlg", "ScopeDlg", nullptr);
     event("OptionsDlg", "Next", "EndDialog", "Return");
     dialog("ReadyDlg", "Next", "Ready to install");
-    control("ReadyDlg", "Body", "Text", 20, 60, 360, 170, nullptr,
+    control("ReadyDlg", "Body", "Text", 20, 60, classic ? 330 : 360, classic ? 155 : 170, nullptr,
             "Product: [ProductName]\r\n\r\nDestination: [INSTALLDIR]\r\n\r\nScope: "
             "[BRLINSTSCOPE]\r\n\r\nClick Install to begin.");
     buttons("ReadyDlg", "DestinationDlg", nullptr, "Install");
@@ -326,14 +369,17 @@ void wizard(Model &m, const Json &product) {
     event("ValidationDlg", "OK", "EndDialog", "Return");
     dialog("RemoveDlg", "Next", "Remove this version?");
     control(
-        "RemoveDlg", "Body", "Text", 20, 65, 360, 150, nullptr,
+        "RemoveDlg", "Body", "Text", 20, 65, classic ? 330 : 360, classic ? 145 : 150, nullptr,
         "Windows Installer will remove [ProductName] and its shortcuts. Other versions remain installed.");
     buttons("RemoveDlg", nullptr, nullptr, "Remove");
     event("RemoveDlg", "Next", "EndDialog", "Return");
     dialog("ProgressDlg", "Cancel", "Installing or removing files", 1);
-    control("ProgressDlg", "Status", "Text", 20, 80, 360, 40, nullptr, "Please wait...");
-    control("ProgressDlg", "Progress", "ProgressBar", 20, 135, 360, 20, nullptr, nullptr);
-    control("ProgressDlg", "Cancel", "PushButton", 315, 273, 65, 18, nullptr, "Cancel", "Cancel");
+    control("ProgressDlg", "Status", "Text", 20, classic ? 70 : 80, classic ? 330 : 360, 40, nullptr,
+            "Please wait...");
+    control("ProgressDlg", "Progress", "ProgressBar", 20, classic ? 125 : 135, classic ? 330 : 360, 20,
+            nullptr, nullptr);
+    control("ProgressDlg", "Cancel", "PushButton", classic ? 304 : 315, classic ? 243 : 273,
+            classic ? 56 : 65, classic ? 17 : 18, nullptr, "Cancel", "Cancel");
     event("ProgressDlg", "Cancel", "SpawnDialog", "StopDlg");
     row("Dialog", {"StopDlg", 50, 50, 360, 150, 3, "Cancel setup", "Continue", "Continue", "Continue"});
     control("StopDlg", "Message", "Text", 15, 15, 330, 80, nullptr,
@@ -345,13 +391,22 @@ void wizard(Model &m, const Json &product) {
     row("EventMapping", {"ProgressDlg", "Status", "ActionText", "Text"});
     row("EventMapping", {"ProgressDlg", "Progress", "SetProgress", "Progress"});
     for (auto name : {"FinishedDlg", "CancelledDlg", "FailedDlg"}) {
-        row("Dialog", {name, 50, 50, 400, 240, 3, "[ProductName] Setup", "Finish", "Finish", "Finish"});
+        std::string title = std::string(name) == "FinishedDlg" ? "Installation complete"
+                            : std::string(name) == "CancelledDlg" ? "Setup cancelled"
+                                                                  : "Setup failed";
+        if (classic)
+            dialog(name, "Finish", title.c_str(), 3, PageStyle::full_image);
+        else
+            row("Dialog", {name, 50, 50, 400, 240, 3, "[ProductName] Setup", "Finish", "Finish", "Finish"});
         std::string message = std::string(name) == "FinishedDlg" ? "The operation completed."
                               : std::string(name) == "CancelledDlg"
                                   ? "Setup was cancelled."
                                   : "Setup failed. See the Windows Installer log for details.";
-        control(name, "Message", "Text", 20, 30, 360, 150, nullptr, message);
-        control(name, "Finish", "PushButton", 315, 205, 65, 18, nullptr, "Close", "Finish");
+        control(name, "Message", "Text", classic ? 135 : 20, classic ? 70 : 30,
+                classic ? 220 : 360, classic ? 130 : 150, nullptr, message, nullptr,
+                classic ? 65539 : 3);
+        control(name, "Finish", "PushButton", classic ? 236 : 315, classic ? 243 : 205,
+                classic ? 56 : 65, classic ? 17 : 18, nullptr, "Close", "Finish");
         event(name, "Finish", "EndDialog", "Return");
     }
     // Close the keyboard navigation cycles through editable controls too.
@@ -376,10 +431,13 @@ void wizard(Model &m, const Json &product) {
         event("ErrorDlg", button.c_str(), "EndDialog", argument.c_str());
     }
     dialog("FilesInUse", "Retry", "Close applications using these files");
-    control("FilesInUse", "List", "ListBox", 20, 60, 360, 185, "FileInUseProcess", nullptr, "Ignore", 65539);
-    control("FilesInUse", "Retry", "PushButton", 240, 273, 65, 18, nullptr, "Retry", "Cancel");
+    control("FilesInUse", "List", "ListBox", 20, 60, classic ? 330 : 360, classic ? 165 : 185,
+            "FileInUseProcess", nullptr, "Ignore", 65539);
+    control("FilesInUse", "Retry", "PushButton", classic ? 236 : 240, classic ? 243 : 273,
+            classic ? 56 : 65, classic ? 17 : 18, nullptr, "Retry", "Cancel");
     event("FilesInUse", "Retry", "EndDialog", "Retry");
-    control("FilesInUse", "Ignore", "PushButton", 165, 273, 65, 18, nullptr, "Ignore", "Retry");
+    control("FilesInUse", "Ignore", "PushButton", classic ? 180 : 165, classic ? 243 : 273,
+            classic ? 56 : 65, classic ? 17 : 18, nullptr, "Ignore", "Retry");
     event("FilesInUse", "Ignore", "EndDialog", "Ignore");
     cancel("FilesInUse", "List");
 }
@@ -417,10 +475,15 @@ Model make_model(const PackageInput &input, const fs::path &notices, const fs::p
              "INSTALLDIR;ALLUSERS;MSIINSTALLPERUSER;BRLINST_STARTMENU;BRLINST_DESKTOP;BRLINST_PATH");
     if (p.contains("website"))
         property("ARPURLINFOABOUT", p.at("website"));
-    if (!input.icon.empty()) {
-        row("Icon", {"Product.ico", {{"stream", utf8(input.icon)}}});
+    const auto &product_icon = input.branding.msi_icon.empty() ? input.icon : input.branding.msi_icon;
+    if (!product_icon.empty()) {
+        row("Icon", {"Product.ico", {{"stream", utf8(product_icon)}}});
         property("ARPPRODUCTICON", "Product.ico");
     }
+    if (!input.branding.msi_banner.empty())
+        row("Binary", {"WixUIBannerBmp", {{"stream", utf8(input.branding.msi_banner)}}});
+    if (!input.branding.msi_dialog.empty())
+        row("Binary", {"WixUIDialogBmp", {{"stream", utf8(input.branding.msi_dialog)}}});
     row("Directory", {"TARGETDIR", nullptr, "SourceDir"});
     row("Directory", {"ProgramFiles64Folder", "TARGETDIR", "."});
     row("Directory", {"INSTALLDIR", "ProgramFiles64Folder", "BRLINST|" + m.name});
@@ -603,7 +666,7 @@ Model make_model(const PackageInput &input, const fs::path &notices, const fs::p
     row("InstallUISequence", {"FinishedDlg", "UILevel = 5", -1});
     row("InstallUISequence", {"CancelledDlg", "UILevel = 5", -2});
     row("InstallUISequence", {"FailedDlg", "UILevel = 5", -3});
-    wizard(m, p);
+    wizard(m, input);
     // Populate validation metadata from the same schema used to create tables.
     // The Windows SDK ICE suite can then check the authored package normally.
     auto &validation = m.table("_Validation");

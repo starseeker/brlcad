@@ -44,7 +44,6 @@ set(
   FindMANIFOLD.cmake
   FindMMESH.cmake
   FindNETPBM.cmake
-  FindNSIS.cmake
   FindOPENNURBS.cmake
   FindOSL.cmake
   FindOSMESA.cmake
@@ -67,8 +66,6 @@ set(
   FindWix.cmake
   FindXMLLINT.cmake
   FindZLIB.cmake
-  NSIS.template.in
-  NSIS_silent.template.in
   OpenVDBUtils.cmake
   Path_Setup.cmake
   RPath_Setup.cmake

@@ -30,6 +30,18 @@ const Json &by_key(Model &m, const char *table, const std::string &key) {
             return row;
     throw Error("Missing MSI row: " + key);
 }
+const Json &by_keys(Model &m, const char *table, const std::string &first, const std::string &second) {
+    for (const auto &row : m.table(table).rows)
+        if (row[0] == first && row[1] == second)
+            return row;
+    throw Error("Missing MSI row: " + first + "/" + second);
+}
+bool has_key(Model &m, const char *table, const std::string &key) {
+    for (const auto &row : m.table(table).rows)
+        if (row[0] == key)
+            return true;
+    return false;
+}
 // Check relational integrity independently of the generator. This catches
 // broken control navigation, components, file keys and schema changes on Unix.
 void relational(Model &m) {
@@ -163,6 +175,71 @@ int main() {
         require(by_key(model, "InstallExecuteSequence", "BrlinstCheck")[2].get<int>() <
                     by_key(model, "InstallExecuteSequence", "InstallInitialize")[2].get<int>(),
                 "Destination preflight runs after mutation starts");
+        require(by_key(model, "LaunchCondition", "VersionNT64")[1] ==
+                    "This package requires 64-bit Windows.",
+                "64-bit Windows launch condition missing");
+        require(by_key(model, "Dialog", "WelcomeDlg")[3] == 400 &&
+                    by_key(model, "Dialog", "WelcomeDlg")[4] == 300,
+                "Unbranded dialog dimensions changed");
+        require(!has_key(model, "Binary", "WixUIBannerBmp") &&
+                    !has_key(model, "Binary", "WixUIDialogBmp"),
+                "Unbranded MSI contains branding streams");
+
+        write(root / "generic.ico", "generic icon");
+        write(root / "msi.ico", "MSI icon");
+        write(root / "banner.bmp", "banner");
+        write(root / "dialog.bmp", "dialog");
+        write(root / "license.rtf", "{\\rtf1 Branded license}");
+        auto classic_input = input;
+        classic_input.product["branding"] = {{"style", "classic"}};
+        classic_input.icon = root / "generic.ico";
+        classic_input.branding.msi_icon = root / "msi.ico";
+        classic_input.branding.msi_banner = root / "banner.bmp";
+        classic_input.branding.msi_dialog = root / "dialog.bmp";
+        classic_input.branding.msi_license = root / "license.rtf";
+        auto classic = make_model(classic_input, root / "NOTICE.txt", root / "actions.dll", guid);
+        relational(classic);
+        require(by_key(classic, "Binary", "WixUIBannerBmp")[1]["stream"] == utf8(root / "banner.bmp"),
+                "Classic MSI banner stream missing");
+        require(by_key(classic, "Binary", "WixUIDialogBmp")[1]["stream"] == utf8(root / "dialog.bmp"),
+                "Classic MSI dialog stream missing");
+        require(by_key(classic, "Icon", "Product.ico")[1]["stream"] == utf8(root / "msi.ico"),
+                "Classic MSI icon did not override the generic icon");
+        require(by_keys(classic, "Control", "LicenseDlg", "License")[9] == "{\\rtf1 Branded license}",
+                "Classic MSI license did not override generated RTF");
+        for (auto dialog : {"WelcomeDlg", "LicenseDlg", "ScopeDlg", "DestinationDlg", "OptionsDlg",
+                            "ReadyDlg", "RemoveDlg", "ProgressDlg", "FinishedDlg", "CancelledDlg",
+                            "FailedDlg", "FilesInUse"}) {
+            const auto &dialog_row = by_key(classic, "Dialog", dialog);
+            require(dialog_row[3] == 370 && dialog_row[4] == 270,
+                    std::string("Classic MSI dialog dimensions: ") + dialog);
+        }
+        for (auto dialog : {"WelcomeDlg", "FinishedDlg", "CancelledDlg", "FailedDlg"}) {
+            const auto &bitmap = by_keys(classic, "Control", dialog, "DialogBitmap");
+            require(bitmap[2] == "Bitmap" && bitmap[5] == 370 && bitmap[6] == 234 &&
+                        bitmap[9] == "WixUIDialogBmp",
+                    std::string("Classic MSI dialog image: ") + dialog);
+        }
+        for (auto dialog : {"LicenseDlg", "ScopeDlg", "DestinationDlg", "OptionsDlg", "ReadyDlg",
+                            "RemoveDlg", "ProgressDlg", "FilesInUse"}) {
+            const auto &bitmap = by_keys(classic, "Control", dialog, "BannerBitmap");
+            require(bitmap[2] == "Bitmap" && bitmap[5] == 370 && bitmap[6] == 44 &&
+                        bitmap[9] == "WixUIBannerBmp",
+                    std::string("Classic MSI banner image: ") + dialog);
+        }
+        const auto &classic_next = by_keys(classic, "Control", "WelcomeDlg", "Next");
+        require(classic_next[3] == 236 && classic_next[4] == 243 && classic_next[5] == 56 &&
+                    classic_next[6] == 17,
+                "Classic MSI navigation was not compacted");
+        const auto &classic_welcome = by_keys(classic, "Control", "WelcomeDlg", "Body");
+        require(classic_welcome[3] == 125 && classic_welcome[4] == 72 &&
+                    classic_welcome[5] == 230 && classic_welcome[6] == 120,
+                "Classic MSI welcome text was not centered in the body area");
+        classic_input.branding.msi_icon.clear();
+        auto fallback = make_model(classic_input, root / "NOTICE.txt", root / "actions.dll", guid);
+        require(by_key(fallback, "Icon", "Product.ico")[1]["stream"] == utf8(root / "generic.ico"),
+                "MSI icon did not fall back to the generic product icon");
+
         auto old = model;
         input.product["version"] = "2.0.0";
         auto newer = make_model(input, root / "NOTICE.txt", root / "actions.dll", guid);

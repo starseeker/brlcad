@@ -23,14 +23,17 @@ Copy-Item "$env:WINDIR\System32\cmd.exe" "$root\payload\bin\app.exe"
 [IO.File]::WriteAllText("$root\payload\data.txt", 'Original data')
 [IO.File]::WriteAllText("$root\license.txt", 'MSI test license {braces} [literal brackets].')
 $installer = New-Object -ComObject WindowsInstaller.Installer
+$installStateUnknown = -1
+$installStateDefault = 5
+$compressedPackageFlags = 2
 function Read-Property($Database, [string]$Name) {
     $view = $Database.OpenView("SELECT ``Value`` FROM ``Property`` WHERE ``Property`` = '$Name'")
     try {
-        $view.Execute()
+        [void]$view.Execute()
         $record = $view.Fetch()
         if ($null -eq $record) { throw "Missing MSI property $Name" }
         try { return $record.StringData(1) } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($record) }
-    } finally { $view.Close(); [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) }
+    } finally { [void]$view.Close(); [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) }
 }
 function Invoke-Msi([string[]]$MsiArguments, [int]$Expected = 0) {
     $p = Start-Process -FilePath "$env:WINDIR\System32\msiexec.exe" -ArgumentList $MsiArguments -Wait -PassThru
@@ -65,7 +68,12 @@ try {
                 throw 'Incorrect dual-purpose scope defaults'
             }
             $summary = $db.SummaryInformation(0)
-            try { $packageCode = $summary.Property(9) } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($summary) }
+            try {
+                $packageCode = $summary.Property(9)
+                if ($summary.Property(15) -ne $compressedPackageFlags) {
+                    throw 'Incorrect dual-purpose package summary flags'
+                }
+            } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($summary) }
         } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($db) }
         $packages += @{ File = $package; Code = $code; PackageCode = $packageCode; Version = $version }
     }
@@ -91,9 +99,9 @@ try {
             Invoke-Msi ($installArguments + @('/l*v', "`"$root\repeat-$($package.Version).log`"")) 1603
             if ((Get-FileHash "$destination\bin\app.exe").Hash -ne (Get-FileHash "$root\payload\bin\app.exe").Hash) { throw 'Installed bytes differ' }
             if ([IO.File]::ReadAllText("$destination\data.txt") -ne 'Original data') { throw 'Unversioned payload differs' }
-            $arp = if ($Machine) { 'HKLM:' } else { 'HKCU:' }
-            $key = "$arp\Software\Microsoft\Windows\CurrentVersion\Uninstall\$($package.Code)"
-            if (-not (Test-Path $key)) { throw 'Missing per-version uninstall registration' }
+            if ($installer.ProductState($package.Code) -ne $installStateDefault) {
+                throw 'Missing per-version Windows Installer registration'
+            }
             $menu = Join-Path $menuRoot "$folderName\Test command.lnk"
             $desktop = Join-Path $desktopRoot "Test command - $folderName.lnk"
             if (-not (Test-Path $menu) -or -not (Test-Path $desktop)) { throw 'Missing MSI shortcuts' }
@@ -104,13 +112,15 @@ try {
             } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) }
             if (-not (Path-Contains ([Environment]::GetEnvironmentVariable('Path', $scope)) "$destination\bin")) { throw 'Missing PATH entry' }
             [IO.File]::WriteAllText("$destination\user-data.txt", 'Keep user data')
-            $package.Destination = $destination; $package.Menu = $menu; $package.Desktop = $desktop; $package.Registry = $key
+            $package.Destination = $destination; $package.Menu = $menu; $package.Desktop = $desktop
         }
         foreach ($package in $packages[0..1]) {
             Invoke-Msi @('/x', $package.Code, '/qn', '/norestart', '/l*v', "`"$root\remove-$($package.Version).log`"")
             $installed = @($installed | Where-Object { $_ -ne $package.Code })
             if ((Test-Path "$($package.Destination)\bin\app.exe") -or (Test-Path $package.Menu) -or
-                (Test-Path $package.Desktop) -or (Test-Path $package.Registry)) { throw 'MSI left owned resources behind' }
+                (Test-Path $package.Desktop) -or $installer.ProductState($package.Code) -ne $installStateUnknown) {
+                throw 'MSI left owned resources behind'
+            }
             if ([IO.File]::ReadAllText("$($package.Destination)\user-data.txt") -ne 'Keep user data') { throw 'MSI removed unowned data' }
             if (Path-Contains ([Environment]::GetEnvironmentVariable('Path', $scope)) "$($package.Destination)\bin") { throw 'MSI left its PATH entry behind' }
             if ($package.Version -eq '1.0.0' -and -not (Test-Path "$($packages[1].Destination)\bin\app.exe")) { throw 'Uninstall damaged the other version' }

@@ -32,7 +32,8 @@ Model make_model(const PackageInput &input, const fs::path &notices, const fs::p
 std::string sql_create(const Table &table);
 std::string formatted_literal(const std::string &text);
 #ifdef _WIN32
-void create(const fs::path &config, const fs::path &source, const fs::path &output, const fs::path &actions);
-void verify(const fs::path &package);
+void create(const fs::path &config, const fs::path &source, const fs::path &output, const fs::path &actions,
+            const Progress &progress = {});
+void verify(const fs::path &package, const Progress &progress = {});
 #endif
 } // namespace installer::msi

@@ -36,6 +36,15 @@ struct Handle {
 std::wstring wide(const std::string &s) {
     return path_from_utf8(s).wstring();
 }
+fs::path preferred(fs::path path) {
+    path.make_preferred();
+    return path;
+}
+void report(const Progress &progress, const std::string &stage, std::uint64_t done = 0,
+            std::uint64_t total = 0) {
+    if (progress)
+        progress(stage, done, total);
+}
 void check(UINT result, const std::string &what) {
     if (result == ERROR_SUCCESS)
         return;
@@ -46,6 +55,7 @@ void check(UINT result, const std::string &what) {
         wchar_t empty = 0;
         if (MsiFormatRecordW(0, error, &empty, &length) == ERROR_MORE_DATA) {
             std::wstring text(length + 1, L'\0');
+            ++length;
             if (MsiFormatRecordW(0, error, text.data(), &length) == ERROR_SUCCESS) {
                 text.resize(length);
                 detail = ": " + utf8(fs::path(text));
@@ -61,6 +71,7 @@ std::wstring record_string(MSIHANDLE record, UINT field) {
     if (result != ERROR_MORE_DATA && result != ERROR_SUCCESS)
         check(result, "Read MSI field");
     std::wstring text(length + 1, L'\0');
+    ++length;
     check(MsiRecordGetStringW(record, field, text.data(), &length), "Read MSI field");
     text.resize(length);
     return text;
@@ -121,20 +132,13 @@ void representable(const std::wstring &value) {
         throw Error(
             "MSI v1 requires Windows-1252 product text and payload names; EXE supports broader Unicode");
 }
-void insert(MSIHANDLE db, const Table &table, const Json &row) {
+void insert(MSIHANDLE view, const Table &table, const Json &row) {
     if (row.size() != table.columns.size())
         throw Error("Invalid MSI row width: " + table.name);
     Handle record(MsiCreateRecord(static_cast<UINT>(row.size())));
     if (!record.value)
         throw Error("Cannot allocate MSI record");
-    std::string columns, placeholders;
     for (std::size_t i = 0; i < row.size(); ++i) {
-        if (i) {
-            columns += ',';
-            placeholders += ',';
-        }
-        columns += '`' + table.columns[i].name + '`';
-        placeholders += '?';
         auto field = static_cast<UINT>(i + 1);
         const auto &value = row[i];
         if (value.is_null())
@@ -145,7 +149,7 @@ void insert(MSIHANDLE db, const Table &table, const Json &row) {
                 throw Error("MSI integer out of range");
             check(MsiRecordSetInteger(record, field, static_cast<int>(integer)), "Set MSI integer");
         } else if (value.is_object()) {
-            auto path = path_from_utf8(value.at("stream").get<std::string>());
+            auto path = preferred(path_from_utf8(value.at("stream").get<std::string>()));
             check_no_links(path);
             check(MsiRecordSetStreamW(record, field, path.c_str()), "Set MSI stream");
         } else {
@@ -154,7 +158,7 @@ void insert(MSIHANDLE db, const Table &table, const Json &row) {
             check(MsiRecordSetStringW(record, field, text.c_str()), "Set MSI string");
         }
     }
-    query(db, "INSERT INTO `" + table.name + "` (" + columns + ") VALUES (" + placeholders + ")", record);
+    check(MsiViewModify(view, MSIMODIFY_INSERT, record), "Insert MSI row into " + table.name);
 }
 void write(const fs::path &path, const std::string &text) {
     std::ofstream out(path, std::ios::binary);
@@ -175,6 +179,16 @@ struct Cabinet {
         return work / relative;
     }
 };
+struct CabinetRange {
+    std::size_t begin = 0, end = 0;
+    std::string name;
+    fs::path directory;
+};
+struct CabinetOutput {
+    std::string name;
+    fs::path path;
+    std::size_t last_sequence = 0;
+};
 void *DIAMONDAPI cab_alloc(ULONG size) {
     return std::malloc(size);
 }
@@ -184,7 +198,7 @@ void DIAMONDAPI cab_free(void *p) {
 INT_PTR DIAMONDAPI cab_open(char *name, int flags, int, int *error, void *context) {
     try {
         auto &cab = *static_cast<Cabinet *>(context);
-        auto path = cab.path(name);
+        auto path = preferred(cab.path(name));
         check_no_links(path);
         const bool writing = (flags & (_O_WRONLY | _O_RDWR)) != 0;
         // Source payloads are immutable inputs even if FCI asks unexpectedly.
@@ -244,7 +258,7 @@ int DIAMONDAPI cab_delete(char *name, int *error, void *context) {
             *error = EACCES;
             return -1;
         }
-        if (DeleteFileW(cab.path(name).c_str()))
+        if (DeleteFileW(preferred(cab.path(name)).c_str()))
             return 0;
     } catch (...) {
     }
@@ -279,13 +293,17 @@ INT_PTR DIAMONDAPI cab_info(char *name, USHORT *date, USHORT *time, USHORT *attr
     *attributes = FILE_ATTRIBUTE_ARCHIVE;
     return cab_open(name, _O_RDONLY, 0, error, context);
 }
-void cabinet(const Model &model, const fs::path &work) {
-    Cabinet context{work, {}, 0};
+void cabinet(const Model &model, const CabinetRange &range) {
+    if (!fs::create_directory(range.directory))
+        throw Error("Cannot create cabinet work directory");
+    Cabinet context{range.directory, {}, 0};
     CCAB parameters{};
     parameters.cb = 0x7fffffff;
     parameters.cbFolderThresh = 64 * 1024 * 1024;
     parameters.setID = 1;
-    std::strcpy(parameters.szCab, "payload.cab");
+    if (range.name.size() >= sizeof(parameters.szCab))
+        throw Error("Cabinet filename exceeds FCI limit");
+    std::strcpy(parameters.szCab, range.name.c_str());
     ERF error{};
     auto handle = FCICreate(&error, cab_placed, cab_alloc, cab_free, cab_open, cab_read, cab_write, cab_close,
                             cab_seek, cab_delete, cab_temp, &parameters, &context);
@@ -297,7 +315,8 @@ void cabinet(const Model &model, const fs::path &work) {
             FCIDestroy(h);
         }
     } destroy{handle};
-    for (const auto &file : model.files) {
+    for (std::size_t i = range.begin; i < range.end; ++i) {
+        const auto &file = model.files[i];
         auto token = "source" + file.id;
         auto member = file.id;
         context.sources.emplace(token, file.source);
@@ -309,13 +328,48 @@ void cabinet(const Model &model, const fs::path &work) {
     if (!FCIFlushCabinet(handle, FALSE, cab_next, cab_status))
         throw Error("Cannot finish cabinet");
 }
-void file_metadata(Model &model) {
+std::vector<CabinetRange> cabinet_ranges(const Model &model, const fs::path &work) {
+    std::vector<CabinetRange> ranges;
+    const auto count = parallel_worker_count(model.files.size());
+    if (!count)
+        return ranges;
+    std::uint64_t remaining_bytes = 0;
+    for (const auto &file : model.files)
+        remaining_bytes += file.size;
+    std::size_t begin = 0;
+    for (std::size_t part = 0; part < count; ++part) {
+        const auto remaining_parts = count - part;
+        const auto target = (remaining_bytes + remaining_parts - 1) / remaining_parts;
+        const auto last_allowed = model.files.size() - (remaining_parts - 1);
+        std::uint64_t bytes = 0;
+        std::size_t end = begin;
+        while (end < last_allowed && (end == begin || bytes < target))
+            bytes += model.files[end++].size;
+        auto name = part ? "payload" + std::to_string(part + 1) + ".cab" : "payload.cab";
+        ranges.push_back({begin, end, name, work / ("cabinet-" + std::to_string(part + 1))});
+        begin = end;
+        remaining_bytes -= bytes;
+    }
+    return ranges;
+}
+std::vector<CabinetOutput> cabinets(const Model &model, const fs::path &work, const Progress &progress) {
+    auto ranges = cabinet_ranges(model, work);
+    std::vector<CabinetOutput> outputs(ranges.size());
+    parallel_for(ranges.size(), "Compressing MSI cabinets", progress, [&](std::size_t i) {
+        cabinet(model, ranges[i]);
+        outputs[i] = {ranges[i].name, ranges[i].directory / ranges[i].name, ranges[i].end};
+    });
+    return outputs;
+}
+void file_metadata(Model &model, const Progress &progress) {
     auto &rows = model.table("File").rows;
-    for (std::size_t i = 0; i < model.files.size(); ++i) {
+    std::vector<Json> hashes(model.files.size());
+    parallel_for(model.files.size(), "Reading MSI file metadata", progress, [&](std::size_t i) {
         const auto &file = model.files[i];
         wchar_t version[256]{}, language[256]{};
         DWORD vn = 256, ln = 256;
-        auto status = MsiGetFileVersionW(file.source.c_str(), version, &vn, language, &ln);
+        auto source = preferred(file.source);
+        auto status = MsiGetFileVersionW(source.c_str(), version, &vn, language, &ln);
         if (status == ERROR_SUCCESS && vn) {
             rows[i][4] = utf8(fs::path(version));
             if (ln)
@@ -324,15 +378,18 @@ void file_metadata(Model &model) {
                    (status == ERROR_SUCCESS && !vn)) {
             MSIFILEHASHINFO hash{};
             hash.dwFileHashInfoSize = sizeof(hash);
-            check(MsiGetFileHashW(file.source.c_str(), 0, &hash), "Hash " + file.path);
-            model.table("MsiFileHash")
-                .rows.push_back({file.id, 0, static_cast<std::int32_t>(hash.dwData[0]),
-                                 static_cast<std::int32_t>(hash.dwData[1]),
-                                 static_cast<std::int32_t>(hash.dwData[2]),
-                                 static_cast<std::int32_t>(hash.dwData[3])});
+            check(MsiGetFileHashW(source.c_str(), 0, &hash), "Hash " + file.path);
+            hashes[i] = {file.id, 0, static_cast<std::int32_t>(hash.dwData[0]),
+                         static_cast<std::int32_t>(hash.dwData[1]),
+                         static_cast<std::int32_t>(hash.dwData[2]),
+                         static_cast<std::int32_t>(hash.dwData[3])};
         } else
             check(status, "Read file version: " + file.path);
-    }
+    });
+    auto &hash_rows = model.table("MsiFileHash").rows;
+    for (auto &hash : hashes)
+        if (!hash.is_null())
+            hash_rows.push_back(std::move(hash));
 }
 void summary(MSIHANDLE db, const Model &model, const Json &product) {
     Handle info;
@@ -354,18 +411,22 @@ void summary(MSIHANDLE db, const Model &model, const Json &product) {
     text(7, "x64;1033");
     text(9, random_guid());
     number(14, 500); // Windows Installer 5.0, needed for dual-purpose authoring
-    number(15, 10);  // Compressed payload and LUA (per-user-capable) package
+    number(15, 2); // Compressed dual-purpose package; machine scope may require elevation
     text(18, "brlinst");
     number(19, 2); // Read-only recommended
     check(MsiSummaryInfoPersist(info), "Persist MSI summary");
 }
 } // namespace
-void verify(const fs::path &package) {
-    check(MsiVerifyPackageW(package.c_str()), "Verify MSI storage");
+void verify(const fs::path &package, const Progress &progress) {
+    auto native_package = preferred(package);
+    report(progress, "Verifying MSI storage");
+    check(MsiVerifyPackageW(native_package.c_str()), "Verify MSI storage");
     Handle db, view;
-    check(MsiOpenDatabaseW(package.c_str(), MSIDBOPEN_READONLY, &db.value), "Open generated MSI");
+    check(MsiOpenDatabaseW(native_package.c_str(), MSIDBOPEN_READONLY, &db.value), "Open generated MSI");
     check(MsiDatabaseOpenViewW(db, L"SELECT `Name` FROM `_Tables`", &view.value), "Read MSI table list");
     check(MsiViewExecute(view, 0), "Query MSI tables");
+    std::uint64_t checked_tables = 0;
+    report(progress, "Verifying MSI tables");
     for (;;) {
         Handle record;
         auto result = MsiViewFetch(view, &record.value);
@@ -394,22 +455,76 @@ void verify(const fs::path &package) {
                             " (database validation " + std::to_string(static_cast<int>(error)) + ")");
             }
         }
+        report(progress, "Verifying MSI tables", ++checked_tables);
     }
-    Handle streams;
-    check(MsiDatabaseOpenViewW(db, L"SELECT `Data` FROM `_Streams` WHERE `Name` = 'payload.cab'",
-                               &streams.value),
-          "Find embedded cabinet");
-    check(MsiViewExecute(streams, 0), "Read embedded cabinet");
-    Handle payload;
-    check(MsiViewFetch(streams, &payload.value), "Fetch embedded cabinet");
-    char magic[4]{};
-    DWORD count = 4;
-    check(MsiRecordReadStream(payload, 1, magic, &count), "Read cabinet header");
-    if (count != 4 || std::memcmp(magic, "MSCF", 4))
-        throw Error("Missing MSI cabinet signature");
+    std::vector<std::pair<std::wstring, int>> cabinets;
+    Handle media;
+    check(MsiDatabaseOpenViewW(db,
+                               L"SELECT `Cabinet`, `LastSequence` FROM `Media` ORDER BY `DiskId`",
+                               &media.value),
+          "Read MSI media");
+    check(MsiViewExecute(media, 0), "Query MSI media");
+    int previous_sequence = 0;
+    for (;;) {
+        Handle record;
+        auto result = MsiViewFetch(media, &record.value);
+        if (result == ERROR_NO_MORE_ITEMS)
+            break;
+        check(result, "Fetch MSI media");
+        auto cabinet = record_string(record, 1);
+        const int last_sequence = MsiRecordGetInteger(record, 2);
+        if (cabinet.size() < 2 || cabinet.front() != L'#' || last_sequence == MSI_NULL_INTEGER ||
+            last_sequence <= previous_sequence)
+            throw Error("Invalid embedded MSI cabinet sequence");
+        previous_sequence = last_sequence;
+        cabinets.emplace_back(cabinet.substr(1), last_sequence);
+    }
+    if (cabinets.empty())
+        throw Error("MSI has no embedded cabinets");
+    Handle files;
+    check(MsiDatabaseOpenViewW(db, L"SELECT `Sequence` FROM `File` ORDER BY `Sequence`", &files.value),
+          "Read MSI file sequence");
+    check(MsiViewExecute(files, 0), "Query MSI file sequence");
+    int final_file_sequence = 0;
+    for (;;) {
+        Handle record;
+        auto result = MsiViewFetch(files, &record.value);
+        if (result == ERROR_NO_MORE_ITEMS)
+            break;
+        check(result, "Fetch MSI file sequence");
+        final_file_sequence = MsiRecordGetInteger(record, 1);
+    }
+    if (final_file_sequence != previous_sequence)
+        throw Error("MSI cabinet sequence does not cover every file");
+    report(progress, "Verifying embedded cabinets", 0, cabinets.size());
+    for (std::size_t i = 0; i < cabinets.size(); ++i) {
+        Handle streams, parameters(MsiCreateRecord(1));
+        if (!parameters.value)
+            throw Error("Cannot allocate MSI cabinet query");
+        check(MsiRecordSetStringW(parameters, 1, cabinets[i].first.c_str()),
+              "Set MSI cabinet query");
+        check(MsiDatabaseOpenViewW(db, L"SELECT `Data` FROM `_Streams` WHERE `Name` = ?", &streams.value),
+              "Find embedded cabinet");
+        check(MsiViewExecute(streams, parameters), "Read embedded cabinet");
+        Handle payload;
+        check(MsiViewFetch(streams, &payload.value),
+              "Fetch embedded cabinet " + utf8(fs::path(cabinets[i].first)));
+        char magic[4]{};
+        DWORD count = 4;
+        check(MsiRecordReadStream(payload, 1, magic, &count), "Read cabinet header");
+        if (count != 4 || std::memcmp(magic, "MSCF", 4))
+            throw Error("Missing MSI cabinet signature: " + utf8(fs::path(cabinets[i].first)));
+        report(progress, "Verifying embedded cabinets", i + 1, cabinets.size());
+    }
 }
-void create(const fs::path &config, const fs::path &source, const fs::path &output, const fs::path &actions) {
+void create(const fs::path &config, const fs::path &source, const fs::path &output, const fs::path &actions,
+            const Progress &progress) {
+    report(progress, "Validating staged payload");
     auto input = prepare_input(config, source, output);
+    if (input.product.contains("branding") &&
+        input.product["branding"].value("style", "") == "classic" &&
+        (input.branding.msi_banner.empty() || input.branding.msi_dialog.empty()))
+        throw Error("Classic MSI branding requires banner and dialog bitmaps", ExitCode::arguments);
     check_no_links(actions);
     if (!fs::is_regular_file(actions))
         throw Error("Missing brlinst-msi-actions.dll beside the generator");
@@ -427,7 +542,9 @@ void create(const fs::path &config, const fs::path &source, const fs::path &outp
     } cleanup{work};
     auto notices = work / "NOTICE.txt";
     write(notices, license_notices());
+    report(progress, "Building MSI model", 0, input.files.size());
     auto model = make_model(input, notices, actions, stable_guid);
+    report(progress, "Building MSI model", input.files.size(), input.files.size());
     // Hold read handles without write/delete sharing until both the metadata and
     // CAB have been written. A changing build tree must not produce a package
     // whose version/hash records describe different bytes from the payload.
@@ -435,43 +552,80 @@ void create(const fs::path &config, const fs::path &source, const fs::path &outp
         std::vector<HANDLE> files;
         ~Locks() {
             for (auto h : files)
-                CloseHandle(h);
+                if (h != INVALID_HANDLE_VALUE)
+                    CloseHandle(h);
         }
-    } locks;
-    for (const auto &file : model.files) {
-        auto handle = CreateFileW(file.source.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+    } locks{std::vector<HANDLE>(model.files.size(), INVALID_HANDLE_VALUE)};
+    parallel_for(model.files.size(), "Locking staged files", progress, [&](std::size_t i) {
+        const auto &file = model.files[i];
+        auto source = preferred(file.source);
+        auto handle = CreateFileW(source.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                   FILE_ATTRIBUTE_NORMAL, nullptr);
         if (handle == INVALID_HANDLE_VALUE)
             throw Error("Cannot lock staged file: " + file.path);
-        locks.files.push_back(handle);
+        locks.files[i] = handle;
         LARGE_INTEGER size{};
         if (!GetFileSizeEx(handle, &size) || static_cast<std::uint64_t>(size.QuadPart) != file.size)
             throw Error("Staged file changed during packaging: " + file.path);
-    }
-    file_metadata(model);
-    cabinet(model, work);
+    });
+    file_metadata(model, progress);
+    auto cabinet_outputs = cabinets(model, work, progress);
+    auto &media_rows = model.table("Media").rows;
+    media_rows.clear();
+    for (std::size_t i = 0; i < cabinet_outputs.size(); ++i)
+        media_rows.push_back({i + 1, cabinet_outputs[i].last_sequence, nullptr,
+                              "#" + cabinet_outputs[i].name, nullptr, nullptr});
     auto temporary = work / "package.msi";
     {
         Handle db;
-        check(MsiOpenDatabaseW(temporary.c_str(), MSIDBOPEN_CREATE, &db.value), "Create MSI database");
+        check(MsiOpenDatabaseW(preferred(temporary).c_str(), MSIDBOPEN_CREATE, &db.value),
+              "Create MSI database");
         write(work / "codepage.idt", "\r\n\r\n1252\t_ForceCodepage\r\n");
-        check(MsiDatabaseImportW(db, work.c_str(), L"codepage.idt"), "Set MSI database code page");
-        for (const auto &t : model.tables)
+        check(MsiDatabaseImportW(db, preferred(work).c_str(), L"codepage.idt"),
+              "Set MSI database code page");
+        report(progress, "Creating MSI tables", 0, model.tables.size());
+        std::uint64_t created_tables = 0;
+        for (const auto &t : model.tables) {
             query(db, sql_create(t));
-        for (const auto &t : model.tables)
-            for (const auto &r : t.rows)
-                insert(db, t, r);
+            report(progress, "Creating MSI tables", ++created_tables, model.tables.size());
+        }
+        std::uint64_t row_count = 0;
+        for (const auto &table : model.tables)
+            row_count += table.rows.size();
+        report(progress, "Writing MSI rows", 0, row_count);
+        std::uint64_t written_rows = 0;
+        for (const auto &t : model.tables) {
+            Handle view;
+            check(MsiDatabaseOpenViewW(db, wide("SELECT * FROM `" + t.name + "`").c_str(), &view.value),
+                  "Open " + t.name + " for insertion");
+            check(MsiViewExecute(view, 0), "Prepare " + t.name + " for insertion");
+            for (const auto &r : t.rows) {
+                insert(view, t, r);
+                report(progress, "Writing MSI rows", ++written_rows, row_count);
+            }
+        }
         Table streams{"_Streams",
                       {{"Name", "CHAR(62)", "", false, true, false, "", 0},
                        {"Data", "OBJECT", "", false, false, false, "", 0}},
                       {}};
-        insert(db, streams, Json{"payload.cab", {{"stream", utf8(work / "payload.cab")}}});
+        report(progress, "Embedding MSI cabinets", 0, cabinet_outputs.size());
+        Handle streams_view;
+        check(MsiDatabaseOpenViewW(db, L"SELECT * FROM `_Streams`", &streams_view.value),
+              "Open _Streams for insertion");
+        check(MsiViewExecute(streams_view, 0), "Prepare _Streams for insertion");
+        for (std::size_t i = 0; i < cabinet_outputs.size(); ++i) {
+            const auto &cabinet_output = cabinet_outputs[i];
+            insert(streams_view, streams,
+                   Json{cabinet_output.name, {{"stream", utf8(cabinet_output.path)}}});
+            report(progress, "Embedding MSI cabinets", i + 1, cabinet_outputs.size());
+        }
         summary(db, model, input.product);
+        report(progress, "Committing MSI database");
         check(MsiDatabaseCommit(db), "Commit MSI database");
     }
     if (fs::file_size(temporary) >= 0x7fffffffULL)
         throw Error("MSI exceeds the 2 GiB package limit");
-    verify(temporary);
+    verify(temporary, progress);
     flush_file(temporary);
     publish_file(temporary, output);
 }

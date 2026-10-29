@@ -49,6 +49,9 @@ struct Package {
 // Validated input shared by both output formats. Internal runtime files are
 // supplied by each backend, never by the staged application.
 struct PackageInput {
+    struct Branding {
+        fs::path exe_header, exe_sidebar, msi_icon, msi_banner, msi_dialog, msi_license;
+    } branding;
     Json product;
     fs::path icon;
     std::vector<std::pair<std::string, fs::path>> files;
@@ -77,12 +80,15 @@ Options parse_options(const std::vector<std::string> &args, bool uninstall = fal
 std::string option_help(bool uninstall);
 Fingerprint fingerprint(const fs::path &path);
 void check_cancel(const Cancel &cancel);
+std::size_t parallel_worker_count(std::size_t task_count);
+void parallel_for(std::size_t task_count, const std::string &stage, const Progress &progress,
+                  const std::function<void(std::size_t)> &action);
 Package open_package(const fs::path &executable);
 void verify_package(const Package &package, const Progress &progress = {}, const Cancel &cancel = {});
 void extract_file(const Package &package, const FileEntry &entry, const fs::path &output,
                   const Cancel &cancel = {});
 void create_package(const fs::path &config, const fs::path &source, const fs::path &stub,
-                    const fs::path &uninstaller, const fs::path &output);
+                    const fs::path &uninstaller, const fs::path &output, const Progress &progress = {});
 struct Integration {
     virtual ~Integration() = default;
     virtual void install(Json &state, const fs::path &journal) = 0;
@@ -94,6 +100,7 @@ void install(const Package &package, const Options &options, Integration &integr
 std::vector<std::string> uninstall(const fs::path &root, Integration &integration,
                                    const Progress &progress = {}, bool defer_uninstaller = false);
 #ifdef _WIN32
-void update_resources(const fs::path &executable, const Json &product, const fs::path &icon);
+void update_resources(const fs::path &executable, const Json &product, const fs::path &icon,
+                      const PackageInput::Branding &branding);
 #endif
 } // namespace installer

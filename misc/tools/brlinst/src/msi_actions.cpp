@@ -11,14 +11,14 @@ namespace {
 using namespace installer;
 std::wstring property(MSIHANDLE install, const wchar_t *name) {
     DWORD size = 0;
-    wchar_t empty = 0;
-    auto status = MsiGetPropertyW(install, name, &empty, &size);
+    auto status = MsiGetPropertyW(install, name, nullptr, &size);
     if (status != ERROR_MORE_DATA && status != ERROR_SUCCESS)
         throw Error("Cannot read installation property");
-    std::wstring value(size + 1, L'\0');
-    if (MsiGetPropertyW(install, name, value.data(), &size) != ERROR_SUCCESS)
+    DWORD capacity = size + 1;
+    std::wstring value(capacity, L'\0');
+    if (MsiGetPropertyW(install, name, value.data(), &capacity) != ERROR_SUCCESS)
         throw Error("Cannot read installation property");
-    value.resize(size);
+    value.resize(capacity);
     return value;
 }
 fs::path known(REFKNOWNFOLDERID id) {
@@ -30,13 +30,6 @@ fs::path known(REFKNOWNFOLDERID id) {
     return result;
 }
 void validate(MSIHANDLE install) {
-    using RtlVersion = LONG(WINAPI *)(OSVERSIONINFOW *);
-    auto version =
-        reinterpret_cast<RtlVersion>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion"));
-    OSVERSIONINFOW os{};
-    os.dwOSVersionInfoSize = sizeof(os);
-    if (!version || version(&os) != 0 || os.dwMajorVersion < 10)
-        throw Error("This package requires Windows 10 or later.");
     const auto scope = property(install, L"ALLUSERS");
     if (!scope.empty() && scope != L"1")
         throw Error("Invalid installation scope after costing.");
@@ -48,7 +41,8 @@ void validate(MSIHANDLE install) {
     if (property(install, L"BRLINST_PATH") == L"1" && property(install, L"BRLINST_HASBIN") != L"1")
         throw Error("This package has no bin directory to add to PATH.");
     auto code = property(install, L"ProductCode");
-    for (auto context : {MSIINSTALLCONTEXT_USERUNMANAGED, MSIINSTALLCONTEXT_MACHINE}) {
+    for (auto context : {MSIINSTALLCONTEXT_USERMANAGED, MSIINSTALLCONTEXT_USERUNMANAGED,
+                         MSIINSTALLCONTEXT_MACHINE}) {
         wchar_t state[32]{};
         DWORD count = 32;
         auto status =

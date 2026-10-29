@@ -103,6 +103,22 @@ int main(int argc, char **argv) {
                     {"publisher", "Tests"},
                     {"license", "license.txt"},
                     {"shortcuts", Json::array({{{"name", "Test"}, {"target", "bin/app.exe"}}})}};
+        auto branded_config = config;
+        branded_config["branding"] = {
+            {"style", "classic"},
+            {"exe", {{"header", "header.bmp"}, {"sidebar", "sidebar.bmp"}}},
+            {"msi",
+             {{"icon", "product.ico"},
+              {"banner", "banner.bmp"},
+              {"dialog", "dialog.bmp"},
+              {"license", "license.rtf"}}}};
+        validate_product(branded_config);
+        auto incomplete_branding = branded_config;
+        incomplete_branding["branding"]["exe"].erase("sidebar");
+        fails([&] { validate_product(incomplete_branding); }, "Incomplete EXE branding accepted");
+        auto unknown_branding = branded_config;
+        unknown_branding["branding"]["style"] = "custom";
+        fails([&] { validate_product(unknown_branding); }, "Unknown branding style accepted");
         write(root / "product.json", config.dump());
         create_package(root / "product.json", root / "payload", root / "stub.exe", root / "uninstall.exe",
                        root / "setup.exe");

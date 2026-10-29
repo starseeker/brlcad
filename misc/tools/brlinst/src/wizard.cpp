@@ -10,6 +10,10 @@ namespace {
 constexpr int id_back = 100, id_next = 101, id_cancel = 102, id_user = 103, id_machine = 104;
 constexpr int id_directory = 105, id_browse = 106, id_start = 107, id_desktop = 108, id_path = 109;
 constexpr int id_content = 110, id_progress = 111;
+constexpr int classic_width = 508, classic_height = 360, classic_page_bottom = 314;
+constexpr int classic_header_width = 150, classic_header_text_left = classic_header_width + 8;
+constexpr int classic_license_top = 65, classic_license_bottom = 300;
+constexpr int header_bitmap_id = 200, sidebar_bitmap_id = 201;
 std::wstring control_text(HWND control) {
     int n = GetWindowTextLengthW(control);
     std::wstring text(static_cast<std::size_t>(n) + 1, L'\0');
@@ -26,6 +30,7 @@ struct Wizard::Impl {
     HWND hwnd = nullptr;
     HFONT font = nullptr, title_font = nullptr;
     HBRUSH background = nullptr;
+    HBITMAP header_bitmap = nullptr, sidebar_bitmap = nullptr;
     double scale = 1;
     std::vector<HWND> controls;
     std::wstring finished;
@@ -37,7 +42,8 @@ struct Wizard::Impl {
         wc.hInstance = GetModuleHandleW(nullptr);
         wc.lpszClassName = L"BrlinstWizard";
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        background = GetSysColorBrush(COLOR_WINDOW);
+        wc.hbrBackground = background;
         wc.hIcon = LoadIconW(wc.hInstance, MAKEINTRESOURCEW(1));
         if (!wc.hIcon)
             wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
@@ -46,12 +52,20 @@ struct Wizard::Impl {
         scale = static_cast<double>(GetDeviceCaps(screen, LOGPIXELSX)) / 96.0;
         ReleaseDC(nullptr, screen);
         font =
-            CreateFontW(-px(14), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+            CreateFontW(-px(classic() ? 12 : 14), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                        OUT_DEFAULT_PRECIS,
                         CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-        title_font = CreateFontW(-px(23), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        title_font = CreateFontW(-px(classic() ? 16 : 23), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                                 DEFAULT_CHARSET,
                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
                                  L"Segoe UI");
-        RECT rect{0, 0, px(700), px(500)};
+        if (classic()) {
+            header_bitmap = static_cast<HBITMAP>(LoadImageW(wc.hInstance, MAKEINTRESOURCEW(header_bitmap_id),
+                                                            IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION));
+            sidebar_bitmap = static_cast<HBITMAP>(LoadImageW(
+                wc.hInstance, MAKEINTRESOURCEW(sidebar_bitmap_id), IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION));
+        }
+        RECT rect{0, 0, px(classic() ? classic_width : 700), px(classic() ? classic_height : 500)};
         AdjustWindowRectEx(&rect, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE, 0);
         auto title = wide(product.at("name")) + (r ? L" Uninstall" : L" Setup");
         hwnd = CreateWindowExW(0, wc.lpszClassName, title.c_str(),
@@ -70,8 +84,13 @@ struct Wizard::Impl {
             DeleteObject(font);
         if (title_font)
             DeleteObject(title_font);
-        if (background)
-            DeleteObject(background);
+        if (header_bitmap)
+            DeleteObject(header_bitmap);
+        if (sidebar_bitmap)
+            DeleteObject(sidebar_bitmap);
+    }
+    bool classic() const {
+        return product.contains("branding") && product["branding"].value("style", "") == "classic";
     }
     int px(int value) const {
         return static_cast<int>(value * scale);
@@ -87,6 +106,12 @@ struct Wizard::Impl {
         controls.push_back(child);
         return child;
     }
+    void bitmap(HBITMAP image, int x, int y, int width, int height) {
+        if (!image)
+            return;
+        auto control = add(L"STATIC", L"", 0, x, y, width, height, SS_BITMAP);
+        SendMessageW(control, STM_SETIMAGE, IMAGE_BITMAP, reinterpret_cast<LPARAM>(image));
+    }
     void label(const std::wstring &text, int y, int h = 65) {
         add(L"STATIC", text, 0, 28, y, 640, h);
     }
@@ -101,7 +126,19 @@ struct Wizard::Impl {
                        : page == 4 ? L"Ready to install"
                        : page == 5 ? (removing ? L"Removing files" : L"Installing")
                                    : L"Finished";
-        auto title = add(L"STATIC", heading, 0, 28, 22, 640, 38);
+        const bool compact = classic();
+        const bool side_page = compact && (page == 0 || page == 6);
+        if (compact) {
+            if (side_page)
+                bitmap(sidebar_bitmap, 0, 0, 164, classic_page_bottom);
+            else
+                bitmap(header_bitmap, 0, 0, classic_header_width, 57);
+        }
+        const int left = side_page ? 184 : (compact ? 20 : 28);
+        const int content_width = side_page ? 304 : (compact ? 468 : 640);
+        const int title_left = compact && !side_page ? classic_header_text_left : left;
+        auto title = add(L"STATIC", heading, 0, title_left, compact ? 12 : 22,
+                         compact ? classic_width - title_left - 20 : 640, compact ? 28 : 38);
         SendMessageW(title, WM_SETFONT, reinterpret_cast<WPARAM>(title_font), TRUE);
         if (page == 0) {
             auto text = wide(display_name(product, options.machine));
@@ -115,7 +152,10 @@ struct Wizard::Impl {
                 text += L"\r\n\r\n" + wide(product.at("website"));
             if (removing)
                 text += L"\r\n\r\nLocation: " + options.directory.wstring();
-            label(text, 90, 300);
+            if (compact)
+                add(L"STATIC", text, 0, left, 60, content_width, 235);
+            else
+                label(text, 90, 300);
         } else if (page == 1) {
             auto text = wide(product.at("licenseText"));
             std::wstring normalized;
@@ -124,36 +164,46 @@ struct Wizard::Impl {
                     normalized += L'\r';
                 normalized += c;
             }
-            add(L"EDIT", normalized, id_content, 28, 80, 640, 335,
+            add(L"EDIT", normalized, id_content, left, compact ? classic_license_top : 80, content_width,
+                compact ? classic_license_bottom - classic_license_top : 335,
                 ES_MULTILINE | ES_READONLY | WS_VSCROLL | WS_TABSTOP);
         } else if (page == 2) {
-            label(L"Install for:", 82, 25);
-            auto user = add(L"BUTTON", L"Only me (no administrator permission needed)", id_user, 30, 115, 630,
-                            28, BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP);
-            auto machine = add(L"BUTTON", L"All users (administrator permission required)", id_machine, 30,
-                               150, 630, 28, BS_AUTORADIOBUTTON | WS_TABSTOP);
+            add(L"STATIC", L"Install for:", 0, left, compact ? 60 : 82, content_width, 25);
+            auto user = add(L"BUTTON", L"Only me (no administrator permission needed)", id_user, left,
+                            compact ? 82 : 115, content_width, compact ? 22 : 28,
+                            BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP);
+            auto machine = add(L"BUTTON", L"All users (administrator permission required)", id_machine,
+                               left, compact ? 108 : 150, content_width, compact ? 22 : 28,
+                               BS_AUTORADIOBUTTON | WS_TABSTOP);
             SendMessageW(options.machine ? machine : user, BM_SETCHECK, BST_CHECKED, 0);
-            label(L"Installation folder:", 210, 25);
-            add(L"EDIT", options.directory.wstring(), id_directory, 28, 243, 530, 30,
+            add(L"STATIC", L"Installation folder:", 0, left, compact ? 145 : 210, content_width, 22);
+            add(L"EDIT", options.directory.wstring(), id_directory, left, compact ? 169 : 243,
+                compact ? 370 : 530, compact ? 24 : 30,
                 ES_AUTOHSCROLL | WS_TABSTOP);
-            add(L"BUTTON", L"Browse...", id_browse, 570, 243, 100, 30, WS_TABSTOP);
-            label(L"Choose a new or empty folder. Different versions can be installed separately. All-users "
-                  L"installations use a folder inside Program Files.",
-                  295, 100);
+            add(L"BUTTON", L"Browse...", id_browse, compact ? 400 : 570, compact ? 169 : 243,
+                compact ? 88 : 100, compact ? 24 : 30, WS_TABSTOP);
+            add(L"STATIC",
+                L"Choose a new or empty folder. Different versions can be installed separately. All-users "
+                L"installations use a folder inside Program Files.",
+                0, left, compact ? 210 : 295, content_width, compact ? 75 : 100);
         } else if (page == 3) {
-            auto a = add(L"BUTTON", L"Create Start Menu shortcuts", id_start, 28, 90, 640, 30,
+            auto a = add(L"BUTTON", L"Create Start Menu shortcuts", id_start, left, compact ? 65 : 90,
+                         content_width, compact ? 24 : 30,
                          BS_AUTOCHECKBOX | WS_TABSTOP);
-            auto b = add(L"BUTTON", L"Create desktop shortcuts", id_desktop, 28, 135, 640, 30,
+            auto b = add(L"BUTTON", L"Create desktop shortcuts", id_desktop, left, compact ? 98 : 135,
+                         content_width, compact ? 24 : 30,
                          BS_AUTOCHECKBOX | WS_TABSTOP);
-            auto c = add(L"BUTTON", L"Add this version's bin directory to PATH", id_path, 28, 180, 640, 30,
+            auto c = add(L"BUTTON", L"Add this version's bin directory to PATH", id_path, left,
+                         compact ? 131 : 180, content_width, compact ? 24 : 30,
                          BS_AUTOCHECKBOX | WS_TABSTOP);
             SendMessageW(a, BM_SETCHECK, options.start_menu ? BST_CHECKED : BST_UNCHECKED, 0);
             SendMessageW(b, BM_SETCHECK, options.desktop ? BST_CHECKED : BST_UNCHECKED, 0);
             SendMessageW(c, BM_SETCHECK, options.path ? BST_CHECKED : BST_UNCHECKED, 0);
-            label(L"Shortcuts identify their version and installation scope.\r\n\r\nPATH changes apply to "
-                  L"newly started applications. This version is appended; an earlier matching command "
-                  L"elsewhere in PATH still takes precedence.",
-                  245, 160);
+            add(L"STATIC",
+                L"Shortcuts identify their version and installation scope.\r\n\r\nPATH changes apply to "
+                L"newly started applications. This version is appended; an earlier matching command "
+                L"elsewhere in PATH still takes precedence.",
+                0, left, compact ? 180 : 245, content_width, compact ? 105 : 160);
         } else if (page == 4) {
             auto text = wide(display_name(product, options.machine)) + L"\r\n\r\nDestination: " +
                         options.directory.wstring();
@@ -162,21 +212,30 @@ struct Wizard::Impl {
             text += L"\r\nAdd to PATH: " + std::wstring(options.path ? L"yes" : L"no");
             if (options.machine && !elevated())
                 text += L"\r\n\r\nWindows will ask for administrator permission.";
-            label(text, 90, 320);
+            add(L"STATIC", text, 0, left, compact ? 65 : 90, content_width, compact ? 225 : 320);
         } else if (page == 5) {
-            label(L"Please wait. The operation log records detailed progress.", 85, 55);
-            add(L"STATIC", L"Preparing...", id_content, 28, 155, 640, 130);
-            add(PROGRESS_CLASSW, L"", id_progress, 28, 300, 640, 25);
+            add(L"STATIC", L"Please wait. The operation log records detailed progress.", 0, left,
+                compact ? 65 : 85, content_width, 45);
+            add(L"STATIC", L"Preparing...", id_content, left, compact ? 125 : 155, content_width,
+                compact ? 80 : 130);
+            add(PROGRESS_CLASSW, L"", id_progress, left, compact ? 225 : 300, content_width,
+                compact ? 20 : 25);
             SendMessageW(GetDlgItem(hwnd, id_progress), PBM_SETRANGE32, 0, 1000);
         } else
-            add(L"EDIT", finished, id_content, 28, 85, 640, 325,
+            add(L"EDIT", finished, id_content, left, compact ? 55 : 85, content_width,
+                compact ? 245 : 325,
                 ES_MULTILINE | ES_READONLY | WS_VSCROLL | WS_TABSTOP);
-        auto back = add(L"BUTTON", L"< Back", id_back, 352, 450, 95, 30, WS_TABSTOP);
+        if (compact)
+            add(L"STATIC", L"", 0, 0, classic_page_bottom, classic_width, 1, SS_ETCHEDHORZ);
+        auto back = add(L"BUTTON", L"< Back", id_back, compact ? 265 : 352, compact ? 326 : 450,
+                        compact ? 75 : 95, compact ? 23 : 30, WS_TABSTOP);
         auto next =
             add(L"BUTTON",
                 page == 6 ? L"Close" : (page == 4 ? L"Install" : (removing ? L"Uninstall" : L"Next >")),
-                id_next, 457, 450, 95, 30, WS_TABSTOP | BS_DEFPUSHBUTTON);
-        auto stop = add(L"BUTTON", L"Cancel", id_cancel, 570, 450, 100, 30, WS_TABSTOP);
+                id_next, compact ? 345 : 457, compact ? 326 : 450, compact ? 75 : 95,
+                compact ? 23 : 30, WS_TABSTOP | BS_DEFPUSHBUTTON);
+        auto stop = add(L"BUTTON", L"Cancel", id_cancel, compact ? 425 : 570, compact ? 326 : 450,
+                        compact ? 75 : 100, compact ? 23 : 30, WS_TABSTOP);
         EnableWindow(back, page > 0 && page < 5 && !removing);
         EnableWindow(next, page != 5);
         EnableWindow(stop, page != 6 && !(page == 5 && removing));
@@ -282,6 +341,10 @@ struct Wizard::Impl {
                             self->closed = true;
                     }
                     return 0;
+                }
+                if (message == WM_CTLCOLORSTATIC) {
+                    SetBkColor(reinterpret_cast<HDC>(wp), GetSysColor(COLOR_WINDOW));
+                    return reinterpret_cast<LRESULT>(self->background);
                 }
             } catch (const std::exception &e) {
                 MessageBoxW(window, wide(e.what()).c_str(), L"brlinst", MB_OK | MB_ICONERROR);

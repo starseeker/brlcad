@@ -3,10 +3,13 @@
 #include <zlib.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cstdio>
+#include <mutex>
 #include <fstream>
 #include <set>
+#include <thread>
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -15,6 +18,9 @@
 #endif
 
 namespace installer {
+namespace {
+constexpr std::size_t max_parallel_workers = 8;
+}
 std::string utf8(const fs::path &p) {
     return p.u8string();
 }
@@ -198,7 +204,7 @@ static std::string text_field(const Json &j, const char *key) {
 }
 void validate_product(const Json &p, bool packaged) {
     fields(p, {"formatVersion", "id", "name", "version", "publisher", "website", "welcome", "license",
-               "licenseText", "icon", "shortcuts"});
+               "licenseText", "icon", "branding", "shortcuts"});
     if (!p.contains("formatVersion") || p["formatVersion"] != 1)
         throw Error("Unsupported configuration formatVersion", ExitCode::arguments);
     for (auto key : {"id", "version"}) {
@@ -222,6 +228,33 @@ void validate_product(const Json &p, bool packaged) {
     for (auto key : {"welcome", "icon", "website"})
         if (p.contains(key))
             text_field(p, key);
+    if (p.contains("branding")) {
+        const auto &branding = p["branding"];
+        fields(branding, {"style", "exe", "msi"});
+        if (!branding.contains("style") || branding["style"] != "classic")
+            throw Error("branding.style must be classic", ExitCode::arguments);
+        for (auto backend : {"exe", "msi"}) {
+            if (!branding.contains(backend))
+                continue;
+            if (packaged)
+                throw Error(std::string("Packaged product contains branding asset paths: ") + backend,
+                            ExitCode::arguments);
+            const auto &assets = branding[backend];
+            if (backend == std::string("exe")) {
+                fields(assets, {"header", "sidebar"});
+                text_field(assets, "header");
+                text_field(assets, "sidebar");
+            } else {
+                fields(assets, {"icon", "banner", "dialog", "license"});
+                if (assets.contains("icon"))
+                    text_field(assets, "icon");
+                text_field(assets, "banner");
+                text_field(assets, "dialog");
+                if (assets.contains("license"))
+                    text_field(assets, "license");
+            }
+        }
+    }
     if (p.contains("website")) {
         auto url = p["website"].get<std::string>();
         if (url.rfind("https://", 0) != 0)
@@ -335,5 +368,53 @@ Fingerprint fingerprint(const fs::path &path) {
 void check_cancel(const Cancel &cancel) {
     if (cancel && cancel())
         throw Error("Operation cancelled", ExitCode::cancelled);
+}
+
+std::size_t parallel_worker_count(std::size_t task_count) {
+    if (!task_count)
+        return 0;
+    const auto available = std::max(1u, std::thread::hardware_concurrency());
+    return std::min(task_count, std::min(max_parallel_workers, static_cast<std::size_t>(available)));
+}
+
+void parallel_for(std::size_t task_count, const std::string &stage, const Progress &progress,
+                  const std::function<void(std::size_t)> &action) {
+    if (progress)
+        progress(stage, 0, task_count);
+    const auto worker_count = parallel_worker_count(task_count);
+    if (!worker_count)
+        return;
+    std::atomic_size_t next{0}, completed{0};
+    std::atomic_bool stop{false};
+    std::exception_ptr failure;
+    std::mutex failure_mutex, progress_mutex;
+    auto worker = [&] {
+        while (!stop.load(std::memory_order_relaxed)) {
+            const auto index = next.fetch_add(1, std::memory_order_relaxed);
+            if (index >= task_count)
+                return;
+            try {
+                action(index);
+                const auto done = completed.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (progress) {
+                    std::lock_guard<std::mutex> lock(progress_mutex);
+                    progress(stage, done, task_count);
+                }
+            } catch (...) {
+                stop.store(true, std::memory_order_relaxed);
+                std::lock_guard<std::mutex> lock(failure_mutex);
+                if (!failure)
+                    failure = std::current_exception();
+            }
+        }
+    };
+    std::vector<std::thread> workers;
+    workers.reserve(worker_count);
+    for (std::size_t i = 0; i < worker_count; ++i)
+        workers.emplace_back(worker);
+    for (auto &thread : workers)
+        thread.join();
+    if (failure)
+        std::rethrow_exception(failure);
 }
 } // namespace installer

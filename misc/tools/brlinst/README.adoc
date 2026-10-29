@@ -46,6 +46,12 @@ Keep them together. The generator is a console application; the runtime is a
 native GUI application with no extra runtime redistribution requirement when
 built with MSVC's static runtime configuration.
 
+Generation reports elapsed time and progress. EXE payloads are compressed in
+parallel deterministic shards and assembled in manifest order. MSI payloads
+are divided into balanced embedded cabinets that are compressed in parallel;
+validation, metadata collection, database authoring, and verification are also
+reported.
+
 For alternate toolchains, set `BRLINST_EXTRA_NOTICES` to any additional runtime-library
 notices that must accompany generated executables. These are embedded in the
 installed NOTICE.txt as well.
@@ -89,6 +95,11 @@ not by these checksums.
   "welcome": "This wizard installs this version separately from other versions.",
   "license": "COPYING",
   "icon": "brlcad.ico",
+  "branding": {
+    "style": "classic",
+    "exe": {"header": "header.bmp", "sidebar": "side.bmp"},
+    "msi": {"icon": "product.ico", "banner": "banner.bmp", "dialog": "dialog.bmp", "license": "license.rtf"}
+  },
   "shortcuts": [
     {"name": "MGED", "target": "bin/mged.exe", "workingDirectory": "@profile", "desktop": true},
     {"name": "Manual", "target": "share/doc/index.html", "desktop": false}
@@ -103,6 +114,16 @@ are relative to the JSON file, or absolute. Other paths use forward slashes and
 are relative to the staged payload. Unknown fields and duplicate JSON keys are
 errors. The license is displayed as information; there is no additional license
 acceptance switch for quiet installation.
+
+The optional `classic` branding style uses the compact layouts expected by
+NSIS Modern UI and standard WiX dialogs. EXE header and sidebar images must be
+uncompressed 24-bit BMP files sized 150x57 and 164x314. MSI banner and dialog
+images must be uncompressed 24-bit BMP files sized 493x58 and 493x312. brlinst
+owns window dimensions and control placement; product JSON supplies assets,
+not raw GUI coordinates. The MSI-specific icon overrides the general installer
+icon for Add/Remove Programs. Branding paths follow the same resolution rules
+as `license` and `icon`. An MSI-specific `license` must be an RTF document; if
+omitted, brlinst converts the general plain-text license to RTF.
 
 Each shortcut has a name and target. Optional properties are `icon`, `arguments`,
 `workingDirectory`, and `desktop` (default true). The working directory defaults
@@ -271,8 +292,9 @@ Initial MSI format limits are checked during generation:
 
 * Canonical numeric `major.minor.build`, bounded by `255.255.65535`.
 * At most 32,767 files including the installed license notices, and at most
-  1.5 GiB of uncompressed payload in a single embedded MSZIP cabinet. The final
-  database must be smaller than 2 GiB. EXE packaging retains its separate limits.
+  1.5 GiB of uncompressed payload split across embedded MSZIP cabinets. The
+  final database must be smaller than 2 GiB. EXE packaging retains its separate
+  limits.
 * Product text and payload filenames must be representable in Windows-1252.
   License text is converted from UTF-8 to RTF with Unicode escapes, up to 60 KB
   of RTF. Installer destination paths use Windows Unicode APIs.
@@ -280,27 +302,28 @@ Initial MSI format limits are checked during generation:
   generated desktop shortcut names to 115 UTF-8 bytes before the short alias.
 
 `--verify` checks MSI storage, authored table constraints, and the presence of
-the embedded cabinet header. It does not decompress the cabinet, run the ICE
+the embedded cabinet headers. It does not decompress the cabinets, run the ICE
 suite, or prove that an installation succeeds. These require Windows tests.
 
 == BRL-CAD / CPack integration
 
-Build BRL-CAD normally, adding this optional configure hook:
+On native 64-bit Windows builds, BRL-CAD configures brlinst as an isolated local
+`ExternalProject`. It is built in Release mode as part of the normal build graph,
+is not installed, and does not add its tests to the BRL-CAD test suite. The
+standard package target produces ZIP, EXE, and MSI artifacts:
 
 [source,powershell]
 ----
-cmake -S C:/src/brlcad -B C:/build/brlcad -DCMAKE_PROJECT_BRLCAD_INCLUDE=C:/src/brlcad/misc/tools/brlinst/cmake/BRLCAD.cmake -DBRLINST_EXECUTABLE=C:/src/brlcad/misc/tools/brlinst/build/Release/brlinst.exe
+cmake -S C:/src/brlcad -B C:/build/brlcad
 cmake --build C:/build/brlcad --config Release
-cmake --build C:/build/brlcad --config Release --target package-brlinst
+cmake --build C:/build/brlcad --config Release --target package
 ----
 
-The hook adds packaging targets after BRL-CAD has configured its existing CPack
-setup: `package-brlinst` for EXE and, on Windows hosts, `package-brlinst-msi` for
-MSI. It uses CPack External staging and returns packages to the build directory.
-Set `BRLINST_FORMATS=exe` when the generator was built without MSI support; Unix
-hosts default to EXE only. Separate CPack staging roots let both targets coexist.
-Existing NSIS/WiX generators are not changed. If another project hook is in use,
-include this module from that hook instead of replacing it.
+CPack's ZIP generator remains available as a tool-independent fallback. Its
+External generator stages BRL-CAD once and invokes the locally built brlinst to
+produce both Windows installers. Native 32-bit Windows and cross-compiled builds
+currently produce ZIP only because brlinst authors x64 packages and its MSI
+backend requires Windows host APIs.
 
 The default configuration advertises MGED, Archer, and RtWizard only when their
 build targets exist, and adds manual links when those files are staged. Set `BRLINST_PRODUCT_CONFIG` to a complete custom JSON file

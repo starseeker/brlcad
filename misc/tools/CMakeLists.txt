@@ -10,6 +10,47 @@ endfunction(SetTargetFolder)
 # asciiquack - AsciiDoc processor used to build BRL-CAD documentation
 add_subdirectory(asciiquack)
 
+# brlinst is a packaging-time host tool. Keep its project settings, static
+# runtime, and install rules isolated from the main build while ensuring the
+# generated CPack package target has built it through its normal all dependency.
+if(WIN32 AND CMAKE_HOST_WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND
+    CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64)$")
+  include(ExternalProject)
+  set(_brlinst_host_binary_dir "${CMAKE_CURRENT_BINARY_DIR}/brlinst-host")
+  set(_brlinst_zlib_source)
+  if(BRLCAD_EXT_SOURCE_DIR AND EXISTS "${BRLCAD_EXT_SOURCE_DIR}/zlib/zlib/zlib.h")
+    set(_brlinst_zlib_source "${BRLCAD_EXT_SOURCE_DIR}/zlib/zlib")
+  elseif(BRLCAD_EXT_DIR)
+    get_filename_component(_brlinst_bext_root "${BRLCAD_EXT_DIR}" DIRECTORY)
+    if(EXISTS "${_brlinst_bext_root}/zlib/zlib/zlib.h")
+      set(_brlinst_zlib_source "${_brlinst_bext_root}/zlib/zlib")
+    endif()
+  endif()
+  set(_brlinst_cmake_args
+    "-DCMAKE_BUILD_TYPE=Release"
+    "-DBUILD_TESTING=OFF"
+    "-DBRLINST_JSON_INCLUDE=${CMAKE_SOURCE_DIR}/src/libbu"
+    "-DBRLINST_WITH_MSI=ON"
+  )
+  if(_brlinst_zlib_source)
+    list(APPEND _brlinst_cmake_args "-DBRLINST_ZLIB_SOURCE=${_brlinst_zlib_source}")
+  endif()
+  ExternalProject_Add(brlinst_host
+    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/brlinst"
+    BINARY_DIR "${_brlinst_host_binary_dir}"
+    CMAKE_ARGS ${_brlinst_cmake_args}
+    BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --config Release
+    INSTALL_COMMAND ""
+    TEST_COMMAND ""
+    BUILD_ALWAYS TRUE
+  )
+  set_target_properties(brlinst_host PROPERTIES FOLDER "Compilation Utilities")
+  set(BRLINST_HOST_BINARY_DIR "${_brlinst_host_binary_dir}" PARENT_SCOPE)
+  set(BRLINST_HOST_CONFIG Release PARENT_SCOPE)
+  distclean("${CMAKE_CURRENT_BINARY_DIR}/brlinst_host-prefix")
+  distclean("${_brlinst_host_binary_dir}")
+endif()
+
 # On some platforms distclean has additional cleanup to do
 distclean("${CMAKE_BINARY_DIR}/${BIN_DIR}/asciiquack.pdb")
 

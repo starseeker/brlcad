@@ -56,7 +56,8 @@ void resource(HANDLE h, LPCWSTR type, WORD id, const void *data, DWORD bytes) {
         throw Error("Cannot update executable resources");
 }
 } // namespace
-void update_resources(const fs::path &executable, const Json &product, const fs::path &icon) {
+void update_resources(const fs::path &executable, const Json &product, const fs::path &icon,
+                      const PackageInput::Branding &branding) {
     HANDLE update = BeginUpdateResourceW(executable.c_str(), FALSE);
     if (!update)
         throw Error("Cannot open executable resources");
@@ -119,6 +120,16 @@ void update_resources(const fs::path &executable, const Json &product, const fs:
         root.append(var);
         root.finish();
         resource(update, RT_VERSION, 1, root.data.data(), static_cast<DWORD>(root.data.size()));
+        auto bitmap = [&](const fs::path &path, WORD id) {
+            if (path.empty())
+                return;
+            auto data = read_text(path, 16 * 1024 * 1024);
+            constexpr std::size_t bitmap_file_header_size = 14;
+            resource(update, RT_BITMAP, id, data.data() + bitmap_file_header_size,
+                     static_cast<DWORD>(data.size() - bitmap_file_header_size));
+        };
+        bitmap(branding.exe_header, 200);
+        bitmap(branding.exe_sidebar, 201);
         if (!icon.empty()) {
             auto data = read_text(icon, 4 * 1024 * 1024);
             if (data.size() < 6 || read16(data, 0) != 0 || read16(data, 2) != 1 || read16(data, 4) == 0 ||

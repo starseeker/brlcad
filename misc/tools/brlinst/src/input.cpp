@@ -8,6 +8,33 @@
 #include <windows.h>
 #endif
 namespace installer {
+namespace {
+constexpr std::uint32_t bitmap_info_header_size = 40;
+constexpr std::uint16_t bitmap_bits_per_pixel = 24;
+std::uint16_t little16(const std::string &data, std::size_t offset) {
+    return static_cast<unsigned char>(data[offset]) |
+           (static_cast<std::uint16_t>(static_cast<unsigned char>(data[offset + 1])) << 8);
+}
+std::uint32_t little32(const std::string &data, std::size_t offset) {
+    return little16(data, offset) | (static_cast<std::uint32_t>(little16(data, offset + 2)) << 16);
+}
+void validate_bitmap(const fs::path &path, std::uint32_t width, std::uint32_t height) {
+    constexpr std::size_t bitmap_header_bytes = 54;
+    const auto data = read_text(path, 16 * 1024 * 1024);
+    if (data.size() < bitmap_header_bytes || data[0] != 'B' || data[1] != 'M')
+        throw Error("Invalid branding bitmap: " + utf8(path), ExitCode::arguments);
+    const auto info_size = little32(data, 14);
+    const auto pixel_offset = little32(data, 10);
+    const std::uint64_t row_size = (static_cast<std::uint64_t>(width) * 3 + 3) & ~std::uint64_t{3};
+    const std::uint64_t required_size = pixel_offset + row_size * height;
+    if (info_size < bitmap_info_header_size || pixel_offset < 14 + info_size ||
+        required_size > data.size() || little32(data, 18) != width ||
+        little32(data, 22) != height || little16(data, 26) != 1 ||
+        little16(data, 28) != bitmap_bits_per_pixel || little32(data, 30) != 0)
+        throw Error("Branding bitmap must be an uncompressed 24-bit " + std::to_string(width) + "x" +
+                    std::to_string(height) + " BMP: " + utf8(path), ExitCode::arguments);
+}
+}
 std::string license_notices() {
     return std::string(reinterpret_cast<const char *>(distribution_notices));
 }
@@ -28,6 +55,40 @@ PackageInput prepare_input(const fs::path &config, const fs::path &source, const
         if (!fs::is_regular_file(result.icon))
             throw Error("Missing product icon");
         product.erase("icon");
+    }
+    if (product.contains("branding")) {
+        auto &branding = product["branding"];
+        auto branding_asset = [&](const char *backend, const char *name, fs::path &destination,
+                                  std::uint32_t width, std::uint32_t height) {
+            if (!branding.contains(backend) || !branding[backend].contains(name))
+                return;
+            destination = asset(branding[backend][name].get<std::string>());
+            check_no_links(destination);
+            if (!fs::is_regular_file(destination))
+                throw Error("Missing branding bitmap: " + utf8(destination), ExitCode::arguments);
+            validate_bitmap(destination, width, height);
+        };
+        branding_asset("exe", "header", result.branding.exe_header, 150, 57);
+        branding_asset("exe", "sidebar", result.branding.exe_sidebar, 164, 314);
+        if (branding.contains("msi") && branding["msi"].contains("icon")) {
+            result.branding.msi_icon = asset(branding["msi"]["icon"].get<std::string>());
+            check_no_links(result.branding.msi_icon);
+            if (!fs::is_regular_file(result.branding.msi_icon))
+                throw Error("Missing MSI product icon: " + utf8(result.branding.msi_icon), ExitCode::arguments);
+        }
+        branding_asset("msi", "banner", result.branding.msi_banner, 493, 58);
+        branding_asset("msi", "dialog", result.branding.msi_dialog, 493, 312);
+        if (branding.contains("msi") && branding["msi"].contains("license")) {
+            result.branding.msi_license = asset(branding["msi"]["license"].get<std::string>());
+            check_no_links(result.branding.msi_license);
+            if (!fs::is_regular_file(result.branding.msi_license))
+                throw Error("Missing MSI license: " + utf8(result.branding.msi_license), ExitCode::arguments);
+            const auto rtf = read_text(result.branding.msi_license, 60000);
+            if (rtf.rfind("{\\rtf", 0) != 0)
+                throw Error("MSI license must be an RTF document", ExitCode::arguments);
+        }
+        branding.erase("exe");
+        branding.erase("msi");
     }
     validate_product(product, true);
     check_no_links(source);

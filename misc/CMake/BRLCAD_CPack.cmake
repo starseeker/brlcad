@@ -129,55 +129,27 @@ if(CPACK_RPM_PACKAGE_RELEASE)
 endif(CPACK_RPM_PACKAGE_RELEASE)
 
 if(WIN32)
-  find_package(NSIS)
-  if(NSIS_FOUND)
-    set(CPACK_GENERATOR ${CPACK_GENERATOR} NSIS)
-    set(CPACK_NSIS_PACKAGE_NAME "BRL-CAD")
-    set(CPACK_NSIS_INSTALL_DIRECTORY "BRL-CAD ${BRLCAD_VERSION}")
-    set(CPACK_SOURCE_DIR "${CMAKE_SOURCE_DIR}")
-    set(CPACK_DATA_DIR "${DATA_DIR}")
-    set(CPACK_DOC_DIR "${DOC_DIR}")
-    # There is a bug in NSIS that does not handle full unix paths properly. Make
-    # sure there is at least one set of four (4) backslashes.
-    set(CPACK_NSIS_MUI_ICON "${CMAKE_SOURCE_DIR}/misc/nsis\\\\brlcad.ico")
-    set(CPACK_NSIS_MUI_UNIICON "${CMAKE_SOURCE_DIR}/misc/nsis\\\\uninstall.ico")
-    set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
-    set(CPACK_NSIS_DISPLAY_NAME "BRL-CAD")
-    set(CPACK_NSIS_MODIFY_PATH ON)
-  endif(NSIS_FOUND)
-  find_package(Wix)
-  if(Wix_FOUND)
-    # User report that this version of the installer also supports
-    # non-graphical installation with the /passive option.
-    #
-    # Note: for WiX, start menu shortcuts and desktop icons are handled with
-    # properties set on targets.  (At the moment, this is not true for NSIS -
-    # it uses entries in the misc/CMake/NSIS.template.in file.)
-    #
-    # If we need to get fancier about this, look at the following:
-    # https://github.com/Kitware/CMake/blob/master/CMakeCPackOptions.cmake.in#L216
-    # https://github.com/Kitware/CMake/tree/master/Utilities/Release/WiX
-    set(CPACK_GENERATOR ${CPACK_GENERATOR} WIX)
-    set(CPACK_WIX_LICENSE_RTF "${CMAKE_SOURCE_DIR}/misc/wix/License.rtf")
-    set(CPACK_WIX_PRODUCT_ICON "${CMAKE_SOURCE_DIR}/misc/wix/brlcad_product.ico")
-    set(CPACK_WIX_PROGRAM_MENU_FOLDER "BRL-CAD ${BRLCAD_VERSION}")
-    set(CPACK_WIX_UI_BANNER "${CMAKE_SOURCE_DIR}/misc/wix/brlcad_banner.bmp")
-    set(CPACK_WIX_UI_DIALOG "${CMAKE_SOURCE_DIR}/misc/wix/brlcad_dialog.bmp")
-  endif(Wix_FOUND)
+  if(BRLINST_HOST_BINARY_DIR)
+    list(APPEND CPACK_GENERATOR ZIP External)
+    set(CPACK_EXTERNAL_ENABLE_STAGING ON)
+    set(BRLINST_CONFIG "${BRLINST_PRODUCT_CONFIG}")
+    set(BRLINST_EXECUTABLE "")
+    set(BRLINST_FORMATS exe msi)
+    set(BRLI_FILTER_SHORTCUTS "${BRLINST_FILTER_SHORTCUTS}")
+    set(_brlinst_package_script "${CMAKE_BINARY_DIR}/BrlinstPackage.cmake")
+    configure_file("${CMAKE_SOURCE_DIR}/misc/tools/brlinst/cmake/Package.cmake.in"
+      "${_brlinst_package_script}" @ONLY)
+    set(CPACK_EXTERNAL_PACKAGE_SCRIPT "${_brlinst_package_script}")
+    distclean("${_brlinst_package_script}")
+  endif()
   if(NOT CPACK_GENERATOR)
     # If nothing else, make a zip file
     set(CPACK_GENERATOR ZIP)
   endif(NOT CPACK_GENERATOR)
   if(CMAKE_CL_64)
     set(CPACK_PACKAGE_FILE_NAME "BRL-CAD_${BRLCAD_VERSION}_win64")
-    set(CPACK_PACKAGE_INSTALL_REGISTRY_KEY "BRL-CAD ${BRLCAD_VERSION} win64")
-    # Use the setting from http://public.kitware.com/pipermail/cmake/2013-June/055000.html to
-    # provide the correct default 64 bit directory with older CMake versions
-    set(CPACK_NSIS_INSTALL_ROOT "$PROGRAMFILES64")
   else(CMAKE_CL_64)
     set(CPACK_PACKAGE_FILE_NAME "BRL-CAD_${BRLCAD_VERSION}_win32")
-    set(CPACK_PACKAGE_INSTALL_REGISTRY_KEY "BRL-CAD ${BRLCAD_VERSION} win32")
-    set(CPACK_NSIS_PACKAGE_NAME "BRL-CAD (32 Bit)")
   endif(CMAKE_CL_64)
 endif(WIN32)
 

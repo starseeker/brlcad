@@ -206,6 +206,33 @@ FileEntry deflate_file(const fs::path &source, const std::string &name, std::ost
     entry.compressed_size = static_cast<std::uint64_t>(out.tellp()) - origin - entry.offset;
     return entry;
 }
+FileEntry deflate_text(const std::string &text, const std::string &name, std::ostream &out,
+                       std::uint64_t origin) {
+    uLongf length = compressBound(static_cast<uLong>(text.size()));
+    std::vector<Bytef> compressed(length);
+    if (compress2(compressed.data(), &length, reinterpret_cast<const Bytef *>(text.data()),
+                  static_cast<uLong>(text.size()), Z_BEST_COMPRESSION) != Z_OK)
+        throw Error("Cannot compress dependency notices");
+    FileEntry entry{name, text.size(), length, static_cast<std::uint64_t>(out.tellp()) - origin,
+                    static_cast<std::uint32_t>(crc32(0, reinterpret_cast<const Bytef *>(text.data()),
+                                                     static_cast<uInt>(text.size())))};
+    if (!out.write(reinterpret_cast<const char *>(compressed.data()), static_cast<std::streamsize>(length)))
+        throw Error("Cannot write dependency notices");
+    return entry;
+}
+void append_bytes(std::istream &input, std::ostream &output, std::uint64_t offset, std::uint64_t length) {
+    input.clear();
+    input.seekg(static_cast<std::streamoff>(offset));
+    std::array<char, buffer_size> buffer{};
+    while (length) {
+        const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(length, buffer.size()));
+        if (!input.read(buffer.data(), static_cast<std::streamsize>(count)))
+            throw Error("Cannot read compressed payload shard");
+        if (!output.write(buffer.data(), static_cast<std::streamsize>(count)))
+            throw Error("Cannot assemble installer payload");
+        length -= count;
+    }
+}
 } // namespace
 
 Package open_package(const fs::path &executable) {
@@ -282,10 +309,13 @@ void extract_file(const Package &p, const FileEntry &e, const fs::path &output, 
     flush_file(output);
 }
 void create_package(const fs::path &config, const fs::path &source, const fs::path &stub,
-                    const fs::path &uninstaller, const fs::path &output) {
+                    const fs::path &uninstaller, const fs::path &output, const Progress &progress) {
     auto input = prepare_input(config, source, output);
     auto &product = input.product;
     auto &icon = input.icon;
+    if (product.contains("branding") && product["branding"].value("style", "") == "classic" &&
+        (input.branding.exe_header.empty() || input.branding.exe_sidebar.empty()))
+        throw Error("Classic EXE branding requires header and sidebar bitmaps", ExitCode::arguments);
     auto inputs = std::move(input.files);
     inputs.insert(inputs.begin(), {std::string(state_directory) + "/" + uninstall_filename, uninstaller});
     inputs.emplace_back(std::string(state_directory) + "/" + notices_filename, fs::path{});
@@ -306,38 +336,65 @@ void create_package(const fs::path &config, const fs::path &source, const fs::pa
     }
     auto temporary = output;
     temporary += ".building";
+    auto parts_directory = output;
+    parts_directory += ".parts";
     check_no_links(temporary);
+    check_no_links(parts_directory);
     if (fs::exists(temporary))
         throw Error("Remove stale package output: " + utf8(temporary));
+    if (fs::exists(parts_directory))
+        throw Error("Remove stale package work directory: " + utf8(parts_directory));
     try {
         fs::copy_file(stub, temporary);
 #ifdef _WIN32
-        update_resources(temporary, product, icon);
+        update_resources(temporary, product, icon, input.branding);
 #else
-        if (!icon.empty())
+        if (!icon.empty() || !input.branding.exe_header.empty() || !input.branding.exe_sidebar.empty())
             throw Error("Branding executable resources requires Windows");
 #endif
+        if (!fs::create_directory(parts_directory))
+            throw Error("Cannot create package work directory");
+        struct CompressedEntry {
+            FileEntry entry;
+            std::size_t part = 0;
+        };
+        const auto part_count = parallel_worker_count(inputs.size());
+        std::vector<fs::path> part_paths(part_count);
+        std::vector<CompressedEntry> compressed(inputs.size());
+        parallel_for(part_count, "Compressing EXE payload", progress, [&](std::size_t part) {
+            auto part_path = parts_directory / ("payload-" + std::to_string(part + 1));
+            part_paths[part] = part_path;
+            std::ofstream part_output(part_path, std::ios::binary);
+            if (!part_output)
+                throw Error("Cannot create compressed payload shard");
+            for (std::size_t i = part; i < inputs.size(); i += part_count) {
+                auto entry = inputs[i].second.empty()
+                                 ? deflate_text(license_notices(), inputs[i].first, part_output, 0)
+                                 : deflate_file(inputs[i].second, inputs[i].first, part_output, 0);
+                compressed[i] = {entry, part};
+            }
+            part_output.flush();
+            if (!part_output)
+                throw Error("Cannot flush compressed payload shard");
+        });
         std::ofstream out(temporary, std::ios::binary | std::ios::app);
-        const auto payload = fs::file_size(temporary);
+        out.seekp(0, std::ios::end);
+        if (!out)
+            throw Error("Cannot append installer payload");
+        const auto payload = static_cast<std::uint64_t>(out.tellp());
         Json files = Json::array();
         std::vector<FileEntry> entries;
-        for (const auto &input : inputs) {
-            FileEntry entry;
-            if (input.second.empty()) {
-                const auto text = license_notices();
-                uLongf length = compressBound(static_cast<uLong>(text.size()));
-                std::vector<Bytef> compressed(length);
-                if (compress2(compressed.data(), &length, reinterpret_cast<const Bytef *>(text.data()),
-                              static_cast<uLong>(text.size()), Z_BEST_COMPRESSION) != Z_OK)
-                    throw Error("Cannot compress dependency notices");
-                entry = {input.first, text.size(), length, static_cast<std::uint64_t>(out.tellp()) - payload,
-                         static_cast<std::uint32_t>(crc32(0, reinterpret_cast<const Bytef *>(text.data()),
-                                                          static_cast<uInt>(text.size())))};
-                if (!out.write(reinterpret_cast<const char *>(compressed.data()),
-                               static_cast<std::streamsize>(length)))
-                    throw Error("Cannot write dependency notices");
-            } else
-                entry = deflate_file(input.second, input.first, out, payload);
+        std::vector<std::ifstream> part_inputs(part_count);
+        for (std::size_t part = 0; part < part_count; ++part) {
+            part_inputs[part].open(part_paths[part], std::ios::binary);
+            if (!part_inputs[part])
+                throw Error("Cannot open compressed payload shard");
+        }
+        for (auto &compressed_entry : compressed) {
+            auto entry = compressed_entry.entry;
+            const auto part_offset = entry.offset;
+            entry.offset = static_cast<std::uint64_t>(out.tellp()) - payload;
+            append_bytes(part_inputs[compressed_entry.part], out, part_offset, entry.compressed_size);
             files.push_back({{"path", entry.path},
                              {"size", entry.size},
                              {"compressedSize", entry.compressed_size},
@@ -367,12 +424,16 @@ void create_package(const fs::path &config, const fs::path &source, const fs::pa
         if (!out || static_cast<std::uint64_t>(out.tellp()) > max_package_size)
             throw Error("Package too large or write failed");
         out.close();
+        for (auto &part_input : part_inputs)
+            part_input.close();
+        fs::remove_all(parts_directory);
         verify_package(open_package(temporary));
         flush_file(temporary);
         publish_file(temporary, output);
     } catch (...) {
         std::error_code ec;
         fs::remove(temporary, ec);
+        fs::remove_all(parts_directory, ec);
         throw;
     }
 }

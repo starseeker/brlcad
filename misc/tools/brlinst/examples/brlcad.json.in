@@ -7,7 +7,20 @@
   "website": "https://brlcad.org/",
   "welcome": "BRL-CAD is an open source solid modeling system. This wizard installs this version separately from other versions.",
   "license": "@CMAKE_SOURCE_DIR@/COPYING",
-  "icon": "@CMAKE_SOURCE_DIR@/misc/nsis/brlcad.ico",
+  "icon": "@CMAKE_SOURCE_DIR@/misc/cpack/icons/brlcad.ico",
+  "branding": {
+    "style": "classic",
+    "exe": {
+      "header": "@CMAKE_SOURCE_DIR@/misc/cpack/exe/header.bmp",
+      "sidebar": "@CMAKE_SOURCE_DIR@/misc/cpack/exe/sidebar.bmp"
+    },
+    "msi": {
+      "icon": "@CMAKE_SOURCE_DIR@/misc/cpack/msi/product.ico",
+      "banner": "@CMAKE_SOURCE_DIR@/misc/cpack/msi/banner.bmp",
+      "dialog": "@CMAKE_SOURCE_DIR@/misc/cpack/msi/dialog.bmp",
+      "license": "@CMAKE_SOURCE_DIR@/misc/cpack/msi/license.rtf"
+    }
+  },
   "shortcuts": [
     {"name": "MGED", "target": "bin/mged.exe", "icon": "@DATA_DIR@/icons/brlcad.ico", "workingDirectory": "@profile", "desktop": true},
     {"name": "Archer", "target": "bin/archer.exe", "icon": "@DATA_DIR@/icons/archer.ico", "workingDirectory": "@profile", "desktop": true},
