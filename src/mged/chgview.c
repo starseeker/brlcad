@@ -855,14 +855,16 @@ f_status(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[]
 	return TCL_OK;
     }
 
-    if (BU_STR_EQUAL(argv[1], "s->dbip->dbi_base2local")) {
+    if (BU_STR_EQUAL(argv[1], "base2local") ||
+	BU_STR_EQUAL(argv[1], "s->dbip->dbi_base2local")) {
 	bu_vls_printf(&vls, "%f", s->dbip->dbi_base2local);
 	Tcl_AppendResult(interp, bu_vls_addr(&vls), (char *)NULL);
 	bu_vls_free(&vls);
 	return TCL_OK;
     }
 
-    if (BU_STR_EQUAL(argv[1], "s->dbip->dbi_local2base")) {
+    if (BU_STR_EQUAL(argv[1], "local2base") ||
+	BU_STR_EQUAL(argv[1], "s->dbip->dbi_local2base")) {
 	bu_vls_printf(&vls, "%f", s->dbip->dbi_local2base);
 	Tcl_AppendResult(interp, bu_vls_addr(&vls), (char *)NULL);
 	bu_vls_free(&vls);

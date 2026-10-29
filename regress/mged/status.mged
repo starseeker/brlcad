@@ -12,4 +12,23 @@ status view2model
 status model2objview
 status objview2model
 
+set original_units [units -s]
+# The status command prints conversion factors to six decimal places.
+set conversion_tolerance 1.0e-6
+foreach unit {mm in} {
+    units $unit
+    set millimeters_per_unit [bu_units_conversion $unit]
+    foreach subcommand {base2local s->dbip->dbi_base2local} {
+	regression_assert {
+	    abs([status $subcommand] - 1.0 / $millimeters_per_unit) <= $conversion_tolerance
+	} "status $subcommand returned an incorrect conversion for $unit"
+    }
+    foreach subcommand {local2base s->dbip->dbi_local2base} {
+	regression_assert {
+	    abs([status $subcommand] - $millimeters_per_unit) <= $conversion_tolerance
+	} "status $subcommand returned an incorrect conversion for $unit"
+    }
+}
+units $original_units
+
 puts "*** 'status' testing completed ***"
