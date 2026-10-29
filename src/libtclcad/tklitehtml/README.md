@@ -206,6 +206,29 @@ Tcl error; successful navigation clears the banner. Calling `error`
 returns the current message, and `error message` lets an embedding
 application report its own load failure in the same banner.
 
+## Local help viewer
+
+Applications can build a standard documentation view around the browser:
+
+```tcl
+set help [tklitehtml::helpviewer .help \
+    -home /path/to/start.html \
+    -contents /path/to/contents.html]
+pack $help -fill both -expand true
+```
+
+The toolbar provides Back, Home, Find, and Contents controls. When a
+contents document is supplied, it appears beside the main document in a
+paned window. The sash adjusts their relative widths, and Contents toggles
+the sidebar without discarding its document or width. Links selected in the
+contents pane open in the main pane.
+
+The widget command supports `back`, `home`, `goto`, `findbar`, and
+`showcontents ?boolean?`. `browser` and `contentsbrowser` return the
+underlying browser widgets. Other browser operations are forwarded to the
+main document browser. Only local files and fragment links are supported;
+network retrieval is intentionally outside this component's scope.
+
 ### Link callback
 
 The command prefix supplied with `-linkcommand` receives the widget

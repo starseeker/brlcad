@@ -68,6 +68,7 @@ LoadArcherLibs
 package require ArcherCore 1.0
 catch {package require Tktable 2.10} tktable
 package require ManBrowser 1.0
+package require tklitehtml 0.1.0
 package provide Archer 1.0
 
 ::itcl::class Archer {
@@ -2522,19 +2523,7 @@ package provide Archer 1.0
 }
 
 
-proc Archer::html_help_load {browser url} {
-    catch {$browser goto $url}
-}
-
-proc Archer::html_help_display {_browser url _attributes} {
-    global htmlviewer
-
-    Archer::html_help_load $htmlviewer $url
-}
-
 ::itcl::body Archer::buildarcherHelp {} {
-    global htmlviewer
-
     itk_component add archerHelp {
 	::iwidgets::dialog $itk_interior.archerHelp \
 	    -modality none \
@@ -2558,43 +2547,13 @@ proc Archer::html_help_display {_browser url _attributes} {
     after idle "$win configure -relief flat"
 
     set tlparent [$itk_component(archerHelp) childsite]
-
-    # Table of Contents
-    itk_component add archerHelpToC {
-	::tk::frame $tlparent.archerManToc
+    itk_component add archerHelpViewer {
+	::tklitehtml::helpviewer $tlparent.viewer \
+	    -contents [file join [bu_dir doc] html main_menu.html] \
+	    -home [file join [bu_dir doc] html books \
+		BRL-CAD_Tutorial_Series-VolumeI.html]
     } {}
-    set docstoc $itk_component(archerHelpToC)
-
-    set docstoclist [::tklitehtml::browser $docstoc.htmlview \
-	-width 250 -linkcommand Archer::html_help_display]
-    Archer::html_help_load $docstoclist \
-	[file join [bu_dir doc] html main_menu.html]
-
-    grid $docstoclist -sticky nsew -in $docstoc
-
-    grid columnconfigure $docstoc 0 -weight 1
-    grid rowconfigure $docstoc 0 -weight 1
-
-    pack $itk_component(archerHelpToC) -side left -expand no -fill y
-
-    # Main HTML window
-
-    itk_component add archerHelpF {
-	::tk::frame $tlparent.archerHelpF
-    } {}
-
-    set sfcs $itk_component(archerHelpF)
-
-    set htmlviewer [::tklitehtml::browser $sfcs.htmlview]
-    Archer::html_help_load $htmlviewer [file join [bu_dir doc] html books \
-	BRL-CAD_Tutorial_Series-VolumeI.html]
-
-    grid $htmlviewer -sticky nsew -in $sfcs
-
-    grid columnconfigure $sfcs 0 -weight 1
-    grid rowconfigure $sfcs 0 -weight 1
-
-    pack $itk_component(archerHelpF) -side left -expand yes -fill both
+    pack $itk_component(archerHelpViewer) -expand yes -fill both
 
     wm geometry $itk_component(archerHelp) "1100x800"
     $itk_component(archerHelp) center
@@ -4188,8 +4147,6 @@ proc Archer::html_help_display {_browser url _attributes} {
 }
 
 ::itcl::body Archer::doarcherHelp {} {
-    global tcl_platform
-
     $itk_component(archerHelp) center [namespace tail $this]
     ::update idletasks
     $itk_component(archerHelp) activate

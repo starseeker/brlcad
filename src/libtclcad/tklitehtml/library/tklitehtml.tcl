@@ -38,6 +38,10 @@ namespace eval ::tklitehtml {
     variable browserState
     variable browserCase
     variable browserQuery
+    variable helpContentsMinimumWidth 120
+    variable helpContentsWidth 260
+    variable helpContentsVisible
+    variable helpState
     variable selectionState
     variable selectionScrollDelay 50
 }
@@ -342,6 +346,213 @@ proc ::tklitehtml::browser {path args} {
         return -options $options $message
     }
     return $path
+}
+
+proc ::tklitehtml::helpviewer {path args} {
+    variable helpContentsMinimumWidth
+    variable helpContentsVisible
+    variable helpContentsWidth
+    variable helpState
+
+    if {[llength $args] % 2 != 0} {
+        error "value for \"[lindex $args end]\" missing"
+    }
+
+    set home ""
+    set contents ""
+    set contentsWidth $helpContentsWidth
+    set browserOptions {}
+    foreach {option value} $args {
+        switch -- $option {
+            -home {
+                set home $value
+            }
+            -contents {
+                set contents $value
+            }
+            -contentswidth {
+                if {![string is integer -strict $value] || $value < 1} {
+                    error "expected positive integer but got \"$value\""
+                }
+                set contentsWidth $value
+            }
+            default {
+                lappend browserOptions $option $value
+            }
+        }
+    }
+
+    frame $path -class TkLiteHtmlHelpViewer
+    set hullCommand ${path}.__hull
+    rename $path $hullCommand
+    interp alias {} $path {} ::tklitehtml::_help_dispatch $path
+    set helpState($path) [dict create \
+        hull $hullCommand \
+        home $home \
+        contentswidth $contentsWidth \
+        browser {} \
+        contentsbrowser {}]
+    set helpContentsVisible($path) [expr {$contents ne ""}]
+    bind $path <Destroy> +[list ::tklitehtml::_help_destroy $path %W]
+
+    try {
+        frame $path.toolbar -relief raised -borderwidth 1
+        button $path.toolbar.back -text "Back" \
+            -command [list ::tklitehtml::_help_invoke $path back]
+        button $path.toolbar.home -text "Home" \
+            -command [list ::tklitehtml::_help_invoke $path home]
+        button $path.toolbar.find -text "Find" \
+            -command [list ::tklitehtml::_help_invoke $path findbar]
+        pack $path.toolbar.back $path.toolbar.home $path.toolbar.find \
+            -side left
+        if {$home eq ""} {
+            $path.toolbar.home configure -state disabled
+        }
+
+        ::tk::panedwindow $path.body -orient horizontal -sashrelief raised \
+            -sashwidth 6
+        if {$contents ne ""} {
+            checkbutton $path.toolbar.contents -text "Contents" \
+                -indicatoron false \
+                -variable ::tklitehtml::helpContentsVisible($path) \
+                -command [list ::tklitehtml::_help_show_contents $path]
+            pack $path.toolbar.contents -side left
+
+            frame $path.body.contents
+            set contentsBrowser [browser $path.body.contents.browser \
+                {*}$browserOptions -width $contentsWidth \
+                -linkcommand [list ::tklitehtml::_help_contents_link $path]]
+            pack $contentsBrowser -fill both -expand true
+            $path.body add $path.body.contents \
+                -minsize $helpContentsMinimumWidth -width $contentsWidth
+            dict set helpState($path) contentsbrowser $contentsBrowser
+        }
+
+        set documentBrowser [browser $path.body.document {*}$browserOptions]
+        $path.body add $documentBrowser -minsize $helpContentsMinimumWidth \
+            -stretch always
+        dict set helpState($path) browser $documentBrowser
+
+        pack $path.toolbar -side top -fill x
+        pack $path.body -side top -fill both -expand true
+
+        if {$contents ne ""} {
+            catch {$contentsBrowser goto $contents}
+        }
+        if {$home ne ""} {
+            catch {$documentBrowser goto $home}
+        }
+    } on error {message options} {
+        catch {destroy $path}
+        return -options $options $message
+    }
+    return $path
+}
+
+proc ::tklitehtml::_help_destroy {path destroyedWindow} {
+    variable helpContentsVisible
+    variable helpState
+
+    if {$path ne $destroyedWindow} {
+        return
+    }
+    if {[info exists helpState($path)]} {
+        set hullCommand [dict get $helpState($path) hull]
+        unset helpState($path)
+        unset -nocomplain helpContentsVisible($path)
+        catch {rename $hullCommand {}}
+    }
+    catch {rename $path {}}
+}
+
+proc ::tklitehtml::_help_dispatch {path method args} {
+    variable helpState
+
+    if {![info exists helpState($path)]} {
+        error "invalid help viewer \"$path\""
+    }
+    set documentBrowser [dict get $helpState($path) browser]
+    switch -- $method {
+        back - findbar - goto {
+            return [$documentBrowser $method {*}$args]
+        }
+        browser {
+            if {[llength $args] != 0} {
+                error "wrong # args: should be \"$path browser\""
+            }
+            return $documentBrowser
+        }
+        cget - configure {
+            set hullCommand [dict get $helpState($path) hull]
+            return [$hullCommand $method {*}$args]
+        }
+        contentsbrowser {
+            if {[llength $args] != 0} {
+                error "wrong # args: should be \"$path contentsbrowser\""
+            }
+            return [dict get $helpState($path) contentsbrowser]
+        }
+        home {
+            if {[llength $args] != 0} {
+                error "wrong # args: should be \"$path home\""
+            }
+            set home [dict get $helpState($path) home]
+            if {$home eq ""} {
+                return {}
+            }
+            return [$documentBrowser goto $home]
+        }
+        showcontents {
+            if {[llength $args] > 1 ||
+                ([llength $args] == 1 &&
+                 ![string is boolean -strict [lindex $args 0]])} {
+                error "wrong # args: should be \"$path showcontents ?boolean?\""
+            }
+            return [_help_show_contents $path {*}$args]
+        }
+        default {
+            return [$documentBrowser $method {*}$args]
+        }
+    }
+}
+
+proc ::tklitehtml::_help_invoke {path method} {
+    catch {$path $method}
+}
+
+proc ::tklitehtml::_help_contents_link {path _browser url _attributes} {
+    catch {$path goto $url}
+}
+
+proc ::tklitehtml::_help_show_contents {path args} {
+    variable helpContentsMinimumWidth
+    variable helpContentsVisible
+    variable helpState
+
+    set contentsBrowser [dict get $helpState($path) contentsbrowser]
+    if {$contentsBrowser eq ""} {
+        return false
+    }
+    if {[llength $args] == 1} {
+        set helpContentsVisible($path) [expr {[lindex $args 0] ? true : false}]
+    }
+
+    set contentsFrame $path.body.contents
+    set panes [$path.body panes]
+    set displayed [expr {[lsearch -exact $panes $contentsFrame] >= 0}]
+    if {$helpContentsVisible($path) == $displayed} {
+        return $displayed
+    }
+    if {$helpContentsVisible($path)} {
+        $path.body add $contentsFrame -before [dict get $helpState($path) browser] \
+            -minsize $helpContentsMinimumWidth \
+            -width [dict get $helpState($path) contentswidth]
+    } else {
+        lassign [$path.body sash coord 0] sashPosition _unused
+        dict set helpState($path) contentswidth $sashPosition
+        $path.body forget $contentsFrame
+    }
+    return $helpContentsVisible($path)
 }
 
 proc ::tklitehtml::_browser_destroy {path destroyedWindow} {

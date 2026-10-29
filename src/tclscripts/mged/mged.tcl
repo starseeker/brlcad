@@ -512,88 +512,33 @@ proc echo args {
     return $args
 }
 
-#==============================================================================
-# HTML support
-#==============================================================================
-namespace eval ::mged::manual {
-}
-
-proc ::mged::manual::file_uri {path} {
-    return [::tklitehtml::file_uri $path]
-}
-
-proc ::mged::manual::local_path {location} {
-    return [::tklitehtml::local_path $location]
-}
-
-proc ::mged::manual::navigate {viewer args} {
-    global message
-
-    if {[catch {$viewer {*}$args} error]} {
-	set message $error
-	return 0
-    }
-    set message ""
-    return 1
-}
-
-proc ::mged::manual::go_to {viewer screen} {
-    global ::tk::Priv
-
-    set initial_path [pwd]
-    if {![catch {local_path [$viewer location]} current_path]} {
-	set initial_path $current_path
-    }
-    cad_input_dialog $::tk::Priv(cad_dialog) $screen "Go To" \
-	"Enter filename to read:" filename $initial_path \
-	0 {{ summary "Enter the name of a local HTML file."}} OK
-
-    if {[file pathtype $filename] eq "relative"} {
-	set filename [file join [pwd] $filename]
-    }
-    if {[catch {file normalize $filename} normalized]} {
-	cad_dialog $::tk::Priv(cad_dialog) $screen "Error reading file" \
-	    "Cannot read file $filename." error 0 OK
-	return
-    }
-    set filename $normalized
-    if {[file readable $filename] && [file isfile $filename]} {
-	navigate $viewer goto [file_uri $filename]
-	return
-    }
-
-    cad_dialog $::tk::Priv(cad_dialog) $screen "Error reading file" \
-	"Cannot read file $filename." error 0 OK
-}
-
 proc ia_man {parent screen} {
-    global mged_html_dir message
+    global mged_html_dir
 
     package require tklitehtml 0.1.0
 
     set w $parent.man
-    catch {destroy $w}
+    if {[winfo exists $w]} {
+	wm deiconify $w
+	raise $w
+	focus $w
+	return
+    }
     toplevel $w -screen $screen
-    wm title $w "MGED HTML browser"
+    wm title $w "MGED Help"
 
-    frame $w.f -relief sunken -bd 1
-    pack $w.f -side top -fill x
+    set viewer [::tklitehtml::helpviewer $w.help \
+	-contents [file join $mged_html_dir contents.html] \
+	-home [file join $mged_html_dir preface.html]]
+    pack $viewer -fill both -expand yes
 
-    set viewer [::tklitehtml::browser $w.html]
-    button $w.f.close -text Close -command [list destroy $w]
-    button $w.f.goto -text "Go To" \
-	-command [list ::mged::manual::go_to $viewer $screen]
-    button $w.f.back -text "Back" \
-	-command [list ::mged::manual::navigate $viewer back]
-
-    pack $w.f.close $w.f.goto $w.f.back -side left -fill x -expand yes
-    label $w.message -textvariable message -anchor w
-    pack $w.message -side top -anchor w -fill x
-    pack $viewer -side top -fill both -expand yes
+    set defaultWidth 1000
+    set defaultHeight 700
+    lassign [wm maxsize $w] maximumWidth maximumHeight
+    set width [expr {min($defaultWidth, $maximumWidth)}]
+    set height [expr {min($defaultHeight, $maximumHeight)}]
+    wm geometry $w ${width}x${height}
     update idletasks
-
-    set contents [file join $mged_html_dir contents.html]
-    ::mged::manual::navigate $viewer goto $contents
 }
 
 #==============================================================================

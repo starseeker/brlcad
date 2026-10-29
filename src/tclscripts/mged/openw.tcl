@@ -63,14 +63,6 @@ if {[info exists env(MGED_HTML_DIR)]} {
     set mged_html_dir $mged_default(html_dir)
 }
 
-if {![info exists mged_default(web_browser)]} {
-    if { ($::tcl_platform(platform) == "windows") && [file exists "C:/Program Files/Internet Explorer/iexplore.exe"] } {
-	set mged_default(web_browser) "C:/Program Files/Internet Explorer/iexplore.exe"
-    } else {
-	set mged_default(web_browser) /usr/bin/netscape
-    }
-}
-
 if {![info exists mged_color_scheme]} {
     color_scheme_init
 }
@@ -207,43 +199,6 @@ if {![info exists mged_default(doubleClickTol)]} {
     set mged_default(doubleClickTol) 500
 }
 
-if {[info exists env(WEB_BROWSER)]} {
-    if {[file exists $env(WEB_BROWSER)]} {
-	set mged_browser $env(WEB_BROWSER)
-    }
-}
-
-if {![info exists mged_browser]} {
-    if {[file exists $mged_default(web_browser)]} {
-	set mged_browser $mged_default(web_browser)
-    } else {
-	if { ($::tcl_platform(os) == "Windows NT") && [file exists "C:/Program Files/Internet Explorer/iexplore.exe"] } {
-	    set mged_browser "C:/Program Files/Internet Explorer/iexplore.exe"
-	} elseif {[info exists env(PATH)]} {
-	    set pathlist [split $env(PATH) :]
-	    foreach path $pathlist {
-		if {[file exists $path/netscape]} {
-		    set mged_browser $path/netscape
-		    break;
-		} elseif { [file exists $path/mozilla] } {
-		    set mged_browser $path/mozilla
-		    break;
-		} elseif { [file exists $path/firefox] } {
-		    set mged_browser $path/firefox
-		    break;
-		} elseif { ($::tcl_platform(os) == "Darwin") && [file exists $path/open] } {
-		    set mged_browser $path/open
-		    break;
-		}
-	    }
-	}
-
-	if {![info exists mged_browser]} {
-	    set mged_browser "Browser not found, check your PATH"
-	}
-    }
-}
-
 # Call this routine to initialize the "solid_data" array
 solid_data_init
 
@@ -274,16 +229,6 @@ if {[namespace exists ::tk]} {
 }
 
 proc mged_open_manual {parent screen} {
-    global mged_browser
-    global mged_html_dir
-
-    set manual_path [file join $mged_html_dir index.html]
-    set browser [auto_execok $mged_browser]
-    if {[file readable $manual_path] &&
-	[llength $browser] && ![catch {exec -- {*}$browser $manual_path &}]} {
-	return
-    }
-
     ia_man $parent $screen
 }
 
@@ -292,7 +237,6 @@ proc gui { args } {
     global mged_gui
     global mged_default
     global mged_html_dir
-    global mged_browser
     global mged_players
     global mged_collaborators
     global mged_display
@@ -2072,15 +2016,7 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
     .$id.menubar.help add command -label "Manual" -underline 0\
 	-command "mged_open_manual .$id $screen"
     hoc_register_menu_data "Help" "Manual" "Manual"\
-	{ { summary "Start a tool for browsing the online MGED manual.
-	The web browser that gets started is dependent, first, on the
-	WEB_BROWSER environment variable. If this variable exists and
-	the browser identified by this variable exists, then that browser
-	is used. Failing that the browser specified by the
-	mged_default(web_browser) Tcl variable is tried. As a last
-	resort the existence of /usr/bin/netscape, /usr/local/bin/netscape
-	and /usr/X11/bin/netscape is checked. If a browser has still not
-	been located, the built-in Tcl browser is used." } }
+	{ { summary "Open the local MGED documentation in the built-in help viewer." } }
 
     #==============================================================================
     # PHASE 3: Bottom-row display

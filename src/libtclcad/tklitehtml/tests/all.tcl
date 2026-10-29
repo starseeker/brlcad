@@ -979,6 +979,68 @@ test browser-1.7 {unreadable files preserve browser state} -constraints filePerm
     file delete -force $testDirectory
 } -result {1 Fixture}
 
+test helpviewer-1.1 {local help viewer provides navigation and optional contents} -setup {
+    set testDirectory [file normalize [file join \
+        [::tcltest::temporaryDirectory] help-viewer-[pid]]]
+    file mkdir $testDirectory
+    set homePath [file join $testDirectory home.html]
+    set secondPath [file join $testDirectory second.html]
+    set contentsPath [file join $testDirectory contents.html]
+    set channel [open $homePath w]
+    puts $channel {<title>Home</title><p>Home documentation</p>}
+    close $channel
+    set channel [open $secondPath w]
+    puts $channel {<title>Second</title><p>Second documentation</p>}
+    close $channel
+    set channel [open $contentsPath w]
+    puts $channel {<title>Contents</title><a href="second.html">Second</a>}
+    close $channel
+    set viewer [::tklitehtml::helpviewer .help \
+        -home $homePath -contents $contentsPath]
+    pack $viewer -fill both -expand true
+    update
+} -body {
+    set document [$viewer browser]
+    set contents [$viewer contentsbrowser]
+    set initial [list [$document title] [$contents title] \
+        [llength [.help.body panes]] [winfo class .help.body]]
+    $viewer showcontents false
+    set hidden [llength [.help.body panes]]
+    $viewer showcontents true
+    set shown [llength [.help.body panes]]
+    ::tklitehtml::_help_contents_link $viewer $contents \
+        [::tklitehtml::file_uri $secondPath] {}
+    set linked [$viewer title]
+    $viewer home
+    .help.toolbar.find invoke
+    list $initial $hidden $shown $linked [$viewer title] \
+        [winfo manager $document.find]
+} -cleanup {
+    catch {destroy .help}
+    file delete -force $testDirectory
+} -result {{Home Contents 2 Panedwindow} 1 2 Second Home pack}
+
+test helpviewer-1.2 {help viewer validates sidebar width before construction} -body {
+    list [catch {::tklitehtml::helpviewer .help -contentswidth 0} message] \
+        $message [winfo exists .help]
+} -cleanup {
+    catch {destroy .help}
+} -result {1 {expected positive integer but got "0"} 0}
+
+test helpviewer-1.3 {help viewer uses Tk panedwindow despite command shadowing} -setup {
+    rename ::panedwindow ::tklitehtml_test_panedwindow
+    proc ::panedwindow args {
+        error "unqualified panedwindow command used"
+    }
+} -body {
+    set viewer [::tklitehtml::helpviewer .help]
+    list [winfo class .help.body] [$viewer contentsbrowser]
+} -cleanup {
+    catch {destroy .help}
+    rename ::panedwindow {}
+    rename ::tklitehtml_test_panedwindow ::panedwindow
+} -result {Panedwindow {}}
+
 test browser-find-1.1 {shared find controls count, navigate, and match case} -setup {
     set browser [::tklitehtml::browser .browser]
     pack $browser -fill both -expand true

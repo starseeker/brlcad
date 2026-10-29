@@ -22,14 +22,7 @@
 
 source $::env(MGED_GUI_TEST_LIBRARY)
 
-namespace eval ::mged::xmin::help {
-    variable exec_arguments {}
-}
-
-proc ::mged::xmin::help::record_exec {args} {
-    set ::mged::xmin::help::exec_arguments $args
-    return ""
-}
+namespace eval ::mged::xmin::help {}
 
 proc ::mged::xmin::help::exercise_command_manual {top} {
     ::mged::gui::test::invoke $top {Help {Command Manual Pages}}
@@ -147,51 +140,49 @@ proc ::mged::xmin::help::exercise_static_help {id top} {
 }
 
 proc ::mged::xmin::help::exercise_html_manual {top} {
-    global mged_browser mged_html_dir
-    variable exec_arguments
+    global mged_html_dir
 
-    set manual_path [file normalize [file join $mged_html_dir index.html]]
-    ::gui::test::require {[file readable $manual_path]} \
+    set contents_path [file normalize [file join $mged_html_dir contents.html]]
+    set home_path [file normalize [file join $mged_html_dir preface.html]]
+    ::gui::test::require {
+	[file readable $contents_path] && [file readable $home_path]
+    } \
 	"built MGED HTML manual is unavailable"
 
-    set browser [auto_execok true]
-    set mged_browser $browser
-    set exec_arguments {}
-    rename ::exec ::mged::xmin::help::saved_exec
-    rename ::mged::xmin::help::record_exec ::exec
-    set status [catch {
-	::mged::gui::test::invoke $top {Help Manual}
-    } message options]
-    rename ::exec ::mged::xmin::help::record_exec
-    rename ::mged::xmin::help::saved_exec ::exec
-    if {$status} {
-	return -options $options $message
-    }
-    ::gui::test::require {
-	$exec_arguments eq [list -- {*}$browser $manual_path &]
-    } "Manual did not dispatch the configured browser with its index page"
-
-    set mged_browser [file join $::env(GUI_TEST_DIR) missing-browser]
     ::mged::gui::test::invoke $top {Help Manual}
-    set fallback $top.man
-    set viewer $fallback.html
+    set help_window $top.man
+    set help_viewer $help_window.help
+    set viewer [$help_viewer browser]
+    set contents_viewer [$help_viewer contentsbrowser]
     ::gui::test::require {
-	[winfo exists $fallback] && [winfo ismapped $fallback] &&
-	[winfo exists $viewer] && [$viewer title] eq "Table of Contents"
-    } "Manual did not load MGED's internal HTML viewer"
+	[winfo exists $help_window] && [winfo ismapped $help_window] &&
+	[grab current $help_window] eq "" &&
+	[$viewer title] eq "Mged User's Manual" &&
+	[$contents_viewer title] eq "Table of Contents"
+    } "Manual did not load MGED's non-modal local help viewer"
+
+    set panes [$help_viewer.body panes]
+    ::gui::test::require {[llength $panes] == 2} \
+	"MGED help viewer did not display its contents pane"
+    $help_viewer showcontents false
+    ::gui::test::require {[llength [$help_viewer.body panes]] == 1} \
+	"MGED help viewer did not hide its contents pane"
+    $help_viewer showcontents true
+    ::gui::test::require {[llength [$help_viewer.body panes]] == 2} \
+	"MGED help viewer did not restore its contents pane"
 
     set special_path [file join [pwd] {manual path} {contents#1.html}]
     ::gui::test::require {
-	[::mged::manual::local_path \
-	    [::mged::manual::file_uri $special_path]] eq \
+	[::tklitehtml::local_path \
+	    [::tklitehtml::file_uri $special_path]] eq \
 	[file normalize $special_path]
     } "internal Manual viewer did not preserve special path characters"
 
     set html [$viewer html]
-    set contents [$html text]
+    set contents_html [[$contents_viewer html] text]
     ::gui::test::require {
-	[string first "Preface" $contents] >= 0 &&
-	[string first "background-color" $contents] < 0
+	[string first "Preface" $contents_html] >= 0 &&
+	[string first "background-color" $contents_html] < 0
     } "internal Manual viewer did not render its table of contents"
 
     $viewer goto mged.html#csg
@@ -203,24 +194,28 @@ proc ::mged::xmin::help::exercise_html_manual {top} {
 	$manual_title eq "Mged User's Manual" && $manual_heading >= 0
     } "internal Manual viewer did not follow its document links"
 
-    $fallback.f.back invoke
+    $help_viewer.toolbar.back invoke
     ::mged::gui::test::settle
-    ::gui::test::require {[$viewer title] eq "Table of Contents"} \
+    ::gui::test::require {[$viewer title] eq "Mged User's Manual"} \
 	"internal Manual viewer Back button did not restore the prior page"
 
     set original_location [$viewer location]
     set missing_path [file join $::env(GUI_TEST_DIR) missing-manual.html]
-    set navigation_status \
-	[::mged::manual::navigate $viewer goto $missing_path]
+    set navigation_status [catch {$viewer goto $missing_path}]
     ::gui::test::require {
-	!$navigation_status && [$viewer location] eq $original_location &&
-	[$viewer title] eq "Table of Contents" && [$viewer error] ne ""
+	$navigation_status && [$viewer location] eq $original_location &&
+	[$viewer title] eq "Mged User's Manual" && [$viewer error] ne ""
     } "internal Manual viewer did not preserve a failed navigation"
     ::gui::test::require {
-	[::mged::manual::navigate $viewer goto $original_location] &&
+	![catch {$viewer goto $original_location}] &&
 	[$viewer error] eq ""
     } "internal Manual viewer did not recover after a navigation failure"
-    destroy $fallback
+
+    ::mged::gui::test::invoke $top {Help Manual}
+    ::gui::test::require {
+	[winfo exists $help_window] && [$viewer location] eq $original_location
+    } "Manual did not reuse its existing help window"
+    destroy $help_window
 }
 
 proc ::mged::xmin::help::run {id top} {

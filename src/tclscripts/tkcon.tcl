@@ -1671,20 +1671,20 @@ proc ::tkcon::InitMenus {w title} {
 		set key {HKEY_LOCAL_MACHINE\SOFTWARE\ActiveState\ActiveTcl}
 		if {![catch {registry get "$key\\$ver\\Help" ""} help]
 		    && [file exists $help]} {
-		    set cmd [list exec $::env(COMSPEC) /c start {} $help]
+		    set cmd [list ::tkcon::Help $help]
 		}
 	    } elseif {$::tcl_platform(os) == "Darwin"} {
 		set ver ActiveTcl-[join [lrange [split $ver .] 0 1] .]
 		set rsc "/Library/Frameworks/Tcl.framework/Resources"
 		set help "$rsc/English.lproj/$ver/index.html"
 		if {[file exists $help]} {
-		    set cmd [list exec open $help]
+		    set cmd [list ::tkcon::Help $help]
 		}
 	    } elseif {$::tcl_platform(platform) == "unix"} {
 		set help [file dirname [info nameofexe]]
 		append help /../html/index.html
 		if {[file exists $help]} {
-		    set cmd [list puts "Start $help"]
+		    set cmd [list ::tkcon::Help $help]
 		}
 	    }
 	    if {$cmd != ""} {
@@ -1694,6 +1694,35 @@ proc ::tkcon::InitMenus {w title} {
 	    }
 	}
     }
+}
+
+proc ::tkcon::Help help {
+    variable PRIV
+
+    if {[catch {package require tklitehtml 0.1.0} message]} {
+	tk_messageBox -icon error -type ok -title "TkCon Help" \
+	    -message "Unable to open the local help viewer." -detail $message
+	return
+    }
+
+    set window [expr {$PRIV(root) eq "." ? ".tkconHelp" : "$PRIV(root).help"}]
+    if {[winfo exists $window]} {
+	wm deiconify $window
+	raise $window
+	focus $window
+	return
+    }
+
+    toplevel $window
+    wm title $window "ActiveTcl Help"
+    set viewer [::tklitehtml::helpviewer $window.viewer -home $help]
+    pack $viewer -fill both -expand true
+    set defaultWidth 900
+    set defaultHeight 700
+    lassign [wm maxsize $window] maximumWidth maximumHeight
+    set width [expr {min($defaultWidth, $maximumWidth)}]
+    set height [expr {min($defaultHeight, $maximumHeight)}]
+    wm geometry $window ${width}x${height}
 }
 
 ## ::tkcon::HistoryMenu - dynamically build the menu for attached interpreters
