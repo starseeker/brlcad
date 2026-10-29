@@ -43,6 +43,7 @@
 
 #include "common.h"
 
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 
@@ -160,6 +161,12 @@ ecmd_annot_set_tseg_txt_size(struct rt_edit *s)
 	return;
     }
 
+    if (s->e_para[0] <= 0.0) {
+	bu_vls_printf(s->log_str,
+		"ECMD_ANNOT_SET_TSEG_TXT_SIZE: size must be positive\n");
+	return;
+    }
+
     tsg->txt_size = s->e_para[0];
 }
 
@@ -181,15 +188,18 @@ ecmd_annot_vert_move(struct rt_edit *s)
 	return;
     }
 
-    int vi = (int)s->e_para[0];
-    if (vi < 0 || (size_t)vi >= aip->vert_count) {
+    fastf_t vertex_index = s->e_para[0];
+    if (vertex_index < 0.0 || vertex_index >= (fastf_t)aip->vert_count ||
+	vertex_index > (fastf_t)INT_MAX ||
+	!EQUAL(vertex_index, floor(vertex_index))) {
 	bu_vls_printf(s->log_str,
-		"ECMD_ANNOT_VERT_MOVE: vertex %d out of range [0,%zu)\n",
-		vi, aip->vert_count);
+		"ECMD_ANNOT_VERT_MOVE: vertex index must be an integer in [0,%zu)\n",
+		aip->vert_count);
 	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
 	if (f) (*f)(0, NULL, d, NULL);
 	return;
     }
+    int vi = (int)vertex_index;
 
     /* Model-space UVs multiply the basis vectors; screen-space UVs are lengths. */
     const fastf_t scale = (aip->flags & RT_ANNOT_MODEL_SPACE) ? 1.0 : s->local2base;

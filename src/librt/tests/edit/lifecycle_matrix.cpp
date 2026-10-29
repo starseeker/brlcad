@@ -186,6 +186,27 @@ check_unit(fastf_t local2base, const char *unit)
 	bu_log("failed edit consumes input\t%s\t%s\n", unit,
 	    failures ? "fail" : "pass");
 
+	rt_edit_set_edflag(edit, RT_PARAMS_EDIT_SCALE);
+	edit->e_inpara = RT_EDIT_MAXPARA + 1;
+	if (rt_edit_process(edit) != BRLCAD_ERROR || edit->e_inpara ||
+	    !same_ell(edit, 4))
+	    ++failures;
+	edit->e_inpara = -1;
+	if (rt_edit_process(edit) != BRLCAD_ERROR || edit->e_inpara ||
+	    !same_ell(edit, 4))
+	    ++failures;
+	edit->e_nstr = RT_EDIT_MAXSTR + 1;
+	if (rt_edit_process(edit) != BRLCAD_ERROR || edit->e_nstr ||
+	    !same_ell(edit, 4))
+	    ++failures;
+	edit->e_inpara = 1;
+	edit->e_para[0] = NAN;
+	if (rt_edit_process(edit) != BRLCAD_ERROR || edit->e_inpara ||
+	    !same_ell(edit, 4))
+	    ++failures;
+	bu_log("invalid input counts\t%s\t%s\n", unit,
+	    failures ? "fail" : "pass");
+
 	const fastf_t target_length = 2.0 * inch_to_mm;
 	rt_edit_set_edflag(edit, ECMD_ELL_SCALE_A);
 	edit->mv_context = 1;
@@ -247,11 +268,24 @@ rt_edit_test_lifecycle_matrix(void)
     struct rt_edit *idle = rt_edit_create(NULL, NULL, NULL, NULL);
     if (!idle)
 	return BRLCAD_ERROR;
+    point_t invalid_target = {NAN, 2.0, 3.0};
+    idle->e_para[0] = 7.0;
+    rt_edit_set_translation_target(idle, NULL);
+    rt_edit_set_translation_target(idle, invalid_target);
+    point2d_t snap_point = {1.25, 2.75};
+    idle->snap.enabled = 1;
+    idle->snap.spacing = NAN;
+    rt_edit_snap_point(NULL, idle);
+    rt_edit_snap_point(snap_point, idle);
+    if (idle->e_inpara || !EQUAL(idle->e_para[0], 7.0) ||
+	!EQUAL(snap_point[X], 1.25) || !EQUAL(snap_point[Y], 2.75))
+	++failures;
     idle->e_inpara = 1;
     idle->e_mvalid = 1;
     idle->es_scale = 2.0;
     if (rt_edit_process(NULL) != BRLCAD_ERROR ||
 	rt_edit_process(idle) != BRLCAD_ERROR ||
+	rt_edit_checkpoint(idle) != BRLCAD_ERROR ||
 	idle->e_inpara || idle->e_mvalid || !ZERO(idle->es_scale) ||
 	idle->update_views)
 	++failures;

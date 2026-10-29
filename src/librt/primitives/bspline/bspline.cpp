@@ -44,6 +44,7 @@
 #include "bnetwork.h"
 
 #include "bu/cv.h"
+#include "bu/opt.h"
 #include "vmath.h"
 #include "nmg.h"
 #include "rt/db4.h"
@@ -1385,15 +1386,27 @@ rt_nurb_adjust(struct bu_vls *logstr, struct rt_db_internal *intern, int argc, c
 	}
 
 	if (BU_STR_EQUAL(argv[0], "N")) {
+	    int surface_count = 0;
+	    if (bu_opt_int(NULL, 1, &argv[1], &surface_count) != 1 ||
+		surface_count < 0) {
+		bu_vls_printf(logstr, "ERROR: invalid surface count\n");
+		bu_free((char *)srf_array, "srf_array");
+		return BRLCAD_ERROR;
+	    }
 	    if (nurb->srfs) {
 		for (i=0; i<nurb->nsrf; i++)
 		    nmg_nurb_free_snurb(nurb->srfs[i]);
 		bu_free((char *)nurb->srfs, "nurb surfaces");
 	    }
-	    nurb->nsrf = atoi(argv[1]);
+	    nurb->nsrf = surface_count;
 	    nurb->srfs = (struct face_g_snurb **) bu_calloc(
 		nurb->nsrf, sizeof(struct face_g_snurb *), "nurb srfs[]");
 	} else if (BU_STR_EQUAL(argv[0], "S")) {
+	    if (len != nurb->nsrf) {
+		bu_vls_printf(logstr, "ERROR: surface count mismatch\n");
+		bu_free((char *)srf_array, "srf_array");
+		return BRLCAD_ERROR;
+	    }
 	    for (srf_no=0; srf_no < nurb->nsrf; srf_no++) {
 		int n_params=0;
 		int *order=NULL, *s_size=NULL, u_size=0, v_size=0, pt_type=0;
@@ -1406,6 +1419,12 @@ rt_nurb_adjust(struct bu_vls *logstr, struct rt_db_internal *intern, int argc, c
 
 		for (i=0; i<n_params; i+= 2) {
 		    int tmp_len;
+		    if (i + 1 >= n_params) {
+			bu_vls_printf(logstr, "ERROR: incomplete surface parameter\n");
+			bu_free((char *)srf_array, "srf_array");
+			bu_free((char *)srf_param_array, "srf_param_array");
+			return BRLCAD_ERROR;
+		    }
 
 		    key = srf_param_array[i];
 		    if (BU_STR_EQUAL(key, "O")) {
@@ -1423,7 +1442,12 @@ rt_nurb_adjust(struct bu_vls *logstr, struct rt_db_internal *intern, int argc, c
 			    return BRLCAD_ERROR;
 			}
 		    } else if (BU_STR_EQUAL(key, "T")) {
-			pt_type = atoi(srf_param_array[i+1]);
+			if (bu_opt_int(NULL, 1, &srf_param_array[i+1], &pt_type) != 1) {
+			    bu_vls_printf(logstr, "ERROR: invalid point type\n");
+			    bu_free((char *)srf_array, "srf_array");
+			    bu_free((char *)srf_param_array, "srf_param_array");
+			    return BRLCAD_ERROR;
+			}
 		    } else if (BU_STR_EQUAL(key, "u")) {
 			(void)_rt_tcl_list_to_fastf_array(srf_param_array[i+1], &u_pts, &u_size);
 		    } else if (BU_STR_EQUAL(key, "v")) {

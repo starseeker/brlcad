@@ -96,14 +96,16 @@ ecmd_datum_set_type(struct rt_edit *s)
 	return;
     }
 
-    int new_type = (int)s->e_para[0];
-    if (new_type < DATUM_TYPE_POINT || new_type > DATUM_TYPE_PLANE) {
+    fastf_t type_value = s->e_para[0];
+    if (type_value < DATUM_TYPE_POINT || type_value > DATUM_TYPE_PLANE ||
+	!EQUAL(type_value, floor(type_value))) {
 	bu_vls_printf(s->log_str,
 		"ECMD_DATUM_SET_TYPE: type must be 0, 1, or 2\n");
 	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
 	if (f) (*f)(0, NULL, d, NULL);
 	return;
     }
+    int new_type = (int)type_value;
 
     int old_type = _datum_current_type(dp);
 

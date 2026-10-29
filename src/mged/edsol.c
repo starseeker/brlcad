@@ -32,6 +32,7 @@
 
 #include "vmath.h"
 #include "bn.h"
+#include "bu/opt.h"
 #include "nmg.h"
 #include "rt/geom.h"
 #include "raytrace.h"
@@ -50,6 +51,12 @@
 
 static void init_sedit_vars(struct mged_state *), init_oedit_vars(struct mged_state *);
 static int init_oedit_guts(struct mged_state *);
+
+static int
+mged_parse_int(const char *value, int *result)
+{
+    return value && bu_opt_int(NULL, 1, &value, result) == 1;
+}
 
 /* if (!both) then set only MEDIT(s)->curr_e_axes_pos, otherwise
    set e_axes_pos and MEDIT(s)->curr_e_axes_pos */
@@ -174,7 +181,9 @@ arb_setup_rotface_clbk(int UNUSED(ac), const char **UNUSED(av), void *d, void *U
 	    return rt_arb_vertices[type][loc];
 	}
 
-	vertex = atoi(Tcl_GetVar(ms->interp, "vertex_num", TCL_GLOBAL_ONLY));
+	const char *vertex_result = Tcl_GetVar(ms->interp, "vertex_num", TCL_GLOBAL_ONLY);
+	if (!mged_parse_int(vertex_result, &vertex))
+	    continue;
 	for (int j = 0; j < vertices_per_face; j++) {
 	    if (vertex == rt_arb_vertices[type][loc + j])
 		valid = 1;
@@ -213,7 +222,13 @@ ecmd_bot_mode_clbk(int UNUSED(ac), const char **UNUSED(av), void *d, void *UNUSE
 	return BRLCAD_ERROR;
     }
     radio_result = Tcl_GetVar(ms->interp, "_bot_mode_result", TCL_GLOBAL_ONLY);
-    bot->mode = atoi(radio_result) + 1;
+    int mode_index;
+    if (!mged_parse_int(radio_result, &mode_index) ||
+	mode_index < 0 || mode_index > 3) {
+	bu_vls_printf(s->log_str, "Invalid BOT mode selection\n");
+	return BRLCAD_ERROR;
+    }
+    bot->mode = mode_index + 1;
 
     return BRLCAD_OK;
 }
@@ -242,7 +257,13 @@ ecmd_bot_orient_clbk(int UNUSED(ac), const char **UNUSED(av), void *d, void *UNU
 	return BRLCAD_ERROR;
     }
     radio_result = Tcl_GetVar(s->interp, "_bot_orient_result", TCL_GLOBAL_ONLY);
-    bot->orientation = atoi(radio_result) + 1;
+    int orientation;
+    if (!mged_parse_int(radio_result, &orientation) ||
+	orientation < 0 || orientation > 2) {
+	bu_vls_printf(MEDIT(s)->log_str, "Invalid BOT orientation selection\n");
+	return BRLCAD_ERROR;
+    }
+    bot->orientation = orientation + 1;
 
     return BRLCAD_OK;
 }
@@ -271,7 +292,9 @@ ecmd_bot_thick_clbk(int UNUSED(ac), const char **UNUSED(av), void *d, void *UNUS
 	    bu_log("cad_dialog failed: %s\n", Tcl_GetStringResult(s->interp));
 	    return BRLCAD_ERROR;
 	}
-	if (atoi(Tcl_GetStringResult(s->interp)))
+	int dialog_result;
+	if (!mged_parse_int(Tcl_GetStringResult(s->interp), &dialog_result) ||
+	    dialog_result)
 	    return BRLCAD_ERROR;
     }
 
@@ -354,11 +377,14 @@ ecmd_bot_fmode_clbk(int UNUSED(ac), const char **UNUSED(av), void *d, void *UNUS
 
     if (b->bot_verts[0] < 0 || b->bot_verts[1] < 0 || b->bot_verts[2] < 0) {
 	/* setting mode for all faces */
-	(void)Tcl_VarEval(s->interp, "cad_dialog ", ".bot_err ",
+	if (Tcl_VarEval(s->interp, "cad_dialog ", ".bot_err ",
 		"$mged_gui(mged,screen) ", "{Setting Mode for All Faces} ",
 		"{No face is selected, so this operation will modify all the faces in this BOT} ",
-		"\"\" ", "0 ", "OK ", "CANCEL ", (char *)NULL);
-	if (atoi(Tcl_GetStringResult(s->interp)))
+		"\"\" ", "0 ", "OK ", "CANCEL ", (char *)NULL) != TCL_OK)
+	    return BRLCAD_ERROR;
+	int dialog_result;
+	if (!mged_parse_int(Tcl_GetStringResult(s->interp), &dialog_result) ||
+	    dialog_result)
 	    return BRLCAD_ERROR;
 
 	face_state = -2;
@@ -399,14 +425,18 @@ ecmd_bot_fmode_clbk(int UNUSED(ac), const char **UNUSED(av), void *d, void *UNUS
 	return BRLCAD_ERROR;
     }
     radio_result = Tcl_GetVar(s->interp, "_bot_fmode_result", TCL_GLOBAL_ONLY);
+    int face_mode;
+    if (!mged_parse_int(radio_result, &face_mode) ||
+	(face_mode != 0 && face_mode != 1))
+	return BRLCAD_ERROR;
 
     if (face_state > -1) {
-	if (atoi(radio_result))
+	if (face_mode)
 	    BU_BITSET(bot->face_mode, face_no);
 	else
 	    BU_BITCLR(bot->face_mode, face_no);
     } else {
-	if (atoi(radio_result)) {
+	if (face_mode) {
 	    for (size_t i=0; i<bot->num_faces; i++)
 		BU_BITSET(bot->face_mode, i);
 	} else
@@ -470,7 +500,9 @@ ecmd_extrude_skt_name_clbk(int UNUSED(ac), const char **UNUSED(av), void *d, voi
 	return BRLCAD_ERROR;
     }
 
-    if (atoi(Tcl_GetStringResult(s->interp)) == 1) {
+    int dialog_result;
+    if (!mged_parse_int(Tcl_GetStringResult(s->interp), &dialog_result) ||
+	dialog_result == 1) {
 	bu_vls_free(&tcl_cmd);
 	return BRLCAD_ERROR;
     }
@@ -699,8 +731,12 @@ get_sketch_name(struct mged_state *s, const char *sk_n)
 	return NULL;
     }
 
-    if (atoi(Tcl_GetStringResult(s->interp)) == 1)
+    int dialog_result;
+    if (!mged_parse_int(Tcl_GetStringResult(s->interp), &dialog_result) ||
+	dialog_result == 1) {
+	bu_vls_free(&tcl_cmd);
 	return NULL;
+    }
 
     bu_vls_free(&tcl_cmd);
 
@@ -1334,7 +1370,7 @@ mged_param(struct mged_state *s, Tcl_Interp *interp, int argc, fastf_t *argvect)
     }
 
     MEDIT(s)->update_views = s->update_views;
-    rt_edit_process(MEDIT(s));
+    int edit_result = rt_edit_process(MEDIT(s));
     s->update_views = MEDIT(s)->update_views;
 
     if (SEDIT_TRAN) {
@@ -1351,7 +1387,7 @@ mged_param(struct mged_state *s, Tcl_Interp *interp, int argc, fastf_t *argvect)
 	if (MEDIT(s)->k.sca_abs > 0)
 	    MEDIT(s)->k.sca_abs /= 3.0;
     }
-    return TCL_OK;
+    return (edit_result == BRLCAD_OK) ? TCL_OK : TCL_ERROR;
 }
 
 
@@ -1380,7 +1416,12 @@ f_param(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     }
 
     for (i = 1; i < argc && i <= 3; i++) {
-	argvect[i-1] = atof(argv[i]);
+	if (bu_opt_fastf_t(NULL, 1, &argv[i], &argvect[i-1]) != 1 ||
+	    !isfinite(argvect[i-1])) {
+	    Tcl_AppendResult(interp, "Invalid numeric parameter: ", argv[i],
+		    "\n", (char *)NULL);
+	    return TCL_ERROR;
+	}
     }
 
     return mged_param(s, interp, argc-1, argvect);
@@ -1464,10 +1505,17 @@ f_keypoint(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv
 
 	    break;
 	case 3:
-	    VSET(MEDIT(s)->e_keypoint,
-		 atof(argv[1]) * s->dbip->dbi_local2base,
-		 atof(argv[2]) * s->dbip->dbi_local2base,
-		 atof(argv[3]) * s->dbip->dbi_local2base);
+	    point_t keypoint;
+	    for (int i = 0; i < ELEMENTS_PER_VECT; ++i) {
+		if (bu_opt_fastf_t(NULL, 1, &argv[i + 1], &keypoint[i]) != 1 ||
+		    !isfinite(keypoint[i])) {
+		    Tcl_AppendResult(interp, "Invalid keypoint coordinate: ",
+			    argv[i + 1], "\n", (char *)NULL);
+		    return TCL_ERROR;
+		}
+		keypoint[i] *= s->dbip->dbi_local2base;
+	    }
+	    VMOVE(MEDIT(s)->e_keypoint, keypoint);
 	    MEDIT(s)->e_keytag = "user-specified";
 	    MEDIT(s)->e_keyfixed = 1;
 	    break;
@@ -1894,10 +1942,18 @@ f_extrude(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
 	return TCL_ERROR;
     }
 
-    face = atoi(argv[1]);
+    if (bu_opt_int(NULL, 1, &argv[1], &face) != 1) {
+	Tcl_AppendResult(interp, "Extrude: invalid face - ", argv[1], "\n",
+		(char *)NULL);
+	return TCL_ERROR;
+    }
 
     /* get distance to project face */
-    dist = atof(argv[2]);
+    if (bu_opt_fastf_t(NULL, 1, &argv[2], &dist) != 1 || !isfinite(dist)) {
+	Tcl_AppendResult(interp, "Extrude: invalid distance - ", argv[2], "\n",
+		(char *)NULL);
+	return TCL_ERROR;
+    }
     /* apply MEDIT(s)->e_mat[15] to get to real model space */
     /* convert from the local unit (as input) to the base unit */
     dist = dist * MEDIT(s)->e_mat[15] * s->dbip->dbi_local2base;
@@ -1973,7 +2029,11 @@ f_mirface(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
     struct rt_arb_internal *arb = (struct rt_arb_internal *)MEDIT(s)->es_int.idb_ptr;
     RT_ARB_CK_MAGIC(arb);
 
-    face = atoi(argv[1]);
+    if (bu_opt_int(NULL, 1, &argv[1], &face) != 1) {
+	Tcl_AppendResult(interp, "Mirface: invalid face - ", argv[1], "\n",
+		(char *)NULL);
+	return TCL_ERROR;
+    }
 
     fastf_t es_peqn[7][4];
     struct bu_vls error_msg = BU_VLS_INIT_ZERO;

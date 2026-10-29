@@ -24,9 +24,11 @@
 
 #include "common.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "bu/cmd.h"
+#include "bu/opt.h"
 #include "rt/geom.h"
 #include "raytrace.h"
 
@@ -40,8 +42,7 @@ ged_pscale_core(struct ged *gedp, int argc, const char *argv[])
     int rflag;
     struct rt_db_internal intern;
 
-    /* intentionally double for scan */
-    double sf;
+    fastf_t sf;
 
     char *last;
     struct directory *dp;
@@ -77,7 +78,7 @@ ged_pscale_core(struct ged *gedp, int argc, const char *argv[])
     } else
 	rflag = 0;
 
-    if (sscanf(argv[3], "%lf", &sf) != 1 ||
+    if (bu_opt_fastf_t(NULL, 1, &argv[3], &sf) != 1 || !isfinite(sf) ||
 	sf <= SQRT_SMALL_FASTF) {
 	bu_vls_printf(gedp->ged_result_str, "%s: bad scale factor - %s", argv[0], argv[3]);
 	return BRLCAD_ERROR;
