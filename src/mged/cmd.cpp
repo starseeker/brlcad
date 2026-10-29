@@ -2529,8 +2529,11 @@ f_postscript(ClientData clientData, Tcl_Interp *interpreter, int argc, const cha
 
     vsp = view_state;  /* save state info pointer */
 
-    bu_free((void *)menu_state, "f_postscript: menu_state");
+    /* Keep the source menu alive when the temporary display is released. */
+    if (!--menu_state->ms_rc)
+	bu_free((void *)menu_state, "f_postscript: menu_state");
     menu_state = dml->dm_menu_state;
+    ++menu_state->ms_rc;
 
     scroll_top = dml->dm_scroll_top;
     scroll_active = dml->dm_scroll_active;

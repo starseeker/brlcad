@@ -4,7 +4,12 @@ in_sph ps
 e ps_sph.s
 autoview
 ae 35 25 0
-postscript mged_ps_test.ps
-regression_assert {[file size mged_ps_test.ps] > 0} "ps produced an empty file"
+set original_view [list [center] [size] [view quat]]
+foreach output {mged_ps_test.ps mged_ps_repeat.ps} {
+    postscript $output
+    regression_assert {[file size $output] > 0} "ps produced an empty file: $output"
+    regression_assert {[list [center] [size] [view quat]] eq $original_view} \
+	"ps changed the original display manager's view"
+}
 
 puts "*** 'ps' testing completed ***"
