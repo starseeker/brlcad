@@ -182,7 +182,7 @@ rt_edit_create(struct db_full_path *dfp, struct db_i *dbip, struct bn_tol *tol, 
     bn_mat_inv(s->e_invmat, s->e_mat);
 
     /* Establish initial keypoint */
-    s->e_keytag = "";
+    s->e_keytag = NULL;
     rt_get_solid_keypoint(s, &s->e_keypoint, &s->e_keytag, s->e_mat);
 
     return s;
@@ -343,7 +343,7 @@ rt_edit_reinit(struct rt_edit *s, struct db_full_path *dfp, struct db_i *dbip,
     bn_mat_inv(s->e_invmat, s->e_mat);
 
     /* Establish initial keypoint */
-    s->e_keytag = "";
+    s->e_keytag = NULL;
     rt_get_solid_keypoint(s, &s->e_keypoint, &s->e_keytag, s->e_mat);
 
     return BRLCAD_OK;
@@ -510,6 +510,9 @@ rt_get_solid_keypoint(struct rt_edit *s, point_t *pt, const char **strp, fastf_t
 
     if (!strp)
 	return;
+
+    if (*strp && !(*strp)[0])
+	*strp = NULL;
 
     struct rt_db_internal *ip = &s->es_int;
     RT_CK_DB_INTERNAL(ip);
@@ -1300,7 +1303,7 @@ rt_edit_revert(struct rt_edit *s)
     rt_edit_clear_input(s);
     s->acc_sc_sol = 1.0;
     if (!s->e_keyfixed) {
-	s->e_keytag = "";
+	s->e_keytag = NULL;
 	rt_get_solid_keypoint(s, &s->e_keypoint, &s->e_keytag, s->e_mat);
     }
 
