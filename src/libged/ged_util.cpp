@@ -1284,8 +1284,7 @@ editit_parse_editstring(char **editor, char **terminal, char **editor_opt, char 
      * using this approach.  For more robust handling use the struct ged
      * entries to assign this information before calling _ged_editit. */
     char **avtmp = (char **)NULL;
-    char *editstring_cpy = (char *)bu_calloc(2*strlen(editstring), sizeof(char), "editstring_cpy");
-    bu_str_escape(editstring, "\\", editstring_cpy, 2*strlen(editstring));
+    char *editstring_cpy = bu_str_escape(editstring, "\\", NULL, 0);
     avtmp = (char **)bu_calloc(5, sizeof(char *), "ged_editit: editstring args");
     bu_argv_from_string(avtmp, 4, editstring_cpy);
 
