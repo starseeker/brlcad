@@ -517,13 +517,15 @@ r937 uses a small TGC connector (s937) as the base, subtracted by a larger TGC t
 == EXAMPLES
 
 .Examine entire database for all defect categories (using lint_tests.g from BRL-CAD repository)
-[example]
 ====
-mged>**lint**
+[source,console]
+----
+mged> lint
+----
 
 
-....
-
+[source,text]
+----
 Checking for cyclic paths...
 Checking for references to non-extant objects...
 Checking for invalid objects...
@@ -537,39 +539,41 @@ Found references to missing objects or files:
 	missingentry.c/missing.s
 Found invalid objects:
 	nonsolid.bot [bot:not_solid]
-		
-....
+----
 
 
 
 ====
 
 .Check the validity of a single geometry object (using lint_tests.g from BRL-CAD repository)
-[example]
 ====
-mged>**lint -I nonsolid.bot**
+[source,console]
+----
+mged> lint -I nonsolid.bot
+----
 
 
-....
-
+[source,text]
+----
 Checking for invalid objects...
 Found invalid objects:
 	nonsolid.bot [bot:not_solid]
-		
-....
+----
 
 
 
 ====
 
 .Examine all non-BoT objects in the database matching the name pattern "*_1.*" for invalidity (using VIA OpenBook part d STEP conversion)
-[example]
 ====
-mged>**lint -F "! -type bot -name *_1.*"**
+[source,console]
+----
+mged> lint -F "! -type bot -name *_1.*"
+----
 
 
-....
-
+[source,text]
+----
 Checking for cyclic paths...
 Checking for references to non-extant objects...
 Checking for invalid objects...
@@ -581,21 +585,22 @@ brep.m_F[1180] face is not valid.
 ON_Brep.m_F[1180] is invalid.
 Found invalid objects:
 	D.s [brep:opennurbs_invalid]
-		
-....
+----
 
 
 
 ====
 
 .Test for empty bots (using havoc model facetized with -r option)
-[example]
 ====
-mged>**lint -I bot:empty havoc.bot**
+[source,console]
+----
+mged> lint -I bot:empty havoc.bot
+----
 
 
-....
-
+[source,text]
+----
 Checking for invalid objects...
 Found invalid objects:
 	r.rot137.bot [bot:empty]
@@ -603,51 +608,59 @@ Found invalid objects:
 	r.rot337.bot [bot:empty]
 	r.rot37.bot [bot:empty]
 	r.rot437.bot [bot:empty]
-		
-....
+----
 
 
 
 ====
 
 .Run raytrace validation on a specific assembly
-[example]
 ====
-mged>**lint --raytrace wing_assembly**
+[source,console]
+----
+mged> lint --raytrace wing_assembly
+----
 
 
-....
-
+[source,text]
+----
 Running raytrace validation checks...
 Raytrace validation: 12 passed, 1 failed, 3 skipped
 Raytrace mismatches (CSG raytracer disagrees with reference):
 	r.spar.c [comb]  SA_err=38.2%  VOL_err=0.4%  (CSG Crofton SA disagrees with BoT mesh; coplanar-face artifact possible - re-run with --perturb to distinguish artifact from modeling issue)
-....
+----
 
 ====
 
 .Triage a mismatch using --perturb to determine whether it is a facetize artifact or a modeling issue
-[example]
 ====
 First run without --perturb (default):
 
-mged>**lint --raytrace r.pocket.c**
+[source,console]
+----
+mged> lint --raytrace r.pocket.c
+----
 
-....
+[source,text]
+----
 Raytrace validation: 0 passed, 1 failed, 0 skipped
 Raytrace mismatches (CSG raytracer disagrees with reference):
 	r.pocket.c [comb]  SA_err=130.2%  VOL_err=0.3%  (CSG Crofton SA disagrees with BoT mesh; coplanar-face artifact possible - re-run with --perturb to distinguish artifact from modeling issue)
-....
+----
 
 Re-run with --perturb:
 
-mged>**lint --raytrace --perturb r.pocket.c**
+[source,console]
+----
+mged> lint --raytrace --perturb r.pocket.c
+----
 
-....
+[source,text]
+----
 Raytrace validation: 0 passed, 1 failed, 0 skipped
 Raytrace mismatches (CSG raytracer disagrees with reference):
 	r.pocket.c [comb]  SA_err=130.5%  VOL_err=0.3%  (persistent SA mismatch under perturbation; probable coplanar sub-sub or sub-base interface - geometry correction required (see lint man page))
-....
+----
 
 The mismatch persists under --perturb, indicating a coplanar sub-base interface
 (Pattern 2 above).  The remedy is to offset the flush faces of the subtractive
@@ -655,12 +668,14 @@ primitive inward by at least 0.001 mm.
 ====
 
 .Run raytrace validation with strict 5% tolerance and JSON output
-[example]
 ====
-mged>**lint --raytrace --raytrace-tol 0.05 -j results.json entire_model**
+[source,console]
+----
+mged> lint --raytrace --raytrace-tol 0.05 -j results.json entire_model
+----
 
-....
-
+[source,text]
+----
 Running raytrace validation checks...
 Raytrace validation: 47 passed, 3 failed, 8 skipped
 Raytrace mismatches (CSG raytracer disagrees with reference):
@@ -669,7 +684,7 @@ Raytrace mismatches (CSG raytracer disagrees with reference):
 	r.window.c [comb]  SA_err=5.5%  VOL_err=0.1%  (CSG Crofton SA disagrees with BoT mesh; coplanar-face artifact possible - re-run with --perturb to distinguish artifact from modeling issue)
 Raytrace checks skipped (facetize failed):
 	r.complex.c [comb]
-....
+----
 
 ====
 

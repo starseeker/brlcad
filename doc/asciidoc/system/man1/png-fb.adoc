@@ -99,10 +99,10 @@ lower left corner of the image.
 
 .Render a model and display the result
 ====
-[source,bash]
+[source,console]
 ----
-rt -o render.png -w 1024 -n 1024 havoc.g havoc
-png-fb -c render.png
+$ rt -o render.png -w 1024 -n 1024 havoc.g havoc
+$ png-fb -c render.png
 ----
 Ray-traces a geometry database to a 1024x1024 PNG file with *rt*(1), then
 clears the framebuffer and displays the rendered image.
@@ -110,10 +110,10 @@ clears the framebuffer and displays the rendered image.
 
 .Probe an image size from a script
 ====
-[source,bash]
+[source,console]
 ----
-eval $(png-fb -H earth.png)
-echo "image is ${WIDTH} by ${HEIGHT}"
+$ eval $(png-fb -H earth.png)
+$ echo "image is ${WIDTH} by ${HEIGHT}"
 ----
 Uses *-H* to read back the dimensions of a PNG without displaying it, capturing
 them as shell variables for further processing.

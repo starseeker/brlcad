@@ -26,9 +26,11 @@ The *pipe_delete_pnt* command is implemented in _src/libged/pipe/pipe.c_ and acc
 The example shows one way to invoke the *pipe_delete_pnt* command.
 
 .Invoke the *pipe_delete_pnt* command.
-[example]
 ====
-mged>**pipe_delete_pnt pipe seg i**
+[source,console]
+----
+mged> pipe_delete_pnt pipe seg i
+----
 
 Invokes *pipe_delete_pnt* using the syntax shown in the synopsis.
 

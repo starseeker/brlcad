@@ -25,9 +25,11 @@ NOTE: This command is not yet fully implemented. Invoking it returns a "Not yet 
 == EXAMPLES
 
 .Attempt to label an object (not yet implemented)
-[example]
 ====
-mged> **label hull.r**
+[source,console]
+----
+mged> label hull.r
+----
 
 Returns: `Not yet implemented!`
 ====

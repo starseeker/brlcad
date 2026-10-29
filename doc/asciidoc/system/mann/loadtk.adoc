@@ -26,10 +26,12 @@ Loads the initialization for the Tk window library. This is normally done automa
 The example shows the use of the *loadtk* command to load the initialization for the Tk window library.
 
 .Load the initialization of the Tk library.
-[example]
 ====
 
-mged> **loadtk**::
+[source,console]
+----
+mged> loadtk
+----
 Initializes the Tk window library.
 
 

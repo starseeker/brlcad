@@ -51,9 +51,9 @@ assumed to be 512x512 pixels.
 
 .Convert a non-square rendering to a rasterfile
 ====
-[source,bash]
+[source,console]
 ----
-pix-sun -w 1024 -n 768 < render.pix > render.ras
+$ pix-sun -w 1024 -n 768 < render.pix > render.ras
 ----
 Convert a 1024x768 PIX image produced by *rt*(1) into an 8 bit Sun
 rasterfile, preserving the image dimensions.
@@ -61,10 +61,10 @@ rasterfile, preserving the image dimensions.
 
 .Dither a high-color image to reduce banding
 ====
-[source,bash]
+[source,console]
 ----
-rt -o scene.pix -s 512 scene.g all.g
-pix-sun -d -s 512 < scene.pix > scene.ras
+$ rt -o scene.pix -s 512 scene.g all.g
+$ pix-sun -d -s 512 < scene.pix > scene.ras
 ----
 Render a 512x512 image with *rt*(1) and then convert it with dithering enabled,
 which softens the visible banding introduced by reducing 24 bit color to the

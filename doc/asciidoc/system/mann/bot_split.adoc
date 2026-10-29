@@ -37,9 +37,11 @@ the command completes.
 == EXAMPLES
 
 .Split one disjoint BoT into separate named pieces.
-[example]
 ====
-mged>**bot_split tires.bot**
+[source,console]
+----
+mged> bot_split tires.bot
+----
 
 Breaks _tires.bot_ into one BoT per disconnected facet island, which is useful when imported mesh data contains several logically separate parts in a single primitive.
 ====

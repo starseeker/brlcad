@@ -29,31 +29,36 @@ NMG solid named *s.nmg* inside a region named *r.nmg*.
 The ASCII input consists of whitespace-separated tokens of the following forms:
 
 To start a new outer (counter-clockwise) loop for a face:
-....
+[source,text]
+----
 l
-....
+----
 
 To start a new "hole" (inner) loop in the current face:
-....
+[source,text]
+----
 l hole
-....
+----
 
 To define a vertex and its coordinates in the current loop:
-....
+[source,text]
+----
 v# x y z
-....
+----
 where _#_ is an integer vertex number (e.g. *v0* or *v1*) and _x_, _y_, _z_
 are its coordinates.
 
 To reuse a previously defined vertex in the current loop, omit the coordinates:
-....
+[source,text]
+----
 v#
-....
+----
 
 To extrude the first face by a vector:
-....
+[source,text]
+----
 e x y z
-....
+----
 where _x_, _y_, _z_ form the extrusion vector.
 
 If an extrusion vector is supplied, the first described face is extruded to
@@ -76,7 +81,8 @@ closed shell. Each run of *asc-nmg* produces a single NMG object.
 ====
 With _filein.txt_ containing a single face plus an extrusion vector:
 
-....
+[source,text]
+----
 l
 	e	-1 0 0
 	v0	1 -1 -1
@@ -85,11 +91,11 @@ l
 	v3	1 0 0
 	v4	1 0 1
 	v5	1 -1 1
-....
+----
 
 the command:
 
-[source,bash]
+[source,console]
 ----
 $ asc-nmg filein.txt sample.g
 ----
@@ -104,7 +110,8 @@ object in _sample.g_, which can then be raytraced with *rt*(1) or viewed in
 A square outer loop with a square inner hole loop (inner loop wound opposite
 to the outer loop):
 
-....
+[source,text]
+----
 l
     v0 0 0 0
     v1 10 0 0
@@ -115,9 +122,9 @@ l hole
     v5 8 2 0
     v6 8 8 0
     v7 2 8 0
-....
+----
 
-[source,bash]
+[source,console]
 ----
 $ asc-nmg square_with_hole.txt square.g
 $ mged square.g facetize s.nmg bot.nmg

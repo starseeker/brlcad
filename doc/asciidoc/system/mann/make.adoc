@@ -59,10 +59,12 @@ building the primitive.
 The first example shows the use of the *make* command to create a sphere with a specified name. The second example shows the use of the *make* command with the _-t_ argument to generate a list of shape types handled by *make*.
 
 .Create a sphere having a specified name.
-[example]
 ====
 
-mged> **make shapea sph**::
+[source,console]
+----
+mged> make shapea sph
+----
 Creates a sphere named _shapea_.
 
 
@@ -70,9 +72,11 @@ Creates a sphere named _shapea_.
 ====
 
 .Generate a list of shape types handled by *make*.
-[example]
 ====
-mged>**make -t**
+[source,console]
+----
+mged> make -t
+----
 
 Lists the shape types handled by *make*.
 

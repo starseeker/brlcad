@@ -71,9 +71,9 @@ but is ignored; the transform length is fixed at 1024 samples, yielding
 
 .Plot a power spectrum
 ====
-[source,bash]
+[source,console]
 ----
-dfft -A -N < signal.doubles > spectrum.txt
+$ dfft -A -N < signal.doubles > spectrum.txt
 ----
 Computes the FFT of the samples in _signal.doubles_, normalizes the
 power spectral density to a 0 dB peak, and writes (frequency, magnitude)
@@ -82,9 +82,9 @@ pairs as ASCII text suitable for feeding to a plotting program.
 
 .Critical band magnitude on a log frequency scale
 ====
-[source,bash]
+[source,console]
 ----
-dmod -m 32768 < raw.doubles | dfft -c -l > bands.doubles
+$ dmod -m 32768 < raw.doubles | dfft -c -l > bands.doubles
 ----
 Scales the raw samples with *dmod*(1), then computes a third-octave
 critical-band-filtered spectrum interpolated onto a logarithmic

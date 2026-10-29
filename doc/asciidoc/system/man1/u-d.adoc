@@ -49,10 +49,10 @@ shorts is that of the host machine.
 
 .Normalize 16-bit samples for further processing
 ====
-[source,bash]
+[source,console]
 ----
-u-d -n < heightfield.shorts > heightfield.d
-dstats < heightfield.d
+$ u-d -n < heightfield.shorts > heightfield.d
+$ dstats < heightfield.d
 ----
 Convert a file of unsigned shorts (for example a 16-bit elevation grid)
 into normalized doubles in the range [0.0, 1.0), then report statistics
@@ -61,9 +61,9 @@ on the result with *dstats*(1).
 
 .Apply a custom scale factor
 ====
-[source,bash]
+[source,console]
 ----
-u-d 0.01 < sensor.shorts > sensor.d
+$ u-d 0.01 < sensor.shorts > sensor.d
 ----
 Multiply every input sample by 0.01 while converting to doubles, for
 example to rescale raw fixed-point readings into engineering units.

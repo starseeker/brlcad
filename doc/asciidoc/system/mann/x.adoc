@@ -51,25 +51,31 @@ If `level` is omitted, the default level `0` is used.
 == EXAMPLES
 
 .List currently drawn primitives with default detail
-[example]
 ====
-mged> **x**
+[source,console]
+----
+mged> x
+----
 
 Lists all currently drawn primitives with their full paths and illumination state (level 0).
 ====
 
 .List primitives with per-solid color and size information
-[example]
 ====
-mged> **x 1**
+[source,console]
+----
+mged> x 1
+----
 
 Lists all drawn primitives with center, size, region flag, and color information.
 ====
 
 .List primitive names only
-[example]
 ====
-mged> **x -2**
+[source,console]
+----
+mged> x -2
+----
 
 Lists just the names of currently drawn primitives, with no path or extra detail.
 ====

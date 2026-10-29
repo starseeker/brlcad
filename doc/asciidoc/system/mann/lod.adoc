@@ -39,10 +39,13 @@ When called with no arguments, *lod* prints the current LoD configuration, inclu
 == EXAMPLES
 
 .Query current LoD state
-[example]
 ====
-mged> **lod**
+[source,console]
+----
+mged> lod
+----
 
+[source,text]
 ----
 LoD drawing: enabled
 Point scale: 1.000000
@@ -54,18 +57,25 @@ Prints the current LoD configuration.
 ====
 
 .Enable LoD and reduce curve complexity
-[example]
 ====
-mged> **lod on**
-mged> **lod scale curves 0.5**
+[source,console]
+----
+mged> lod on
+----
+[source,console]
+----
+mged> lod scale curves 0.5
+----
 
 Enables LoD drawing and halves the curve complexity scale, reducing the number of line segments used to approximate curves.
 ====
 
 .Check LoD status for scripting
-[example]
 ====
-mged> **lod enabled**
+[source,console]
+----
+mged> lod enabled
+----
 
 Returns `1` if LoD is enabled, `0` if disabled. Useful in scripts or Tcl procedures.
 ====

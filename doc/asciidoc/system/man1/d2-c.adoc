@@ -42,9 +42,9 @@ developers if you depend on it.
 
 .Build a complex signal from separate real and imaginary files
 ====
-[source,bash]
+[source,console]
 ----
-d2-c real.d imag.d > signal.c
+$ d2-c real.d imag.d > signal.c
 ----
 Reads matching real and imaginary sample streams and writes the interleaved
 complex result to signal.c, ready for spectral analysis with *dfft*(1).
@@ -52,9 +52,9 @@ complex result to signal.c, ready for spectral analysis with *dfft*(1).
 
 .Promote a purely real signal to complex form
 ====
-[source,bash]
+[source,console]
 ----
-d2-c real.d . > signal.c
+$ d2-c real.d . > signal.c
 ----
 Pairs each real sample with a zero imaginary part by using the *.* null
 stream, producing a complex file with no imaginary component.

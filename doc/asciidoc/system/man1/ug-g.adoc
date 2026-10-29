@@ -26,10 +26,10 @@ Note that this converter requires the Unigraphics _ugopen_ module. This may be o
 == EXAMPLE
 
 
-....
-
+[source,console]
+----
 $ \fuug-g -o sample.g sample.prt
-....
+----
 
 
 [[author]]

@@ -42,10 +42,10 @@ The environment variable `FB_FILE` is used to select the display device (see *br
 
 .Inspect the color distribution of a rendered image
 ====
-[source,bash]
+[source,console]
 ----
-rt -o scene.pix -s 512 scene.g all.g
-pixhist3d scene.pix
+$ rt -o scene.pix -s 512 scene.g all.g
+$ pixhist3d scene.pix
 ----
 Render a scene with *rt*(1) to a *pix*(5) file, then display the three
 orthographic projections of its RGB color-space usage on the framebuffer.

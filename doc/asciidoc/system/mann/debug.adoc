@@ -44,13 +44,15 @@ Although it shouldn't normally be necessary, the *-V* option provides a way to r
 == EXAMPLES
 
 .Display help and available libraries
-[example]
 ====
-mged>**debug -h**
+[source,console]
+----
+mged> debug -h
+----
 
 
-....
-
+[source,text]
+----
 debug [-h] [-l [lib]] [-C [lib]] [-V [lib] [val]] [lib [flag]]
 
 Available libs:
@@ -58,21 +60,22 @@ Available libs:
         NMG
         OPTICAL
         RT
-    
-....
+----
 
 
 
 ====
 
 .List available flags for _LIBBU_
-[example]
 ====
-mged>**debug -l BU**
+[source,console]
+----
+mged> debug -l BU
+----
 
 
-....
-
+[source,text]
+----
 BU flags:
       COREDUMP (0x00000001): bu_bomb() should dump core on exit 
       PARALLEL (0x00000010): Parallel debug logging 
@@ -84,121 +87,131 @@ BU flags:
    MAPPED_FILE (0x00000800): bu_mapped_file logging 
          PATHS (0x00001000): File and path debug logging 
        TABDATA (0x00010000): LIBBN: tabdata 
-    
-....
+----
 
 
 
 ====
 
 .Set _LIBBU_ flags for bu_avs and path debugging
-[example]
 ====
-mged>**debug BU AVS**
+[source,console]
+----
+mged> debug BU AVS
+----
 
 
-....
-
+[source,text]
+----
            AVS (0x00000400): bu_avs_() loggin
-    
-....
+----
 
 
 
-mged>**debug BU PATHS**
+[source,console]
+----
+mged> debug BU PATHS
+----
 
 
-....
-
+[source,text]
+----
            AVS (0x00000400): bu_avs_() logging 
          PATHS (0x00001000): File and path debug logging 
-    
-....
+----
 
 
 
 ====
 
 .Set _LIBRT_ flag for rt_shootray processing
-[example]
 ====
-mged>**debug RT SHOOT**
+[source,console]
+----
+mged> debug RT SHOOT
+----
 
 
-....
-
+[source,text]
+----
          SHOOT (0x00000004): 3 Info about rt_shootray() processing
-    
-....
+----
 
 
 
 ====
 
 .List LIBBU's active debugging flags and all active debugging flags
-[example]
 ====
-mged>**debug BU**
+[source,console]
+----
+mged> debug BU
+----
 
 
-....
-
+[source,text]
+----
            AVS (0x00000400): bu_avs_() logging 
          PATHS (0x00001000): File and path debug logging
-    
-....
+----
 
 
 
-mged>**debug**
+[source,console]
+----
+mged> debug
+----
 
 
-....
-
+[source,text]
+----
 BU flags:
            AVS (0x00000400): bu_avs_() logging 
          PATHS (0x00001000): File and path debug logging 
 
 RT flags:
          SHOOT (0x00000004): 3 Info about rt_shootray() processing 
-    
-....
+----
 
 
 
 ====
 
 .Clear LIBRT debug flags
-[example]
 ====
-mged>**debug -C RT**
+[source,console]
+----
+mged> debug -C RT
+----
 
 
-....
+[source,text]
+----
+----
 
-    
-....
+[source,console]
+----
+mged> debug
+----
 
-mged>**debug**
 
-
-....
-
+[source,text]
+----
 BU flags:
            AVS (0x00000400): bu_avs_() logging 
          PATHS (0x00001000): File and path debug logging 
-
-    
-....
+----
 
 
 
 ====
 
 .Clear all active debug flags for all libraries
-[example]
 ====
-mged>**debug -C**
+[source,console]
+----
+mged> debug -C
+----
 
 ====
 

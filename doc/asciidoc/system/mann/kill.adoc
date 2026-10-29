@@ -28,10 +28,12 @@ The *-q* option may be added to suppress database object lookup messages reporti
 The example shows the use of the *kill* command to delete specified objects from the database.
 
 .Delete objects from the database.
-[example]
 ====
 
-mged> **kill group1 region2 shapeb**::
+[source,console]
+----
+mged> kill group1 region2 shapeb
+----
 Deletes _group1, region2_, and _shapeb_ from the database.
 
 

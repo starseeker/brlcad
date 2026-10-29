@@ -153,9 +153,9 @@ fields are retained as metadata for round-trip editing.
 
 .Creating a 185/65R15 tire with a highway tread
 ====
-[source,bash]
+[source,console]
 ----
-tire -d 185/65R15 -p highway-rib -n autowheel
+$ tire -d 185/65R15 -p highway-rib -n autowheel
 ----
 Generate a 185 mm wide, 65 aspect, 15 in rim tire named _autowheel_ in
 _tire.g_, using the built-in _highway-rib_ tread preset. Use *--list-tread-patterns*
@@ -164,9 +164,9 @@ to see the other presets such as _all-terrain_, _mud-terrain_, and _winter-siped
 
 .Overriding individual dimensions with fractional values
 ====
-[source,bash]
+[source,console]
 ----
-tire -W 225.5 -R 50 -D 18 -g 13 -c 24 -p mud-terrain -n offroad
+$ tire -W 225.5 -R 50 -D 18 -g 13 -c 24 -p mud-terrain -n offroad
 ----
 Build a precisely sized tire (225.5 mm wide, 50 aspect, 18 in rim) with a 13/32 in
 tread depth and 24 _mud-terrain_ pattern repeats (each preset has its own valid
@@ -176,10 +176,10 @@ accept fractional input and override any ISO size from *-d*.
 
 .Generating the built-in sampler for visual comparison
 ====
-[source,bash]
+[source,console]
 ----
-tire --demo-file tire_demo.g
-mged tire_demo.g
+$ tire --demo-file tire_demo.g
+$ mged tire_demo.g
 ----
 Write a database of varied example tires (one per vehicle class) into
 _tire_demo.g_, then open it in *mged*(1). Drawing the _all_ combination shows the

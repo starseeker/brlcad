@@ -34,9 +34,11 @@ NOTE: *E* is distinct from the lowercase *e* command (which erases objects from 
 == EXAMPLES
 
 .Display the evaluated result of a region tree.
-[example]
 ====
-mged> **E -s suspension.r**
+[source,console]
+----
+mged> E -s suspension.r
+----
 
 Evaluates the booleans in _suspension.r_ and displays a more accurate faceted
 approximation of the resulting volume.

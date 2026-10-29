@@ -26,9 +26,11 @@ Changes the name of __old_name__ to __new_name__. Note that this does not change
 The example shows the use of the *mv* command to change an object's __old_name__ to a __new_name__.
 
 .Change an object's name.
-[example]
 ====
-mged>**mv shapea shapeb**
+[source,console]
+----
+mged> mv shapea shapeb
+----
 
 Changes the name of _shapea_ to _shapeb_.
 

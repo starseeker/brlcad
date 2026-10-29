@@ -61,10 +61,10 @@ run; values outside that range are clamped.
 
 .Generate handles and raytrace them
 ====
-[source,bash]
+[source,console]
 ----
-handle -fhandle.g -n3 -l200 -H100 -r120 -r210
-rt -s 1024 -o handle.png handle.g hana
+$ handle -fhandle.g -n3 -l200 -H100 -r120 -r210
+$ rt -s 1024 -o handle.png handle.g hana
 ----
 Creates handle.g containing three handles, each 200 mm long and 100 mm tall,
 with a torus rounding radius of 20 mm and a cylinder radius of 10 mm. Note

@@ -23,9 +23,11 @@ Lists the entries in the ident-based color table. The ident number for a display
 == EXAMPLES
 
 .Review the current ident-based color ranges.
-[example]
 ====
-mged>**prcolor**
+[source,console]
+----
+mged> prcolor
+----
 
 Prints the current color table so you can verify which ident ranges are being colorized before editing them with *color* or *edcolor*.
 ====

@@ -51,41 +51,51 @@ Use the incoming database's unit settings instead of the current database's unit
 == EXAMPLES
 
 .Merge a database without renaming
-[example]
 ====
-mged> **concat other.g**
+[source,console]
+----
+mged> concat other.g
+----
 
 Merges all objects from `other.g` into the current database. Any name collisions are resolved by automatically incrementing names.
 ====
 
 .Merge with a prefix applied to all incoming names
-[example]
 ====
-mged> **concat -p other.g imported_**
+[source,console]
+----
+mged> concat -p other.g imported_
+----
 
 Merges all objects from `other.g`, prefixing every incoming name with `imported_`. For example, `hull.r` becomes `imported_hull.r`.
 ====
 
 .Merge with a suffix applied lazily on conflict only
-[example]
 ====
-mged> **concat -s -L other.g _v2**
+[source,console]
+----
+mged> concat -s -L other.g _v2
+----
 
 Merges objects from `other.g`, appending `_v2` only to names that collide with existing objects.
 ====
 
 .Overwrite on conflict
-[example]
 ====
-mged> **concat -O other.g**
+[source,console]
+----
+mged> concat -O other.g
+----
 
 Merges `other.g`, silently overwriting any existing objects with the same name.
 ====
 
 .Merge and use the incoming color table and units
-[example]
 ====
-mged> **concat -c -u other.g**
+[source,console]
+----
+mged> concat -c -u other.g
+----
 
 Merges `other.g` and adopts its color table and unit settings.
 ====

@@ -228,20 +228,18 @@ Command-line options that affect MGED variables (all the long options listed abo
 Often it is convenient to generate a series of _MGED_ commands outside _MGED_ and then submit the command list to _MGED_, which will react as if each command were being manually entered within it. Simply create a file (say, "cmds.txt") with each line being a desired command, and then have _MGED_ execute the list. At the normal shell prompt, execute
 
 
+[source,console]
 ----
-
 $ mged -c tgm.g < cmds.txt
-      
 ----
 
 Note that the procedure described above is very useful in rapid prototyping or automated TGM processing without resorting to low-level library programming in C or C++.
 
 For fully non-interactive scripted use, the *--no-rc* flag avoids loading any personal `.mgedrc` that could affect the session:
 
+[source,console]
 ----
-
 $ mged --no-rc -c --use-air --linewidth 2 model.g 'some_command arg'
-
 ----
 
 
@@ -261,13 +259,10 @@ SIGINT aborts the current command.
 The following are run from the operating system command prompt:
 
 .Running the _MGED_ *l* from the operating system command line.
-[example]
 ====
-user:~**mged /usr/brlcad/share/brlcad/7.12.2/db/m35.g l component**
-
-
-....
-
+[source,console]
+----
+$ mged /usr/brlcad/share/brlcad/7.12.2/db/m35.g l component
 Opened in READ ONLY mode
 component:  --
    u bed
@@ -276,42 +271,34 @@ component:  --
    u suspension
    u misc
    u power.train
-	
-....
+----
 
 
 
 ====
 
 .Running _MGED_ without a display manager.
-[example]
 ====
-user:~**mged -c**
-
-
-....
-
+[source,console]
+----
+$ mged -c
 BRL-CAD Release 7.13.0  Geometry Editor (MGED)
     Thu, 09 Oct 2008 22:31:41 -0400, Compilation 1
     user@localhost:/usr/brlcad/
 
 attach (nu|X|ogl)[nu]? nu
 mged>
-	
-....
+----
 
 
 
 ====
 
 .Running _MGED_ and bypassing the attach prompt by specifying the X11 display manager.
-[example]
 ====
-user:~**mged -a X -c**
-
-
-....
-
+[source,console]
+----
+$ mged -a X -c
 BRL-CAD Release 7.15.0  Geometry Editor (MGED)
     Tue, 22 Sep 2009 12:40:01 -0400, Compilation 1
     user@localhost:/usr/brlcad/
@@ -319,29 +306,34 @@ BRL-CAD Release 7.15.0  Geometry Editor (MGED)
 ATTACHING X (X Window System (X11))
 
 mged>
-	
-....
+----
 
 
 
 ====
 
 .Running _MGED_ with a custom background colour and no personal rc file (scripted use).
-[example]
 ====
-user:~**mged --no-rc --bg 0 0 64 --use-air -c model.g**
+[source,console]
+----
+$ mged --no-rc --bg 0 0 64 --use-air -c model.g
+----
 ====
 
 .Setting an MGED variable not exposed as a dedicated option.
-[example]
 ====
-user:~**mged --set eye_sep_dist=65 model.g**
+[source,console]
+----
+$ mged --set eye_sep_dist=65 model.g
+----
 ====
 
 .Setting a grid resource via the rset escape hatch.
-[example]
 ====
-user:~**mged --rset "g snap 1" --rset "g rh 10" model.g**
+[source,console]
+----
+$ mged --rset "g snap 1" --rset "g rh 10" model.g
+----
 ====
 
 

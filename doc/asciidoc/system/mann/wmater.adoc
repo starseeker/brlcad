@@ -26,9 +26,11 @@ Lists the shader name and parameters, RGB color, __RGB_valid__ flag, and the inh
 The example shows the use of the *wmater* command to list the shader parameters of two objects to a specified file.
 
 .List the shader parameters of two objects to a specified file.
-[example]
 ====
-mged>**wmater mater_file group1 regiona**
+[source,console]
+----
+mged> wmater mater_file group1 regiona
+----
 
 Lists the shader parameters of _group1_ and _regiona_ to __mater_file__.
 

@@ -29,17 +29,21 @@ NOTE: This command operates on the *framebuffer* layer — the raster image laye
 == EXAMPLES
 
 .Clear the framebuffer to black
-[example]
 ====
-mged> **fbclear**
+[source,console]
+----
+mged> fbclear
+----
 
 Clears the framebuffer to black (0, 0, 0).
 ====
 
 .Clear the framebuffer to a specific color
-[example]
 ====
-mged> **fbclear 128 128 128**
+[source,console]
+----
+mged> fbclear 128 128 128
+----
 
 Fills the framebuffer with a 50% gray background.
 ====

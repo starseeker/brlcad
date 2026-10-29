@@ -70,11 +70,11 @@ Use *fbpoint*(1) to interactively determine endpoint coordinates.
 
 .Draw crosshairs over an image on the framebuffer
 ====
-[source,bash]
+[source,console]
 ----
-pix-fb -s 512 image.pix
-fbline -r 255 -g 0 -b 0 256 0 256 511
-fbline -r 255 -g 0 -b 0 0 256 511 256
+$ pix-fb -s 512 image.pix
+$ fbline -r 255 -g 0 -b 0 256 0 256 511
+$ fbline -r 255 -g 0 -b 0 0 256 511 256
 ----
 Display a 512x512 image with *pix-fb*(1), then overlay a red vertical
 and a red horizontal line through the center to mark the image center.

@@ -32,9 +32,11 @@ The implementation supports the following options:
 The example shows one way to invoke *rselect* after a rectangle has been defined in the current view.
 
 .Select from the current rectangle.
-[example]
 ====
-mged>**rselect**
+[source,console]
+----
+mged> rselect
+----
 
 Returns the displayed items contained by the current selection rectangle.
 

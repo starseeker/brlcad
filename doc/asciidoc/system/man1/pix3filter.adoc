@@ -57,18 +57,18 @@ The output must be redirected; *pix3filter* refuses to write image data to a ter
 
 .Smooth the middle frame of an animation
 ====
-[source,bash]
+[source,console]
 ----
-pix3filter frame.pix.15 > smoothed.pix.15
+$ pix3filter frame.pix.15 > smoothed.pix.15
 ----
 Reads `frame.pix.14`, `frame.pix.15`, and `frame.pix.16` as 512x512 frames, applies the default low-pass kernel, and writes the temporally and spatially smoothed middle frame to `smoothed.pix.15`. Doing this for each frame in a render reduces aliasing flicker between frames.
 ====
 
 .Boxcar average of three explicit high-resolution frames
 ====
-[source,bash]
+[source,console]
 ----
-pix3filter -f b -s 1024 a.pix b.pix c.pix | pix-png -s 1024 > avg.png
+$ pix3filter -f b -s 1024 a.pix b.pix c.pix | pix-png -s 1024 > avg.png
 ----
 Reads three explicit 1024x1024 frames, applies the boxcar average kernel, and pipes the result through *pix-png*(1) to produce a viewable PNG of the averaged center frame.
 ====

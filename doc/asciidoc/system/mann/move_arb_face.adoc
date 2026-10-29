@@ -40,17 +40,21 @@ Face indices are 1-based and the valid range depends on the ARB type:
 == EXAMPLES
 
 .Move face 1 of an ARB8 to an absolute point
-[example]
 ====
-mged> **move_arb_face arb8.s 1 "0 0 50"**
+[source,console]
+----
+mged> move_arb_face arb8.s 1 "0 0 50"
+----
 
 Moves face 1 of `arb8.s` so that the plane of that face passes through model point (0, 0, 50) in local units. The face slides parallel to itself; the ARB vertices are updated accordingly.
 ====
 
 .Move a face by a relative offset
-[example]
 ====
-mged> **move_arb_face -r arb8.s 3 "5 0 0"**
+[source,console]
+----
+mged> move_arb_face -r arb8.s 3 "5 0 0"
+----
 
 Shifts face 3 of `arb8.s` by 5 local units along X relative to the face's current first-vertex position.
 ====

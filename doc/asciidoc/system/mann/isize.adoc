@@ -27,19 +27,29 @@ This value is primarily useful in scripts that compute view-space to model-space
 == EXAMPLES
 
 .Get the inverse view size
-[example]
 ====
-mged> **isize**
+[source,console]
+----
+mged> isize
+----
 
 Returns the reciprocal of the current view size in working units, for example: `0.001` when the view size is 1000 mm.
 ====
 
 .Use isize in a calculation
-[example]
 ====
-mged> **set inv [isize]**
-mged> **set sz [size]**
-mged> **expr {$inv * $sz}**
+[source,console]
+----
+mged> set inv [isize]
+----
+[source,console]
+----
+mged> set sz [size]
+----
+[source,console]
+----
+mged> expr {$inv * $sz}
+----
 
 Retrieves both `isize` and `size` and verifies their product equals 1.0.
 ====

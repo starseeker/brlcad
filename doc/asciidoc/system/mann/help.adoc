@@ -26,10 +26,12 @@ Returns a list of available MGED commands along with a one-line usage message fo
 The example shows the use of the *help* command to display a one-line usage message for a specific command.
 
 .Display a one-line usage message for a command.
-[example]
 ====
 
-mged> **help ae**::
+[source,console]
+----
+mged> help ae
+----
 Displays a one-line usage message for the *ae* command.
 
 

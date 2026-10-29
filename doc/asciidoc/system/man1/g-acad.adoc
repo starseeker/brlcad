@@ -77,9 +77,9 @@ standard output.
 
 .Convert a region to an ACAD facet file
 ====
-[source,bash]
+[source,console]
 ----
-g-acad -o hull.acad vehicle.g hull
+$ g-acad -o hull.acad vehicle.g hull
 ----
 Tessellates the _hull_ region from _vehicle.g_ and writes the result
 to _hull.acad_ in millimeters.
@@ -87,9 +87,9 @@ to _hull.acad_ in millimeters.
 
 .Convert with tighter tolerances and inch units
 ====
-[source,bash]
+[source,console]
 ----
-g-acad -i -a 0.5 -n 15 -e convert.log -o tank.acad tank.g turret hull tracks
+$ g-acad -i -a 0.5 -n 15 -e convert.log -o tank.acad tank.g turret hull tracks
 ----
 Converts three regions to a single ACAD facet file in inches, using a
 0.5 mm absolute tessellation tolerance and a 15-degree normal

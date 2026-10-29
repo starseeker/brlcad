@@ -26,10 +26,12 @@ Displays the full path of all combinations that have any of the _objects_ specif
 The example shows the use of the *dbfindtree* command to display the full path of all combinations that refer to the specified object.
 
 .Display the full path of all combinations that refer to a specified object.
-[example]
 ====
 
-mged> **dbfindtree shapea**::
+[source,console]
+----
+mged> dbfindtree shapea
+----
 Lists the full path of all combinations that refer to _shapea_.
 
 

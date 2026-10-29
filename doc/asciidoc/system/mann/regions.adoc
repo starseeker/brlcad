@@ -63,17 +63,21 @@ Each primitive in the Boolean formula is assigned a unique solid number in brack
 == EXAMPLES
 
 .Write a regions summary for two groups
-[example]
 ====
-mged> **regions regions_file group1 group2**
+[source,console]
+----
+mged> regions regions_file group1 group2
+----
 
 Writes a region and Boolean member summary for all regions reachable from `group1` and `group2` to `regions_file`. The result string reports how many primitives and regions were processed.
 ====
 
 .Write a summary for a specific top-level object
-[example]
 ====
-mged> **regions hull_report.txt vehicle.c**
+[source,console]
+----
+mged> regions hull_report.txt vehicle.c
+----
 
 Writes the regions table for all regions under `vehicle.c` to `hull_report.txt`.
 ====

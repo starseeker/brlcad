@@ -63,10 +63,10 @@ given, since those commands are ignored without it.
 
 .Flatten a 3D BRL-CAD plot for a classic plotter
 ====
-[source,bash]
+[source,console]
 ----
-rt -o model.pl -P1 model.g component.r
-plot3-plot3 -S < model.pl > model2d.plot
+$ rt -o model.pl -P1 model.g component.r
+$ plot3-plot3 -S < model.pl > model2d.plot
 ----
 Render a region to an extended BRL-CAD plot file with *rt*(1), then
 convert it to a classic 2D UnixPlot file, scaling the geometry to fill
@@ -75,10 +75,10 @@ the available integer plotting space so nothing is clipped.
 
 .Inspect commands while down-converting
 ====
-[source,bash]
+[source,console]
 ----
-plot3-asc < model.pl
-plot3-plot3 -v < model.pl > model2d.plot
+$ plot3-asc < model.pl
+$ plot3-plot3 -v < model.pl > model2d.plot
 ----
 Use *plot3-asc*(1) to dump the extended commands as ASCII, then run the
 conversion with *-v* to print each command name (on standard output,

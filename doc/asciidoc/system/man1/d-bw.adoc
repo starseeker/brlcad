@@ -59,9 +59,9 @@ deprecation warning on startup.
 
 .Convert a normalized double stream to a bw image
 ====
-[source,bash]
+[source,console]
 ----
-d-bw -n < ramp.d > ramp.bw
+$ d-bw -n < ramp.d > ramp.bw
 ----
 Reads doubles in the range 0.0 to 1.0 from ramp.d and writes a
 single-channel 8-bit *bw*(5) image, scaling each value across the full
@@ -70,9 +70,9 @@ single-channel 8-bit *bw*(5) image, scaling each value across the full
 
 .Apply a custom gain
 ====
-[source,bash]
+[source,console]
 ----
-dmod -m 100 < signal.d | d-bw 2.5 > signal.bw
+$ dmod -m 100 < signal.d | d-bw 2.5 > signal.bw
 ----
 Processes a double-precision signal with *dmod*(1), then scales each
 sample by 2.5 while converting to bytes, brightening the result and

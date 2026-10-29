@@ -59,10 +59,10 @@ environment variable is consulted (see *brlcad*(1)).
 
 .Frame a 1024x1024 region and verify it visually
 ====
-[source,bash]
+[source,console]
 ----
-fbframe -F /tmp/test.pix -s 1024
-fb-png -F /tmp/test.pix -s 1024 > frame.png
+$ fbframe -F /tmp/test.pix -s 1024
+$ fb-png -F /tmp/test.pix -s 1024 > frame.png
 ----
 Opens a 1024x1024 framebuffer (here a memory-mapped *pix*(5) file),
 draws the colored border, then captures the result to a PNG with

@@ -26,10 +26,12 @@ Change the directory to the given path. This can change to a given folder in the
 Change directory to the given folder located in the current directory.
 
 .Use *cd* to change the directory.
-[example]
 ====
 
-mged> **cd test_folder**::
+[source,console]
+----
+mged> cd test_folder
+----
 Changes the current directroy to a folder named test_folder that is located within the current directory.
 
 
@@ -39,10 +41,12 @@ Changes the current directroy to a folder named test_folder that is located with
 Change directory to the given folder using the full path.
 
 .Use *cd* to change the directory.
-[example]
 ====
 
-mged> **cd C:/geometry/test_folder**::
+[source,console]
+----
+mged> cd C:/geometry/test_folder
+----
 Changes the current directroy to a folder named test_folder located at C:/geometry/test_folder.
 
 
@@ -52,10 +56,12 @@ Changes the current directroy to a folder named test_folder located at C:/geomet
 Change directory to the folder above the current folder.
 
 .Use *cd* to change the directory.
-[example]
 ====
 
-mged> **cd ..**::
+[source,console]
+----
+mged> cd ..
+----
 Changes the current directroy to the folder above the current folder.
 
 

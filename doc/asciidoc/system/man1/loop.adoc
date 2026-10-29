@@ -52,18 +52,18 @@ example, `008` through `010`).
 
 .Count from 10 to 30 in steps of 5
 ====
-[source,bash]
+[source,console]
 ----
-loop 10 30 5
+$ loop 10 30 5
 ----
 Prints `10`, `15`, `20`, `25`, `30` on successive lines.
 ====
 
 .Drive a render loop over zero-padded frame numbers
 ====
-[source,bash]
+[source,console]
 ----
-for frame in $(loop 001 100) ; do
+$ for frame in $(loop 001 100) ; do
     rt -o frame${frame}.pix -F /dev/null model.g component
 done
 ----
@@ -75,9 +75,9 @@ correctly.
 
 .Generate a descending real-number ramp
 ====
-[source,bash]
+[source,console]
 ----
-loop 1.6 0.1 -0.5
+$ loop 1.6 0.1 -0.5
 ----
 Prints `1.6`, `1.1`, `0.6`, `0.1`; the decimal point selects
 floating-point mode and the negative _incr_ steps downward.
@@ -85,9 +85,9 @@ floating-point mode and the negative _incr_ steps downward.
 
 .Step through an alphabetical range
 ====
-[source,bash]
+[source,console]
 ----
-loop -c a e
+$ loop -c a e
 ----
 Prints the characters `a` through `e`, one per line.
 ====

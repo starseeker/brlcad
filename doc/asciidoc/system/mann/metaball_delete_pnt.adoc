@@ -26,9 +26,11 @@ The *metaball_delete_pnt* command is implemented in _src/libged/metaball/metabal
 The example shows one way to invoke the *metaball_delete_pnt* command.
 
 .Invoke the *metaball_delete_pnt* command.
-[example]
 ====
-mged>**metaball_delete_pnt metaball pt i**
+[source,console]
+----
+mged> metaball_delete_pnt metaball pt i
+----
 
 Invokes *metaball_delete_pnt* using the syntax shown in the synopsis.
 

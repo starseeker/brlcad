@@ -65,10 +65,10 @@ tools such as *mged*(1) and *rt*(1).
 
 .Generate a window frame and raytrace it
 ====
-[source,bash]
+[source,console]
 ----
-window_frame -fwin.g -n1 -H1618 -w1000 -d100 -r50 -i75
-rt -o win.png -s 1024 win.g wfra
+$ window_frame -fwin.g -n1 -H1618 -w1000 -d100 -r50 -i75
+$ rt -o win.png -s 1024 win.g wfra
 ----
 The first command writes *win.g* containing a single 1618 mm by 1000 mm frame,
 100 mm deep, with 50 mm rounded corners and 75 mm of frame material. The second

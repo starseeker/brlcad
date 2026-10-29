@@ -100,9 +100,9 @@ See *g-stl*(1) and *g-ply*(1) for related polygonal exporters.
 
 .Export a region to OBJ with materials
 ====
-[source,bash]
+[source,console]
 ----
-g-obj -o havoc.obj havoc.g havoc
+$ g-obj -o havoc.obj havoc.g havoc
 ----
 Tessellate the _havoc_ region from _havoc.g_ and write _havoc.obj_ along
 with a companion _havoc.mtl_ that captures the model's BRL-CAD colors.
@@ -110,9 +110,9 @@ with a companion _havoc.mtl_ that captures the model's BRL-CAD colors.
 
 .Export with vertex normals and material codes
 ====
-[source,bash]
+[source,console]
 ----
-g-obj -m -u -a 0.5 -o tank.obj tank.g turret hull
+$ g-obj -m -u -a 0.5 -o tank.obj tank.g turret hull
 ----
 Convert the _turret_ and _hull_ objects with a 0.5 mm absolute
 tessellation tolerance, emitting vertex normals and `usemtl` statements
@@ -121,9 +121,9 @@ whose names encode GIFT material, LOS, and aircode values.
 
 .Pipe OBJ output in inches to standard output
 ====
-[source,bash]
+[source,console]
 ----
-g-obj -i sample.g sample_object > sample.obj
+$ g-obj -i sample.g sample_object > sample.obj
 ----
 Write the geometry in inches to standard output, redirected into
 _sample.obj_. Because no named OBJ file is opened, no companion _.mtl_

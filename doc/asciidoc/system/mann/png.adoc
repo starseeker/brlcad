@@ -33,18 +33,22 @@ Without options, the command writes a 512x512 PNG image with a white background.
 The examples show common uses of *png*.
 
 .Write the current display to a PNG file.
-[example]
 ====
-mged>**png view.png**
+[source,console]
+----
+mged> png view.png
+----
 
 Writes the current display to _view.png_.
 
 ====
 
 .Write a larger PNG with a black background.
-[example]
 ====
-mged>**png -c 0/0/0 -s 1024 view.png**
+[source,console]
+----
+mged> png -c 0/0/0 -s 1024 view.png
+----
 
 Writes a 1024x1024 PNG image using a black background.
 

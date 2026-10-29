@@ -88,7 +88,7 @@ output; use *-o* in that case.
 
 .Rotate an image 90 degrees clockwise
 ====
-[source,bash]
+[source,console]
 ----
 $ bwrot -f -w 1024 -n 768 image.bw > rotated.bw
 ----
@@ -98,7 +98,7 @@ Rotates the 1024x768 image `image.bw` 90 degrees forward (clockwise) into
 
 .Flip an image upside down before display
 ====
-[source,bash]
+[source,console]
 ----
 $ bwrot -i -s 256 image.bw | bw-pix | pix-fb
 ----
@@ -109,7 +109,7 @@ correcting top-down versus bottom-up scanline ordering.
 
 .Arbitrary angle rotation
 ====
-[source,bash]
+[source,console]
 ----
 $ bwrot -a 45.5 -s 1024 input.bw > rotated.bw
 ----

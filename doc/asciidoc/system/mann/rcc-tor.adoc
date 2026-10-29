@@ -26,9 +26,11 @@ Used to round the edges of the specified RCC by creating a torus based on the pa
 The example shows the use of the *rcc-tor* command to round the edges of an RCC by creating a torus shape based on the parameters of that RCC.
 
 .Round the edges of an RCC.
-[example]
 ====
-mged>**rcc-tor rcc.s tor.s**
+[source,console]
+----
+mged> rcc-tor rcc.s tor.s
+----
 
 Creates a TOR shape named _tor.s_ using the parameters of _rcc.s_ .
 

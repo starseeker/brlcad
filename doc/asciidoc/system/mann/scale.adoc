@@ -29,27 +29,39 @@ Only a single (uniform) scale factor is accepted. Providing three separate XYZ s
 == EXAMPLES
 
 .Zoom in by a factor of 2
-[example]
 ====
-mged> **scale 0.5**
+[source,console]
+----
+mged> scale 0.5
+----
 
 Halves the view scale, making objects appear twice as large (zooming in).
 ====
 
 .Zoom out by a factor of 4
-[example]
 ====
-mged> **sca 4**
+[source,console]
+----
+mged> sca 4
+----
 
 Multiplies the view scale by 4, making objects appear four times smaller (zooming out). Uses the short `sca` alias.
 ====
 
 .Restore a zoom after inspecting detail
-[example]
 ====
-mged> **set s [view size]**
-mged> **scale 0.1**
-mged> **view size $s**
+[source,console]
+----
+mged> set s [view size]
+----
+[source,console]
+----
+mged> scale 0.1
+----
+[source,console]
+----
+mged> view size $s
+----
 
 Saves the current view size, zooms in to 10% of original scale for detail inspection, then restores the original view size.
 ====

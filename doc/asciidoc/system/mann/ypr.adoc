@@ -38,27 +38,39 @@ This command is also accessible as a subcommand of *view_func*: `view_func ypr [
 == EXAMPLES
 
 .Get the current view orientation
-[example]
 ====
-mged> **ypr**
+[source,console]
+----
+mged> ypr
+----
 
 Returns the current view yaw, pitch, and roll in degrees, for example: `35.0 25.0 0.0`.
 ====
 
 .Set the view to a specific yaw/pitch/roll
-[example]
 ====
-mged> **ypr 45 30 0**
+[source,console]
+----
+mged> ypr 45 30 0
+----
 
 Sets the view to a yaw of 45°, pitch of 30°, and roll of 0°.
 ====
 
 .Save and restore view orientation
-[example]
 ====
-mged> **set orientation [ypr]**
-mged> **ypr 90 0 0**
-mged> **ypr {*}$orientation**
+[source,console]
+----
+mged> set orientation [ypr]
+----
+[source,console]
+----
+mged> ypr 90 0 0
+----
+[source,console]
+----
+mged> ypr {*}$orientation
+----
 
 Saves the current orientation, applies a temporary 90° yaw, then restores the original orientation.
 ====

@@ -73,9 +73,9 @@ the DXF is written to standard output.
 
 .Convert geometry to a DXF file
 ====
-[source,bash]
+[source,console]
 ----
-g-dxf -o hull.dxf ship.g hull
+$ g-dxf -o hull.dxf ship.g hull
 ----
 Tessellate the _hull_ region from _ship.g_ and write the resulting
 3DFACE entities to _hull.dxf_.
@@ -83,9 +83,9 @@ Tessellate the _hull_ region from _ship.g_ and write the resulting
 
 .Tighten tolerances and emit a polyface mesh in inches
 ====
-[source,bash]
+[source,console]
 ----
-g-dxf -p -i -a 0.1 -o turret.dxf ship.g turret
+$ g-dxf -p -i -a 0.1 -o turret.dxf ship.g turret
 ----
 Export the _turret_ region as POLYFACE MESH entities in inches, using a
 0.1 mm absolute tessellation tolerance for a finer mesh suitable for

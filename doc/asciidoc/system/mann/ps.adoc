@@ -27,9 +27,11 @@ See *postscript* for the detailed behavior and option meanings.
 == EXAMPLES
 
 .Write the current display to a PostScript file using the short command name.
-[example]
 ====
-mged> **ps -t "Wheel View" wheel.ps**
+[source,console]
+----
+mged> ps -t "Wheel View" wheel.ps
+----
 
 Performs the same operation as *postscript* and writes the current display to
 _wheel.ps_.

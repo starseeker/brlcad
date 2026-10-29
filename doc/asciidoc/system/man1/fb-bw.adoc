@@ -55,9 +55,9 @@ Print a help message and exit.
 
 .Grab the current framebuffer and threshold it into a silhouette
 ====
-[source,bash]
+[source,console]
 ----
-fb-bw -F /dev/X -s 1024 | bwmod -m 4 -c | bw-fb -s 1024
+$ fb-bw -F /dev/X -s 1024 | bwmod -m 4 -c | bw-fb -s 1024
 ----
 Reads the entire 1024x1024 framebuffer, converts it to a single grayscale
 channel, brightens and clamps it with *bwmod*(1) to produce a high-contrast
@@ -66,9 +66,9 @@ silhouette, and displays the result back on the framebuffer with *bw-fb*(1).
 
 .Save a specific region of the framebuffer to a file
 ====
-[source,bash]
+[source,console]
 ----
-fb-bw -X 256 -Y 256 -w 512 -n 512 region.bw
+$ fb-bw -X 256 -Y 256 -w 512 -n 512 region.bw
 ----
 Captures a 512x512 region starting at screen offset (256, 256) from the
 default framebuffer and writes the grayscale result to `region.bw`.

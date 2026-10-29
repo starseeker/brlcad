@@ -100,8 +100,8 @@ This is a name or description the material.
 An example file might look like the following:
 
 
-....
-
+[source,text]
+----
 #******************************************************************************
 #  sample .density file for check, gqa and rtweight
 #******************************************************************************
@@ -132,9 +132,7 @@ An example file might look like the following:
 10   7.84      Carbon Steel
 12   3.00      Gunner
 14   10.00     Fuel
-
-    
-....
+----
 
 The table is typically created in an external file using a text editor.
 
@@ -145,11 +143,10 @@ The user will typically want to run *gqa* and verify the results using the *-f* 
 
 
 
-....
-
+[source,console]
+----
 mged> bo -i u c _DENSITIES filename
-      
-....
+----
 
 
 
@@ -272,45 +269,40 @@ Specifies a volumetric tolerance value that the three view computations must be 
 == EXAMPLES
 
 .Specifying Grid and Target Objects
-[example]
 ====
 The following will check objects hull, turret, and suspension for overlaps. The grid starts at 1 cm and is refined to 1 mm.
 
 
-....
-
+[source,console]
+----
 mged> check overlaps -g 1cm-1mm hull turret suspension
-	
-....
+----
 
 
 
 ====
 
 .Specifying Using Non-Default Units
-[example]
 ====
 The following computes volume of hull, turret, and suspension. Results are reported in cubic centimeters (cc). The grid spacing starts at 5 in. and will not be refined below 0.3 mm spacing.
 
 
-....
-
+[source,console]
+----
 mged> check volume -g5in-0.3mm -u ft,cc,oz hull turret suspension
-	
-....
+----
 
 
 
 ====
 
 .Different Analysis Types
-[example]
 ====
 For examples of some independent analysis types, consider the following:
 
 
-....
-
+[source,console]
+----
 mged> check overlaps -g50,50 -u m,m^3,kg overlaps
 Units:
 length: m volume: m^3 weight: kg
@@ -325,42 +317,39 @@ SUMMARY
 	1 unique overlapping pair (1 ordered pair)
 	Overlapping objects: /overlaps/overlap_obj.r /overlaps/closed_box.r
 	2 unique overlapping objects detected
-      
-....
+----
 
 
 
 
-....
-
+[source,console]
+----
 mged> check exp_air -u m,m^3,kg exposed_air.g
 Units:
 length: m volume: m^3 weight: kg
 grid spacing 50mm  199 x 199 x 199
 list Exposed Air:
 /exposed_air.g/exposed_air.r count:25921 dist:9m @ (10000 1000 1000)
-      
-....
+----
 
 
 
 
-....
-
+[source,console]
+----
 mged> check unconf_air -u m,m^3,kg unconf_air.g
 Units:
 length: m volume: m^3 weight: kg
 grid spacing 50mm  199 x 199 x 199
 list Unconfined Air:
 /unconf_air.g/air1.r /unconf_air.g/air2.r count:23921 dist:7m @ (10000 1000 1000)
-      
-....
+----
 
 
 
 
-....
-
+[source,console]
+----
 mged> check gap -u m,m^3,kg gap.g
 Units:
 length: m volume: m^3 weight: kg
@@ -368,14 +357,13 @@ grid spacing 50mm  199 x 199 x 199
 list Gaps:
 /gap.g/closed_box.r /gap.g/closed_box.r count:26082 dist:8m @ (9000 1000 1000)
 /gap.g/adj_air2.r /gap.g/closed_box.r count:25921 dist:4m @ (1000 5000 1000)
-      
-....
+----
 
 
 
 
-....
-
+[source,console]
+----
 mged> check volume -u m,m^3,kg closed_box.r
 Units:
 length: m volume: m^3 weight: kg
@@ -385,14 +373,13 @@ grid spacing 25mm  399 x 399 x 399
 grid spacing 12.5mm  799 x 799 x 799
     closed_box.r  484.195 m^3
     Average total volume: 488.327 m^3
-      
-....
+----
 
 
 
 
-....
-
+[source,console]
+----
 mged> check surf_area -u m,m^3,kg closed_box.r
 Units:  length: m volume: m^3 mass: kg
 Using estimated surface area tolerance 640000 mm^2
@@ -403,14 +390,13 @@ Surface Area:
 	closed_box.r 384.485 m^2
 
   Average total surface area: 384.485 m^2
-      
-....
+----
 
 
 
 
-....
-
+[source,console]
+----
 mged> check weight -u m,m^3,kg closed_box.r
 Units:
 length: m volume: m^3 weight: kg
@@ -419,8 +405,7 @@ grid spacing 50mm  199 x 199 x 199
 Weight:
     closed_box.r  3.6375e+06 kg
     Average total weight: 3.67541e+06 kg
-      
-....
+----
 
 
 

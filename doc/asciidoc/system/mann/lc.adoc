@@ -61,9 +61,11 @@ Identifies output should be to a file and specifies the file name. If the path i
 == EXAMPLES
 
 .Find regions that share a region id but disagree on other code settings.
-[example]
 ====
-mged>**lc -m vehicle.c**
+[source,console]
+----
+mged> lc -m vehicle.c
+----
 
 Lists only the regions below _vehicle.c_ that share a region id while disagreeing on material, LOS, or aircode values, which is useful before normalizing region attributes with *edcodes*.
 ====

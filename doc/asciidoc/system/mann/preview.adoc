@@ -26,9 +26,11 @@ Allows the user to _preview_ animation scripts in MGED. The _-d_ option provides
 The example shows the use of the *preview* command to preview specified frames of an animation script.
 
 .Preview an animation script.
-[example]
 ====
-mged>**preview -D 101 -K 237 script.rt**
+[source,console]
+----
+mged> preview -D 101 -K 237 script.rt
+----
 
 Displays the animation script stored in the file named _script.rt_ from frame number 101 through frame number 237.
 

@@ -76,7 +76,8 @@ using a text editor or built within MGED using *mater -d set*.
 An example file might look like the following:
 
 
-....
+[source,text]
+----
 #******************************************************************************
 #  sample .density file for check, gqa and rtweight
 #******************************************************************************
@@ -107,16 +108,17 @@ An example file might look like the following:
 10   7.84      Carbon Steel
 12   3.00      Gunner
 14   10.00     Fuel
-....
+----
 
 To import an existing density file into the database, use the *mater -d import* command:
 
 
 
 
-....
+[source,console]
+----
 mged> mater -d import filename
-....
+----
 
 
 
@@ -346,86 +348,83 @@ The weight computation tolerance is probably more appropriate when doing whole-v
 == EXAMPLES
 
 .Default Behavior
-[example]
 ====
 The following command computes the weight of an object called _wheel.r_ from the geometry database _model.g_ and reports the weight and volume, and checks for overlaps.
 
 
-....
-gqa model.g wheel.r
-....
+[source,console]
+----
+$ gqa model.g wheel.r
+----
 
 
 
 ====
 
 .Specifying Grid and Target Objects
-[example]
 ====
 The following will check objects hull, turret, and suspension for overlaps and report exposed air. The grid starts at 1 cm and is refined to 1 mm unless overlaps or exposed air are detected before the grid is refined to 1 mm.
 
 
-....
-gqa -g 1cm-1mm -Aoe model.g hull turret suspension
-....
+[source,console]
+----
+$ gqa -g 1cm-1mm -Aoe model.g hull turret suspension
+----
 
 
 
 ====
 
 .Specifying Using Non-Default Units
-[example]
 ====
 The following computes volume and weight of hull, turret, and suspension. Results are reported in cubic centimeters (cc) and ounces (oz). The grid spacing starts at 5 in. and will not be refined below 0.3 mm spacing.
 
 
-....
-gqa -g5in-0.3mm -Avw -u ft,cc,oz test.g hull turret suspension
-....
+[source,console]
+----
+$ gqa -g5in-0.3mm -Avw -u ft,cc,oz test.g hull turret suspension
+----
 
 
 
 ====
 
 .Different Analysis Types
-[example]
 ====
 For an example of each independent analysis type, consider the following:
 
 
-....
-
-gqa -u m,m^3,kg -Ao geometry.g overlaps
+[source,console]
+----
+$ gqa -u m,m^3,kg -Ao geometry.g overlaps
 Units:
 length: m volume: m^3 weight: kg
 grid spacing 50mm  199 x 199 x 199
 Summary:
 list Overlaps:
 /overlaps/overlap_obj.r /overlaps/closed_box.r count:32039 dist:8m @ (9050 1000 1000)
-    
-....
+----
 
 
 
 
-....
-
-gqa -u m,m^3,kg -Ae geometry.g exposed_air.g
+[source,console]
+----
+$ gqa -u m,m^3,kg -Ae geometry.g exposed_air.g
 Units:
 length: m volume: m^3 weight: kg
 grid spacing 50mm  199 x 199 x 199
 Summary:
 list Exposed Air:
 /exposed_air.g/exposed_air.r count:25921 dist:9m @ (10000 1000 1000)
-    
-....
+----
 
 
 
 
-....
-
-gqa -u m,m^3,kg -Ag geometry.g gap.g
+[source,console]
+----
+$ gqa -u m,m^3,kg -Ag geometry.g gap.g
 Units:
 length: m volume: m^3 weight: kg
 grid spacing 50mm  199 x 199 x 199
@@ -433,15 +432,14 @@ Summary:
 list Gaps:
 /gap.g/closed_box.r /gap.g/closed_box.r count:26082 dist:8m @ (9000 1000 1000)
 /gap.g/adj_air2.r /gap.g/closed_box.r count:25921 dist:4m @ (1000 5000 1000)
-    
-....
+----
 
 
 
 
-....
-
-gqa -u m,m^3,kg -Av geometry.g closed_box.r
+[source,console]
+----
+$ gqa -u m,m^3,kg -Av geometry.g closed_box.r
 Units:
 length: m volume: m^3 weight: kg
 setting volume tolerance to 1 m^3
@@ -451,15 +449,14 @@ grid spacing 12.5mm  799 x 799 x 799
 Summary:
 closed_box.r  484.195 m^3
 Average total volume: 488.327 m^3
-    
-....
+----
 
 
 
 
-....
-
-gqa -u m,m^3,kg -Aw geometry.g closed_box.r
+[source,console]
+----
+$ gqa -u m,m^3,kg -Aw geometry.g closed_box.r
 Units:
 length: m volume: m^3 weight: kg
 setting weight tolerance to 768000 kg
@@ -468,8 +465,7 @@ Summary:
 Weight:
 closed_box.r  3.6375e+06 kg
 Average total weight: 3.67541e+06 kg
-    
-....
+----
 
 
 

@@ -26,18 +26,19 @@ The *aproposdevel* command searches through the one-line usage messages for each
 The example demonstrates the use of the *aproposdevel* command to search for a particular _mged developer_ command in one-line usage messages.
 
 .Using aproposdevel to search for specified developer commands containing "region."
-[example]
 ====
-mged>**aproposdevel region**
+[source,console]
+----
+mged> aproposdevel region
+----
 
 
 
 
-....
-
+[source,text]
+----
 get_regions
-       
-....
+----
 
 
 

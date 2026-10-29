@@ -69,9 +69,9 @@ output so the result can be rendered directly.
 
 .Convert selected regions to a renderable NFF file
 ====
-[source,bash]
+[source,console]
 ----
-g-nff -a 0.5 -o engine.nff engine.g block piston
+$ g-nff -a 0.5 -o engine.nff engine.g block piston
 ----
 Tessellates the *block* and *piston* regions from *engine.g* using a 0.5 mm
 absolute tolerance and writes the triangulated geometry, together with a

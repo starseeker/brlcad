@@ -26,9 +26,11 @@ The *ted* command places the parameters of the currently edited primitive shape 
 The example shows the use of the *ted* command to place the parameters of a currently edited primitive shape into a file and start a text editor to modify the parameters.
 
 .Use a text editor to modify a currently edited shape.
-[example]
 ====
-mged>**ted**
+[source,console]
+----
+mged> ted
+----
 
 Starts a text editor to modify a currently edited shape.
 

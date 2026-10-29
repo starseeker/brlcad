@@ -43,17 +43,21 @@ where `az`, `el`, `tw` are azimuth, elevation, and twist in degrees; `x`, `y`, `
 == EXAMPLES
 
 .Read the transformation of combination members
-[example]
 ====
-mged> **combmem vehicle.c**
+[source,console]
+----
+mged> combmem vehicle.c
+----
 
 Returns the Boolean operator, name, and decomposed transformation (az/el/tw, x/y/z, sa/sx/sy/sz) for each member of `vehicle.c`.
 ====
 
 .Set member transformations
-[example]
 ====
-mged> **combmem vehicle.c u hull.r 0 0 0 100 0 0 1 1 1 1 u turret.r 45 0 0 100 0 200 1 1 1 1**
+[source,console]
+----
+mged> combmem vehicle.c u hull.r 0 0 0 100 0 0 1 1 1 1 u turret.r 45 0 0 100 0 200 1 1 1 1
+----
 
 Sets `hull.r` with no rotation and a translation of (100, 0, 0), and `turret.r` with 45° azimuth rotation, no elevation, and translation of (100, 0, 200).
 ====

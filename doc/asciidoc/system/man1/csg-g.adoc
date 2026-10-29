@@ -30,8 +30,8 @@ The *-d* option prints debugging information during conversion.
 == EXAMPLE
 
 
+[source,console]
 ----
-
 $ openscad -o model.csg model.scad
 $ csg-g model.csg model.g
 ----

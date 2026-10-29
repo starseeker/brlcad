@@ -50,18 +50,18 @@ prints a deprecation warning when run.
 
 .Convert command-line values to a binary double stream
 ====
-[source,bash]
+[source,console]
 ----
-a-d 1.0 2.5 -3.75 > values.d
+$ a-d 1.0 2.5 -3.75 > values.d
 ----
 Writes three 8-byte doubles (24 bytes total) to the file values.d.
 ====
 
 .Pipe ASCII data through to a binary consumer
 ====
-[source,bash]
+[source,console]
 ----
-echo "# sample data
+$ echo "# sample data
 1.0 2.0 3.0" | a-d | d-a
 ----
 Reads whitespace-separated numbers from standard input, skipping the

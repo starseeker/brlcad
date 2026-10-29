@@ -26,18 +26,22 @@ Allows the user to set or check the debug flags used by _librt_. With no argumen
 The first example shows the use of the *debuglib* command (without an argument) to list the available debug values for _librt_ and the current value. The second example shows the use of the *debuglib* command with a hex code, which sets the _librt_ debug flag to that value.
 
 .List available debug values for _librt_ and the current value.
-[example]
 ====
-mged>**debuglib**
+[source,console]
+----
+mged> debuglib
+----
 
 Lists available debug values for _librt_ and the current value.
 
 ====
 
 .Set the _librt_ debug flag to a specific value.
-[example]
 ====
-mged>**debuglib 1**
+[source,console]
+----
+mged> debuglib 1
+----
 
 Sets the _librt_ debug flag to <DEBUG_ALLRAYS> (prints info about rays).
 

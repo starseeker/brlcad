@@ -28,9 +28,11 @@ The arguments are:
 == EXAMPLES
 
 .Identify a BOT vertex near a view coordinate
-[example]
 ====
-mged> **find_bot_pnt bot.s "0 0 1"**
+[source,console]
+----
+mged> find_bot_pnt bot.s "0 0 1"
+----
 
 Searches `bot.s` for a vertex that is closest to the view coordinate `(0, 0, 1)` and returns the numeric ID of that vertex.
 ====

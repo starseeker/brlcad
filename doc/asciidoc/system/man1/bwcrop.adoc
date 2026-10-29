@@ -49,7 +49,7 @@ quadrilateral along that axis.
 
 .Cropping a tilted region from a 512x512 image into a 100x100 image
 ====
-[source,bash]
+[source,console]
 ----
 $ bwcrop input.bw output.bw 512 100 100 256 512 512 256 256 0 0 256
 ----

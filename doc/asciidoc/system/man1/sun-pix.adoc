@@ -56,9 +56,9 @@ To avoid corrupting a terminal, *sun-pix* refuses to write binary output to a tt
 
 .Display a screendump on a framebuffer
 ====
-[source,bash]
+[source,console]
 ----
-sun-pix screen.ras | pix-fb -w1152 -n900
+$ sun-pix screen.ras | pix-fb -w1152 -n900
 ----
 Convert a Sun rasterfile and pipe the resulting *pix*(5) stream straight onto a
 framebuffer with *pix-fb*(1).
@@ -66,10 +66,10 @@ framebuffer with *pix-fb*(1).
 
 .Auto-size the framebuffer from the header
 ====
-[source,bash]
+[source,console]
 ----
-sun-pix screen.ras > screen.pix
-pix-fb $(sun-pix -H screen.ras) screen.pix
+$ sun-pix screen.ras > screen.pix
+$ pix-fb $(sun-pix -H screen.ras) screen.pix
 ----
 The first command writes the converted image to a file; the second uses *-H* to
 read the image dimensions back out as *-w*/*-n* options so *pix-fb*(1) is sized
@@ -78,9 +78,9 @@ to match without hard-coding the resolution.
 
 .Make a white-on-black overlay
 ====
-[source,bash]
+[source,console]
 ----
-sun-pix -i -b logo.ras > logo.bw
+$ sun-pix -i -b logo.ras > logo.bw
 ----
 Invert a 1-bit logo and emit a *bw*(5) image, producing a white-on-black mask
 suitable for compositing over a color image with *pixmerge*(1).

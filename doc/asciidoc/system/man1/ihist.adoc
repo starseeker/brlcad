@@ -41,9 +41,9 @@ applies arithmetic operations to it.
 
 .Inspect the dynamic range of sampled audio
 ====
-[source,bash]
+[source,console]
 ----
-ihist < samples.shorts
+$ ihist < samples.shorts
 ----
 Reports the min/max range, the per-bit usage, and the percentage of the 65,536
 possible levels actually present in _samples.shorts_, which is a quick way to
@@ -53,9 +53,9 @@ narrow band of values.
 
 .Produce a full histogram for plotting
 ====
-[source,bash]
+[source,console]
 ----
-ihist -v < samples.shorts | tail -n +22 > histogram.dat
+$ ihist -v < samples.shorts | tail -n +22 > histogram.dat
 ----
 Generates a complete "value count" listing and skips the leading summary lines
 so that _histogram.dat_ contains only the per-value frequency pairs, ready to

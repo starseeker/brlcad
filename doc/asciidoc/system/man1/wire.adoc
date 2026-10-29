@@ -36,9 +36,9 @@ named *wires*.  All values are interpreted in millimeters.
 
 .Build a three-segment wire and raytrace it
 ====
-[source,bash]
+[source,console]
 ----
-wire <<EOF
+$ wire <<EOF
 hose.g
 3
 0 0 0
@@ -51,7 +51,7 @@ hose.g
 .25
 EOF
 
-rt -o hose.png hose.g wires
+$ rt -o hose.png hose.g wires
 ----
 Feeding the interactive prompts from a here-document creates
 *hose.g* containing a three-segment wire of constant 0.25 mm radius whose

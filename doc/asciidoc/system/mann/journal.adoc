@@ -26,10 +26,12 @@ Starts or stops the journaling of MGED commands to a file. If executed with no a
 The example shows the use of the *journal* command to start the journaling of a specified file.
 
 .Start the journaling of a specified file.
-[example]
 ====
 
-mged> **journal journal_file**::
+[source,console]
+----
+mged> journal journal_file
+----
 Starts journaling to __journal_file__.
 
 

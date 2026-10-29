@@ -66,9 +66,9 @@ binary formats require an output file or directory.
 
 .Export selected BoTs to a binary STL
 ====
-[source,bash]
+[source,console]
 ----
-bot_dump -b -t stl -o hull.stl ship.g hull_bot deck_bot
+$ bot_dump -b -t stl -o hull.stl ship.g hull_bot deck_bot
 ----
 Writes the *hull_bot* and *deck_bot* BoT primitives from ship.g into a single
 binary STL file suitable for slicing or 3D printing.
@@ -76,9 +76,9 @@ binary STL file suitable for slicing or 3D printing.
 
 .Export every BoT to per-object glTF files in millimeters-to-meters
 ====
-[source,bash]
+[source,console]
 ----
-bot_dump -u m -t glb -m gltf_out world.g
+$ bot_dump -u m -t glb -m gltf_out world.g
 ----
 Converts all BoT primitives in world.g, scaling coordinates from millimeters to
 meters, and writes one GLB file per object into the gltf_out directory.
@@ -86,9 +86,9 @@ meters, and writes one GLB file per object into the gltf_out directory.
 
 .Export an OBJ with normals and material colors
 ====
-[source,bash]
+[source,console]
 ----
-bot_dump -n -t obj -o part.obj assembly.g part_bot
+$ bot_dump -n -t obj -o part.obj assembly.g part_bot
 ----
 Produces an OBJ (plus companion MTL) containing surface normals and the
 resolved region/object color for *part_bot*, ready for import into a renderer.

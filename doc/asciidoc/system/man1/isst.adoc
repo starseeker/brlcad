@@ -45,9 +45,9 @@ geometry window.
 
 .View a single object directly
 ====
-[source,bash]
+[source,console]
 ----
-isst havoc.g havoc
+$ isst havoc.g havoc
 ----
 Opens _havoc.g_, loads the _havoc_ object, and begins ray tracing it in an
 interactive window where it can be walked through and rotated.
@@ -55,9 +55,9 @@ interactive window where it can be walked through and rotated.
 
 .Choose objects from a database
 ====
-[source,bash]
+[source,console]
 ----
-isst moss.g
+$ isst moss.g
 ----
 Opens _moss.g_ and presents a list of its objects; the selected objects are
 loaded together into the interactive viewer. This is convenient with the

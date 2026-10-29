@@ -34,9 +34,11 @@ provided that perspective is not currently being used. Any executable routine ma
 The example shows the use of the *rrt* command to execute the specified program and list the current database name and currently displayed objects.
 
 .Execute a specified program and list the current database name and currently displayed objects.
-[example]
 ====
-mged>**rrt echo**
+[source,console]
+----
+mged> rrt echo
+----
 
 Lists the current database name and currently displayed objects.
 

@@ -31,17 +31,21 @@ For point conversion *with local-unit scaling* applied (the more common case for
 == EXAMPLES
 
 .Retrieve the current model-to-view matrix
-[example]
 ====
-mged> **model2view**
+[source,console]
+----
+mged> model2view
+----
 
 Returns the 16-element `gv_model2view` matrix as a space-separated string reflecting the current view rotation and zoom.
 ====
 
 .Transform a model point to view space (in mm)
-[example]
 ====
-mged> **model2view 0 0 0**
+[source,console]
+----
+mged> model2view 0 0 0
+----
 
 `0 0 0`
 
@@ -49,10 +53,15 @@ Transforms the model origin (in mm) into normalized view space. Returns the view
 ====
 
 .Capture matrix for use with mat4x3pnt
-[example]
 ====
-mged> **set m2v [model2view]**
-mged> **mat4x3pnt $m2v "25.4 0 0"**
+[source,console]
+----
+mged> set m2v [model2view]
+----
+[source,console]
+----
+mged> mat4x3pnt $m2v "25.4 0 0"
+----
 
 Retrieves the model-to-view matrix and manually applies it to the model point (25.4 mm = 1 inch along X), yielding the normalized view-space position of that point.
 ====

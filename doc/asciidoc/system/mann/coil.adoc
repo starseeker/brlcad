@@ -59,25 +59,31 @@ Advanced: provide an explicit section data structure to override the automatic c
 == EXAMPLES
 
 .Create a default coil
-[example]
 ====
-mged> **coil**
+[source,console]
+----
+mged> coil
+----
 
 Creates a coil spring named `coil` using default dimensions.
 ====
 
 .Create a named coil with specific dimensions
-[example]
 ====
-mged> **coil -d 50 -w 5 -p 6 -n 10 spring1**
+[source,console]
+----
+mged> coil -d 50 -w 5 -p 6 -n 10 spring1
+----
 
 Creates a 10-turn coil spring named `spring1` with a mean outer diameter of 50 units, wire diameter of 5 units, and pitch of 6 units per turn.
 ====
 
 .Create a left-hand wound coil with caps
-[example]
 ====
-mged> **coil -d 100 -w 10 -n 8 -s 2 -e 2 -L lh_spring**
+[source,console]
+----
+mged> coil -d 100 -w 10 -n 8 -s 2 -e 2 -L lh_spring
+----
 
 Creates a left-hand wound coil with squared-and-ground end caps.
 ====

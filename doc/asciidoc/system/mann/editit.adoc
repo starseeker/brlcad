@@ -35,17 +35,21 @@ Specify an edit string to pass to the editor (deprecated; prefer specifying the 
 == EXAMPLES
 
 .Open a file in the editor
-[example]
 ====
-mged> **editit /tmp/myconfig.tcl**
+[source,console]
+----
+mged> editit /tmp/myconfig.tcl
+----
 
 Opens `/tmp/myconfig.tcl` in the system's default text editor.
 ====
 
 .Use the -f flag
-[example]
 ====
-mged> **editit -f /tmp/notes.txt**
+[source,console]
+----
+mged> editit -f /tmp/notes.txt
+----
 
 Opens `/tmp/notes.txt` using the `-f` flag form.
 ====

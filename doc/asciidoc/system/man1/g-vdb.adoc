@@ -49,10 +49,10 @@ command line.
 
 .Voxelize a component at fine resolution
 ====
-[source,bash]
+[source,console]
 ----
-g-vdb -s "0.5 0.5 0.5" -d 6 -t 0.4 havoc.g havoc
-mv file.vdb havoc.vdb
+$ g-vdb -s "0.5 0.5 0.5" -d 6 -t 0.4 havoc.g havoc
+$ mv file.vdb havoc.vdb
 ----
 Samples the *havoc* object from *havoc.g* using half-millimeter voxels at
 a higher level of detail, marking any voxel that is at least 40% filled.

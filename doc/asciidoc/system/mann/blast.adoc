@@ -33,25 +33,31 @@ Override the display color for all drawn objects using the specified RGB triple 
 == EXAMPLES
 
 .Clear display and draw a single object
-[example]
 ====
-mged> **blast hull.c**
+[source,console]
+----
+mged> blast hull.c
+----
 
 Erases everything currently shown and draws `hull.c`.
 ====
 
 .Clear and draw multiple objects
-[example]
 ====
-mged> **B engine.c wheels.c**
+[source,console]
+----
+mged> B engine.c wheels.c
+----
 
 Erases the current display and draws both `engine.c` and `wheels.c`. Uses the short `B` alias.
 ====
 
 .Clear and draw with color override
-[example]
 ====
-mged> **blast -C 255/0/0 target.c**
+[source,console]
+----
+mged> blast -C 255/0/0 target.c
+----
 
 Erases the display and draws `target.c` with an RGB override color of red (255,0,0), overriding all other color specifications.
 ====

@@ -51,9 +51,9 @@ such as *dmod*(1) and *dconv*(1).
 
 .Normalize full-scale short samples to unit-range doubles
 ====
-[source,bash]
+[source,console]
 ----
-i-d -n < signal.pcm > signal.d
+$ i-d -n < signal.pcm > signal.d
 ----
 Treats the values in `signal.pcm` as 16-bit signed samples and rescales
 them to the range -1.0 to +1.0, producing double-precision data in
@@ -62,9 +62,9 @@ them to the range -1.0 to +1.0, producing double-precision data in
 
 .Convert and filter in a processing pipeline
 ====
-[source,bash]
+[source,console]
 ----
-i-d -n < input.shorts | dmod -m 2.0 > louder.d
+$ i-d -n < input.shorts | dmod -m 2.0 > louder.d
 ----
 Converts the 16-bit short stream to normalized doubles, then doubles
 the amplitude with *dmod*(1), leaving the result as a double-precision

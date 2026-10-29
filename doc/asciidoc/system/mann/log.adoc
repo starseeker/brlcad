@@ -28,12 +28,23 @@ The three subcommands are:
 == EXAMPLES
 
 .Capture and retrieve log output
-[example]
 ====
-mged> **log start**
-mged> **draw some_object.r**
-mged> **log stop**
-mged> **log get**
+[source,console]
+----
+mged> log start
+----
+[source,console]
+----
+mged> draw some_object.r
+----
+[source,console]
+----
+mged> log stop
+----
+[source,console]
+----
+mged> log get
+----
 
 Starts capturing log output, draws an object (which may produce internal log messages), stops capturing, then retrieves and prints all log messages that were generated during the draw operation.
 ====

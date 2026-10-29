@@ -39,10 +39,10 @@ rejected. Input may not be read from a terminal.
 
 .Convert an Alias pix file and display the result
 ====
-[source,bash]
+[source,console]
 ----
-alias-pix < image.alias > image.pix
-pix-fb -w 1024 -n 1024 image.pix
+$ alias-pix < image.alias > image.pix
+$ pix-fb -w 1024 -n 1024 image.pix
 ----
 Converts the Alias image `image.alias` to a BRL-CAD *pix*(5) file and then
 displays it on a framebuffer with *pix-fb*(1), giving a one-step preview of the
@@ -51,9 +51,9 @@ converted image.
 
 .Inspect the image dimensions during conversion
 ====
-[source,bash]
+[source,console]
 ----
-alias-pix -v < image.alias > image.pix
+$ alias-pix -v < image.alias > image.pix
 ----
 Converts the image while printing its width, height, and pixel offsets to
 standard error, which is useful for discovering the dimensions needed by later

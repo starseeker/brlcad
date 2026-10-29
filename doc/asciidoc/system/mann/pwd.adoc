@@ -26,10 +26,12 @@ Prints the current working directoy. See also the *cd* command.
 Print the current working directory.
 
 .Type *pwd* to display the current working directory.
-[example]
 ====
 
-mged> **pwd**::
+[source,console]
+----
+mged> pwd
+----
 Returns the current working directory.
 
 

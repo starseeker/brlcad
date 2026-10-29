@@ -26,10 +26,12 @@ Without any options, *keypoint* displays the current keypoint setting. If a poin
 The example shows the use of the *keypoint* command to set the keypoint in model units.
 
 .Set the keypoint.
-[example]
 ====
 
-mged> **keypoint 10 20 30**::
+[source,console]
+----
+mged> keypoint 10 20 30
+----
 Sets the _keypoint_ to the point (10 20 30) in model units.
 
 

@@ -90,9 +90,9 @@ pipe (and, for ground caps, subtracting the capping solids).
 
 .Create a named spring with specific dimensions
 ====
-[source,bash]
+[source,console]
 ----
-coil -d 20 -w 2 -p 5 -n 10 my_spring
+$ coil -d 20 -w 2 -p 5 -n 10 my_spring
 ----
 Writes _coil.g_ containing a 10-turn coil named _my_spring_ with a 20 mm mean
 outer diameter, 2 mm wire, and 5 mm pitch.
@@ -100,10 +100,10 @@ outer diameter, 2 mm wire, and 5 mm pitch.
 
 .Create a coil with ground ends and inspect its volume
 ====
-[source,bash]
+[source,console]
 ----
-coil -d 50 -w 5 -n 12 -s 3 -e 3 valve_spring
-mged -c coil.g 'analyze valve_spring'
+$ coil -d 50 -w 5 -n 12 -s 3 -e 3 valve_spring
+$ mged -c coil.g 'analyze valve_spring'
 ----
 Builds a compression-spring-style coil whose ends are squared off and ground
 flat, then opens the database in *mged*(1) to report the part's bounding box
@@ -112,9 +112,9 @@ and volume.
 
 .Build a two-section coil
 ====
-[source,bash]
+[source,console]
 ----
-coil -S 10,1000,50,60,800,1 -S 10,1000,50,0,100,1 stacked_coil
+$ coil -S 10,1000,50,60,800,1 -S 10,1000,50,0,100,1 stacked_coil
 ----
 Stacks a 10-turn section with a 60-degree helix angle and 800 mm pitch on top
 of a tighter 10-turn section, both right-handed, in a single _stacked_coil_

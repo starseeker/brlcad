@@ -69,7 +69,7 @@ parts.
 
 .Tracing the outline of a unit square
 ====
-[source,bash]
+[source,console]
 ----
 $ cat square.txt
 # bottom, right, top, and left edges

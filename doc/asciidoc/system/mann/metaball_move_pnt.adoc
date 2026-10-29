@@ -32,9 +32,11 @@ The alternate command name *mouse_move_metaball_pnt* is also available.
 == EXAMPLES
 
 .Move a metaball control point upward relative to its current position.
-[example]
 ====
-mged> **metaball_move_pnt -r blob.s 2 {0 0 5}**
+[source,console]
+----
+mged> metaball_move_pnt -r blob.s 2 {0 0 5}
+----
 
 Moves point index `2` of _blob.s_ five local units in the positive Z direction.
 

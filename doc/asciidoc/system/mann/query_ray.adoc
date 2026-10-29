@@ -26,9 +26,11 @@ Runs the NIRT program that is distributed with BRL-CAD to intersect a single ray
 The example shows the use of the *query_ray* command to fire a single ray through the center of the MGED display.
 
 .Fire a ray through the center of the MGED display.
-[example]
 ====
-mged>**query_ray**
+[source,console]
+----
+mged> query_ray
+----
 
 Fires a single ray through the center of the MGED display.
 

@@ -61,27 +61,27 @@ By default the output is a 6.75 inch square centered on an 8.5 x 11 inch page. T
 
 .Center a default image on a page
 ====
-[source,bash]
+[source,console]
 ----
-pix-ps image.pix > image.ps
+$ pix-ps image.pix > image.ps
 ----
 Produces a 6.75 inch PostScript image from a 512x512 input and centers it on an 8.5 x 11 inch page, ready to send to a PostScript printer.
 ====
 
 .Render a region of geometry directly to PostScript
 ====
-[source,bash]
+[source,console]
 ----
-rt -s 1024 -o /dev/stdout share/db/moss.g all.g | pix-ps -w 1024 -n 1024 -L -S 7 > moss.ps
+$ rt -s 1024 -o /dev/stdout share/db/moss.g all.g | pix-ps -w 1024 -n 1024 -L -S 7 > moss.ps
 ----
 Ray traces the *moss.g* model at 1024x1024, pipes the resulting *pix*(5) data into *pix-ps*, and writes a 7 inch square landscape PostScript image.
 ====
 
 .Generate an Encapsulated PostScript figure
 ====
-[source,bash]
+[source,console]
 ----
-pix-ps -e -w 800 -n 600 plot.pix > plot.eps
+$ pix-ps -e -w 800 -n 600 plot.pix > plot.eps
 ----
 Creates an Encapsulated PostScript version of an 800x600 image, suitable for inclusion as a figure in a larger document.
 ====

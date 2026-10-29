@@ -27,18 +27,25 @@ NOTE: *bot_merge* concatenates vertex lists without fusing shared vertices. If t
 == EXAMPLES
 
 .Merge two BOTs
-[example]
 ====
-mged> **bot_merge combined.bot left_half.bot right_half.bot**
+[source,console]
+----
+mged> bot_merge combined.bot left_half.bot right_half.bot
+----
 
 Creates `combined.bot` by merging the vertex and face lists from `left_half.bot` and `right_half.bot`.
 ====
 
 .Merge multiple BOTs and clean up
-[example]
 ====
-mged> **bot_merge raw_merged.bot part1.bot part2.bot part3.bot**
-mged> **bot_fuse fused_merged.bot raw_merged.bot**
+[source,console]
+----
+mged> bot_merge raw_merged.bot part1.bot part2.bot part3.bot
+----
+[source,console]
+----
+mged> bot_fuse fused_merged.bot raw_merged.bot
+----
 
 Merges three BOTs into one, then fuses duplicate vertices to produce a clean mesh.
 ====

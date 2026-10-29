@@ -47,9 +47,9 @@ or any other fixed-width pixel data.
 
 .Find the most common colors in a rendered image
 ====
-[source,bash]
+[source,console]
 ----
-pixcount moss.pix | sort -k4 -n -r | head
+$ pixcount moss.pix | sort -k4 -n -r | head
 ----
 Tallies every unique RGB color in _moss.pix_, then pipes the result through
 *sort*(1) to list the ten most frequently occurring colors first. This is a
@@ -58,9 +58,9 @@ quick way to inspect an image's palette or spot a dominant background color.
 
 .Count grayscale levels in a BW image
 ====
-[source,bash]
+[source,console]
 ----
-pixcount -#1 image.bw levels.txt
+$ pixcount -#1 image.bw levels.txt
 ----
 Treats the input as 1-byte-per-pixel *bw*(5) data and writes the count of each
 grayscale value to _levels.txt_, revealing the image's tonal distribution.

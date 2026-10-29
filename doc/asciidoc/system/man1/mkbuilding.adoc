@@ -135,26 +135,26 @@ not copied verbatim.
 
 .Generate a three-storey framed house
 ====
-[source,bash]
+[source,console]
 ----
-mkbuilding --preset house --levels 3 --structure wood_frame -o house.g
+$ mkbuilding --preset house --levels 3 --structure wood_frame -o house.g
 ----
 ====
 
 .Validate and generate an OSM GeoJSON building
 ====
-[source,bash]
+[source,console]
 ----
-mkbuilding --validate-only --spec building.geojson
-mkbuilding --spec building.geojson -o building.g
+$ mkbuilding --validate-only --spec building.geojson
+$ mkbuilding --spec building.geojson -o building.g
 ----
 ====
 
 .Generate a broad taxonomy catalog
 ====
-[source,bash]
+[source,console]
 ----
-mkbuilding --demo-file buildings.g
+$ mkbuilding --demo-file buildings.g
 ----
 ====
 

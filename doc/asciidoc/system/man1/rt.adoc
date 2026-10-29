@@ -296,49 +296,49 @@ When using *rt* to create an animation sequence destined for NTSC video, it is u
 
 .Render a quick 256x256 preview to a PNG file
 ====
-[source,bash]
+[source,console]
 ----
-rt -A0.9 -c "set ambSamples=4" -s256 -o preview.png model.g object
+$ rt -A0.9 -c "set ambSamples=4" -s256 -o preview.png model.g object
 ----
 Renders to a PNG image with minimal ambient occlusion (4 samples per ray) using the lighting-model default. The *-A* ambient-light value is raised to compensate for the darkening caused by the occlusion samples. View *preview.png* with *png-fb*(1) or any image viewer.
 ====
 
 .Render a saved MGED view to a pix file
 ====
-[source,bash]
+[source,console]
 ----
-rt -M -o view.pix model.g component < saveview.rt
+$ rt -M -o view.pix model.g component < saveview.rt
 ----
 Feeds an animation/view script (such as one produced by the MGED *saveview* command) into *rt* on standard input via *-M*, which supplies the model-to-view matrix and camera settings. The resulting image is written in *pix*(5) format and can be displayed with *pix-fb*(1).
 ====
 
 .Render directly to a framebuffer server
 ====
-[source,bash]
+[source,console]
 ----
-fbserv -S 512 0 /dev/mem &
-rt -F 0 -s512 model.g object
+$ fbserv -S 512 0 /dev/mem &
+$ rt -F 0 -s512 model.g object
 ----
 The first command starts an *fbserv*(1) framebuffer server on port 0. The second command renders straight into that framebuffer via *-F*, displaying pixels as they are computed instead of writing a file.
 ====
 
 .Render to a framebuffer server authenticated and secure
 ====
-[source,bash]
+[source,console]
 ----
-set FBSERV_TOKEN=0123456789abcdef
-set FBSERV_TLS=1
-fbserv -T -A -p 0 -F /dev/wgl &
-rt -F 0 model.g object
+$ set FBSERV_TOKEN=0123456789abcdef
+$ set FBSERV_TLS=1
+$ fbserv -T -A -p 0 -F /dev/wgl &
+$ rt -F 0 model.g object
 ----
 With *FBSERV_TOKEN* in both the *fbserv* and *rt* environments, *fbserv* will require authentication from connecting *rt* processes.  If BRL-CAD was compiled with OpenSSL support, the connection attempts TLS.
 ====
 
 .Render a high-quality, high-resolution image
 ====
-[source,bash]
+[source,console]
 ----
-rt -H8 -R -A1.3 -c "set ambSamples=512 gamma=2.2" \
+$ rt -H8 -R -A1.3 -c "set ambSamples=512 gamma=2.2" \
    -C234/245/255 -s4096 -o render_4k.png model.g object
 ----
 Renders with 8 hypersamples each averaging 512 ambient-occlusion samples (a brute-force global-illumination approximation) to smooth edges and soften shadows, with overlap reporting suppressed (*-R*) and a near-white background (*-C*). Rendering at 2x the desired resolution (here 4096 for a 2048-pixel result) and decimating in post-processing with *pixhalve*(1) yields the cleanest output; the *-A* and *gamma* values can be tuned for overall brightness.

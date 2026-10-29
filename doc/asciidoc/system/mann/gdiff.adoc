@@ -64,9 +64,11 @@ names. This mode does not currently produce visual output.
 == EXAMPLES
 
 .Compare two region trees and visualize only their differing volume.
-[example]
 ====
-mged> **gdiff --grid-spacing 1.0 left.r right.r**
+[source,console]
+----
+mged> gdiff --grid-spacing 1.0 left.r right.r
+----
 
 Shoots a comparison grid across _left.r_ and _right.r_ and displays segments
 that appear only in one object or the other.
@@ -74,9 +76,11 @@ that appear only in one object or the other.
 ====
 
 .Compare tree structure without raytracing.
-[example]
 ====
-mged> **gdiff --structure left.r right.r**
+[source,console]
+----
+mged> gdiff --structure left.r right.r
+----
 
 Checks whether the two trees differ in matrices, booleans, or leaf geometry
 without generating view output.

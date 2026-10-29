@@ -61,7 +61,7 @@ X bitmap.
 
 .Convert a halftoned image into an X11 bitmap
 ====
-[source,bash]
+[source,console]
 ----
 $ pix-fb -w1280 -n960 -i -Fimage.pixi image.pix
 $ pix-bw image.pixi | halftone -R -S -w1280 -n960 | \

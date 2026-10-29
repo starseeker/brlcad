@@ -26,10 +26,12 @@ Performs the function of selecting an object after entering _solid_ (i.e., primi
 The example shows the use of the *ill* command to select a specified object for editing.
 
 .Select an object for editing.
-[example]
 ====
 
-mged> **ill shapea**::
+[source,console]
+----
+mged> ill shapea
+----
 _Shapea_ is selected for editing.
 
 

@@ -54,10 +54,10 @@ the left, middle, and right drag modes rotate, translate, and zoom the scene.
 
 .View a plot generated from a BRL-CAD geometry database
 ====
-[source,bash]
+[source,console]
 ----
-rt -o model.plot3 model.g component
-plot3-dm model.plot3
+$ rt -o model.plot3 model.g component
+$ plot3-dm model.plot3
 ----
 Render a region of the geometry in _model.g_ to a 3-D UNIX plot file with
 *rt*(1), then open it in an interactive window where it can be rotated and
@@ -66,9 +66,9 @@ zoomed to inspect the wireframe.
 
 .Load several plots at once using the OpenGL backend
 ====
-[source,bash]
+[source,console]
 ----
-plot3-dm -t o first.plot3 second.plot3
+$ plot3-dm -t o first.plot3 second.plot3
 ----
 Open both plot files together in the OpenGL display manager; each file becomes
 a separately named, individually drawable object that can be toggled with the

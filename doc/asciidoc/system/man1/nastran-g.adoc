@@ -70,10 +70,10 @@ model is assumed to be in inches.
 
 .Convert a metric model and inspect the result
 ====
-[source,bash]
+[source,console]
 ----
-nastran-g -m -i wing.nas -o wing.g
-mged wing.g 'tops'
+$ nastran-g -m -i wing.nas -o wing.g
+$ mged wing.g 'tops'
 ----
 Converts the millimeter NASTRAN deck _wing.nas_ to _wing.g_, then lists
 the top-level objects with *mged*(1) so the _all_ combination can be
@@ -82,9 +82,9 @@ drawn and examined.
 
 .Convert from a pipeline using NMG shells and a tightened tolerance
 ====
-[source,bash]
+[source,console]
 ----
-cat model.bdf | nastran-g -n -t 0.005 -o model.g
+$ cat model.bdf | nastran-g -n -t 0.005 -o model.g
 ----
 Reads the bulk data deck from standard input, writes shell elements as
 NMG solids, and treats vertices within 0.005 mm of each other as

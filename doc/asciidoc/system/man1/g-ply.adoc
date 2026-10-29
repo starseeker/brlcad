@@ -76,9 +76,9 @@ default all requested objects are merged into a single file.
 
 .Export a single ASCII PLY for downstream tools
 ====
-[source,bash]
+[source,console]
 ----
-g-ply -t asc -a 0.5 -o widget.ply widget.g body bracket
+$ g-ply -t asc -a 0.5 -o widget.ply widget.g body bracket
 ----
 Tessellates the *body* and *bracket* objects from *widget.g* with a 0.5 mm
 absolute tolerance, merging them into one human-readable ASCII PLY file that
@@ -87,9 +87,9 @@ can be inspected or imported into mesh editors and 3D printing slicers.
 
 .Write one binary mesh per object
 ====
-[source,bash]
+[source,console]
 ----
-g-ply -s -t le -r 0.005 -o parts.ply assembly.g part1 part2 part3
+$ g-ply -s -t le -r 0.005 -o parts.ply assembly.g part1 part2 part3
 ----
 Produces a compact little-endian binary PLY for each of *part1*, *part2*, and
 *part3* using a tighter relative tolerance, keeping the individual components

@@ -37,9 +37,9 @@ deprecation warning on startup.
 
 .Inspect raw 16-bit sample data as text
 ====
-[source,bash]
+[source,console]
 ----
-u-a < samples.u | head
+$ u-a < samples.u | head
 ----
 Decodes the binary unsigned-short stream in samples.u and shows the
 first ten decimal sample values, a quick way to sanity-check captured
@@ -48,9 +48,9 @@ first ten decimal sample values, a quick way to sanity-check captured
 
 .Compute statistics on a binary short stream
 ====
-[source,bash]
+[source,console]
 ----
-u-a < signal.u | dstats
+$ u-a < signal.u | dstats
 ----
 Converts the binary shorts to ASCII and pipes them to *dstats*(1) to
 report the minimum, maximum, mean, and other descriptive statistics of

@@ -125,9 +125,11 @@ remaining face are removed.  The result is a BoT containing only exterior faces.
 == EXAMPLES
 
 .Basic exterior extraction
-[example]
 ====
-mged> **bot exterior havoc.bot**
+[source,console]
+----
+mged> bot exterior havoc.bot
+----
 
 Extracts the exterior shell of _havoc.bot_ and writes the result to
 _havoc.bot_exterior_.
@@ -135,27 +137,33 @@ _havoc.bot_exterior_.
 ====
 
 .In-place extraction
-[example]
 ====
-mged> **bot exterior -i havoc.bot**
+[source,console]
+----
+mged> bot exterior -i havoc.bot
+----
 
 Replaces _havoc.bot_ with its exterior shell.  The original full mesh is lost.
 
 ====
 
 .Specify output name
-[example]
 ====
-mged> **bot exterior havoc.bot havoc_shell**
+[source,console]
+----
+mged> bot exterior havoc.bot havoc_shell
+----
 
 Writes the exterior shell to the new object _havoc_shell_.
 
 ====
 
 .Visibility threshold (conservative exterior)
-[example]
 ====
-mged> **bot exterior --visibility-threshold=0.1 --per-face-budget=0.5 havoc.bot havoc_vis**
+[source,console]
+----
+mged> bot exterior --visibility-threshold=0.1 --per-face-budget=0.5 havoc.bot havoc_vis
+----
 
 Samples each face for up to half a second and retains it only if at least
 10 % of fired rays see it as an exterior surface.  Lightly visible faces
@@ -164,9 +172,11 @@ Samples each face for up to half a second and retains it only if at least
 ====
 
 .Custom convergence threshold
-[example]
 ====
-mged> **bot exterior -c 0.25 havoc.bot havoc_precise**
+[source,console]
+----
+mged> bot exterior -c 0.25 havoc.bot havoc_precise
+----
 
 Requires the surface-area estimate to stabilize within 0.25 % before a face is
 declared interior, which generally increases sampling work relative to the
@@ -175,9 +185,11 @@ default 1 % threshold.
 ====
 
 .Flood-fill method
-[example]
 ====
-mged> **bot exterior --flood-fill havoc.bot havoc_flood**
+[source,console]
+----
+mged> bot exterior --flood-fill havoc.bot havoc_flood
+----
 
 Uses the voxel water-filling method (requires OpenVDB).  Falls back to
 Cauchy-Crofton ray sampling if OpenVDB is unavailable.

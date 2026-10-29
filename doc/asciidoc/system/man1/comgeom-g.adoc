@@ -19,7 +19,7 @@ comgeom-g [-h] [-?] [-d debug_lvl] [-v version_num] [-s name_suffix] input_file 
 
 *comgeom-g* reads a COMGEOM format model from a GIFT-style input file, converts the geometry into the internal form used by the BRL-CAD package, and writes an MGED-style binary database.
 
-Each solid is given the name s###, retaining the COMGEOM solid number. Each region is given the name r###, retaining the COMGEOM region number. Regions are grouped together into various groups g### based on their region-id numbers. Group g00 gets all regions with a region-id of zero, g0 gets ids 1 through 99, g1 gets ids 100 through 199, etc.
+Each solid is given a name of the form `s###`, retaining the COMGEOM solid number. Each region is given a name of the form `r###`, retaining the COMGEOM region number. Regions are grouped together into various groups named `g###` based on their region-id numbers. Group `g00` gets all regions with a region-id of zero, `g0` gets ids 1 through 99, `g1` gets ids 100 through 199, etc.
 
 In the resulting database, a high-level group all.g is created. The units used in a COMGEOM file are specified on a header record, while the units of an MGED database are always millimeters. *comgeom-g* performs automatic units conversion using the built-in units conversion feature of *libwdb*(3).
 
@@ -45,21 +45,21 @@ In the resulting database, a high-level group all.g is created. The units used i
 
 .Convert a version 4 COMGEOM file with verbose output
 ====
-[source,bash]
+[source,console]
 ----
-comgeom-g -d 1 -v 4 model.cg model.g
+$ comgeom-g -d 1 -v 4 model.cg model.g
 ----
 Converts the COMGEOM version 4 input _model.cg_ into the BRL-CAD database _model.g_, printing the expected file layout and per-item progress reports during the conversion. Raising the debug level is the quickest way to find which solid or region card a malformed input file is choking on.
 ====
 
 .Convert and merge two COMGEOM models with namespaced names
 ====
-[source,bash]
+[source,console]
 ----
-comgeom-g -s _a model_a.cg combined.g
-comgeom-g -s _b model_b.cg combined.g
+$ comgeom-g -s _a model_a.cg combined.g
+$ comgeom-g -s _b model_b.cg combined.g
 ----
-Because *comgeom-g* appends to an existing output database rather than overwriting it, two COMGEOM models can be merged into one BRL-CAD database. The *-s* suffixes ("_a" and "_b") keep the auto-generated s###, r###, and g### names from each model distinct so they do not collide in _combined.g_. The result can then be inspected with *mged*(1).
+Because *comgeom-g* appends to an existing output database rather than overwriting it, two COMGEOM models can be merged into one BRL-CAD database. The *-s* suffixes (`_a` and `_b`) keep the auto-generated `s###`, `r###`, and `g###` names from each model distinct so they do not collide in _combined.g_. The result can then be inspected with *mged*(1).
 ====
 
 

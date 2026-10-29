@@ -38,7 +38,7 @@ The total number of input cells must match the product of the width and length i
 
 .Converting an ASCII displacement map to binary dsp
 ====
-[source]
+[source,console]
 ----
 $ asc2dsp terrain.asc terrain.dsp
 ----
@@ -48,7 +48,7 @@ Converts the ASCII file 'terrain.asc' to the binary displacement map format and 
 
 .Creating a dsp file using tac for proper row order
 ====
-[source]
+[source,console]
 ----
 $ tac top_down.asc > bottom_up.asc
 $ asc2dsp bottom_up.asc terrain.dsp

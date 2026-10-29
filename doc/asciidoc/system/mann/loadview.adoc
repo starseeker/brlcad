@@ -39,18 +39,22 @@ View changes are finalized when the script's `end` command is processed. If a sc
 These examples show how *loadview* restores a view from a previously saved script.
 
 .Restore a view saved by *saveview*.
-[example]
 ====
-mged>**loadview render.rt**
+[source,console]
+----
+mged> loadview render.rt
+----
 
 Clears the current display, draws the objects named in _render.rt_, and restores the saved view parameters from that script.
 
 ====
 
 .Reload a saved view script after editing it externally.
-[example]
 ====
-mged>**loadview raycast.sh**
+[source,console]
+----
+mged> loadview raycast.sh
+----
 
 Reads the saved view block and object list from _raycast.sh_ and applies the recognized settings to the current MGED session.
 

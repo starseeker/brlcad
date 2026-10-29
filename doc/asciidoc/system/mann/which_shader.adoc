@@ -32,13 +32,16 @@ Script mode. Outputs matching combination names separated by spaces on a single 
 == EXAMPLES
 
 .List all combinations using the plastic shader
-[example]
 ====
-mged> **which_shader plastic**
+[source,console]
+----
+mged> which_shader plastic
+----
 
 Reports all combinations whose shader string contains `plastic`, with a heading line and one name per line.
 
 Example output:
+[source,text]
 ----
 Combination[s] with shader plastic:
    hull.c
@@ -47,20 +50,25 @@ Combination[s] with shader plastic:
 ====
 
 .Script-mode output for use in automation
-[example]
 ====
-mged> **which_shader -s plastic**
+[source,console]
+----
+mged> which_shader -s plastic
+----
 
 Returns the matching names space-separated without a header, for use in scripts:
+[source,text]
 ----
  hull.c turret.c
 ----
 ====
 
 .Search for multiple shaders at once
-[example]
 ====
-mged> **which_shader plastic glass**
+[source,console]
+----
+mged> which_shader plastic glass
+----
 
 Scans for combinations using `plastic` and then separately for those using `glass`, reporting results under separate headings.
 ====

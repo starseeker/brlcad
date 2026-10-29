@@ -42,41 +42,51 @@ Angles may be given as two or three separate arguments (`az el` or `az el tw`), 
 == EXAMPLES
 
 .Get the current view orientation
-[example]
 ====
-mged> **aet**
+[source,console]
+----
+mged> aet
+----
 
 Returns the current azimuth, elevation, and twist in degrees, for example: `35 25 0`.
 ====
 
 .Set the view to azimuth 35, elevation 25
-[example]
 ====
-mged> **aet 35 25**
+[source,console]
+----
+mged> aet 35 25
+----
 
 Sets the view to azimuth 35°, elevation 25°, twist 0°.
 ====
 
 .Set azimuth, elevation, and twist together
-[example]
 ====
-mged> **aet 45 30 15**
+[source,console]
+----
+mged> aet 45 30 15
+----
 
 Sets the view to azimuth 45°, elevation 30°, twist 15°.
 ====
 
 .Rotate the view incrementally
-[example]
 ====
-mged> **aet -i 10 0**
+[source,console]
+----
+mged> aet -i 10 0
+----
 
 Adds 10° to the current azimuth without changing elevation or twist.
 ====
 
 .Set orientation using a quoted string
-[example]
 ====
-mged> **aet "270 0"**
+[source,console]
+----
+mged> aet "270 0"
+----
 
 Sets the view to look from the left side (azimuth 270°, elevation 0°).
 ====

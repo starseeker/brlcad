@@ -37,10 +37,10 @@ where a raw byte stream may not survive intact.
 
 .Convert a rendered image to ASCII for safe transport
 ====
-[source,bash]
+[source,console]
 ----
-rt -s 512 -o moss.pix moss.g all.g
-pix2asc < moss.pix > moss.asc
+$ rt -s 512 -o moss.pix moss.g all.g
+$ pix2asc < moss.pix > moss.asc
 ----
 Render a 512x512 image of the _all.g_ object with *rt*(1), then encode the
 resulting binary *pix*(5) file as ASCII so it can be safely moved across

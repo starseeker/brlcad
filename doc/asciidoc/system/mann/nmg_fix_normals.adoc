@@ -24,9 +24,11 @@ This is useful after manual NMG editing operations (such as adding faces with `n
 == EXAMPLES
 
 .Fix normals on an edited NMG solid
-[example]
 ====
-mged> **nmg_fix_normals my_nmg.s**
+[source,console]
+----
+mged> nmg_fix_normals my_nmg.s
+----
 
 Repairs any inconsistent face normals in `my_nmg.s`, ensuring all normals point outward.
 ====

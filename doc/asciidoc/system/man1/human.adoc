@@ -109,9 +109,9 @@ meant to be supplied directly.
 
 .Generate a default human model
 ====
-[source,bash]
+[source,console]
 ----
-human
+$ human
 ----
 Creates _human.g_ containing a single 68-inch standing human model under
 the top-level combination _Body.c_.
@@ -119,10 +119,10 @@ the top-level combination _Body.c_.
 
 .Build a squad and render it
 ====
-[source,bash]
+[source,console]
 ----
-human -N 4 squad.c
-rt -o squad.png human.g Crowd.c
+$ human -N 4 squad.c
+$ rt -o squad.png human.g Crowd.c
 ----
 Generates a 4x4 grid (16 models) of humans, each model named with the
 prefix _squad.c_ (so _squad.c0_ through _squad.c15_) and all gathered
@@ -134,10 +134,10 @@ command line.
 
 .Create a seated model of a specific height
 ====
-[source,bash]
+[source,console]
 ----
-human -H 72 -s 1 seated.c
-mged human.g 'draw seated.c; e seated.c'
+$ human -H 72 -s 1 seated.c
+$ mged human.g 'draw seated.c; e seated.c'
 ----
 Builds a 72-inch model in a seated pose named _seated.c_ and opens it in
 *mged*(1) for inspection.

@@ -102,10 +102,10 @@ clients are still accepted.
 
 .Reattachable framebuffer for rendering
 ====
-[source,bash]
+[source,console]
 ----
-fbserv -s 1024 0 /dev/wgl &
-rt -F 0 -s 1024 model.g component
+$ fbserv -s 1024 0 /dev/wgl &
+$ rt -F 0 -s 1024 model.g component
 ----
 Open a persistent 1024x1024 framebuffer on the local display and bind it
 to port 0 (which maps to default port 5559), then ray trace into it with
@@ -115,11 +115,11 @@ the same framebuffer and the image survives between client connections.
 
 .Authenticated TLS server
 ====
-[source,bash]
+[source,console]
 ----
-export FBSERV_TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-fbserv -T -A -p 0 -F /dev/wgl &
-rt -F 0 model.g object
+$ export FBSERV_TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+$ fbserv -T -A -p 0 -F /dev/wgl &
+$ rt -F 0 model.g object
 ----
 Run *fbserv* in encrypted, strictly authenticated mode. Both the server
 and every client must share the same *FBSERV_TOKEN*; the *-T* flag enables

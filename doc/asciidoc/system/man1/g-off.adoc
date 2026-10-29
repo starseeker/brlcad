@@ -81,9 +81,9 @@ tessellation-based tools.
 
 .Convert two regions with a tightened tolerance and a name prefix
 ====
-[source,bash]
+[source,console]
 ----
-g-off -r 0.005 -p out_ have.g component1 component2
+$ g-off -r 0.005 -p out_ have.g component1 component2
 ----
 Tessellates the regions *component1* and *component2* from *have.g*
 using a relative tolerance of 0.005, writing the figure file

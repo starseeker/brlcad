@@ -47,9 +47,9 @@ than invoked by hand.
 
 .Reviewing and submitting a crash log
 ====
-[source,bash]
+[source,console]
 ----
-bombardier ~/.brlcad/crash/mged-crash.log
+$ bombardier ~/.brlcad/crash/mged-crash.log
 ----
 Opens the crash reporter dialog populated with the contents of
 _mged-crash.log_, allowing the stack trace and system information to be
@@ -58,9 +58,9 @@ reviewed, annotated, and submitted to the developers.
 
 .Combining multiple log files into one report
 ====
-[source,bash]
+[source,console]
 ----
-bombardier mged-crash.log rt-crash.log session-env.log
+$ bombardier mged-crash.log rt-crash.log session-env.log
 ----
 Loads and concatenates several log files so that a stack trace and its
 related environment or session diagnostics are reviewed and submitted

@@ -26,10 +26,12 @@ Echos whatever text is provided as an argument on the command line. This is inte
 The example shows the use of the *echo* command in displaying text.
 
 .Using the echo command to display text.
-[example]
 ====
 
-mged> **echo some text goes here**::
+[source,console]
+----
+mged> echo some text goes here
+----
 Displays the text, "some text goes here."
 
 

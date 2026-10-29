@@ -127,10 +127,12 @@ For situations where a file has *material_id* attributes but no names, the *--na
 The example shows the use of the *mater* command to assign shader parameters, color, and inheritance to a region.
 
 .Assigning shader parameters, color, and inheritance to a region.
-[example]
 ====
 
-mged> **mater region1 "plastic {tr 0.5 re 0.2}" 210 100 100 0**::
+[source,console]
+----
+mged> mater region1 "plastic {tr 0.5 re 0.2}" 210 100 100 0
+----
 Sets _region1_ to use the plastic shader with 50% transparency, 20% reflectivity, a base color of (210 100 100), and inheritance set to 0.
 
 
@@ -138,10 +140,12 @@ Sets _region1_ to use the plastic shader with 50% transparency, 20% reflectivity
 ====
 
 .Importing Density Data
-[example]
 ====
 
-mged> **mater -d import /home/user/.density**::
+[source,console]
+----
+mged> mater -d import /home/user/.density
+----
 After this operation, the density valued defined in /home/user/.density are now stored in the .g file.
 
 
@@ -149,10 +153,12 @@ After this operation, the density valued defined in /home/user/.density are now 
 ====
 
 .View Full Density Table
-[example]
 ====
 
-mged> **mater -d get \***::
+[source,console]
+----
+mged> mater -d get \*
+----
 Lists all entries in the density table.
 
 
@@ -160,10 +166,12 @@ Lists all entries in the density table.
 ====
 
 .View Name-Specific Density Data
-[example]
 ====
 
-mged> **mater -d get --name \*Rubber\***::
+[source,console]
+----
+mged> mater -d get --name \*Rubber\*
+----
 Lists all density entries with a material name containing "Rubber".
 
 
@@ -171,10 +179,12 @@ Lists all density entries with a material name containing "Rubber".
 ====
 
 .Names from IDs
-[example]
 ====
 
-mged> **mater -d map --names-from-ids /home/user/.density**::
+[source,console]
+----
+mged> mater -d map --names-from-ids /home/user/.density
+----
 Assigns *material_name* names from a density file assuming existing *material_id* attributes.
 
 
@@ -182,10 +192,12 @@ Assigns *material_name* names from a density file assuming existing *material_id
 ====
 
 .IDs from Names
-[example]
 ====
 
-mged> **mater -d map --ids-from-names /home/user/.density /home/user/mapping_file**::
+[source,console]
+----
+mged> mater -d map --ids-from-names /home/user/.density /home/user/mapping_file
+----
 Assigning or updating *material_id* attributes based on *material_name* attribute values, density file names, and mapping file associations.
 
 

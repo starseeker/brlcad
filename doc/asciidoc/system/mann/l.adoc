@@ -44,10 +44,12 @@ If the _-r_ (recursive) option is used, then each _object_ on the command line w
 The three examples show the use of the *l* command to display details about a region, shape parameters, and all possible paths starting with a particular designation.
 
 .Display details about a particular region.
-[example]
 ====
 
-mged> **l region1**::
+[source,console]
+----
+mged> l region1
+----
 Displays details about region1.
 
 
@@ -55,18 +57,22 @@ Displays details about region1.
 ====
 
 .Display shape parameters for a particular shape.
-[example]
 ====
-mged>**l group1/group2/region1/shape3**
+[source,console]
+----
+mged> l group1/group2/region1/shape3
+----
 
 Displays shape parameters for _shape3_ with matrices applied from the _path_.
 
 ====
 
 .Display all paths that start with a particular designation and end in a primitive shape.
-[example]
 ====
-mged>**l -r a/b**
+[source,console]
+----
+mged> l -r a/b
+----
 
 Displays all paths that start with a particular designation and end in a primitive shape. Also, the shape parameters with the accumulated transformation applied will be displayed.
 

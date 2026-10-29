@@ -269,10 +269,10 @@ geometry in the other direction, see *g-iges*(1).
 
 .Convert IGES solid geometry and inspect the result
 ====
-[source,bash]
+[source,console]
 ----
-iges-g widget.iges widget.g
-mged widget.g 'tops'
+$ iges-g widget.iges widget.g
+$ mged widget.g 'tops'
 ----
 Convert the CSG and BREP entities of _widget.iges_ into
 _widget.g_, then list the resulting top-level objects with *mged*(1) to verify
@@ -281,9 +281,9 @@ the conversion.
 
 .Assemble trimmed surfaces into a BRep
 ====
-[source,bash]
+[source,console]
 ----
-iges-g --strict --report boat-import.json -o boat.g boat.iges
+$ iges-g --strict --report boat-import.json -o boat.g boat.iges
 ----
 Build the supported trimmed surfaces in _boat.iges_ directly as OpenNURBS
 faces, stitch coincident naked edges conservatively, and write diagnostics to

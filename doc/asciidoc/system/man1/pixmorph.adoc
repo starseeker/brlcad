@@ -60,9 +60,9 @@ T. Beier and S. Neely, "Feature-Based Image Metamorphosis", SIGGRAPH
 
 .Generate a six-frame morph animation
 ====
-[source,bash]
+[source,console]
 ----
-for i in 0 1 2 3 4 5; do
+$ for i in 0 1 2 3 4 5; do
     f=$(echo "$i / 5" | bc -l)
     pixmorph face1.pix face2.pix lines.txt $f $f > frame$i.pix
 done
@@ -75,9 +75,9 @@ intermediate frames blending feature warp and cross-dissolve together.
 
 .Warp without cross-dissolving
 ====
-[source,bash]
+[source,console]
 ----
-pixmorph face1.pix face2.pix lines.txt 0.5 0.0 > out.pix
+$ pixmorph face1.pix face2.pix lines.txt 0.5 0.0 > out.pix
 ----
 With _dissolvefrac_ = 0 the contribution of _face2.pix_ is ignored at
 the dissolve stage, so _out.pix_ consists entirely of _face1.pix_ warped

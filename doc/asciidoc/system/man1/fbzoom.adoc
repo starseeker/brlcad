@@ -116,7 +116,7 @@ commands (type *?* at any time for this list):
 
 .Inspect a rendered image in detail
 ====
-[source,bash]
+[source,console]
 ----
 $ pix-fb -w 1024 -n 1024 render.pix
 $ fbzoom -w 1024 -n 1024
@@ -128,7 +128,7 @@ Loads a 1024x1024 image into the frame buffer with *pix-fb*(1), then runs
 
 .Start zoomed in on a region
 ====
-[source,bash]
+[source,console]
 ----
 $ fbzoom 256 256 4 4
 ----

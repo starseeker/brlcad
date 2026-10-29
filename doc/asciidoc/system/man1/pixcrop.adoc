@@ -33,9 +33,9 @@ The nearest input pixel is selected for each output pixel. No interpolation is d
 
 .Crop an upright 200x100 region out of a 512-wide image
 ====
-[source,bash]
+[source,console]
 ----
-pixcrop in.pix out.pix 512 200 100 100 400 300 400 300 200 100 200
+$ pixcrop in.pix out.pix 512 200 100 100 400 300 400 300 200 100 200
 ----
 Reads the 512-pixel-wide _in.pix_ and writes a 200x100 _out.pix_ extracted from the axis-aligned rectangle whose input corners are upper-left (100,400), upper-right (300,400), lower-right (300,200), and lower-left (100,200). Because the four corners need not form a rectangle, skewed or sheared quadrilaterals can be rectified into an upright output image.
 ====

@@ -73,9 +73,9 @@ the developers if you rely on it.
 
 .Inspect a raw double-precision data file as text
 ====
-[source,bash]
+[source,console]
 ----
-double-asc samples.d | head
+$ double-asc samples.d | head
 ----
 Dumps the contents of a binary IEEE-double file as plain numbers so the
 first few values can be eyed quickly.
@@ -83,9 +83,9 @@ first few values can be eyed quickly.
 
 .Label each pixel of a 256x256 three-channel double image
 ====
-[source,bash]
+[source,console]
 ----
-double-asc -c -w 256 -n 256 -# 3 image.d > image.txt
+$ double-asc -c -w 256 -n 256 -# 3 image.d > image.txt
 ----
 Treats the input as a 256-wide by 256-high image with three doubles per
 pixel and writes, for every pixel, its column and row followed by the

@@ -26,10 +26,15 @@ The *nmg_kill_f* command is the standalone form of the `nmg <object> kill F` sub
 == EXAMPLES
 
 .Remove face 3 from an NMG solid
-[example]
 ====
-mged> **labelface my_nmg.s**
-mged> **nmg_kill_f my_nmg.s F 3**
+[source,console]
+----
+mged> labelface my_nmg.s
+----
+[source,console]
+----
+mged> nmg_kill_f my_nmg.s F 3
+----
 
 First displays face index labels on `my_nmg.s`, then removes face 3.
 ====

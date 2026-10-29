@@ -26,10 +26,12 @@ The *c* command creates a _BRL-CAD_ combination with the name __combination_name
 The example shows how to use the *c* command to create a combination according to a given formula.
 
 .Creating a combination according to a formula.
-[example]
 ====
 
-mged> **c -c abc (a u b)-(a + d)**::
+[source,console]
+----
+mged> c -c abc (a u b)-(a + d)
+----
 Creates a combination named _abc_ according to the formula _(a u b) - (a + d)_.
 
 

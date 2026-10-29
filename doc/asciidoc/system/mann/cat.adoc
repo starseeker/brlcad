@@ -26,10 +26,12 @@ Displays a brief description of each item in the list of _objects_. If the item 
 The example shows the use of the *cat* command to display Boolean formulas for two regions.
 
 .Displaying Boolean formulas for two regions.
-[example]
 ====
 
-mged> **cat region_1 region_2**::
+[source,console]
+----
+mged> cat region_1 region_2
+----
 Displays the Boolean formulas for region_1 and region_2.
 
 

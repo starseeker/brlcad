@@ -75,18 +75,18 @@ Note that this command can also be applied to color *pix*(5) files, but no disti
 
 .Produce the negative of an image
 ====
-[source,bash]
+[source,console]
 ----
-bwmod -m-1 -a255 < file.bw > file2.bw
+$ bwmod -m-1 -a255 < file.bw > file2.bw
 ----
 This will produce the negative of a file by first multiplying by minus one, and then adding 255 to shift the pixels back into the 0 to 255 range. (i.e., replacing each pixel value by 255 minus that value.)
 ====
 
 .Apply a gamma factor to a file
 ====
-[source,bash]
+[source,console]
 ----
-bwmod -d255 -r2.2 -m255 < file.bw > file2.bw
+$ bwmod -d255 -r2.2 -m255 < file.bw > file2.bw
 ----
 This first normalizes the pixel values (putting them into the 0 to 1 range), then takes the 2.2 root of each value, and finally scales the pixel values back to the 0 to 255 range. (Note: Applying gammas this way is not recommended for performance reasons, as it results in a function call per pixel.)
 ====
@@ -95,18 +95,18 @@ This first normalizes the pixel values (putting them into the 0 to 1 range), the
 ====
 Suppose you ran *bwstat* on a file and found min=80, max=210, and mean=100. If you wish to expand the range of intensities while still preserving the mean, this can be done by:
 
-[source,bash]
+[source,console]
 ----
-bwmod -s100 -m1.409 -a100 < file.bw > file2.bw
+$ bwmod -s100 -m1.409 -a100 < file.bw > file2.bw
 ----
 The multiplier 1.409 results from `(255.0 - 100.0) / (210.0 - 100.0)`, which boosts the maximum value (210) to full scale (255) after subtracting the mean (100). Subtracting and adding 100 makes the multiply occur "about that point"; i.e., values less than 100 get smaller, and those above get higher.
 
 A _file.bw_ for this example can be created with these three command lines:
-[source,bash]
+[source,console]
 ----
-gencolor -r 11 80 >file.bw
-gencolor -r 262131 100 >>file.bw
-gencolor -r 2 210 >>file.bw
+$ gencolor -r 11 80 >file.bw
+$ gencolor -r 262131 100 >>file.bw
+$ gencolor -r 2 210 >>file.bw
 ----
 ====
 

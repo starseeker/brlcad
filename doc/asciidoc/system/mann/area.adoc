@@ -29,12 +29,23 @@ minimum bounding polygon of the region and ignores holes.
 == EXAMPLES
 
 .Report the approximate presented area of a displayed region.
-[example]
 ====
+[source,console]
+----
 mged> # Displays _wheel.r_ as the single evaluated region for use by *area*.
-mged> **E wheel.r**
+----
+[source,console]
+----
+mged> E wheel.r
+----
+[source,console]
+----
 mged> # Calculates approximate presented area using a 0.01 local-unit vertex tolerance.
-mged> **area 0.01**
+----
+[source,console]
+----
+mged> area 0.01
+----
 
 
 ====

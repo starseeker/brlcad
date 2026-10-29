@@ -61,9 +61,9 @@ useful for low-level inspection of how an object is encoded on disk.
 
 .Report database statistics
 ====
-[source,bash]
+[source,console]
 ----
-gex model.g
+$ gex model.g
 ----
 Summarizes every object in _model.g_, listing DLI/major/minor types,
 combinations, regions, attributed objects, and the total free space in
@@ -72,9 +72,9 @@ the file.
 
 .Reclaim free space accumulated during modeling
 ====
-[source,bash]
+[source,console]
 ----
-gex -c -f model.g model-clean.g
+$ gex -c -f model.g model-clean.g
 ----
 Writes a compacted copy of _model.g_ to _model-clean.g_ with unused
 free-storage blocks removed, overwriting _model-clean.g_ if it already
@@ -86,9 +86,9 @@ of geometry.
 
 .Hex-dump a single object
 ====
-[source,bash]
+[source,console]
 ----
-gex -d sph1.s model.g
+$ gex -d sph1.s model.g
 ----
 Prints a canonical hexadecimal dump of the raw bytes of the object named
 *sph1.s*, in addition to the usual database summary.

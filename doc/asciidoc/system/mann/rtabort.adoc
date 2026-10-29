@@ -29,10 +29,15 @@ NOTE: *rtabort* only affects raytrace subprocesses started in the current sessio
 == EXAMPLES
 
 .Abort an active raytrace
-[example]
 ====
-mged> **rt -o output.png scene.g assembly.c**
-mged> **rtabort**
+[source,console]
+----
+mged> rt -o output.png scene.g assembly.c
+----
+[source,console]
+----
+mged> rtabort
+----
 
 Launches an `rt` raytrace in the background, then immediately terminates it with `rtabort`.
 ====

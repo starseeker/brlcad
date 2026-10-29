@@ -28,7 +28,6 @@ void pl_linmod(FILE *fp, const char *s);
 void pl_move(FILE *fp, int x, int y);
 void pl_point(FILE *fp, int x, int y);
 void pl_space(FILE *fp, int x0, int y0, int x1, int y1);
-
 ----
 
 

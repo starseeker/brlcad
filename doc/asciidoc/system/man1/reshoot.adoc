@@ -53,7 +53,8 @@ to the application _hit_ routine, together with the contents of each
 reduced to *reshoot* input with an *awk*(1) program.  A suitable p.awk
 is:
 
-....
+[source,text]
+----
 /Pnt/ { START=index($0,"(") + 1
         STR=substr($0, START, index($0,")") - START)
         gsub(  ", "  , "," , STR)
@@ -70,11 +71,12 @@ is:
 /Region/ { printf "\tregion=%s in=%s in%s out=%s out%s\n",
         $2,PIN,INHIT,POUT,OUTHIT
         }
-....
+----
 
 The resulting input file looks like:
 
-....
+[source,text]
+----
 Pnt=0,0,1
 Dir=0,0,-1
 	region=r1.r in=p1.s indist=10016.8 out=p2.s outdist=10017.8
@@ -82,7 +84,7 @@ Dir=0,0,-1
 Pnt=0,0,10
 Dir=0,0,-1
 	region=r1.r in=p1.s indist=10016.8 out=p2.s outdist=10017.8
-....
+----
 
 For each ray that disagrees, *reshoot* prints the ray's point and
 direction followed by one or more mismatch lines describing the inhit
@@ -94,12 +96,12 @@ did not match.
 
 .Capture rays from rt and verify them with reshoot
 ====
-[source,bash]
+[source,console]
 ----
-rt -x 2 -o /dev/null geom.g all.g 2> log
-awk -f p.awk < log > shotlist
-reshoot geom.g all.g < shotlist
-echo "exit status: $?"
+$ rt -x 2 -o /dev/null geom.g all.g 2> log
+$ awk -f p.awk < log > shotlist
+$ reshoot geom.g all.g < shotlist
+$ echo "exit status: $?"
 ----
 Running *rt*(1) with the *DEBUG_ALLHITS* debug bit (*-x 2*) records every
 hit to the file _log_, which p.awk distills into the ray list _shotlist_.
@@ -111,11 +113,11 @@ regression check after editing a model or modifying *librt*.
 
 .Use the database default object when it can be inferred
 ====
-[source,bash]
+[source,console]
 ----
-rt -x 2 -o /dev/null single.g 2> log
-awk -f p.awk < log > shotlist
-reshoot single.g < shotlist
+$ rt -x 2 -o /dev/null single.g 2> log
+$ awk -f p.awk < log > shotlist
+$ reshoot single.g < shotlist
 ----
 When _single.g_ has a resolvable default object, the omitted object list in
 both commands selects that same object.  If the database has no usable default,

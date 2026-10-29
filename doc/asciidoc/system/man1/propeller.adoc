@@ -158,9 +158,9 @@ engineering design, fabrication, or propulsion performance prediction.
 
 .Highly skewed five-blade propeller
 ====
-[source,bash]
+[source,console]
 ----
-propeller -o skewed5.g -f -Z 5 --ae-ao 0.95 --pd-tip 1.18 \
+$ propeller -o skewed5.g -f -Z 5 --ae-ao 0.95 --pd-tip 1.18 \
   --skew 28 --rake 4 --hub-profile truncated-cone --shaft-standard sae-1-16
 ----
 Generates a high-area five-blade propeller with 28 degrees of skew and 4 degrees
@@ -170,10 +170,10 @@ Open it with `mged skewed5.g` to inspect the result.
 
 .Smooth BREP blades for downstream NURBS work
 ====
-[source,bash]
+[source,console]
 ----
-propeller --mode brep -o prop_brep.g -f
-gqa -g 2mm prop_brep.g propeller.r
+$ propeller --mode brep -o prop_brep.g -f
+$ gqa -g 2mm prop_brep.g propeller.r
 ----
 Builds the propeller with smooth BREP blade solids (the hub stays CSG) and then
 runs *gqa*(1) to check the geometry for overlaps and volume.
@@ -181,10 +181,10 @@ runs *gqa*(1) to check the geometry for overlaps and volume.
 
 .Compare two pitches side by side
 ====
-[source,bash]
+[source,console]
 ----
-propeller -o comparison.g -f -n low_pitch  --pd-tip 0.75 --x-offset 0
-propeller -o comparison.g -j -n high_pitch --pd-tip 1.35 --x-offset 1500
+$ propeller -o comparison.g -f -n low_pitch  --pd-tip 0.75 --x-offset 0
+$ propeller -o comparison.g -j -n high_pitch --pd-tip 1.35 --x-offset 1500
 ----
 Writes a low-pitch propeller, then appends a high-pitch one offset 1500 units
 away in the same database so the two can be rendered together for comparison.
@@ -192,9 +192,9 @@ away in the same database so the two can be rendered together for comparison.
 
 .Built-in sampler grid
 ====
-[source,bash]
+[source,console]
 ----
-propeller --demo-file propeller_demo.g
+$ propeller --demo-file propeller_demo.g
 ----
 Writes a grid of varied propellers (different blade counts, area ratios, hub
 profiles, and shaft tapers) under a top-level `all` combination, useful as a

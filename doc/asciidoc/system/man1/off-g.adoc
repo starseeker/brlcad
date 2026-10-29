@@ -44,10 +44,10 @@ into a single NMG shell. See *g-off*(1) for the inverse conversion and
 
 .Convert an OFF model and view it
 ====
-[source,bash]
+[source,console]
 ----
-off-g widget.off widget.g
-mged widget.g
+$ off-g widget.off widget.g
+$ mged widget.g
 ----
 Reads the OFF descriptor *widget.off* (and the geometry file it names),
 producing *widget.g* with an NMG solid *s.widget* wrapped in the region

@@ -32,9 +32,11 @@ The arguments are:
 == EXAMPLES
 
 .Identify an ARB edge near a view coordinate
-[example]
 ====
-mged> **find_arb_edge arb8.s "0 0 1" 0.5**
+[source,console]
+----
+mged> find_arb_edge arb8.s "0 0 1" 0.5
+----
 
 Searches `arb8.s` for an edge that is within `0.5` units of the view coordinate `(0, 0, 1)` and returns the edge ID and its two vertex IDs.
 ====

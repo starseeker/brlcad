@@ -62,9 +62,9 @@ colors are preserved. The inverse conversion is performed by
 
 .Convert a DXF file drawn in inches
 ====
-[source,bash]
+[source,console]
 ----
-dxf-g -s 25.4 -t 0.01 drawing_inches.dxf drawing.g
+$ dxf-g -s 25.4 -t 0.01 drawing_inches.dxf drawing.g
 ----
 Converts a DXF file authored in inches into a millimeter-unit BRL-CAD
 database by scaling every coordinate by 25.4, while merging vertices
@@ -73,10 +73,10 @@ that lie within 0.01 mm of one another into a single point.
 
 .Round-trip a model through DXF
 ====
-[source,bash]
+[source,console]
 ----
-g-dxf -o part.dxf part.g component
-dxf-g part.dxf part_reimport.g
+$ g-dxf -o part.dxf part.g component
+$ dxf-g part.dxf part_reimport.g
 ----
 Exports the object _component_ from _part.g_ to DXF with *g-dxf*(1),
 then re-imports the result into a new BRL-CAD database for comparison

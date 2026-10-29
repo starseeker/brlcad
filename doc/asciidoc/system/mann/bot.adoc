@@ -259,27 +259,33 @@ Synchronizes connected BoT triangle orientations.
 == EXAMPLES
 
 .Set the orientation of a BoT to right-hand
-[example]
 ====
-mged>**bot set orientation bot_solid.s rh**
+[source,console]
+----
+mged> bot set orientation bot_solid.s rh
+----
 
 Sets the orientation of solid bot_solid.s to right-handed (counter-clockwise).
 
 ====
 
 .Return the orientation of a solid.
-[example]
 ====
-mged>**bot get orientation bot_solid.s**
+[source,console]
+----
+mged> bot get orientation bot_solid.s
+----
 
 Returns the orientation of bot_solid.s. Note that this will return ccw (right-handed), cw (left-handed) or none (unoriented).
 
 ====
 
 .Return information of a solid.
-[example]
 ====
-mged>**bot stat bot_solid.s**
+[source,console]
+----
+mged> bot stat bot_solid.s
+----
 
 Returns information about bot_solid.s.
 

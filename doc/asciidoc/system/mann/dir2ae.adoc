@@ -26,9 +26,11 @@ Returns the azimuth and elevation (AE) using the provided direction vector as in
 The example shows the use of the *dir2ae* command to get the AE.
 
 .Find the AE using the provided direction vector.
-[example]
 ====
-mged>**dir2ae 0.707107 0.707107 0**
+[source,console]
+----
+mged> dir2ae 0.707107 0.707107 0
+----
 
 Returns the AE using a direction vector of 0.707107 0.707107 0.
 

@@ -29,17 +29,21 @@ The output lists the full paths of all primitives hit, in the order they are enc
 == EXAMPLES
 
 .Find solids at the center of the view
-[example]
 ====
-mged> **solids_on_ray 0 0**
+[source,console]
+----
+mged> solids_on_ray 0 0
+----
 
 Fires a ray through the center of the current view and lists all primitive solids along that ray.
 ====
 
 .Find solids at an offset position
-[example]
 ====
-mged> **solids_on_ray 100 50**
+[source,console]
+----
+mged> solids_on_ray 100 50
+----
 
 Fires a ray 100 units right and 50 units up from the view center and lists the intersected primitives.
 ====

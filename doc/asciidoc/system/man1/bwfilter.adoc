@@ -76,9 +76,9 @@ filters, an offset that recenters the result; both may be overridden.
 
 .Sharpen an image with a high pass filter
 ====
-[source,bash]
+[source,console]
 ----
-bwfilter -f hi -s 1024 image.bw > sharp.bw
+$ bwfilter -f hi -s 1024 image.bw > sharp.bw
 ----
 Applies a high pass filter to the 1024x1024 image _image.bw_ and
 redirects the result to _sharp.bw_, accentuating edges and fine detail.
@@ -86,9 +86,9 @@ redirects the result to _sharp.bw_, accentuating edges and fine detail.
 
 .Detect edges and view the result
 ====
-[source,bash]
+[source,console]
 ----
-bwfilter -f la moon.bw | bw-pix | pix-fb
+$ bwfilter -f la moon.bw | bw-pix | pix-fb
 ----
 Runs a laplacian edge detector over _moon.bw_, converts the resulting
 black and white image to *pix*(5) with *bw-pix*(1), and displays it on a

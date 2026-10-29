@@ -24,19 +24,29 @@ The operation is the standard 4x4 matrix product; it is the GED wrapper for `bn_
 == EXAMPLES
 
 .Multiply two identity matrices
-[example]
 ====
-mged> **mat_mul "1 0 0 0  0 1 0 0  0 0 1 0  0 0 0 1" "1 0 0 0  0 1 0 0  0 0 1 0  0 0 0 1"**
+[source,console]
+----
+mged> mat_mul "1 0 0 0  0 1 0 0  0 0 1 0  0 0 0 1" "1 0 0 0  0 1 0 0  0 0 1 0  0 0 0 1"
+----
 
 Returns the identity matrix `1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1`, since the product of two identity matrices is the identity.
 ====
 
 .Chain two rotation matrices
-[example]
 ====
-mged> **set m1 [mat_ae 45 0]**
-mged> **set m2 [mat_ae 0 30]**
-mged> **mat_mul $m1 $m2**
+[source,console]
+----
+mged> set m1 [mat_ae 45 0]
+----
+[source,console]
+----
+mged> set m2 [mat_ae 0 30]
+----
+[source,console]
+----
+mged> mat_mul $m1 $m2
+----
 
 Composes the azimuth rotation matrix `$m1` with the elevation rotation matrix `$m2`, returning their combined transformation.
 ====

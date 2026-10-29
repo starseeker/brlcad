@@ -26,17 +26,21 @@ The `nmg_cmface` command is the standalone form of the `nmg <object> cmface` sub
 == EXAMPLES
 
 .Create a triangular face in an NMG solid
-[example]
 ====
-mged> **nmg_cmface my_nmg.s 0 0 0 100 0 0 50 100 0**
+[source,console]
+----
+mged> nmg_cmface my_nmg.s 0 0 0 100 0 0 50 100 0
+----
 
 Adds a triangular face with vertices at (0,0,0), (100,0,0), and (50,100,0) to `my_nmg.s`.
 ====
 
 .Create a quadrilateral face
-[example]
 ====
-mged> **nmg_cmface my_nmg.s 0 0 0 100 0 0 100 100 0 0 100 0**
+[source,console]
+----
+mged> nmg_cmface my_nmg.s 0 0 0 100 0 0 100 100 0 0 100 0
+----
 
 Adds a four-sided face (square) to `my_nmg.s` with vertices at the four corners on the Z=0 plane.
 ====

@@ -61,9 +61,9 @@ standard output must be redirected.
 
 .Overlapping Hamming windows feeding an FFT
 ====
-[source,bash]
+[source,console]
 ----
-dwin -H 1024 0.5 < signal.doubles | dfft > spectrum.doubles
+$ dwin -H 1024 0.5 < signal.doubles | dfft > spectrum.doubles
 ----
 Extracts 1024-sample windows from _signal.doubles_, advancing 512 samples
 (50% overlap) per step, applies a Hamming taper to each window, and pipes

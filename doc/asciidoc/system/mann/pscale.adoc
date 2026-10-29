@@ -95,25 +95,31 @@ Other primitive types return an error.
 == EXAMPLES
 
 .Scale the height of a TGC
-[example]
 ====
-mged> **pscale cone.s h 1.5**
+[source,console]
+----
+mged> pscale cone.s h 1.5
+----
 
 Sets the height of the TGC primitive `cone.s` to 1.5 times its current absolute value.
 ====
 
 .Scale a TOR major radius relatively
-[example]
 ====
-mged> **pscale -r ring.s a 0.8**
+[source,console]
+----
+mged> pscale -r ring.s a 0.8
+----
 
 Multiplies the major radius of the torus `ring.s` by 0.8, shrinking it to 80% of its current size.
 ====
 
 .Scale the A axis of an ellipsoid
-[example]
 ====
-mged> **pscale sphere.s a 50**
+[source,console]
+----
+mged> pscale sphere.s a 50
+----
 
 Sets the A semi-axis of `sphere.s` to 50 (in local units).
 ====

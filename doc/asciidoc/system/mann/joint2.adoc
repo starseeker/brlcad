@@ -28,17 +28,21 @@ It supports the following `selection` operations:
 == EXAMPLES
 
 .Replace a selection using a ray
-[example]
 ====
-mged> **joint2 arm.j selection replace my_sel 0 0 0 0 0 1**
+[source,console]
+----
+mged> joint2 arm.j selection replace my_sel 0 0 0 0 0 1
+----
 
 Shoots a ray from the origin (0, 0, 0) along the positive Z-axis (0, 0, 1) towards the joint primitive `arm.j`. The closest valid selection is stored as `my_sel`.
 ====
 
 .Translate an existing selection
-[example]
 ====
-mged> **joint2 arm.j selection translate my_sel 5 0 0**
+[source,console]
+----
+mged> joint2 arm.j selection translate my_sel 5 0 0
+----
 
 Translates the previously stored selection `my_sel` on `arm.j` by 5 units along the X-axis.
 ====

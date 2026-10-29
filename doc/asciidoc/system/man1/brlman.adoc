@@ -111,18 +111,18 @@ continues to search the manual collection.
 
 .Viewing a program manual page
 ====
-[source,bash]
+[source,console]
 ----
-brlman mged
+$ brlman mged
 ----
 Opens the manual page for the *mged*(1) command, defaulting to section 1.
 ====
 
 .Disambiguating a name shared by a tool and a GED command
 ====
-[source,bash]
+[source,console]
 ----
-brlman -S n search
+$ brlman -S n search
 ----
 The name *search* exists both as a standalone tool (section 1) and as a GED
 command (section n). The *-S n* selection shows the GED command page instead
@@ -132,9 +132,9 @@ of the default tool page. The equivalent positional form is
 
 .Browsing documentation graphically
 ====
-[source,bash]
+[source,console]
 ----
-brlman -g
+$ brlman -g
 ----
 Forces the graphical viewer and, because no page was named, opens a browsable
 index of all installed programs, libraries, conventions, and GED commands.
@@ -142,9 +142,9 @@ index of all installed programs, libraries, conventions, and GED commands.
 
 .Searching all manual page text
 ====
-[source,bash]
+[source,console]
 ----
-brlman -K "boolean operations"
+$ brlman -K "boolean operations"
 ----
 Lists pages whose full text contains the search terms, with higher-ranked
 matches first.
@@ -153,9 +153,9 @@ matches first.
 
 .Dumping a manual as formatted text
 ====
-[source,bash]
+[source,console]
 ----
-brlman --dump --width 72 mged > mged.txt
+$ brlman --dump --width 72 mged > mged.txt
 ----
 Writes readable text without launching a pager or graphical viewer.
 ====

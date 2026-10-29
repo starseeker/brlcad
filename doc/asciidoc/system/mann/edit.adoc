@@ -172,10 +172,13 @@ complete option reference and examples.
 
 .Quick examples
 ====
-  mged> **edit sph.s translate -a 15 0 0**
-  mged> **edit sph.s translate -r 5 0 0**
-  mged> **edit sph.s translate -k sph.s -a other.s**
-  mged> **edit sph.s tra 5 0 0**
+[source,console]
+----
+mged> edit sph.s translate -a 15 0 0
+mged> edit sph.s translate -r 5 0 0
+mged> edit sph.s translate -k sph.s -a other.s
+mged> edit sph.s tra 5 0 0
+----
 ====
 
 
@@ -210,9 +213,12 @@ model, and examples.
 
 .Quick examples
 ====
-  mged> **edit ell.s rotate 0 0 90**
-  mged> **edit ell.s rotate -z 90**
-  mged> **edit cube rotate -k sphere1 -a sphere2 -d 90**
+[source,console]
+----
+mged> edit ell.s rotate 0 0 90
+mged> edit ell.s rotate -z 90
+mged> edit cube rotate -k sphere1 -a sphere2 -d 90
+----
 ====
 
 
@@ -241,9 +247,12 @@ reference-frame model, and examples.
 
 .Quick examples
 ====
-  mged> **edit sph.s scale 2**
-  mged> **edit sph.s scale 2 2 2**
-  mged> **edit sph.s scale -k 0 0 0 -a 2 2 2**
+[source,console]
+----
+mged> edit sph.s scale 2
+mged> edit sph.s scale 2 2 2
+mged> edit sph.s scale -k 0 0 0 -a 2 2 2
+----
 ====
 
 
@@ -296,7 +305,10 @@ matrix is passed directly to the underlying librt edit layer.
 .Example: Apply a 90° Z-rotation matrix to `ell.s`
 ====
 
-  mged> **edit ell.s mat 0 -1 0 0  1 0 0 0  0 0 1 0  0 0 0 1**
+[source,console]
+----
+mged> edit ell.s mat 0 -1 0 0  1 0 0 0  0 0 1 0  0 0 0 1
+----
 
 ====
 
@@ -323,62 +335,84 @@ See *edit translate*(nged), *edit rotate*(nged), and
 *edit scale*(nged) for comprehensive examples of each subcommand.
 
 .Translate a sphere to an absolute position
-[example]
 ====
 
-  mged> **edit sph.s translate -a 15 0 0**
+[source,console]
+----
+mged> edit sph.s translate -a 15 0 0
+----
 
 ====
 
 .Rotate a cube 45° around the Z-axis
-[example]
 ====
 
-  mged> **edit cube rotate -z 45**
+[source,console]
+----
+mged> edit cube rotate -z 45
+----
 
 ====
 
 .Double the size of a sphere
-[example]
 ====
 
-  mged> **edit sph.s scale 2**
+[source,console]
+----
+mged> edit sph.s scale 2
+----
 
 ====
 
 .Intermediate edit workflow: checkpoint, modify, revert if needed
-[example]
 ====
 
 Create a checkpoint (snapshot to revert to):
 
-  mged> **edit tor.s checkpoint**
+[source,console]
+----
+mged> edit tor.s checkpoint
+----
 
 Apply a tentative translation (stays in buffer):
 
-  mged> **edit -i tor.s translate -r 5 0 0**
+[source,console]
+----
+mged> edit -i tor.s translate -r 5 0 0
+----
 
 If satisfied, write to disk:
 
-  mged> **edit tor.s translate -r 0 0 0**
+[source,console]
+----
+mged> edit tor.s translate -r 0 0 0
+----
 
 If not satisfied, roll back to the checkpoint:
 
-  mged> **edit tor.s revert**
+[source,console]
+----
+mged> edit tor.s revert
+----
 
 ====
 
 .Edit based on the active selection
-[example]
 ====
 
 With objects already selected in the viewer:
 
-  mged> **edit translate -a 10 0 0**
+[source,console]
+----
+mged> edit translate -a 10 0 0
+----
 
 Force the command-line specifier to override the selection:
 
-  mged> **edit -f sph.s translate -a 10 0 0**
+[source,console]
+----
+mged> edit -f sph.s translate -a 10 0 0
+----
 
 ====
 

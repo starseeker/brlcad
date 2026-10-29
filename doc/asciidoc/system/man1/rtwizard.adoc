@@ -208,9 +208,9 @@ preferred.
 
 .Highlighted color-plus-edge image at a custom view
 ====
-[source,bash]
+[source,console]
 ----
-rtwizard -i m35.g -c component/power.train -g component -l component \
+$ rtwizard -i m35.g -c component/power.train -g component -l component \
          -a -35 -e 15 -z 1.6 -o m35.png
 ----
 Render the m35 sample model with its power train highlighted in full color
@@ -220,9 +220,9 @@ elevation 15 and zoomed in 1.6x, saving the result as a PNG image.
 
 .Bulk rendering on the command line
 ====
-[source,bash]
+[source,console]
 ----
-for g in *.g; do
+$ for g in *.g; do
     rtwizard --no-gui -t A -i "$g" -c all -s 1024 -o "${g%.g}.png"
 done
 ----
@@ -233,9 +233,9 @@ database.  *--no-gui* ensures the script never blocks on the GUI.
 
 .Live preview on a framebuffer
 ====
-[source,bash]
+[source,console]
 ----
-rtwizard -d /dev/wgl -i m35.g -l component
+$ rtwizard -d /dev/wgl -i m35.g -l component
 ----
 Display a line drawing of the m35 truck in an OpenGL framebuffer window
 rather than writing it to a file.
@@ -243,9 +243,9 @@ rather than writing it to a file.
 
 .Cutting-plane animation
 ====
-[source,bash]
+[source,console]
 ----
-rtwizard --no-gui -i model.g -c all -o cutaway.apng \
+$ rtwizard --no-gui -i model.g -c all -o cutaway.apng \
          --cut-steps 30 --cut-direction 0/0/-1 --animation-fps 12
 ----
 Creates a 30-frame APNG with the cutting plane advancing in the negative Z

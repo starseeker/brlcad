@@ -28,8 +28,8 @@ The *-d* option prints debugging information. The *-o* option specifies the outp
 == EXAMPLE
 
 
+[source,console]
 ----
-
 $ g-scad -o model.scad model.g all.g
 $ openscad model.scad
 ----

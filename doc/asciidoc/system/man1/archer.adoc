@@ -43,9 +43,9 @@ _geometry_::
 
 .Open an existing database
 ====
-[source,bash]
+[source,console]
 ----
-archer havoc.g
+$ archer havoc.g
 ----
 Launches the *archer* interface and opens the existing _havoc.g_
 geometry database for editing and visualization.
@@ -53,9 +53,9 @@ geometry database for editing and visualization.
 
 .Import foreign geometry for editing
 ====
-[source,bash]
+[source,console]
 ----
-archer part.stl
+$ archer part.stl
 ----
 Starts *archer*, converts the _part.stl_ triangle mesh into a BRL-CAD
 database, and loads it so the imported geometry can be inspected,

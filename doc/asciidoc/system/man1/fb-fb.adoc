@@ -46,10 +46,10 @@ though an input framebuffer is normally required.
 
 .Snapshot a live framebuffer into a file
 ====
-[source,bash]
+[source,console]
 ----
-fb-fb /dev/X /dev/mem
-fb-pix /dev/mem > snapshot.pix
+$ fb-fb /dev/X /dev/mem
+$ fb-pix /dev/mem > snapshot.pix
 ----
 Copy whatever is currently displayed on the X11 framebuffer into the
 in-memory framebuffer, then save it to a *pix*(5) file with *fb-pix*(1).

@@ -48,9 +48,9 @@ bwshrink [-u] [-w _in_width_] [-n _in_height_] [-s _squaresize_] [-f _shrink_fac
 
 .Shrinking a 1024x1024 image
 ====
-[source,bash]
+[source,console]
 ----
-bwshrink -s 1024 -f 4 image.bw > image_small.bw
+$ bwshrink -s 1024 -f 4 image.bw > image_small.bw
 ----
 Shrinks the 1024x1024 input file `image.bw` by a factor of 4, producing a
 256x256 output file named `image_small.bw` using boxcar averaging.
@@ -58,9 +58,9 @@ Shrinks the 1024x1024 input file `image.bw` by a factor of 4, producing a
 
 .Generating a thumbnail from a color render
 ====
-[source,bash]
+[source,console]
 ----
-pix-bw -e ntsc -w 2048 -n 1536 render.pix | bwshrink -w 2048 -n 1536 -f 8 -u > thumb.bw
+$ pix-bw -e ntsc -w 2048 -n 1536 render.pix | bwshrink -w 2048 -n 1536 -f 8 -u > thumb.bw
 ----
 Converts a 2048x1536 color *pix*(5) render to grayscale with *pix-bw*(1),
 then pipes it to *bwshrink* to produce a 256x192 thumbnail. The *-u* flag

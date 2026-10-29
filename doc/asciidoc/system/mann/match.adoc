@@ -29,25 +29,31 @@ The names of all matching objects are printed. If multiple expressions are given
 == EXAMPLES
 
 .List all objects starting with "hull"
-[example]
 ====
-mged> **match hull***
+[source,console]
+----
+mged> match hull*
+----
 
 Lists all objects whose names begin with `hull`, for example: `hull.r`, `hull.s`, `hull_backup.r`.
 ====
 
 .Match by suffix
-[example]
 ====
-mged> **match *.r**
+[source,console]
+----
+mged> match *.r
+----
 
 Lists all objects whose names end in `.r` (typically regions).
 ====
 
 .Multiple patterns
-[example]
 ====
-mged> **match hull* turret***
+[source,console]
+----
+mged> match hull* turret*
+----
 
 Lists all objects matching either `hull*` or `turret*`.
 ====

@@ -68,9 +68,9 @@ present, the same image is written to each.
 
 .Dim an image to a quarter brightness
 ====
-[source,bash]
+[source,console]
 ----
-pixfade -f 0.25 -w 1024 -n 768 scene.pix > dim.pix
+$ pixfade -f 0.25 -w 1024 -n 768 scene.pix > dim.pix
 ----
 Reads the 1024x768 image _scene.pix_ and scales every channel to 25% of its
 original value, producing a darkened _dim.pix_.
@@ -78,9 +78,9 @@ original value, producing a darkened _dim.pix_.
 
 .Clamp highlights and view the result
 ====
-[source,bash]
+[source,console]
 ----
-pixfade -m 200 scene.pix | pix-fb -w 512 -n 512
+$ pixfade -m 200 scene.pix | pix-fb -w 512 -n 512
 ----
 Caps each color channel at 200 to tame bright highlights, then pipes the
 result straight to a framebuffer with *pix-fb*(1) for inspection.

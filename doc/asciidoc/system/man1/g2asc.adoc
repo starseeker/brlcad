@@ -60,11 +60,11 @@ the result back to binary form.
 
 .Round-trip a database through ASCII to edit it as text
 ====
-[source,bash]
+[source,console]
 ----
-g2asc model.g model.asc
-sed -i 's/old_part/new_part/g' model.asc
-asc2g model.asc model_edited.g
+$ g2asc model.g model.asc
+$ sed -i 's/old_part/new_part/g' model.asc
+$ asc2g model.asc model_edited.g
 ----
 Export *model.g* to a text file, rename an object with a stream editor, then
 reimport the result with *asc2g*(1). This text round-trip is handy for bulk
@@ -73,11 +73,11 @@ edits or scripted fixups that are awkward inside *mged*(1).
 
 .Inspect what changed between two databases
 ====
-[source,bash]
+[source,console]
 ----
-g2asc before.g before.asc
-g2asc after.g after.asc
-diff before.asc after.asc
+$ g2asc before.g before.asc
+$ g2asc after.g after.asc
+$ diff before.asc after.asc
 ----
 Convert two binary databases to ASCII and *diff* them to see exactly which
 objects and parameters differ, which is impossible directly on the binary form.

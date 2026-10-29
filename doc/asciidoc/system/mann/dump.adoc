@@ -26,10 +26,12 @@ Copies the entire dababase to the __keep_file__. The __keep_file__ is a _BRL-CAD
 The example shows the use of the *dump* command to copy the entire database to a designated file.
 
 .Copy the database to a designated file.
-[example]
 ====
 
-mged> **dump sample.g**::
+[source,console]
+----
+mged> dump sample.g
+----
 Creates _sample.g_ file which is a copy of the current database.
 
 

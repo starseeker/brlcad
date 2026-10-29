@@ -26,10 +26,12 @@ Adds the objects in the argument list to the display list so that they will appe
 The following examples show the use of the *e* command to draw particular objects, to specify color, to draw with shape lines rather than dot-dash lines, and to limit the objects to be drawn to those having specific attribute names and value pairs.
 
 .Draw specific objects in the _MGED_ display.
-[example]
 ====
 
-mged> **e object1 object2**::
+[source,console]
+----
+mged> e object1 object2
+----
 Draws _object1_ and _object2_ in the MGED display.
 
 
@@ -37,9 +39,11 @@ Draws _object1_ and _object2_ in the MGED display.
 ====
 
 .Limit the objects to be drawn to those having specific attribute names and value pairs.
-[example]
 ====
-mged>**e -A -o Comment {First comment} Comment {Second comment}**
+[source,console]
+----
+mged> e -A -o Comment {First comment} Comment {Second comment}
+----
 
 Draws objects that have a "Comment" attribute with a value of either "First comment" or "Second comment."
 

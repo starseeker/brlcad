@@ -56,11 +56,11 @@ voxel, and the fill fraction:
 
 .Voxelize at a coarse resolution and inspect the result
 ====
-[source,bash]
+[source,console]
 ----
-rm -f voxels1.txt
-g-voxel -s "5 5 5" -d 8 -t 0.5 havoc.g havoc
-wc -l voxels1.txt
+$ rm -f voxels1.txt
+$ g-voxel -s "5 5 5" -d 8 -t 0.5 havoc.g havoc
+$ wc -l voxels1.txt
 ----
 Removes any stale output, then voxelizes the `havoc` object using 5mm cubic
 voxels and 8x8 rays per voxel, keeping voxels that are at least half full.
@@ -70,10 +70,10 @@ The `rm` is important because *g-voxel* appends to the output file.
 
 .Capture only nearly solid voxels at fine resolution
 ====
-[source,bash]
+[source,console]
 ----
-rm -f voxels1.txt
-g-voxel -s "1 1 1" -d 16 -t 0.95 engine.g block
+$ rm -f voxels1.txt
+$ g-voxel -s "1 1 1" -d 16 -t 0.95 engine.g block
 ----
 Uses 1mm voxels with dense 16x16 sampling and a high threshold so that only
 voxels almost entirely filled with material are recorded, producing a tight

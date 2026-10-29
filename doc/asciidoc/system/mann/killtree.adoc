@@ -44,10 +44,12 @@ The *-n* flag causes no objects to be actually killed. Instead, a list of object
 The example shows the use of the *killtree* command to delete specified objects and all references to them from the current database.
 
 .Delete objects and all references to them from the database.
-[example]
 ====
 
-mged> **killtree -a group1 region2 shapeb**::
+[source,console]
+----
+mged> killtree -a group1 region2 shapeb
+----
 Destroys _group1_, _region2_, and _shapeb_ and removes all references to these objects from the database.
 
 

@@ -32,26 +32,35 @@ NOTE: The bounding-box center is computed from the axis-aligned bounding box of 
 == EXAMPLES
 
 .Get the bounding-box center of an object
-[example]
 ====
-mged> **ocenter hull.s**
+[source,console]
+----
+mged> ocenter hull.s
+----
 
 Returns the center of `hull.s`'s bounding box in working units, for example: `0 0 250`.
 ====
 
 .Move an object's center to the origin
-[example]
 ====
-mged> **ocenter wheel.s 0 0 0**
+[source,console]
+----
+mged> ocenter wheel.s 0 0 0
+----
 
 Moves `wheel.s` so its bounding-box center is at the model origin `(0, 0, 0)`.
 ====
 
 .Center an object on an axis
-[example]
 ====
-mged> **set c [ocenter part.s]**
-mged> **ocenter part.s 0 0 [lindex $c 2]**
+[source,console]
+----
+mged> set c [ocenter part.s]
+----
+[source,console]
+----
+mged> ocenter part.s 0 0 [lindex $c 2]
+----
 
 Retrieves the current center, then moves `part.s` so its center is on the Z axis (X=0, Y=0) without changing its Z position.
 ====

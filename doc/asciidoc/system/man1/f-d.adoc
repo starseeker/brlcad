@@ -52,9 +52,9 @@ deprecation warning on startup.
 
 .Promote single-precision samples to double precision
 ====
-[source,bash]
+[source,console]
 ----
-f-d < signal.f > signal.d
+$ f-d < signal.f > signal.d
 ----
 Reads single-precision floats from signal.f and writes the equivalent
 double-precision values to signal.d, the wider format expected by
@@ -63,9 +63,9 @@ signal-processing tools such as *dfft*(1) and *dmod*(1).
 
 .Widen and amplify in one pass
 ====
-[source,bash]
+[source,console]
 ----
-f-d 2.0 < quiet.f | dmod -e 2 > loud.d
+$ f-d 2.0 < quiet.f | dmod -e 2 > loud.d
 ----
 Converts single-precision floats to doubles while doubling each sample,
 then pipes the result through *dmod*(1) for further processing, avoiding

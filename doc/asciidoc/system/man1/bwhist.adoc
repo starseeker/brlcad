@@ -39,10 +39,10 @@ The relative frequency of each pixel value is drawn as a horizontal bar of white
 
 .Inspect the tonal distribution of a rendered image
 ====
-[source,bash]
+[source,console]
 ----
-pix-bw scene.pix > scene.bw
-bwhist -v scene.bw
+$ pix-bw scene.pix > scene.bw
+$ bwhist -v scene.bw
 ----
 Converts a color *pix*(5) image to black and white with *pix-bw*(1), then displays
 its intensity histogram on the framebuffer while dumping the per-value counts and

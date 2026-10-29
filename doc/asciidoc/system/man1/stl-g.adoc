@@ -77,9 +77,9 @@ The inverse conversion (BRL-CAD to STL) is performed by *g-stl*(1).
 
 .Convert a binary STL exported from a 3D printing tool
 ====
-[source,bash]
+[source,console]
 ----
-stl-g -b -c in -N bracket part.stl part.g
+$ stl-g -b -c in -N bracket part.stl part.g
 ----
 Reads the binary STL file _part.stl_ whose coordinates are expressed in
 inches, converts them to millimeters, names the resulting object _bracket_,
@@ -88,10 +88,10 @@ and writes the BRL-CAD database _part.g_.
 
 .Convert and immediately raytrace an ASCII STL model
 ====
-[source,bash]
+[source,console]
 ----
-stl-g model.stl model.g
-rt -o model.png model.g all
+$ stl-g model.stl model.g
+$ rt -o model.png model.g all
 ----
 Converts the ASCII STL file _model.stl_, then renders the top-level group
 _all_ with *rt*(1) to verify the geometry imported correctly.

@@ -68,27 +68,33 @@ Search the full manual page text.
 == EXAMPLES
 
 .Open the *view* manual page in the default viewer mode.
-[example]
 ====
-mged> **man view**
+[source,console]
+----
+mged> man view
+----
 
 Launches the BRL-CAD manual page viewer on the `view` command page.
 
 ====
 
 .Open a specific section in command-line mode.
-[example]
 ====
-mged> **man --no-gui -S 1 rt**
+[source,console]
+----
+mged> man --no-gui -S 1 rt
+----
 
 Displays the section `1` manual for `rt` as text in the command console.
 
 ====
 
 .Search command manual pages.
-[example]
 ====
-mged> **man -K "boolean operations"**
+[source,console]
+----
+mged> man -K "boolean operations"
+----
 
 Opens the graphical manual page viewer with ranked full-text results.
 

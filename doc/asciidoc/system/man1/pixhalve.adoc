@@ -55,10 +55,10 @@ need to be specified, as input is processed until end of file.
 
 .Downsample a rendered frame for NTSC preview
 ====
-[source,bash]
+[source,console]
 ----
-rt -o frame.pix -w 1024 -n 1024 model.g component &&
-pixhalve -s 1024 frame.pix | pix-fb -w 512 -n 512
+$ rt -o frame.pix -w 1024 -n 1024 model.g component &&
+$ pixhalve -s 1024 frame.pix | pix-fb -w 512 -n 512
 ----
 Renders a 1024x1024 image with *rt*(1), halves it to 512x512 with the
 NTSC-tuned YUV filtering, and displays the result on a framebuffer with
@@ -67,9 +67,9 @@ NTSC-tuned YUV filtering, and displays the result on a framebuffer with
 
 .Halve a file twice for a quarter-size thumbnail
 ====
-[source,bash]
+[source,console]
 ----
-pixhalve -a big.pix | pixhalve -w 256 > quarter.pix
+$ pixhalve -a big.pix | pixhalve -w 256 > quarter.pix
 ----
 Autosizes the first pass from the file header, producing a half-size
 intermediate, then halves again so the final image is one quarter of the

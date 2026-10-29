@@ -60,11 +60,11 @@ The result is printed to standard output as two space-separated numbers, "width 
 
 .Guess the dimensions of a .pix image and feed them to a viewer
 ====
-[source,bash]
+[source,console]
 ----
-imgdims teapot.pix
+$ imgdims teapot.pix
 # prints e.g. "512 512"
-pix-fb -w 512 -n 512 teapot.pix
+$ pix-fb -w 512 -n 512 teapot.pix
 ----
 *imgdims* reads the byte size of teapot.pix, divides by 3 (the default for .pix),
 and reports the width and height autosizing chose for that pixel count, which can
@@ -73,9 +73,9 @@ then be passed to *pix-fb*(1) to display the image.
 
 .Recover the resolution from a tool-generated file name
 ====
-[source,bash]
+[source,console]
 ----
-imgdims -n moss_1024x1024.bw
+$ imgdims -n moss_1024x1024.bw
 ----
 With *-n*, *imgdims* pulls the "1024x1024" resolution straight out of the file name
 rather than inferring it from the file size, which is reliable even when the byte
@@ -84,9 +84,9 @@ count is ambiguous between several common resolutions.
 
 .Size a raw black-and-white buffer given only its byte count
 ====
-[source,bash]
+[source,console]
 ----
-imgdims -# 1 262144
+$ imgdims -# 1 262144
 ----
 No file is involved here: 262144 bytes at 1 byte per pixel is 262144 pixels, for
 which autosizing reports "512 512".

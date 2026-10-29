@@ -67,10 +67,10 @@ framebuffer.
 
 .Render a model and capture the framebuffer to PNG
 ====
-[source,bash]
+[source,console]
 ----
-rt -s 1024 -F /dev/X moss.g all.g &
-fb-png -F /dev/X -s 1024 moss.png
+$ rt -s 1024 -F /dev/X moss.g all.g &
+$ fb-png -F /dev/X -s 1024 moss.png
 ----
 Ray traces the *moss.g* model into a 1024x1024 X11 framebuffer with
 *rt*(1), then grabs that framebuffer and saves it as a PNG image of the
@@ -80,9 +80,9 @@ image is captured.
 
 .Save the lower-left quadrant of the default framebuffer
 ====
-[source,bash]
+[source,console]
 ----
-fb-png -w 256 -n 256 crop.png
+$ fb-png -w 256 -n 256 crop.png
 ----
 Reads only a 256x256 region (anchored at the origin) from the
 framebuffer named by the *FB_FILE* environment variable and writes it

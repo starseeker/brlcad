@@ -26,9 +26,11 @@ The 'reair' command assigns the 'aircode' attribute value for all regions within
 Set the aircode
 
 .Set the aircode to 2.
-[example]
 ====
-mged>**reair example.c 2**
+[source,console]
+----
+mged> reair example.c 2
+----
 
 All regions under example.c will have their aircode reset to 2.
 

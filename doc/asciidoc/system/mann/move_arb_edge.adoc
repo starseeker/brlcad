@@ -40,17 +40,21 @@ The command supports all ARB subtypes. Edge indices are 1-based and the valid ra
 == EXAMPLES
 
 .Move edge 5 of an ARB8 to an absolute point
-[example]
 ====
-mged> **move_arb_edge arb8.s 5 "10 20 30"**
+[source,console]
+----
+mged> move_arb_edge arb8.s 5 "10 20 30"
+----
 
 Moves edge 5 of `arb8.s` so that its first vertex passes through model point (10, 20, 30) in local units.
 ====
 
 .Move an edge by a relative offset
-[example]
 ====
-mged> **move_arb_edge -r arb8.s 5 "0 0 10"**
+[source,console]
+----
+mged> move_arb_edge -r arb8.s 5 "0 0 10"
+----
 
 Shifts edge 5 of `arb8.s` upward by 10 local units along Z, relative to its current position.
 ====

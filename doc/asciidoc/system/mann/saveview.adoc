@@ -48,27 +48,33 @@ The resulting script contains the view state needed to reproduce the current dis
 These examples show how *saveview* records the current MGED view into a reusable shell script.
 
 .Write a default raytrace script for the current view.
-[example]
 ====
-mged>**saveview render.rt**
+[source,console]
+----
+mged> saveview render.rt
+----
 
 Appends an executable shell script to _render.rt_ that runs `rt -M` on the currently displayed objects using the current view.
 
 ====
 
 .Write a script that passes an explicit image size to the generated raytrace command.
-[example]
 ====
-mged>**saveview render.rt -s1024**
+[source,console]
+----
+mged> saveview render.rt -s1024
+----
 
 Appends a script to _render.rt_ and passes `-s1024` through to the generated raytrace command.
 
 ====
 
 .Write a script that runs `nirt` instead of `rt`.
-[example]
 ====
-mged>**saveview -e nirt raycast.sh**
+[source,console]
+----
+mged> saveview -e nirt raycast.sh
+----
 
 Appends an executable script to _raycast.sh_ that runs `nirt -M` using the current MGED view.
 

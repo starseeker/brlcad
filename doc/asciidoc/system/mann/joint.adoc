@@ -83,33 +83,41 @@ The *joint* command manages kinematic joint and constraint data used to describe
 == EXAMPLES
 
 .Load a joint file
-[example]
 ====
-mged> **joint load arm_joints.jnt**
+[source,console]
+----
+mged> joint load arm_joints.jnt
+----
 
 Loads joint definitions from `arm_joints.jnt`.
 ====
 
 .List joints
-[example]
 ====
-mged> **joint list**
+[source,console]
+----
+mged> joint list
+----
 
 Lists all currently loaded joints.
 ====
 
 .Move a joint
-[example]
 ====
-mged> **joint move elbow_joint 45**
+[source,console]
+----
+mged> joint move elbow_joint 45
+----
 
 Sets the `elbow_joint` position parameter to 45.
 ====
 
 .Accept the current joint positions
-[example]
 ====
-mged> **joint accept**
+[source,console]
+----
+mged> joint accept
+----
 
 Commits all pending joint moves to the model.
 ====

@@ -47,10 +47,12 @@ knob [-e -i -m -v] [[-o] | [v] | [m] | [e] | [k]] [[zap] | [zero] | [id [val]]]
 The example shows the use of the *knob* command with the _y_ option to rotate a view about the vertical axis.
 
 .Rotate a view about the vertical axis.
-[example]
 ====
 
-mged> **knob y 1**::
+[source,console]
+----
+mged> knob y 1
+----
 Starts the view rotating about the vertical axis.
 
 

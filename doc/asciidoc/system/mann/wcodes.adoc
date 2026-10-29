@@ -35,18 +35,25 @@ The output format is compatible with the *rcodes* command, which can be used to 
 == EXAMPLES
 
 .Write region codes for all regions in two groups
-[example]
 ====
-mged> **wcodes codes.txt group1 group2**
+[source,console]
+----
+mged> wcodes codes.txt group1 group2
+----
 
 Writes the region_id, aircode, material code, LOS, and path for every region reachable from `group1` and `group2` to the file `codes.txt`.
 ====
 
 .Write codes and restore them after editing
-[example]
 ====
-mged> **wcodes saved_codes.txt vehicle.c**
-mged> **rcodes saved_codes.txt**
+[source,console]
+----
+mged> wcodes saved_codes.txt vehicle.c
+----
+[source,console]
+----
+mged> rcodes saved_codes.txt
+----
 
 Saves all region codes from `vehicle.c` to `saved_codes.txt`, then restores them from the file using `rcodes`.
 ====

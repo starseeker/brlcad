@@ -28,9 +28,11 @@ The *nmg_move_v* command is the standalone form of the `nmg <object> move V` sub
 == EXAMPLES
 
 .Move a vertex to a new position
-[example]
 ====
-mged> **nmg_move_v my_nmg.s V 50 100 0 50 150 25**
+[source,console]
+----
+mged> nmg_move_v my_nmg.s V 50 100 0 50 150 25
+----
 
 Moves the vertex at (50, 100, 0) to the new position (50, 150, 25) in `my_nmg.s`.
 ====

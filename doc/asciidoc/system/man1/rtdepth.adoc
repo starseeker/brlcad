@@ -119,9 +119,9 @@ background options of *rt*(1) are disabled in *rtdepth*.
 
 .Depth image from a three-quarter view
 ====
-[source,bash]
+[source,console]
 ----
-rtdepth -a 35 -e 25 -s 1024 -o depth.png model.g all
+$ rtdepth -a 35 -e 25 -s 1024 -o depth.png model.g all
 ----
 Ray traces the group _all_ in _model.g_ from azimuth 35, elevation 25
 degrees on a 1024x1024 grid and writes a grayscale PNG.  Nearer
@@ -131,9 +131,9 @@ surfaces appear brighter and the empty background is pure black (value
 
 .Depth pass matching a saved MGED view
 ====
-[source,bash]
+[source,console]
 ----
-rtdepth -M -o depth.bw model.g component < component.rt
+$ rtdepth -M -o depth.bw model.g component < component.rt
 ----
 Reuses the camera from an *mged*(1) _saveview_ script (the matrix is
 read from standard input via *-M*) so the depth map of _component_ is

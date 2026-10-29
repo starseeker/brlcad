@@ -155,18 +155,22 @@ Apply the Screened Poisson Surface Reconstruction methodology to generate a mesh
 == EXAMPLES
 
 .Read a point cloud file
-[example]
 ====
-mged>**pnts read -f xyz -u in --size 1 pointsfile.txt point_cloud.s1**
+[source,console]
+----
+mged> pnts read -f xyz -u in --size 1 pointsfile.txt point_cloud.s1
+----
 
 Creates a "pnts" primitive named "point_cloud.s1" using the data file "pointsfile.txt" where the data file only contains the point coordinates listed in the order "xyz." The units of the file data is "in" and the default point size is set to "1.0" (in current model units).
 
 ====
 
 .Write a points file from a "pnts" primitive.
-[example]
 ====
-mged>**pnts write -p 3 point_cloud.s1 pointsfile.txt**
+[source,console]
+----
+mged> pnts write -p 3 point_cloud.s1 pointsfile.txt
+----
 
 Write the XYZ coordinates of the "pnts" primitive point_cloud.s1 to a file called "pointsfile.txt" and and give 3 significant digits.
 

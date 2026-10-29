@@ -75,88 +75,80 @@ Print the volume of the bounding box. On by default.
 == EXAMPLES
 
 .Determine the size of the bounding box for a Havoc helicopter
-[example]
 ====
 
 
 
-....
-
+[source,console]
+----
 mged> bb havoc
 Bounding Box Dimensions, Object(s) havoc:
 X Length: 1988.4 cm
 Y Length: 1683.6 cm
 Z Length: 625.0 cm
 Bounding Box Volume: 2092246392.4 cm^3
-	
-....
+----
 
 
 
 ====
 
 .Report only the min and max points of a bounding box
-[example]
 ====
 
 
 
-....
-
+[source,console]
+----
 mged> bb -q -e havoc
 min {-759.447479 -8437.866455 -890.000000} max {19124.621094 8397.693207 5360.000000}
-	
-....
+----
 
 
 
 ====
 
 .Bounding Box for multiple components
-[example]
 ====
 
 
 
-....
-
+[source,console]
+----
 mged> bb havoc_front havoc_middle havoc_tail
 Bounding Box Dimensions, Object(s) havoc_front,  havoc_middle,  havoc_tail:
 X Length: 1775.9 cm
 Y Length: 358.0 cm
 Z Length: 536.0 cm
 Bounding Box Volume: 340782488.9 cm^3
-	
-....
+----
 
 
 
 ====
 
 .Create ARB8 Bounding Box
-[example]
 ====
 
 
 
-....
-
+[source,console]
+----
 mged> bb -c havoc_parts_bbox.s havoc_front havoc_middle havoc_tail
 Bounding Box Dimensions, Object(s) havoc_front,  havoc_middle,  havoc_tail:
 X Length: 1775.9 cm
 Y Length: 358.0 cm
 Z Length: 536.0 cm
 Bounding Box Volume: 340782488.9 cm^3
-	
-....
+----
 
 
 
 
 
 
-....
-
+[source,console]
+----
 mged> l havoc_parts_bbox.s
 havoc_parts_bbox.s:  ARB8
 	1 (-75.9447, -158, -4.86374e-06)
@@ -167,8 +159,7 @@ havoc_parts_bbox.s:  ARB8
 	6 (1700, -158, 536)
 	7 (1700, 200, 536)
 	8 (1700, 200, -4.86374e-06)
-	
-....
+----
 
 
 

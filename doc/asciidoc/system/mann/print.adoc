@@ -44,10 +44,13 @@ To inspect or set individual parameters independently, use the dedicated command
 == EXAMPLES
 
 .Print current view parameters
-[example]
 ====
-mged> **print**
+[source,console]
+----
+mged> print
+----
 
+[source,text]
 ----
     ae: 35 25
     dir: <-0.573576 -0.462910 0.675590>

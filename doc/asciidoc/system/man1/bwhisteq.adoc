@@ -31,7 +31,7 @@ bwhisteq [-v] file.bw > file.equalized
 
 .Improving contrast of a low-contrast image
 ====
-[source,bash]
+[source,console]
 ----
 $ bwhisteq image.bw > equalized.bw
 ----
@@ -40,7 +40,7 @@ Remaps the pixel values of _image.bw_ to produce a more uniform histogram, sprea
 
 .Inspecting the remapping and viewing the result
 ====
-[source,bash]
+[source,console]
 ----
 $ bwhisteq -v image.bw 2> mapping.txt | bw-fb
 ----

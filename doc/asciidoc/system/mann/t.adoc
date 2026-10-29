@@ -27,9 +27,11 @@ See *ls* for the detailed option descriptions and examples.
 == EXAMPLES
 
 .List all regions matching a name pattern.
-[example]
 ====
-mged> **t -r wheel**
+[source,console]
+----
+mged> t -r wheel
+----
 
 Lists regions whose names begin with _wheel_.
 

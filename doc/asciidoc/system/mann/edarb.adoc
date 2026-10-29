@@ -55,49 +55,61 @@ Permute the vertex numbering of `arb` according to the specified `tuple`, which 
 == EXAMPLES
 
 .Move an edge using a delta vector
-[example]
 ====
-mged> **edarb edgedir arb8_1 12 10 0 0**
+[source,console]
+----
+mged> edarb edgedir arb8_1 12 10 0 0
+----
 
 Moves edge 12 (between vertices 1 and 2) of `arb8_1` by +10 units in X. All affected face planes are recalculated.
 ====
 
 .Move an edge using rotation angles
-[example]
 ====
-mged> **edarb edgedir arb8_1 12 45 0**
+[source,console]
+----
+mged> edarb edgedir arb8_1 12 45 0
+----
 
 Sets the direction of edge 12 using azimuth 45°, elevation 0°.
 ====
 
 .Extrude a face
-[example]
 ====
-mged> **edarb extrude arb8_1 1234 50**
+[source,console]
+----
+mged> edarb extrude arb8_1 1234 50
+----
 
 Projects face 1234 (vertices 1, 2, 3, 4) of `arb8_1` outward by 50 units.
 ====
 
 .Redefine a face by plane equation
-[example]
 ====
-mged> **edarb facedef arb8_1 1234 a 0 0 1 100**
+[source,console]
+----
+mged> edarb facedef arb8_1 1234 a 0 0 1 100
+----
 
 Redefines face 1234 of `arb8_1` to be the plane with normal (0,0,1) at offset 100 (i.e., Z=100 plane).
 ====
 
 .Mirror a face
-[example]
 ====
-mged> **edarb mirface arb8_1 1234 z**
+[source,console]
+----
+mged> edarb mirface arb8_1 1234 z
+----
 
 Mirrors face 1234 of `arb8_1` across the Z axis.
 ====
 
 .Permute vertex numbering
-[example]
 ====
-mged> **edarb permute arb8_1 321**
+[source,console]
+----
+mged> edarb permute arb8_1 321
+----
 
 Permutes the vertex numbering of `arb8_1` according to the tuple `321`.
 ====

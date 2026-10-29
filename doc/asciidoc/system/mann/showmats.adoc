@@ -26,9 +26,11 @@ Lists the transformation matrices encountered along the specified path and also 
 The example shows the use of the *showmats* command to list the transformation matrices along the specified path and the accumulated matrix for the entire path.
 
 .List the transformation matrices along a path and the accumulated matrix for the path.
-[example]
 ====
-mged>**showmats head/skull/jaw**
+[source,console]
+----
+mged> showmats head/skull/jaw
+----
 
 Lists the transformation matrices along the path head/skull/jaw and the accumulated matrix for the entire path.
 

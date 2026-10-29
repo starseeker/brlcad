@@ -84,10 +84,12 @@ Takes the value of the first attribute from the specified object and set the sec
 The examples demonstrate the use of the *attr* command and subcommands to assign and list attributes of database objects.
 
 .Assigns an attribute to an object.
-[example]
 ====
 
-mged> **attr set region_1 material_id 10**::
+[source,console]
+----
+mged> attr set region_1 material_id 10
+----
 Assigns an attribute name "material_id" to __region_1__. Its value is 10.
 
 
@@ -95,10 +97,12 @@ Assigns an attribute name "material_id" to __region_1__. Its value is 10.
 ====
 
 .Assigns an attribute (with embedded white space in its value) to an object.
-[example]
 ====
 
-mged> **attr set region_1 comment {This is a comment for region_1}**::
+[source,console]
+----
+mged> attr set region_1 comment {This is a comment for region_1}
+----
 Assigns an attribute named "comment" to __region_1__. Its value is "This is a comment for region_1."
 
 
@@ -106,10 +110,12 @@ Assigns an attribute named "comment" to __region_1__. Its value is "This is a co
 ====
 
 .List all the attributes for an object
-[example]
 ====
 
-mged> **attr show region_1 comment**::
+[source,console]
+----
+mged> attr show region_1 comment
+----
 Lists all the attributes for __region_1__.
 
 
@@ -117,13 +123,15 @@ Lists all the attributes for __region_1__.
 ====
 
 .List all the attribute types present on one or more objects in a database
-[example]
 ====
-mged>**attr list ***
+[source,console]
+----
+mged> attr list *
+----
 
 
-....
-
+[source,text]
+----
 aircode
 los
 material_id
@@ -135,8 +143,7 @@ rgb
 shader
 title
 units
-        
-....
+----
 
 
 
@@ -145,13 +152,15 @@ Generate a list of all attribute keys found one one or more objects in the datab
 ====
 
 .List all the material_id attribute values in use in a database
-[example]
 ====
-mged>**attr list * material_id ***
+[source,console]
+----
+mged> attr list * material_id *
+----
 
 
-....
-
+[source,text]
+----
 material_id=1
 material_id=2
 material_id=4
@@ -162,8 +171,7 @@ material_id=17
 material_id=18
 material_id=19
 material_id=20
-        
-....
+----
 
 
 

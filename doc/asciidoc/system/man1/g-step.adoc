@@ -232,33 +232,33 @@ input, and output failures.
 
 .Export all top-level objects as AP203
 ====
-[source,bash]
+[source,console]
 ----
-g-step -o assembly.step assembly.g
+$ g-step -o assembly.step assembly.g
 ----
 ====
 
 .Export selected objects as AP214 with a report
 ====
-[source,bash]
+[source,console]
 ----
-g-step --schema ap214 --report cab.json -o cab.step vehicle.g cab suspension
+$ g-step --schema ap214 --report cab.json -o cab.step vehicle.g cab suspension
 ----
 ====
 
 .Preserve a representable AP242 CSG tree
 ====
-[source,bash]
+[source,console]
 ----
-g-step --schema ap242 --native-csg -o region.step model.g region
+$ g-step --schema ap242 --native-csg -o region.step model.g region
 ----
 ====
 
 .Require complete inch-based output
 ====
-[source,bash]
+[source,console]
 ----
-g-step --strict --output-units in -o exact.step model.g
+$ g-step --strict --output-units in -o exact.step model.g
 ----
 ====
 

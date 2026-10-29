@@ -34,9 +34,9 @@ Pixels that do not match the input color are passed through unchanged.
 
 .Replace a known background color
 ====
-[source,bash]
+[source,console]
 ----
-pixsubst 0 0 0 255 255 255 < scene.pix > scene-white-bg.pix
+$ pixsubst 0 0 0 255 255 255 < scene.pix > scene-white-bg.pix
 ----
 Every pure-black pixel ({0 0 0}) in _scene.pix_ is changed to white
 ({255 255 255}); all other pixels are left alone. This is handy for swapping a
@@ -45,9 +45,9 @@ black background for a white one before compositing.
 
 .Recolor the background using the first pixel as a key
 ====
-[source,bash]
+[source,console]
 ----
-pixsubst 18 52 86 < input.pix | pix-fb -F /dev/X
+$ pixsubst 18 52 86 < input.pix | pix-fb -F /dev/X
 ----
 Omitting the input color makes *pixsubst* sample the first pixel of
 _input.pix_ as the color to replace, substituting it with {18 52 86}. The

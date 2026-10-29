@@ -72,10 +72,10 @@ with *plot3rot*(1) if true clipping or reorientation is desired.
 
 .Render a wireframe of a database object straight to the framebuffer
 ====
-[source,bash]
+[source,console]
 ----
-fbserv -S 1024 0 /dev/X &
-FB_FILE=:0 rt -o /dev/plot3 -s 1024 model.g component.r | plot3-fb -s 1024
+$ fbserv -S 1024 0 /dev/X &
+$ FB_FILE=:0 rt -o /dev/plot3 -s 1024 model.g component.r | plot3-fb -s 1024
 ----
 Pipe the 3-D plot output of *rt*(1) for a region into *plot3-fb*, displaying the
 wireframe on a 1024x1024 framebuffer started with *fbserv*(1) without writing an
@@ -84,9 +84,9 @@ intermediate file.
 
 .Overlay thick annotation lines on an existing image
 ====
-[source,bash]
+[source,console]
 ----
-plot3-fb -o -t 3 -F /dev/X labels.plot3
+$ plot3-fb -o -t 3 -F /dev/X labels.plot3
 ----
 Draw the strokes from labels.plot3 three pixels thick on top of whatever image
 is already in the X framebuffer, leaving the background untouched.

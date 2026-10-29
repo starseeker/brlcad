@@ -62,9 +62,9 @@ gamma in the PNG.
 
 .Convert a non-default-size PIX image to PNG
 ====
-[source,bash]
+[source,console]
 ----
-pix-png -w 1280 -n 1024 render.pix > render.png
+$ pix-png -w 1280 -n 1024 render.pix > render.png
 ----
 Converts a 1280x1024 PIX rendering to a PNG file, telling *pix-png* the
 input dimensions since PIX files do not store them.
@@ -72,10 +72,10 @@ input dimensions since PIX files do not store them.
 
 .Render a model and save it directly as PNG
 ====
-[source,bash]
+[source,console]
 ----
-rt -s 512 -o render.pix model.g component
-pix-png -a render.pix -o render.png
+$ rt -s 512 -o render.pix model.g component
+$ pix-png -a render.pix -o render.png
 ----
 Ray traces a region of _model.g_ with *rt*(1) to a 512x512 PIX file, then
 converts it to PNG.  The *-a* flag autosizes from the file name so the

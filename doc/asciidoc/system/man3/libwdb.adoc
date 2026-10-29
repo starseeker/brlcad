@@ -10,7 +10,6 @@ libwdb - library for procedural generation of MGED databases
 
 [source,c]
 ----
-
 #include "vmath.h"
 #include "wdb.h"
 
@@ -72,7 +71,6 @@ struct	wmember *headp;
 
 mk_bsolid(FILE * fp, char * name, int nsurf, double res);
 mk_bsurf(FILE * filep, struct b_spline * bp);
-
 ----
 
 

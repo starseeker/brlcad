@@ -57,27 +57,33 @@ Require that _filename_ already exist and open only that file.
 == EXAMPLES
 
 .Open an existing database.
-[example]
 ====
-mged> **opendb -o model.g**
+[source,console]
+----
+mged> opendb -o model.g
+----
 
 Closes the current database, if any, and opens the existing _model.g_ file.
 
 ====
 
 .Report the currently open database path.
-[example]
 ====
-mged> **opendb**
+[source,console]
+----
+mged> opendb
+----
 
 Returns the name of the current database file.
 
 ====
 
 .Open a legacy v4 database with forced endian flipping.
-[example]
 ====
-mged> **opendb -f legacy_v4.g**
+[source,console]
+----
+mged> opendb -f legacy_v4.g
+----
 
 Opens _legacy_v4.g_ as a binary-incompatible v4 database. If flipping is
 applied, the database is opened read-only.

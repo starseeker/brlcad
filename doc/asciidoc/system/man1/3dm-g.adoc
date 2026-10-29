@@ -52,19 +52,19 @@ as *mged*(1) and *gcv*.
 
 .Basic conversion
 ====
-[source,bash]
+[source,console]
 ----
-3dm-g model.3dm model.g
+$ 3dm-g model.3dm model.g
 ----
 Converts the Rhino3D file _model.3dm_ into a BRL-CAD database named _model.g_.
 ====
 
 .Verbose conversion with randomized colors and a follow-on render
 ====
-[source,bash]
+[source,console]
 ----
-3dm-g -r -v -o nist.g NIST_MBE_PMI_7-10.3dm
-rt -o nist.png nist.g NIST_MBE_PMI_7-10
+$ 3dm-g -r -v -o nist.g NIST_MBE_PMI_7-10.3dm
+$ rt -o nist.png nist.g NIST_MBE_PMI_7-10
 ----
 Imports the NIST MBE PMI sample model into _nist.g_ with randomized object
 colors and detailed progress output, then uses *rt*(1) to ray trace the

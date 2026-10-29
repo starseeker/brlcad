@@ -46,10 +46,10 @@ millimeters. Use *-s* to override this factor.
 
 .Convert a binary PLY scan and inspect it
 ====
-[source,bash]
+[source,console]
 ----
-ply-g bunny.ply bunny.g
-mged bunny.g 'tops'
+$ ply-g bunny.ply bunny.g
+$ mged bunny.g 'tops'
 ----
 Convert the PLY mesh _bunny.ply_ into the database _bunny.g_, then list the
 top-level objects with *mged*(1) to verify the imported geometry.
@@ -57,9 +57,9 @@ top-level objects with *mged*(1) to verify the imported geometry.
 
 .Preserve native units
 ====
-[source,bash]
+[source,console]
 ----
-ply-g -s 1.0 model.ply model.g
+$ ply-g -s 1.0 model.ply model.g
 ----
 Import _model.ply_ without the default meters-to-millimeters scaling, leaving
 the coordinates exactly as stored in the file.

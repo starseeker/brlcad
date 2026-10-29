@@ -40,9 +40,9 @@ this program can process ordinary 2-D plot files as well.
 
 .Extract a single frame and convert it to a PostScript image
 ====
-[source,bash]
+[source,console]
 ----
-plot3getframe 2 < animation.plot3 | plot3-ps > frame2.ps
+$ plot3getframe 2 < animation.plot3 | plot3-ps > frame2.ps
 ----
 Pulls the third frame (frame 2) out of a multi-frame plot file produced by an
 animation pipeline and pipes it to *plot3-ps*(1) to render that one frame as a
@@ -51,9 +51,9 @@ PostScript file.
 
 .Report frame numbers while extracting the first frame
 ====
-[source,bash]
+[source,console]
 ----
-plot3getframe -v 0 < animation.plot3 > first.plot3
+$ plot3getframe -v 0 < animation.plot3 > first.plot3
 ----
 Writes frame 0 to first.plot3 and, with *-v*, lists the frame numbers
 encountered on standard error so you can confirm how many frames the input

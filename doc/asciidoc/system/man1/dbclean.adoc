@@ -29,7 +29,7 @@ still completes and _out_model.g_ is written without those objects.
 
 .Compact a database to reclaim dead space
 ====
-[source,bash]
+[source,console]
 ----
 $ dbclean original.g compacted.g
 ----

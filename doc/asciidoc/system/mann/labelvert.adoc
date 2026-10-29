@@ -26,10 +26,12 @@ Labels the vertices of the indicated _objects_ with their coordinate values in t
 The example shows the use of the *labelvert* command to label the vertices of a designated shape with their coordinate values.
 
 .Label the vertices of a particular shape with their coordinate values.
-[example]
 ====
 
-mged> **labelvert shapeb**::
+[source,console]
+----
+mged> labelvert shapeb
+----
 Places coordinate values in the display near the vertices of _shapeb_ .
 
 

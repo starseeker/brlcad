@@ -25,9 +25,11 @@ Note: using the *bot_flip* will toggle the orientation of right and left-handed 
 == EXAMPLES
 
 .Flip a BoT whose outward-facing normals are reversed.
-[example]
 ====
-mged>**bot_flip imported_shell.bot**
+[source,console]
+----
+mged> bot_flip imported_shell.bot
+----
 
 Reverses every facet normal in _imported_shell.bot_, which is a common follow-up after finding that the model's outside faces render as backfaces in shaded mode.
 ====

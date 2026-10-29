@@ -26,9 +26,11 @@ Deletes the specified list of objects from the _mged_ display. This is a synonym
 The example shows the use of the *d* command to delete a region and a shape from the _mged_ display.
 
 .Delete a region and a shape from the _mged_ display.
-[example]
 ====
-mged>**d region1 shapea**
+[source,console]
+----
+mged> d region1 shapea
+----
 
 Deletes _region1_ and _shapea_ from the _mged_ display.
 

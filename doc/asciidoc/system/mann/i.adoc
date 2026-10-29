@@ -26,10 +26,12 @@ Adds __obj_name__ to the end of the combination named __comb_name__. The _operat
 The example shows the use of the *i* command to add a specified region to a combination (group).
 
 .Add an object to a combination (group).
-[example]
 ====
 
-mged> **i region3 group5**::
+[source,console]
+----
+mged> i region3 group5
+----
 Adds _region3_ to the combination _group5_.
 
 

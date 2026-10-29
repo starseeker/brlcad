@@ -94,125 +94,181 @@ Global options (`-S`, `-f`, `-F`, `-i`) are described in
 == EXAMPLES
 
 .Translate sph.s to absolute position (15, 0, 0)
-[example]
 ====
-  mged> **edit sph.s translate -a 15 0 0**
+[source,console]
+----
+mged> edit sph.s translate -a 15 0 0
+----
 ====
 
 .Move sph.s by a relative delta of (+5, 0, 0)
-[example]
 ====
-  mged> **edit sph.s translate -r 5 0 0**
+[source,console]
+----
+mged> edit sph.s translate -r 5 0 0
+----
 
 Using the *tra* alias (always relative):
 
-  mged> **edit sph.s tra 5 0 0**
+[source,console]
+----
+mged> edit sph.s tra 5 0 0
+----
 ====
 
 .Move sph.s from its center to other.s's center (object-name form)
-[example]
 ====
 The `-k sph.s -a other.s` form computes the delta between the two
 keypoints and applies it:
 
-  mged> **edit sph.s translate -k sph.s -a other.s**
+[source,console]
+----
+mged> edit sph.s translate -k sph.s -a other.s
+----
 
 The same delta can also be specified with coordinate positions for `-k`:
 
-  mged> **edit sph.s translate -k 10 0 0 -a other.s**
+[source,console]
+----
+mged> edit sph.s translate -k 10 0 0 -a other.s
+----
 
 Or with an explicit coordinate destination:
 
-  mged> **edit sph.s translate -k 10 0 0 -a 20 0 0**
+[source,console]
+----
+mged> edit sph.s translate -k 10 0 0 -a 20 0 0
+----
 ====
 
 .Align only the Z coordinate of obj to a target elevation of 7.8
-[example]
 ====
-  mged> **edit obj translate -a -z 7.8**
+[source,console]
+----
+mged> edit obj translate -a -z 7.8
+----
 ====
 
 .Align several objects to the same Z elevation — using a reference object
-[example]
 ====
 Set the Z coordinate of obj1 and obj2 to ref.s's Z elevation while
 leaving X and Y unchanged:
 
-  mged> **edit obj1 translate -a -z ref.s**
-  mged> **edit obj2 translate -a -z ref.s**
+[source,console]
+----
+mged> edit obj1 translate -a -z ref.s
+----
+[source,console]
+----
+mged> edit obj2 translate -a -z ref.s
+----
 
 The `-a -z OBJ` form extracts the Z component of ref.s's keypoint
 (its bounding-box center) and applies it absolutely, keeping the
 target's own X and Y.  Multiple axis flags can be combined:
 
-  mged> **edit obj1 translate -a -x -z ref.s**
+[source,console]
+----
+mged> edit obj1 translate -a -x -z ref.s
+----
 
 This copies both the X and Z of ref.s into obj1, leaving Y unchanged.
 ====
 
 .Move a pair of objects away from the origin (explosion effect)
-[example]
 ====
 Each object is moved by a delta equal to its own current position
 vector, doubling its distance from the origin.  Use the `.` batch
 marker as TO and `0 0 0` as FROM:
 
-  mged> **edit sph.s translate -k 0 0 0 .**
-  mged> **edit other.s translate -k 0 0 0 .**
+[source,console]
+----
+mged> edit sph.s translate -k 0 0 0 .
+----
+[source,console]
+----
+mged> edit other.s translate -k 0 0 0 .
+----
 
 For sph.s at (10,0,0): FROM=(0,0,0), TO=own_keypoint=(10,0,0),
 delta=(10,0,0), result=(20,0,0) — doubled distance from origin.
 
 Equivalently with explicit deltas (when positions are known):
 
-  mged> **edit sph.s translate -r 10 0 0**
-  mged> **edit other.s translate -r 20 0 0**
+[source,console]
+----
+mged> edit sph.s translate -r 10 0 0
+----
+[source,console]
+----
+mged> edit other.s translate -r 20 0 0
+----
 ====
 
 .Move a set of objects so that the assembly origin aligns with target.s
-[example]
 ====
-  mged> **edit assembly translate -k assembly -a target.s**
+[source,console]
+----
+mged> edit assembly translate -k assembly -a target.s
+----
 ====
 
 .Translate along a path (move a subpart without disturbing the parent)
-[example]
 ====
 Using a slash-separated path to name the instance:
 
-  mged> **edit assembly/subpart/sph.s translate -r 0 0 10**
+[source,console]
+----
+mged> edit assembly/subpart/sph.s translate -r 0 0 10
+----
 ====
 
 .Use the intermediate buffer: translate tentatively, then revert if unsatisfied
-[example]
 ====
 Create a checkpoint (snapshot to revert to):
 
-  mged> **edit tor.s checkpoint**
+[source,console]
+----
+mged> edit tor.s checkpoint
+----
 
 Apply a tentative translation (stays in buffer only):
 
-  mged> **edit -i tor.s translate -r 5 0 0**
+[source,console]
+----
+mged> edit -i tor.s translate -r 5 0 0
+----
 
 If satisfied, write to disk:
 
-  mged> **edit tor.s translate -r 0 0 0**
+[source,console]
+----
+mged> edit tor.s translate -r 0 0 0
+----
 
 If not satisfied, roll back to the checkpoint:
 
-  mged> **edit tor.s revert**
+[source,console]
+----
+mged> edit tor.s revert
+----
 ====
 
 .Operate on the active selection instead of naming objects explicitly
-[example]
 ====
 With objects already selected in the viewer:
 
-  mged> **edit translate -a 10 0 0**
+[source,console]
+----
+mged> edit translate -a 10 0 0
+----
 
 Force the command-line specifier to override the selection:
 
-  mged> **edit -f sph.s translate -a 10 0 0**
+[source,console]
+----
+mged> edit -f sph.s translate -a 10 0 0
+----
 ====
 
 == SEE ALSO

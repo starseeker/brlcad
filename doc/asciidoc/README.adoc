@@ -31,6 +31,19 @@ doc/asciidoc/
     └── mann/          Section n man pages  (MGED commands)
 ----
 
+== Manual Page Examples
+
+Use `[source,console]` for terminal transcripts in manual-page `EXAMPLES`
+sections. Prefix commands entered at a shell with `$ `, commands entered in
+MGED with `mged> `, and commands entered in gsh with its actual `g> ` prompt.
+Do not add the primary prompt to command continuations or program output. Keep
+the first and last content lines adjacent to the listing fences; do not pad the
+listing with blank or whitespace-only lines.
+
+Use an explicit source language for program source and `[source,text]` for
+file contents or other literal data that is not a terminal transcript. Use
+listing fences (`----`) rather than legacy literal-block fences (`....`).
+
 == Build Outputs
 
 When `BRLCAD_EXTRADOCS=ON` is set at CMake configuration time:

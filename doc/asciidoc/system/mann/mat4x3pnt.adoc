@@ -29,9 +29,11 @@ The result is returned as a space-separated 3-element vector string.
 == EXAMPLES
 
 .Transform the origin by an identity matrix
-[example]
 ====
-mged> **mat4x3pnt "1 0 0 0  0 1 0 0  0 0 1 0  0 0 0 1" "10 20 30"**
+[source,console]
+----
+mged> mat4x3pnt "1 0 0 0  0 1 0 0  0 0 1 0  0 0 0 1" "10 20 30"
+----
 
 `10 20 30`
 
@@ -39,10 +41,15 @@ The identity matrix leaves the point unchanged.
 ====
 
 .Apply a rotation matrix to a point
-[example]
 ====
-mged> **set rot [mat_ae 90 0]**
-mged> **mat4x3pnt $rot "100 0 0"**
+[source,console]
+----
+mged> set rot [mat_ae 90 0]
+----
+[source,console]
+----
+mged> mat4x3pnt $rot "100 0 0"
+----
 
 Rotates the point (100, 0, 0) by 90° in azimuth, which places it on the Y axis.
 ====

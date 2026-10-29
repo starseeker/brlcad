@@ -41,9 +41,9 @@ _file.bw_::
 
 .Summarize the intensity distribution of an image
 ====
-[source,bash]
+[source,console]
 ----
-bwstat moss.bw
+$ bwstat moss.bw
 ----
 Reports the pixel count, inferred square dimensions, minimum, maximum,
 mode, median, mean, standard deviation, variance, and skew for the
@@ -52,9 +52,9 @@ intensities in `moss.bw`.
 
 .Inspect a histogram piped from another tool
 ====
-[source,bash]
+[source,console]
 ----
-pix-bw scene.pix | bwstat -v
+$ pix-bw scene.pix | bwstat -v
 ----
 Converts a color *pix*(5) image to black and white with *pix-bw*(1) and
 pipes it straight into *bwstat*, which prints the statistics followed by

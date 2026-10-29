@@ -26,9 +26,11 @@ Reads the specified _file_ and sets the combination shader, color, and inheritan
 The example shows the use of the *rmater* command to read a specified file and set the combination attributes according to those in the file.
 
 .Set combination attributes according to those listed in a specified file.
-[example]
 ====
-mged>**rmater mater_file**
+[source,console]
+----
+mged> rmater mater_file
+----
 
 Reads the file named __mater_file__ and sets the combination attributes according to those listed in the file.
 

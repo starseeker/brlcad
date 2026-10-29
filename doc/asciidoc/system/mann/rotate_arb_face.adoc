@@ -39,17 +39,21 @@ After the face plane is rotated and re-anchored, all ARB vertices are recomputed
 == EXAMPLES
 
 .Rotate face 1 of an ARB8 by 10° about vertex 1
-[example]
 ====
-mged> **rotate_arb_face arb8.s 1 1 "10 0 0"**
+[source,console]
+----
+mged> rotate_arb_face arb8.s 1 1 "10 0 0"
+----
 
 Rotates face 1 of `arb8.s` by 10° about the X axis, anchored at vertex 1. The face's plane normal is rotated and re-anchored, and all other ARB vertices are recomputed.
 ====
 
 .Tilt a face of an ARB6
-[example]
 ====
-mged> **rotate_arb_face wedge.s 2 3 "0 15 0"**
+[source,console]
+----
+mged> rotate_arb_face wedge.s 2 3 "0 15 0"
+----
 
 Rotates face 2 of the ARB6 primitive `wedge.s` by 15° about the Y axis, keeping vertex 3 fixed.
 ====

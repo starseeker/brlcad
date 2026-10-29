@@ -94,7 +94,7 @@ Pixel averaging may be meaningless for some images or color maps, in which case 
 
 .Enlarge a 320x200 image to fill a 1280x1024 framebuffer
 ====
-[source,bash]
+[source,console]
 ----
 $ gif-fb image.gif
 $ fbstretch -w 320 -n 200 -W 1280 -N 1024

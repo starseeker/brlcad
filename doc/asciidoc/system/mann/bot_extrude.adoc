@@ -62,9 +62,11 @@ Produce a volumetric BoT output even if the input BoT's parameters indicate it i
 Generate a volumetric BoT from a plate mode BoT (standard case.)
 
 .Basic example.
-[example]
 ====
-mged>**bot extrude input.bot output.bot**
+[source,console]
+----
+mged> bot extrude input.bot output.bot
+----
 
 Represents all triangle elements in input.bot with CSG implicits, approximates them with triangles, and unions them together to produce output.bot.
 
@@ -73,9 +75,11 @@ Represents all triangle elements in input.bot with CSG implicits, approximates t
 For a more advanced use, we combine *bot extrude* with *search -exec* to batch convert a large number of plate mode BoTs.
 
 .Batch conversion of plate mode BoTs.
-[example]
 ====
-mged>**search -type bot -type plate -exec bot extrude -F --in-place "{}" ";"**
+[source,console]
+----
+mged> search -type bot -type plate -exec bot extrude -F --in-place "{}" ";"
+----
 
 Uses the *--in-place* to replace plate mode BoTs in the .g file with their volumetric approximations. The *-F* option instructs *bot extrude* to proceed even if the BoT is view dependent.
 

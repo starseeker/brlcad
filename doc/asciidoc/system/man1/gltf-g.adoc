@@ -57,10 +57,10 @@ argument or with the *-o* option, but not both.
 
 .Convert a binary glTF model and inspect the result
 ====
-[source,bash]
+[source,console]
 ----
-gltf-g -v model.glb model.g
-mged model.g tops
+$ gltf-g -v model.glb model.g
+$ mged model.g tops
 ----
 Imports the binary glTF file _model.glb_ into _model.g_, printing the
 mesh, vertex, and face counts as it works, then lists the top-level
@@ -69,9 +69,9 @@ mesh, vertex, and face counts as it works, then lists the top-level
 
 .Convert an ASCII glTF model using the output flag
 ====
-[source,bash]
+[source,console]
 ----
-gltf-g -E -o scene.g scene.gltf
+$ gltf-g -E -o scene.g scene.gltf
 ----
 Reads the ASCII glTF file _scene.gltf_, retaining the original JSON for
 any extras and extensions, and writes the geometry to _scene.g_.

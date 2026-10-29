@@ -28,9 +28,11 @@ query.
 == EXAMPLES
 
 .Report the current database format version.
-[example]
 ====
-mged> **dbversion**
+[source,console]
+----
+mged> dbversion
+----
 
 Prints the version number of the open database, such as `5`.
 

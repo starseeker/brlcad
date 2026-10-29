@@ -75,9 +75,9 @@ standard error on completion.
 
 .Convert objects from a database to an EGG file
 ====
-[source,bash]
+[source,console]
 ----
-g-egg -r 0.005 -o havoc.egg havoc.g body wings
+$ g-egg -r 0.005 -o havoc.egg havoc.g body wings
 ----
 Tessellates the *body* and *wings* regions from *havoc.g* using a tighter
 relative tolerance of 0.005 and writes the combined Panda3D EGG model to
@@ -86,9 +86,9 @@ relative tolerance of 0.005 and writes the combined Panda3D EGG model to
 
 .Generate geometry on demand and pipe it onward
 ====
-[source,bash]
+[source,console]
 ----
-g-egg -a 0.5 moss.g all.g > moss.egg
+$ g-egg -a 0.5 moss.g all.g > moss.egg
 ----
 Facetizes the *all.g* assembly from the *moss.g* sample database with a
 0.5 mm absolute tolerance and redirects the EGG output (which would

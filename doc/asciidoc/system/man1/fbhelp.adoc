@@ -43,9 +43,9 @@ as *fb-pix*(1) and *pix-fb*(1), accept the same *-F* convention.
 
 .List the available frame buffer devices
 ====
-[source,bash]
+[source,console]
 ----
-fbhelp
+$ fbhelp
 ----
 Prints the *FB_FILE* selection instructions, the list of frame buffer
 interfaces built into this installation (for example, the in-memory and
@@ -54,10 +54,10 @@ file-backed devices), and the help text for the default device.
 
 .Inspect a specific frame buffer before writing an image to it
 ====
-[source,bash]
+[source,console]
 ----
-fbhelp -F /tmp/output.pix
-pix-fb -F /tmp/output.pix scene.pix
+$ fbhelp -F /tmp/output.pix
+$ pix-fb -F /tmp/output.pix scene.pix
 ----
 Queries the file-backed (_/tmp/output.pix_) frame buffer to confirm it
 is available and learn its capabilities, then uses *pix-fb*(1) to

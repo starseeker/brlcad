@@ -42,9 +42,9 @@ from standard input. The ASCII listing is written to standard output.
 
 .Inspect the contents of a plot file
 ====
-[source,bash]
+[source,console]
 ----
-plot3-asc -v drawing.plot3
+$ plot3-asc -v drawing.plot3
 ----
 Lists every command in _drawing.plot3_ using mnemonic names and prints a
 usage tally to standard error, making it easy to see what the plot contains.
@@ -52,11 +52,11 @@ usage tally to standard error, making it easy to see what the plot contains.
 
 .Round-trip edit a plot file
 ====
-[source,bash]
+[source,console]
 ----
-plot3-asc drawing.plot3 > drawing.asc
+$ plot3-asc drawing.plot3 > drawing.asc
 # edit drawing.asc with any text editor, then convert back
-asc-plot3 < drawing.asc > edited.plot3
+$ asc-plot3 < drawing.asc > edited.plot3
 ----
 Converts a binary plot to ASCII, allowing the geometry to be tweaked by hand,
 then *asc-plot3*(1) reassembles the edited listing into a binary *plot3*(5)

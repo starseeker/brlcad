@@ -48,36 +48,44 @@ The _-o_ option prints results to the specified _filename_.
 The first example shows the use of the *tree* command to list the contents of specified objects hierarchically. The second and third examples show the use of the *tree* command with arguments.
 
 .Show the structure of an object down to the primitive shape level.
-[example]
 ====
-mged>**tree group1**
+[source,console]
+----
+mged> tree group1
+----
 
 Shows the structure of the tree rooted at _group1_ down to the primitive shape level.
 
 ====
 
 .Specify the amount of indentation in the tree.
-[example]
 ====
-mged>**tree -i2 group1**
+[source,console]
+----
+mged> tree -i2 group1
+----
 
 Uses two spaces for each level of indentation.
 
 ====
 
 .Specify that no shapes are to be printed.
-[example]
 ====
-mged>**tree -c group1**
+[source,console]
+----
+mged> tree -c group1
+----
 
 No shapes are printed.
 
 ====
 
 .Specify that attributes are listed for each object printed.
-[example]
 ====
-mged>**tree -a -c group1**
+[source,console]
+----
+mged> tree -a -c group1
+----
 
 No shapes are printed, but attributes are shown for the printed objects.
 

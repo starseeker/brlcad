@@ -58,18 +58,18 @@ Tiling many small low-resolution frames into a single image allows the collectio
 
 .Tile numbered frames into a large preview image
 ====
-[source,bash]
+[source,console]
 ----
-pixtile -S 1024 -s 128 -o 2 anim > out.pix
+$ pixtile -S 1024 -s 128 -o 2 anim > out.pix
 ----
 Reads files _anim.2_ through _anim.65_, placing each 128x128 image from lower left to upper right into a 1024x1024 _out.pix_ image suitable for previewing an animation sequence.
 ====
 
 .Combine four explicitly named tiles
 ====
-[source,bash]
+[source,console]
 ----
-pixtile -s 256 lowerleft lowerright upperleft upperright > out.pix
+$ pixtile -s 256 lowerleft lowerright upperleft upperright > out.pix
 ----
 Reads the four named 256x256 images and arranges them from lower left to upper right into a 512x512 _out.pix_ image.
 ====

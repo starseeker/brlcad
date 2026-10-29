@@ -36,27 +36,33 @@ See the _nirt(1)_ man page for options documentation.
 == EXAMPLES
 
 .Run the NIRT program to fire a ray through the GED display.
-[example]
 ====
-mged>**nirt**
+[source,console]
+----
+mged> nirt
+----
 
 Fires a single ray through the center of the GED display.
 
 ====
 
 .Run the NIRT program to fire a ray through the GED display and report air.
-[example]
 ====
-mged>**nirt -u 1**
+[source,console]
+----
+mged> nirt -u 1
+----
 
 Fires a single ray through the center of the GED display and report air regions.
 
 ====
 
 .Run the NIRT program to fire a ray through the GED display and include LOS and material ID per region.
-[example]
 ====
-mged>**nirt -A LOS -A material_id**
+[source,console]
+----
+mged> nirt -A LOS -A material_id
+----
 
 Fires a single ray through the center of the GED display and includes LOS and material ID per region.
 

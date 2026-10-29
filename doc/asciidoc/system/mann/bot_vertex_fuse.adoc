@@ -26,10 +26,12 @@ Used to eliminate duplicate vertices from a BOT solid. It returns the number of 
 The example shows the use of the *bot_vertex_fuse* command to eliminate duplicate vertices from a BOT solid and store the result in a new BOT primitive.
 
 .Eliminating duplicate vertices from a primitive and storing the result in a new BOT primitive.
-[example]
 ====
 
-mged> **bot_vertex_fuse bot1_fused bot1_original**::
+[source,console]
+----
+mged> bot_vertex_fuse bot1_fused bot1_original
+----
 Eliminates any duplicate vertices from the primitive named __bot1_original__ and stores the result in the new BOT primitive named __bot1_fused__.
 
 

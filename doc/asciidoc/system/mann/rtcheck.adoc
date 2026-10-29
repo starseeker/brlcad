@@ -26,9 +26,11 @@ Executes the BRL-CAD _rtcheck_ program with the default options of "-s50 M." The
 The example shows the use of the *rtcheck* command to run the _rtcheck_ program with rays fired from a uniform grid with the rays spaced every 10 mm.
 
 .Run the _rtcheck_ program to fire rays from a uniform grid with the rays spaced a specified distance apart.
-[example]
 ====
-mged>**rtcheck -g10 -G10**
+[source,console]
+----
+mged> rtcheck -g10 -G10
+----
 
 Runs the _rtcheck_ program with rays fired from a uniform grid with the rays spaced every 10 mm.
 

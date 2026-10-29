@@ -26,9 +26,11 @@ Attempts to convert an existing nmg_shape to a simpler primitive shape type. The
 The example shows the use of the *nmg_simplify* command to convert an existing nmg shape to a polysolid.
 
 .Convert an existing shape to a polysolid.
-[example]
 ====
-mged>**nmg_simplify poly shapea.poly shapea.nmg**
+[source,console]
+----
+mged> nmg_simplify poly shapea.poly shapea.nmg
+----
 
 Converts the nmg shape named _shapea.nmg_ to a polysolid named _shapea.poly_.
 

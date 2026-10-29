@@ -322,9 +322,8 @@ is approximate and slower.
 == EXAMPLES
 
 .Create plain and framed text
-[example]
 ====
-[source]
+[source,console]
 ----
 mged> annotate text --at "0 0 50" part-note "INSPECT THIS FACE"
 mged> annotate text --at "0 0 60" --plane xz --frame \
@@ -333,9 +332,8 @@ mged> annotate text --at "0 0 60" --plane xz --frame \
 ====
 
 .Create a styled leader
-[example]
 ====
-[source]
+[source,console]
 ----
 mged> annotate leader --for bracket.r --at "30 20 12" \
         --color 0/255/255 --font osifont --bold fastener-note \
@@ -348,9 +346,8 @@ mged> annotate leader --for bracket.r --at "30 20 12" --screen-space \
 ====
 
 .Create linear, angular, radius, diameter, and ordinate dimensions
-[example]
 ====
-[source]
+[source,console]
 ----
 mged> annotate dimension linear --from "0 0 0" --to "100 0 0" \
         --offset 12 --units mm length-dim
@@ -365,9 +362,8 @@ mged> annotate dimension ordinate --origin "0 0 0" --to "42 18 7" \
 ====
 
 .Create examples of the supported line and text styles
-[example]
 ====
-[source]
+[source,console]
 ----
 mged> annotate leader --target "0 0 0" --at "20 10 0" \
         --line-style dashed --line-width 2 dashed-note "DASHED LEADER"
@@ -379,9 +375,8 @@ mged> annotate text --at "0 0 40" --bold --italic \
 ====
 
 .Dimension real geometry in m35.g with an AABB
-[example]
 ====
-[source]
+[source,console]
 ----
 mged> draw component
 mged> annotate autodim --color 255/220/0 --precision 1 \
@@ -393,9 +388,8 @@ of `component`'s model-axis-aligned 3D bounding box.
 ====
 
 .Dimension the same all-up combination with an OBB
-[example]
 ====
-[source]
+[source,console]
 ----
 mged> draw component
 mged> annotate autodim --bounds obb --color 0/255/255 --precision 1 \
@@ -408,9 +402,8 @@ of the faster conservative leaf-bound point set.
 ====
 
 .Refresh dimensions after a view or geometry change
-[example]
 ====
-[source]
+[source,console]
 ----
 mged> ae 125 25
 mged> annotate update component-obb-dim
@@ -423,9 +416,8 @@ The same command should be run after editing any source object.
 ====
 
 .Dimension only two axes at a selected corner
-[example]
 ====
-[source]
+[source,console]
 ----
 mged> annotate autodim --axes x,z --corner xmin,ymax,zmin \
         --offset 15 --units mm bracket-overall bracket.r
@@ -433,9 +425,8 @@ mged> annotate autodim --axes x,z --corner xmin,ymax,zmin \
 ====
 
 .Toggle and inspect annotations
-[example]
 ====
-[source]
+[source,console]
 ----
 mged> annotate hide component
 mged> annotate show component

@@ -36,10 +36,10 @@ positional _window_size_.
 
 .Estimate pitch periodicity of a sampled signal
 ====
-[source,bash]
+[source,console]
 ----
-damdf 1024 < signal.doubles > amdf.doubles
-dpeak < amdf.doubles
+$ damdf 1024 < signal.doubles > amdf.doubles
+$ dpeak < amdf.doubles
 ----
 Computes the AMDF of a stream of doubles over 1024-sample windows, then locates
 the dominant peaks with *dpeak*(1); the lag of the largest peak corresponds to

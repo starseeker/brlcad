@@ -97,54 +97,66 @@ Get (without arguments) or set the view in the form of yaw, pitch, roll. A ypr o
 == EXAMPLES
 
 .Get the center.
-[example]
 ====
-mged>**view center**
+[source,console]
+----
+mged> view center
+----
 
 Gets the center.
 
 ====
 
 .Set the center at the origin of model space.
-[example]
 ====
-mged>**view center 0 0 0**
+[source,console]
+----
+mged> view center 0 0 0
+----
 
 Sets the center at the origin of model space.
 
 ====
 
 .Get the current yaw, pitch, and roll
-[example]
 ====
-mged>**view ypr**
+[source,console]
+----
+mged> view ypr
+----
 
 Returns the yaw, pitch, and roll of the current view.
 
 ====
 
 .Set the current yaw, pitch, and roll
-[example]
 ====
-mged>**view ypr 90 0 0**
+[source,console]
+----
+mged> view ypr 90 0 0
+----
 
 Sets the view using yaw, pitch, and roll so that the ae is 270, 0 (right).
 
 ====
 
 .Increase the azimuth by 10 degrees
-[example]
 ====
-mged>**view ae -i 10 0**
+[source,console]
+----
+mged> view ae -i 10 0
+----
 
 Sets the view by increasing the current azimuth by 10 degrees
 
 ====
 
 .Save current viewing parameters in a specified file in the form of a shell script to run the BRL-CAD rtedge program
-[example]
 ====
-mged>**view save -e rtedge run_rtedge_script.rt -s1024**
+[source,console]
+----
+mged> view save -e rtedge run_rtedge_script.rt -s1024
+----
 
 Creates a script named run_rtedge_script.rt that will run rtedge and create a pix file of the current screen.
 

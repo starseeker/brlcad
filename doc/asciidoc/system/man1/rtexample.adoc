@@ -18,8 +18,8 @@ rtexample model.g objects...
 == DESCRIPTION
 
 
-....
-
+[source,text]
+----
         This is an example of a program that uses librt to shoot a single ray at some
         geometry in a geometry (.g) database.
 
@@ -34,8 +34,7 @@ rtexample model.g objects...
         output information about hit region (if hit) and log misses. Applications will
         typically define more complex tasks to fo if the ray hits, such as describing a
         reflected ray.
-        
-....
+----
 
 
 [[examples]]

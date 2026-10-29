@@ -65,17 +65,21 @@ Use `showmats` to view the actual accumulated transformation matrices along any 
 == EXAMPLES
 
 .Write a full solids summary for a group
-[example]
 ====
-mged> **solids shapes_summary group1**
+[source,console]
+----
+mged> solids shapes_summary group1
+----
 
 Writes a complete region and primitive parameter summary for all regions reachable from `group1` to `shapes_summary`. The result string reports how many primitives and regions were processed.
 ====
 
 .Include a specific region alongside a group
-[example]
 ====
-mged> **solids report.txt assembly.c extra.r**
+[source,console]
+----
+mged> solids report.txt assembly.c extra.r
+----
 
 Writes the solids table for all regions under `assembly.c` and for the specific region `extra.r` to `report.txt`.
 ====

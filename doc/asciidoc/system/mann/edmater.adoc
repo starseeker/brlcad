@@ -26,10 +26,12 @@ Places the user in an editor ready to edit a file filled with shader arguments f
 The example shows the use of the *edmater* command to edit _shader_ parameters for two combinations.
 
 .Editing _shader_ parameters for two combinations.
-[example]
 ====
 
-mged> **edmater comb1 comb2**::
+[source,console]
+----
+mged> edmater comb1 comb2
+----
 The _shader_ parameters can now be edited for _comb1_ and _comb2_.
 
 

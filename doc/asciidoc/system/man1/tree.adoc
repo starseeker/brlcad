@@ -101,10 +101,10 @@ JSON file describing the scale, skeleton, canopy, realization, and materials.
 
 .Generate a reproducible conifer and raytrace it
 ====
-[source,bash]
+[source,console]
 ----
-tree --preset conifer --seed 42 --height 18000 -o spruce.g
-rt -s 512 -o spruce.png spruce.g tree
+$ tree --preset conifer --seed 42 --height 18000 -o spruce.g
+$ rt -s 512 -o spruce.png spruce.g tree
 ----
 Grows an 18 m conifer with a fixed seed (so the model is reproducible) into
 _spruce.g_, then renders the resulting *tree* group to an image with *rt*(1).
@@ -112,11 +112,11 @@ _spruce.g_, then renders the resulting *tree* group to an image with *rt*(1).
 
 .Build a small forest by appending several trees with offsets
 ====
-[source,bash]
+[source,console]
 ----
-tree --preset broadleaf --seed 1 --x-offset 0     -n oak_a -o forest.g
-tree --preset broadleaf --seed 2 --x-offset 9000  -n oak_b -j -o forest.g
-tree --preset shrub     --seed 3 --x-offset 18000 -n bush  -j -o forest.g
+$ tree --preset broadleaf --seed 1 --x-offset 0     -n oak_a -o forest.g
+$ tree --preset broadleaf --seed 2 --x-offset 9000  -n oak_b -j -o forest.g
+$ tree --preset shrub     --seed 3 --x-offset 18000 -n bush  -j -o forest.g
 ----
 Writes the first tree into a fresh _forest.g_, then *--append*s two more at
 shifted X positions and with distinct seeds and names, producing a scene of

@@ -50,9 +50,9 @@ binary unsigned-short stream include *u-a*(1), *u-bw*(1), and *u-d*(1).
 
 .Normalize raw 16-bit samples to floating point
 ====
-[source,bash]
+[source,console]
 ----
-u-f -n < samples.u > samples.f
+$ u-f -n < samples.u > samples.f
 ----
 Reads the binary unsigned-short stream in samples.u and writes
 normalized single-precision floats (scaled by 1/65536) to samples.f,
@@ -62,9 +62,9 @@ floating-point signal processing.
 
 .Scale and analyze a sample stream
 ====
-[source,bash]
+[source,console]
 ----
-u-f 0.5 < signal.u | dstats
+$ u-f 0.5 < signal.u | dstats
 ----
 Halves every unsigned-short sample, converts it to floating point, and
 pipes the result to *dstats*(1) to report the minimum, maximum, mean,

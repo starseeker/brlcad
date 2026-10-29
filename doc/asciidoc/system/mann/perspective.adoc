@@ -31,33 +31,41 @@ Typical useful perspective angles range from about 15° (narrow, telephoto-like)
 == EXAMPLES
 
 .Query the current perspective angle
-[example]
 ====
-mged> **perspective**
+[source,console]
+----
+mged> perspective
+----
 
 Returns the current perspective angle, e.g. `0` when orthographic projection is active.
 ====
 
 .Enable a standard perspective view
-[example]
 ====
-mged> **perspective 45**
+[source,console]
+----
+mged> perspective 45
+----
 
 Sets the field of view to 45°. Objects farther from the viewer will appear smaller relative to nearby objects.
 ====
 
 .Use a narrow telephoto-style perspective
-[example]
 ====
-mged> **perspective 15**
+[source,console]
+----
+mged> perspective 15
+----
 
 Sets a narrow 15° field of view, compressing depth and making distant objects appear proportionally larger.
 ====
 
 .Disable perspective (return to orthographic)
-[example]
 ====
-mged> **perspective 0**
+[source,console]
+----
+mged> perspective 0
+----
 
 Resets `gv_pmat` to the identity matrix, switching the view back to orthographic (parallel) projection.
 ====

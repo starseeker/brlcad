@@ -26,10 +26,12 @@ Allows the user to set the direction of an edge by specifying a direction vector
 The example shows the use of the *edgedir* command to rotate an edge to be parallel to the _y_ axis.
 
 .Rotate an edge to be parallel to the _y_ axis.
-[example]
 ====
 
-mged> **edgedir 0 1 0**::
+[source,console]
+----
+mged> edgedir 0 1 0
+----
 Rotates the edge being edited to be parallel to the _y_ axis.
 
 

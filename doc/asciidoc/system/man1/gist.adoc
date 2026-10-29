@@ -133,9 +133,9 @@ that directory, writing one report per model into an export folder.
 
 .Summarize a single model
 ====
-[source,bash]
+[source,console]
 ----
-gist -i ktank.g -o ktank.png -t tank -n "J. Doe" -c UNCLASSIFIED
+$ gist -i ktank.g -o ktank.png -t tank -n "J. Doe" -c UNCLASSIFIED
 ----
 Renders a report for the *ktank.g* database, featuring the *tank*
 component, naming the preparer and stamping the report banners as
@@ -144,9 +144,9 @@ UNCLASSIFIED, and saves it to *ktank.png*.
 
 .Re-run quickly after tweaking metadata
 ====
-[source,bash]
+[source,console]
 ----
-gist -Z -i ktank.g -o ktank_v2.png -N "revised mass properties"
+$ gist -Z -i ktank.g -o ktank_v2.png -N "revised mass properties"
 ----
 Reuses the cached renders left in the *.working* directory from a
 previous run (*-Z*), so only the report layout is regenerated with the
@@ -155,9 +155,9 @@ added notes rather than re-rendering all of the views.
 
 .Batch-process a directory of models
 ====
-[source,bash]
+[source,console]
 ----
-gist -F models/ -e reports -p 600 -w lbs -l in
+$ gist -F models/ -e reports -p 600 -w lbs -l in
 ----
 Generates a 600 ppi report for every *.g* file in *models/*, writing
 them into a *reports* export folder and presenting weights in pounds

@@ -26,9 +26,11 @@ Copies __old_tgc__(an existing TGC shape) to a new TGC shape (__new_tgc__), posi
 The example shows the use of the *cpi* command to copy an existing TGC shape to a new TGC shape and position the new shape with its base vertex coincident with the center of the top of the existing shape.
 
 .Copy an existing TGC shape to a new TGC shape.
-[example]
 ====
-mged>**cpi tgc_a tgc_b**
+[source,console]
+----
+mged> cpi tgc_a tgc_b
+----
 
 Copies __tgc_a__ to __tgc_b__ and translates __tgc_b__ to the end of __tgc_a__.
 

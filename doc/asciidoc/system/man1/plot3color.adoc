@@ -37,9 +37,9 @@ figures from shell scripts.
 
 .Append a color command to an existing plot
 ====
-[source,bash]
+[source,console]
 ----
-plot3color 255 0 0 < drawing.plot3 > red.plot3
+$ plot3color 255 0 0 < drawing.plot3 > red.plot3
 ----
 Copies the UnixPlot stream from _drawing.plot3_ to _red.plot3_, then appends a
 command that switches the current drawing color to full red (255 0 0).
@@ -47,9 +47,9 @@ command that switches the current drawing color to full red (255 0 0).
 
 .Build a colored plot from scratch in a pipeline
 ====
-[source,bash]
+[source,console]
 ----
-plot3color 0 255 0 | plot3line2 0 0 100 100 > line.plot3
+$ plot3color 0 255 0 | plot3line2 0 0 100 100 > line.plot3
 ----
 Emits a green color command and pipes it into *plot3line2*(1), producing a
 *plot3*(5) file that draws a green line from (0,0) to (100,100).

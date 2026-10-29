@@ -33,17 +33,21 @@ See *eye*(nged) for full documentation.
 == EXAMPLES
 
 .Get the current eye point
-[example]
 ====
-mged> **eye_pos**
+[source,console]
+----
+mged> eye_pos
+----
 
 Returns the current camera eye position in model coordinates, for example: `0 0 1000`.
 ====
 
 .Set the eye point
-[example]
 ====
-mged> **eye_pos 0 -500 500**
+[source,console]
+----
+mged> eye_pos 0 -500 500
+----
 
 Positions the camera eye point at (0, -500, 500) in model coordinates.
 ====

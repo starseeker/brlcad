@@ -124,9 +124,9 @@ currently supported.
 
 .Render a region to a PNG file
 ====
-[source,bash]
+[source,console]
 ----
-art -o havoc.png -s 1024 -a 35 -e 25 havoc.g havoc
+$ art -o havoc.png -s 1024 -a 35 -e 25 havoc.g havoc
 ----
 Renders the _havoc_ object from _havoc.g_ at azimuth 35 and elevation 25
 into a 1024x1024 image named _havoc.png_ in the current directory.
@@ -134,9 +134,9 @@ into a 1024x1024 image named _havoc.png_ in the current directory.
 
 .Increase sample count and use an orthographic camera
 ====
-[source,bash]
+[source,console]
 ----
-art -p 0 -c "set samples=100" -o ortho.png moss.g all.g
+$ art -p 0 -c "set samples=100" -o ortho.png moss.g all.g
 ----
 Sets the perspective angle to 0 (orthographic projection) and raises the
 per-pixel sample count to 100 for a smoother, less noisy image at the cost
@@ -145,10 +145,10 @@ of longer render time.
 
 .Render an mged saveview script
 ====
-[source,bash]
+[source,console]
 ----
-mged moss.g 'saveview view.rt; q'
-art -M -o moss.png moss.g all.g < view.rt
+$ mged moss.g 'saveview view.rt; q'
+$ art -M -o moss.png moss.g all.g < view.rt
 ----
 Captures the current *mged*(1) view as an rt script, then feeds that script
 to *art* via *-M* so the rendered image matches the saved camera position.

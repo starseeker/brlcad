@@ -55,9 +55,9 @@ such as *dmod*(1) and *dconv*(1).
 
 .Normalize full-scale audio samples to unit-range floats
 ====
-[source,bash]
+[source,console]
 ----
-i-f -n < signal.pcm > signal.f
+$ i-f -n < signal.pcm > signal.f
 ----
 Treats the values in `signal.pcm` as full-range 16-bit signed samples
 and rescales them to the range -1.0 to +1.0, producing a stream of
@@ -66,9 +66,9 @@ floats in `signal.f` suitable for further floating point processing.
 
 .Apply an explicit gain in a processing pipeline
 ====
-[source,bash]
+[source,console]
 ----
-i-f 0.01 < input.shorts | dconv > output.f
+$ i-f 0.01 < input.shorts | dconv > output.f
 ----
 Scales each short sample by 0.01 while converting to float, then feeds
 the resulting float stream into *dconv*(1) for further signal

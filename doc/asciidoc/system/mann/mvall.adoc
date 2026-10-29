@@ -24,26 +24,26 @@ Changes the name of __old_name__ to __new_name__. This will also change any refe
 == EXAMPLES
 
 .Change the name of an object everywhere it occurs in the database.
-[example]
 ====
-mged>**mvall shapea shapeb**
+[source,console]
+----
+mged> mvall shapea shapeb
+----
 
 Changes the name of _shapea_ to _shapeb_ everywhere it occurs in the database.
 
 ====
 
 .This example shows a simple mapping file.
-[example]
 ====
 
-....
-
+[source,text]
+----
 # this line is a comment
 old_name new_name
 foo bar # another comment, replacing foo with bar
 bad_name good_name
-      
-....
+----
 
 ====
 

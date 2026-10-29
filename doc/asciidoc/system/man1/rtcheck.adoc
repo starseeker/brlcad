@@ -100,10 +100,10 @@ options most relevant to overlap checking are listed below.
 
 .Check a subassembly for overlaps and view the result
 ====
-[source,bash]
+[source,console]
 ----
-rtcheck -s 1024 -a 35 -e 25 truck.g chassis > overlaps.plot3
-overlay overlaps.plot3
+$ rtcheck -s 1024 -a 35 -e 25 truck.g chassis > overlaps.plot3
+$ overlay overlaps.plot3
 ----
 Fires a 1024x1024 grid from azimuth 35, elevation 25 degrees at the
 _chassis_ in _truck.g_, capturing every overlapping ray segment in

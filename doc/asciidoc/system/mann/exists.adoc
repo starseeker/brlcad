@@ -132,39 +132,39 @@ While this may seem like a rather verbose way of writing the expression, it grea
 The following are run from the MGED command prompt:
 
 .Check whether an object exists
-[example]
 ====
-....
+[source,console]
+----
 mged> exists object1.s
 1
-....
+----
 ====
 
 .Check if an object is a combination
-[example]
 ====
-....
+[source,console]
+----
 mged> exists -c object1.r
 1
-....
+----
 ====
 
 .Use logical operators
-[example]
 ====
-....
+[source,console]
+----
 mged> exists -c object1.r -a -e object1.s
 1
-....
+----
 ====
 
 .Compare bounding-box volumes
-[example]
 ====
-....
+[source,console]
+----
 mged> exists big_sphere.s -bgt small_sphere.s
 1
-....
+----
 ====
 
 

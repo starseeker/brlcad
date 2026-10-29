@@ -124,10 +124,12 @@ placed.  If none fits, no output is written and the command reports an error.
 == EXAMPLES
 
 .Pack planar silhouettes into an L-shaped permitted area.
-[example]
 ====
 
+[source,console]
+----
 mged> *arrange nest -d 2 -a z -s 1 panels.c sheet-area.r panel.r bracket.r bracket.r*
+----
 
 Creates _panels.c_ from translated and quarter-turned instances whose
 silhouettes fit in _sheet-area.r_.
@@ -135,10 +137,12 @@ silhouettes fit in _sheet-area.r_.
 ====
 
 .Pack spatial objects with clearance and gravity.
-[example]
 ====
 
+[source,console]
+----
 mged> *arrange nest -d 3 -s 2 -c 1 -o orthogonal -g 0,0,-1 packed.c usable-volume.r gear.r gear.r bracket.r*
+----
 
 Tests axis-aligned orientations, rounds the requested clearance up to one
 cell, settles feasible candidates toward negative Z, and creates _packed.c_.
@@ -146,10 +150,12 @@ cell, settles feasible candidates toward negative Z, and creates _packed.c_.
 ====
 
 .Select a value-weighted subset without changing the database.
-[example]
 ====
 
+[source,console]
+----
 mged> *arrange nest -n -d 2 --value motor.r=20 --value spacer.r=2 trial.c tray.r motor.r spacer.r spacer.r spacer.r*
+----
 
 Reports the selected subset statistics but does not create _trial.c_.
 

@@ -26,9 +26,11 @@ If the *-b* ("both") flag is provided, the command returns two space-separated v
 == EXAMPLES
 
 .Determine an object's display mode and transparency
-[example]
 ====
-mged> **how -b my_region.r**
+[source,console]
+----
+mged> how -b my_region.r
+----
 
 Returns output similar to `2 0.5`, indicating that `my_region.r` is drawn with display mode 2 and a transparency of 0.5. If the object was not displayed, it would return `-1`.
 ====

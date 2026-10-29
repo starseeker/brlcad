@@ -77,9 +77,9 @@ handling; use it when an XML-based X3D scene is preferred over classic VRML.
 
 .Convert selected regions to an X3D file
 ====
-[source,bash]
+[source,console]
 ----
-g-x3d -o havoc.x3d -u m -r 0.005 havoc.g havoc
+$ g-x3d -o havoc.x3d -u m -r 0.005 havoc.g havoc
 ----
 Tessellates the region tree rooted at object *havoc* in *havoc.g* using a
 relative tolerance of 0.005, scales the output to meters, and writes the
@@ -88,9 +88,9 @@ resulting X3D scene to *havoc.x3d* for viewing in a web browser or X3D viewer.
 
 .Stream output through a pipeline
 ====
-[source,bash]
+[source,console]
 ----
-g-x3d -P 4 sample.g comp1 comp2 > parts.x3d
+$ g-x3d -P 4 sample.g comp1 comp2 > parts.x3d
 ----
 Converts two named objects using four processors and redirects the X3D scene to
 *parts.x3d*. Because output defaults to standard output, *g-x3d* can be chained

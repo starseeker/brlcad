@@ -21,9 +21,10 @@ asc-plot3 [-h] [-?] [file.in [file.plot3]]
 
 The input should consist of lines of the form:
 
-....
+[source,text]
+----
 c arg arg ...
-....
+----
 
 where _c_ is one of the single-character Plot3 command names, followed by white-space-separated arguments of appropriate number and type for that command. Optional white space and lines beginning with the comment character `#' are ignored.
 
@@ -46,18 +47,18 @@ _file.plot3_::
 
 .Convert an ASCII plot3 file to binary
 ====
-[source,bash]
+[source,console]
 ----
-asc-plot3 data.asc data.plot3
+$ asc-plot3 data.asc data.plot3
 ----
 Converts the ASCII file `data.asc` into a binary *plot3*(5) file named `data.plot3`.
 ====
 
 .Draw a box and view it on a framebuffer
 ====
-[source,bash]
+[source,console]
 ----
-printf 's 0 0 100 100\nm 10 10\nn 90 10\nn 90 90\nn 10 90\nn 10 10\n' | asc-plot3 | plot3-fb
+$ printf 's 0 0 100 100\nm 10 10\nn 90 10\nn 90 90\nn 10 90\nn 10 10\n' | asc-plot3 | plot3-fb
 ----
 Sets the drawing space to the square (0,0)-(100,100) with the `s` command, then moves the pen and draws four connected line segments forming a box. The resulting binary plot3 stream is piped directly to *plot3-fb*(1) for display on a framebuffer.
 ====

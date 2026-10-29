@@ -52,9 +52,9 @@ prints a deprecation warning when run.
 
 .Inspect a binary double stream
 ====
-[source,bash]
+[source,console]
 ----
-a-d 1.0 2.5 -3.75 | d-a
+$ a-d 1.0 2.5 -3.75 | d-a
 ----
 Generates three binary doubles with *a-d*(1) and converts them back to
 human-readable ASCII, printing one value per line.
@@ -62,9 +62,9 @@ human-readable ASCII, printing one value per line.
 
 .Index the values in a binary file
 ====
-[source,bash]
+[source,console]
 ----
-d-a -n < values.d | head
+$ d-a -n < values.d | head
 ----
 Reads doubles from the file values.d and prints each value preceded by
 its position in the stream, which is useful for locating a particular

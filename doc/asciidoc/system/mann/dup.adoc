@@ -26,19 +26,23 @@ Checks the specified _file_ (which is expected to contain a _BRL-CAD_ model) for
 The first example shows the use of the *dup* command to check for files having the same name as those in the current model. The second example shows how to prefix the file names in the other model before comparing them with the names of the current model files.
 
 .Check for files having the same name as those in the current model.
-[example]
 ====
 
-mged> **dup other_model.g**::
+[source,console]
+----
+mged> dup other_model.g
+----
 Checks __other_model.g__ for names duplicating those in the current model.
 
 
 
 ====
 
-[example]
 ====
-mged>**dup other_model.g abc**
+[source,console]
+----
+mged> dup other_model.g abc
+----
 
 Does the same check as in the first example, but prefixes all the names in __other_model.g__ with _abc_ before comparing with the names in the current model.
 

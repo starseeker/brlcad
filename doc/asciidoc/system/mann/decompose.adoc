@@ -26,9 +26,11 @@ Processes an NMG shape and produces a series of new _NMG_ shapes consisting of e
 The example shows the use of the *decompose* command (with an optional prefix) to decompose an NMG shape into shells, which are then put into separate, uniquely named NMG shapes.
 
 .Decompose an NMG shape into shells, which are then put into separate, uniquely named NMG shapes.
-[example]
 ====
-mged>**decompose shape.nmg part**
+[source,console]
+----
+mged> decompose shape.nmg part
+----
 
 Decomposes the _NMG_ shape named _shape.nmg_ into maximally connected shells and puts each resulting shell into a separate _NMG_ shape named __part_1, part_2, ....__
 

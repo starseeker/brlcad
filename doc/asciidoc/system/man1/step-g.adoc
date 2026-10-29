@@ -263,34 +263,34 @@ published for those statuses.
 
 .Import using automatic schema selection
 ====
-[source,bash]
+[source,console]
 ----
-step-g -o widget.g widget.step
-mged widget.g 'tops'
+$ step-g -o widget.g widget.step
+$ mged widget.g 'tops'
 ----
 ====
 
 .Validate strictly and write a JSON report
 ====
-[source,bash]
+[source,console]
 ----
-step-g -D --strict --report suspect.json suspect.step
+$ step-g -D --strict --report suspect.json suspect.step
 ----
 ====
 
 .Inspect selected representation items without repair
 ====
-[source,bash]
+[source,console]
 ----
-step-g --repair none --entity '#410,#725' -o selected.g model.step
+$ step-g --repair none --entity '#410,#725' -o selected.g model.step
 ----
 ====
 
 .Import only the solid-oriented content of a mixed model
 ====
-[source,bash]
+[source,console]
 ----
-step-g --skip-open-shells -o solids.g mixed.step
+$ step-g --skip-open-shells -o solids.g mixed.step
 ----
 ====
 

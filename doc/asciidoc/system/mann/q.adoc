@@ -29,9 +29,11 @@ See *quit* for the detailed behavior.
 The example shows the use of the *q* command to quit a current MGED session.
 
 .Quit MGED using the short command.
-[example]
 ====
-mged> **q**
+[source,console]
+----
+mged> q
+----
 
 Performs the same operation as *quit*.
 

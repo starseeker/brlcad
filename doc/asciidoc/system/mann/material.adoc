@@ -111,10 +111,12 @@ Set a material property on the object, optionally from one of the material's fou
 The examples demonstrate the use of the *material* command and subcommands.
 
 .Import a density file to material objects.
-[example]
 ====
 
-mged> **material import --id .density**::
+[source,console]
+----
+mged> material import --id .density
+----
 Imports the density file _.density_ to material objects and names the objects based on the file's ids.
 
 
@@ -122,10 +124,12 @@ Imports the density file _.density_ to material objects and names the objects ba
 ====
 
 .Get the density attribute of the material "copper" within the physical property group.
-[example]
 ====
 
-mged> **material get copper physical density**::
+[source,console]
+----
+mged> material get copper physical density
+----
 Outputs the value of density.
 
 

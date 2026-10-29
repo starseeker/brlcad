@@ -22,8 +22,8 @@ For displayed objects, the _rtarea_ command calculates the exposed, presented an
 The *exposed* area corresponds to what a human observer would see looking at the object(s) in question, if all the objects were non-transparent. For example, say rays were cast towards two cubes, each one of which is a region, one in front of the other, grouped into an assembly, with the ray direction pointed into the page:
 
 
-....
-
+[source,text]
+----
 |----------------| Rear Cube
 |                |
 |                |
@@ -34,14 +34,13 @@ The *exposed* area corresponds to what a human observer would see looking at the
 	 |              |
 	 |              |
 	 |--------------|
-      
-....
+----
 
 The exposed area of the Front Cube corresponds to the total area of the sheet, since it is not occluded by any other object:
 
 
-....
-
+[source,text]
+----
 |----------------| Rear Cube
 |                |
 |                |
@@ -52,14 +51,13 @@ The exposed area of the Front Cube corresponds to the total area of the sheet, s
 	 |**************|
 	 |**************|
 	 |--------------|
-      
-....
+----
 
 The Rear Cube, on the other hand, IS occluded by the Front Cube and would thus report only a fraction of its area as exposed:
 
 
-....
-
+[source,text]
+----
 |----------------| Rear Cube
 |****************|
 |****************|
@@ -70,14 +68,13 @@ The Rear Cube, on the other hand, IS occluded by the Front Cube and would thus r
 	 |              |
 	 |              |
 	 |--------------|
-      
-....
+----
 
 An object that combines both of these sheets would thus report as its exposed area the sum of the exposed areas of the individual sheets:
 
 
-....
-
+[source,text]
+----
 |----------------| Rear Cube
 |****************|
 |****************|
@@ -88,16 +85,15 @@ An object that combines both of these sheets would thus report as its exposed ar
 	 |**************|
 	 |**************|
 	 |--------------|
-      
-....
+----
 
 
 
 *Presented* area, unlike exposed area, does not take occlusion into account. It is the equivalent of taking each object and considering it in isolation. So for the previous case of two sheets of metal, the Front Cube would report the same area:
 
 
-....
-
+[source,text]
+----
 |----------------| Rear Cube
 |                |
 |                |
@@ -108,14 +104,13 @@ An object that combines both of these sheets would thus report as its exposed ar
 	 |**************|
 	 |**************|
 	 |--------------|
-      
-....
+----
 
 The Rear Cube, on the other hand, ALSO reports its full area:
 
 
-....
-
+[source,text]
+----
 |----------------| Rear Cube
 |****************|
 |****************|
@@ -126,14 +121,13 @@ The Rear Cube, on the other hand, ALSO reports its full area:
 	 |              |
 	 |              |
 	 |--------------|
-      
-....
+----
 
 When reporting the presented area of the group, there is a subtle point - rtarea does not count area covered by multiple regions multiple times when totaling the presented area. So for the group containing both cubes, the presented area is NOT the cumulative area of both regions' presented areas but the area of the union of those two areas. In this case, that works out to be the same as the exposed area.
 
 
-....
-
+[source,text]
+----
 |----------------| Rear Cube
 |****************|
 |****************|
@@ -144,8 +138,7 @@ When reporting the presented area of the group, there is a subtle point - rtarea
 	 |**************|
 	 |**************|
 	 |--------------|
-      
-....
+----
 
 
 
@@ -204,49 +197,62 @@ Sets the librt(3) debug flags to the given hexadecimal bit vector. See raytrace.
 == EXAMPLES
 
 .Calculate exposed and presented surface areas
-[example]
 ====
-mged>**rtarea**
+[source,console]
+----
+mged> rtarea
+----
 
 Calculate exposed and presented surface areas of the displayed objects using current azimuth, elevation and size. Results are reported in current editing units.
 
 ====
 
 .Calculate exposed, presented and centers of surface areas
-[example]
 ====
-mged>**rtarea -c "set cc=1"**
+[source,console]
+----
+mged> rtarea -c "set cc=1"
+----
 
 Calculate exposed, presented and centers of surface areas of the displayed objects using current azimuth, elevation and size. Results are reported in current editing units.
 
 ====
 
 .Calculate exposed and presented surface areas (results in inches)
-[example]
 ====
-mged>**units in**
+[source,console]
+----
+mged> units in
+----
 
 Set current editing units to inches.
 
-mged>**rtarea**
+[source,console]
+----
+mged> rtarea
+----
 
 Calculate exposed and presented surface areas of the displayed objects using current azimuth, elevation and size. Results reported in inches.
 
 ====
 
 .Calculate exposed and presented surface areas (az=35, el=25, auto-size)
-[example]
 ====
-mged>**rtarea -a35 -e25**
+[source,console]
+----
+mged> rtarea -a35 -e25
+----
 
 Calculate exposed and presented surface areas of the displayed objects using azimuth 35, elevation 25 and size auto-set for best fit. Results reported in current editing units.
 
 ====
 
 .Calculate exposed and presented surface areas (1x1 inch grid cells)
-[example]
 ====
-mged>**rtarea -g25.4**
+[source,console]
+----
+mged> rtarea -g25.4
+----
 
 Calculate exposed and presented surface areas of the displayed objects using current azimuth, elevation and size. The grid cell width and height is 25.4 millimeters (i.e. 1 inch). Results reported in current editing units.
 

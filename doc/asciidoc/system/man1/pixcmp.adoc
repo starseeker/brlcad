@@ -86,10 +86,10 @@ either via *-i* or as the trailing positional _SKIP1_ and _SKIP2_ arguments.
 
 .Compare a rendered frame against a reference image
 ====
-[source,bash]
+[source,console]
 ----
-rt -s512 moss.g all.g
-pixcmp ref/moss.pix moss.pix
+$ rt -s512 moss.g all.g
+$ pixcmp ref/moss.pix moss.pix
 ----
 After ray tracing a scene with *rt*(1), compare the resulting *pix*(5) image
 against a known-good reference.  This is the check the BRL-CAD benchmark uses to
@@ -99,9 +99,9 @@ any pixels differ.
 
 .List differing pixels, ignoring a header
 ====
-[source,bash]
+[source,console]
 ----
-pixcmp -d -i 1024 a.pix b.pix
+$ pixcmp -d -i 1024 a.pix b.pix
 ----
 Skip the first 1024 pixels of each input (for example a leading scanline or
 header region) and print each remaining pixel that differs, along with its RGB

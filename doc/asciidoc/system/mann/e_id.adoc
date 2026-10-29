@@ -26,10 +26,12 @@ Draws all objects whose region ID falls within the given bounds. If only one inp
 Draw all regions with a single region ID.
 
 .Draw all regions with regionID 1000
-[example]
 ====
 
-mged> **e_id 1000**::
+[source,console]
+----
+mged> e_id 1000
+----
 Draws all regions whose region ID is 1000.
 
 
@@ -37,9 +39,11 @@ Draws all regions whose region ID is 1000.
 ====
 
 .Draw all regions whose region IDs are in the 2000s
-[example]
 ====
-mged>**e_id 2000-2999**
+[source,console]
+----
+mged> e_id 2000-2999
+----
 
 Draws all regions who regions IDs fall between 2000 and 2999 inclusively.
 

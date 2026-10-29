@@ -26,9 +26,11 @@ Sends an _mged_ mouse (i.e., defaults to a middle mouse button) event. The first
 Translate the point at specified screen coordinates to the center of the display.
 
 .Translate the point at screen coordinates (100, 100) to the center of the _mged_ display.
-[example]
 ====
-mged> **M 1 100 100**
+[source,console]
+----
+mged> M 1 100 100
+----
 
 The point at screen coordinates (100,100) is repositioned to the center of the display.
 

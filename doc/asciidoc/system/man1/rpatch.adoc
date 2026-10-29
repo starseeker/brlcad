@@ -44,10 +44,10 @@ re-emitted in the space-delimited layout that *patch-g*(1) reads.
 
 .Convert a FASTGEN model into a BRL-CAD database
 ====
-[source,bash]
+[source,console]
 ----
-rpatch < model.fastgen > model.rp
-patch-g -f model.rp model.g
+$ rpatch < model.fastgen > model.rp
+$ patch-g -f model.rp model.g
 ----
 The first command reformats the raw FASTGEN file into the intermediate
 *.rp* record format; the second feeds that file to *patch-g*(1) to

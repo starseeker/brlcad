@@ -36,9 +36,9 @@ as a 24-bit RGB value, so the count ranges from 1 to 16,777,216.
 
 .List the unique colors in a region of an image
 ====
-[source,bash]
+[source,console]
 ----
-pixrect -s 512 -w 64 -n 64 -x 100 -y 100 frame.pix | pixcolors -v
+$ pixrect -s 512 -w 64 -n 64 -x 100 -y 100 frame.pix | pixcolors -v
 ----
 Extracts a 64x64 tile from a 512-line image with *pixrect*(1) and pipes it to
 *pixcolors* to print the count followed by every distinct *R G B* triple in

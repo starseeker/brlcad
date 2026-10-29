@@ -66,10 +66,12 @@ Print the version of the currently open BRL-CAD database.
 The following examples show the uses of the *db* command to list various objects and attributes from the database, as well as to create new TGC shapes, adjust a vertex attribute, and display command formats.
 
 .List all objects in the database that end with ".s"
-[example]
 ====
 
-mged> **db match *.s**::
+[source,console]
+----
+mged> db match *.s
+----
 Gets a list of all objects in the database that end with .s.
 
 
@@ -77,45 +79,55 @@ Gets a list of all objects in the database that end with .s.
 ====
 
 .List all attributes and their values for _cone.s_
-[example]
 ====
-mged>**db get cone.s**
+[source,console]
+----
+mged> db get cone.s
+----
 
 Gets a list of all the attributes and their values for shape _cone.s_.
 
 ====
 
 .Get the value of the vertex attribute of _cone.s_
-[example]
 ====
-mged>**db get cone.s V**
+[source,console]
+----
+mged> db get cone.s V
+----
 
 Gets the value of the _V_ (vertex) attribute of shape _cone.s_
 
 ====
 
 .Create a new TGC shape named __new_cone.s__ with specified attributes.
-[example]
 ====
-mged>**db put new_cone.s tgc V {0 0 0} H {0 0 1} A {1 0 0} B {0 1 0} C {5 0 0} D {0 5 0}**
+[source,console]
+----
+mged> db put new_cone.s tgc V {0 0 0} H {0 0 1} A {1 0 0} B {0 1 0} C {5 0 0} D {0 5 0}
+----
 
 Creates a new TGC shape named __new_cone.s__ with the specified attributes.
 
 ====
 
 .Adjust the vertex attribute of __new_cone.s__ to a given value.
-[example]
 ====
-mged>**db adjust new_cone.s V {0 0 10}**
+[source,console]
+----
+mged> db adjust new_cone.s V {0 0 10}
+----
 
 Adjusts the _V_ (vertex) attribute of __new_cone.s__ to the value {0 0 10}.
 
 ====
 
 .Display the format used by the *get* and *put* commands for the TGC shape type.
-[example]
 ====
-mged>**db form tgc**
+[source,console]
+----
+mged> db form tgc
+----
 
 Displays the format used by the *get* and *put* commands for the TGC shape type.
 

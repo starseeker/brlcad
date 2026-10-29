@@ -133,10 +133,10 @@ and rendered with *rt*(1).
 
 .Generate a custom fence and render it
 ====
-[source,bash]
+[source,console]
 ----
-fence -o yard.g -N 1800 -L 6000 -j 2000 -R 25 -r 2 -a 60 -C '90 90 90'
-rt -o yard.png yard.g fence.r
+$ fence -o yard.g -N 1800 -L 6000 -j 2000 -R 25 -r 2 -a 60 -C '90 90 90'
+$ rt -o yard.png yard.g fence.r
 ----
 Writes a 1.8m tall, 6m long fence to *yard.g* with poles spaced every 2m
 (25mm radius), 2mm mesh wire twisted at 60 degrees, and a gray color
@@ -146,9 +146,9 @@ applied to all components.  The second command renders the resulting
 
 .Generate only the poles into a database
 ====
-[source,bash]
+[source,console]
 ----
-fence -o posts.g -g p -L 9000 -j 3000 -R 40
+$ fence -o posts.g -g p -L 9000 -j 3000 -R 40
 ----
 Generates just the line of poles (no mesh) for a 9m run with 3m spacing
 and 40mm radius, useful when the mesh is modeled separately or omitted.

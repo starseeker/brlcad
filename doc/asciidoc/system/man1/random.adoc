@@ -49,19 +49,19 @@ The random sequence is seeded from the process ID unless a fixed *-s* _seed_ is 
 
 .Pick a uniform roll and capture it in a shell variable
 ====
-[source,bash]
+[source,console]
 ----
-roll=$(random 1 6)
-echo "you rolled a $roll"
+$ roll=$(random 1 6)
+$ echo "you rolled a $roll"
 ----
 Emulates a six-sided die by selecting a uniform integer between 1 and 6.
 ====
 
 .Reproducible gaussian value clustered near a chosen center
 ====
-[source,bash]
+[source,console]
 ----
-random -g -c 50 -s 42 0 100
+$ random -g -c 50 -s 42 0 100
 ----
 Draws a value between 0 and 100 from a gaussian distribution centered on 50. The fixed seed of 42 makes the result repeatable, which is useful for deterministic tests or scripted scenes.
 ====

@@ -70,17 +70,21 @@ Set both the screen width and height to `squarescrsize` pixels.
 == EXAMPLES
 
 .Display a PNG image in the framebuffer
-[example]
 ====
-mged> **png2fb render.png**
+[source,console]
+----
+mged> png2fb render.png
+----
 
 Loads `render.png` into the current display framebuffer.
 ====
 
 .Clear framebuffer and display at an offset
-[example]
 ====
-mged> **png2fb -c -X 100 -Y 50 overlay.png**
+[source,console]
+----
+mged> png2fb -c -X 100 -Y 50 overlay.png
+----
 
 Clears the framebuffer, then displays `overlay.png` starting at screen position (100, 50).
 ====

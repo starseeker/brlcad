@@ -26,9 +26,11 @@ Returns the direction vector using the provided azimuth and elevation as input. 
 The example shows the use of the *ae2dir* command to get the direction vector.
 
 .Find the direction vector using the provided azimuth and elevation.
-[example]
 ====
-mged>**ae2dir 35 25**
+[source,console]
+----
+mged> ae2dir 35 25
+----
 
 Returns the direction vector using an azimuth of 35 and elevation of 25.
 

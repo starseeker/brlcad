@@ -121,9 +121,9 @@ rays. The default is to fire a single ray.
 
 .Fire a ray down the X axis at a component
 ====
-[source,bash]
+[source,console]
 ----
-rtshot -p 0 0 0 -d 1 0 0 havoc.g hull
+$ rtshot -p 0 0 0 -d 1 0 0 havoc.g hull
 ----
 Shoots a single ray from the origin in the +X direction at the _hull_ region of
 _havoc.g_, printing the in/out points and normals of each region encountered.
@@ -131,9 +131,9 @@ _havoc.g_, printing the in/out points and normals of each region encountered.
 
 .Aim at a known point and list a material attribute
 ====
-[source,bash]
+[source,console]
 ----
-rtshot -a -1000 0 500 -d -1 0 0 -v "material_id" model.g engine
+$ rtshot -a -1000 0 500 -d -1 0 0 -v "material_id" model.g engine
 ----
 Fires a ray toward the point (-1000, 0, 500) heading in the -X direction, with
 the start point automatically placed outside the geometry, and prints the
@@ -143,9 +143,9 @@ verify which components and materials lie along a line of sight.
 
 .Use the database default object
 ====
-[source,bash]
+[source,console]
 ----
-rtshot -p 0 0 0 -d 1 0 0 single.g
+$ rtshot -p 0 0 0 -d 1 0 0 single.g
 ----
 Shoots the ray at _single.g_'s automatically selected default object.  This
 form is valid only when the database default-object rules resolve exactly one

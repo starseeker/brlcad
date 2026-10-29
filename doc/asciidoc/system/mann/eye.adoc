@@ -29,17 +29,21 @@ The command supports three modes of operation:
 == EXAMPLES
 
 .Query the current eye location
-[example]
 ====
-mged> **eye**
+[source,console]
+----
+mged> eye
+----
 
 Returns the current X, Y, and Z model coordinates of the eye point.
 ====
 
 .Move the eye to the origin
-[example]
 ====
-mged> **eye 0 0 0**
+[source,console]
+----
+mged> eye 0 0 0
+----
 
 Positions the camera eye point precisely at the model's (0, 0, 0) origin.
 ====

@@ -24,10 +24,12 @@ Adds all the regions in the current model that have any of the specified aircode
 == EXAMPLES
 
 .Draw all regions having particular air codes.
-[example]
 ====
 
-mged> **eac 1 2 3**::
+[source,console]
+----
+mged> eac 1 2 3
+----
 Draws all regions with _aircodes_ 1, 2, or 3 in the _MGED_ display.
 
 

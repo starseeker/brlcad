@@ -64,9 +64,9 @@ and *d-i*(1) for converting between doubles and other numeric formats.
 
 .Rescale a height field to inches and clamp negatives
 ====
-[source,bash]
+[source,console]
 ----
-dmod -m 0.0393701 -A terrain_mm.d > terrain_in_pos.d
+$ dmod -m 0.0393701 -A terrain_mm.d > terrain_in_pos.d
 ----
 Reads doubles from _terrain_mm.d_ (values in millimeters), multiplies each
 by 0.0393701 to convert to inches, then takes the absolute value to remove any

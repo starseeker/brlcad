@@ -24,9 +24,11 @@ The *nmg_mm* command is the standalone form of the `nmg <object> mm` subcommand.
 == EXAMPLES
 
 .Create an empty NMG model
-[example]
 ====
-mged> **nmg_mm my_nmg.s**
+[source,console]
+----
+mged> nmg_mm my_nmg.s
+----
 
 Creates an empty NMG model named `my_nmg.s` in the database, ready to have faces and vertices added.
 ====

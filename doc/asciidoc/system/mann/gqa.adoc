@@ -94,7 +94,7 @@ file named _vehicle.density_ might contain:
 
 To validate and then import this table into the open database, run:
 
-[source]
+[source,console]
 ----
 mged> mater -d validate vehicle.density
 mged> mater -d import vehicle.density
@@ -110,7 +110,7 @@ without replacing the table.
 Importing the table does not assign materials to regions.  Assign the matching
 ID to each region, for example:
 
-[source]
+[source,console]
 ----
 mged> attr set wheel.r material_id 3
 mged> gqa -Aw wheel.r
@@ -231,36 +231,44 @@ Sets the corresponding tolerance for weight estimates.
 == EXAMPLES
 
 .Analyze displayed geometry
-[example]
 ====
-mged> **gqa -Av**
+[source,console]
+----
+mged> gqa -Av
+----
 
 Computes the volume of the objects currently drawn in the active view.  No
 density table is needed because only volume was requested.
 ====
 
 .Analyze named objects
-[example]
 ====
-mged> **gqa -Aoe -g 1cm,1mm hull turret suspension**
+[source,console]
+----
+mged> gqa -Aoe -g 1cm,1mm hull turret suspension
+----
 
 Checks the three named objects for overlaps and exposed air, refining the grid
 from 1 cm to no finer than 1 mm.
 ====
 
 .Compute centroids and moments of inertia
-[example]
 ====
-mged> **gqa -Am -u cm,cc,kg vehicle**
+[source,console]
+----
+mged> gqa -Am -u cm,cc,kg vehicle
+----
 
 Reports weight, centroid, and inertia results for _vehicle_ using the open
 database's density information.
 ====
 
 .Visualize overlaps
-[example]
 ====
-mged> **gqa -Ap -t 0.1mm**
+[source,console]
+----
+mged> gqa -Ap -t 0.1mm
+----
 
 Checks the displayed geometry and draws detected overlap segments as yellow
 lines in the active view, ignoring overlaps thinner than 0.1 mm.

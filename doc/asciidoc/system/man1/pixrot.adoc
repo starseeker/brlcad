@@ -71,11 +71,11 @@ seekable file rather than a pipe for the rotation modes.
 
 .Rotate a rendered frame and view it
 ====
-[source,bash]
+[source,console]
 ----
-rt -o frame.pix -w 1024 -n 768 model.g component.r
-pixrot -w 1024 -n 768 -f frame.pix > frame-rot.pix
-pix-png -w 768 -n 1024 frame-rot.pix > frame-rot.png
+$ rt -o frame.pix -w 1024 -n 768 model.g component.r
+$ pixrot -w 1024 -n 768 -f frame.pix > frame-rot.pix
+$ pix-png -w 768 -n 1024 frame-rot.pix > frame-rot.png
 ----
 Render a 1024x768 image with *rt*(1), rotate it ninety degrees clockwise (note
 the rotated image is 768x1024), then convert it to PNG with *pix-png*(1).
@@ -83,9 +83,9 @@ the rotated image is 768x1024), then convert it to PNG with *pix-png*(1).
 
 .Flip an image 180 degrees
 ====
-[source,bash]
+[source,console]
 ----
-pixrot -s 512 -r -i image.pix > image-180.pix
+$ pixrot -s 512 -r -i image.pix > image-180.pix
 ----
 Combine a left-to-right reversal with a top-to-bottom inversion to turn a
 512x512 image upside down.

@@ -55,19 +55,19 @@ If a single _basename_ is given, the output files are named _basename.num_, wher
 
 .Re-split a montage produced by pixtile
 ====
-[source,bash]
+[source,console]
 ----
-pixtile -s 512 -S 128 frame < frames.pix > montage.pix
-pixuntile -s 512 -S 128 out < montage.pix
+$ pixtile -s 512 -S 128 frame < frames.pix > montage.pix
+$ pixuntile -s 512 -S 128 out < montage.pix
 ----
 *pixtile*(1) packs sixteen 128x128 sub-images into one 512x512 montage; *pixuntile* reverses it, writing the 128x128 chunks back out as _out.0_ through _out.15_ in lower-left to upper-right order.
 ====
 
 .Extract sub-images into explicitly named files
 ====
-[source,bash]
+[source,console]
 ----
-pixuntile -s 256 -S 128 bl.pix br.pix tl.pix tr.pix < quad.pix
+$ pixuntile -s 256 -S 128 bl.pix br.pix tl.pix tr.pix < quad.pix
 ----
 Split a 256x256 image holding four 128x128 quadrants into individually named *pix*(5) files. Filenames are consumed in extraction order, which proceeds from the lower-left across each row and then upward: _bl.pix_ and _br.pix_ receive the bottom row, _tl.pix_ and _tr.pix_ the top row.
 ====

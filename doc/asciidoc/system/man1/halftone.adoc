@@ -98,11 +98,11 @@ A value outside the range 0-3 is reported and reset to the default (0).
 
 .Render a model and halftone the result for a 1-bit display
 ====
-[source,bash]
+[source,console]
 ----
-rt -s 512 -o image.pix model.g component.r
-pix-bw image.pix > image.bw
-halftone -M 0 -S image.bw > image.ht.bw
+$ rt -s 512 -o image.pix model.g component.r
+$ pix-bw image.pix > image.bw
+$ halftone -M 0 -S image.bw > image.ht.bw
 ----
 Ray traces a region to a 512x512 color image, converts it to *bw*(5)
 grayscale, then applies Floyd-Steinberg error diffusion with a
@@ -112,9 +112,9 @@ for a 1-bit device.
 
 .Coarse newsprint-style halftone with four gray levels
 ====
-[source,bash]
+[source,console]
 ----
-halftone -w 1024 -n 768 -M 1 -I 4 photo.bw > photo.ht.bw
+$ halftone -w 1024 -n 768 -M 1 -I 4 photo.bw > photo.ht.bw
 ----
 Treats the input as a 1024x768 image and applies the 45-degree
 classical clustered-dot screen quantized to four intensity levels,

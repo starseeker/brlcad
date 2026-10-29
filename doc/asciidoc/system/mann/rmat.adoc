@@ -31,27 +31,39 @@ The set form accepts the matrix as a single quoted string. Providing more than o
 == EXAMPLES
 
 .Retrieve the current rotation matrix
-[example]
 ====
-mged> **rmat**
+[source,console]
+----
+mged> rmat
+----
 
 Returns the current 16-element view rotation matrix, e.g. `1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1` for the identity (no rotation).
 ====
 
 .Round-trip: capture and restore rotation
-[example]
 ====
-mged> **set m [rmat]**
-mged> **ae 35 25**
-mged> **rmat $m**
+[source,console]
+----
+mged> set m [rmat]
+----
+[source,console]
+----
+mged> ae 35 25
+----
+[source,console]
+----
+mged> rmat $m
+----
 
 Saves the current rotation matrix, changes to a 35/25 azimuth-elevation view, then restores the original matrix directly.
 ====
 
 .Set the identity rotation (front view)
-[example]
 ====
-mged> **rmat "1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"**
+[source,console]
+----
+mged> rmat "1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"
+----
 
 Sets the view rotation to the identity matrix — the default front-facing orientation with no rotation applied.
 ====

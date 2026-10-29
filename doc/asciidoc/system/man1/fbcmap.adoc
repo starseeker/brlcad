@@ -97,10 +97,10 @@ without disturbing image memory.
 
 .Display a negative of an existing image
 ====
-[source,bash]
+[source,console]
 ----
-pix-fb -F /dev/fb0 moss.pix
-fbcmap -F /dev/fb0 1
+$ pix-fb -F /dev/fb0 moss.pix
+$ fbcmap -F /dev/fb0 1
 ----
 Load an image onto a framebuffer with *pix-fb*(1), then load map 1 so
 the displayed pixels appear as a photographic negative without altering
@@ -110,9 +110,9 @@ appearance.
 
 .Calibrate against a uniform 18% grey field
 ====
-[source,bash]
+[source,console]
 ----
-fbcmap -s 1024 12
+$ fbcmap -s 1024 12
 ----
 Open (or size) the framebuffer to 1024x1024 and remap every pixel to
 18% neutral grey, a common reference value when adjusting a camera or

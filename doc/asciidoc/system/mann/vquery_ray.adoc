@@ -24,18 +24,22 @@ Interprets _x_ and _y_ as view coordinates (i.e., +-2047) and converts them to m
 == EXAMPLES
 
 .Shoot a ray at 1000 pixels up and centered left/right
-[example]
 ====
-mged>**vquery_ray 0 1000**
+[source,console]
+----
+mged> vquery_ray 0 1000
+----
 
 Shoots a ray 1000 pixels up from center.
 
 ====
 
 .Shoot a ray centered top/bottom and 1000 pixels to the right.
-[example]
 ====
-mged>**vquery_ray 1000 0**
+[source,console]
+----
+mged> vquery_ray 1000 0
+----
 
 Shoots a ray 1000 pixels to the right of center.
 

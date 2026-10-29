@@ -55,7 +55,7 @@ If an input file is not specified, *bwrect* reads from standard input. If an out
 
 .Extracting a 256x256 rectangle from a 1024x1024 image
 ====
-[source,bash]
+[source,console]
 ----
 $ bwrect -s 1024 -S 256 -x 0 -y 0 in.bw > out.bw
 ----
@@ -65,7 +65,7 @@ This command extracts a 256x256 rectangle from the lower-left corner of the 1024
 
 .Extracting a 100x100 region with a specific origin and output file
 ====
-[source,bash]
+[source,console]
 ----
 $ bwrect -W 100 -N 100 -x 200 -y 200 -o out.bw in.bw
 ----

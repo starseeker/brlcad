@@ -56,42 +56,55 @@ The *pix2fb* command reads a raw RGB pixel file (bottom-up row order) and sends 
 == EXAMPLES
 
 .Display a pixel file at native size
-[example]
 ====
-mged> **pix2fb render.pix**
+[source,console]
+----
+mged> pix2fb render.pix
+----
 
 Sends the raw pixel file `render.pix` (assumed 512×512) to the framebuffer.
 ====
 
 .Display a 1024×768 image and clear first
-[example]
 ====
-mged> **pix2fb -w 1024 -n 768 -c scene.pix**
+[source,console]
+----
+mged> pix2fb -w 1024 -n 768 -c scene.pix
+----
 
 Clears the framebuffer to black and then displays the 1024×768 pixel file `scene.pix`.
 ====
 
 .Zoom a small image to fill the display
-[example]
 ====
-mged> **pix2fb -s 256 -z thumbnail.pix**
+[source,console]
+----
+mged> pix2fb -s 256 -z thumbnail.pix
+----
 
 Reads a 256×256 pixel file and zooms it to fill the full framebuffer.
 ====
 
 .Display a crop of an input image at an offset
-[example]
 ====
-mged> **pix2fb -w 1024 -n 1024 -x 256 -y 256 -W 512 -N 512 large.pix**
+[source,console]
+----
+mged> pix2fb -w 1024 -n 1024 -x 256 -y 256 -W 512 -N 512 large.pix
+----
 
 Reads the 1024×1024 input `large.pix`, starting from offset (256, 256), and writes a 512×512 region to the framebuffer.
 ====
 
 .Display a raytrace result after rendering to file
-[example]
 ====
-mged> **rt -w 512 -n 512 -o render.pix model.g obj**
-mged> **pix2fb -w 512 -n 512 render.pix**
+[source,console]
+----
+mged> rt -w 512 -n 512 -o render.pix model.g obj
+----
+[source,console]
+----
+mged> pix2fb -w 512 -n 512 render.pix
+----
 
 First renders `obj` in `model.g` to a pixel file, then displays the result on the framebuffer. Note: the mged prompt is a Tcl interpreter — shell pipes are not available; multi-step workflows use sequential commands.
 ====

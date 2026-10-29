@@ -32,25 +32,31 @@ This command directly sets the absolute view orientation. It does not apply a re
 == EXAMPLES
 
 .Set the view to look straight down the -Z axis (top view)
-[example]
 ====
-mged> **orient 0.707107 0 0 0.707107**
+[source,console]
+----
+mged> orient 0.707107 0 0 0.707107
+----
 
 Sets the view orientation to a 90° rotation about the X axis (unit quaternion for a top-down view). The `w` scalar is approximately `cos(45°)` and the X vector component is `sin(45°)`.
 ====
 
 .Use the orientation alias
-[example]
 ====
-mged> **orientation 0 0 0 1**
+[source,console]
+----
+mged> orientation 0 0 0 1
+----
 
 Sets the view to the identity quaternion — the default front-facing orientation with no rotation. `orient` and `orientation` are equivalent.
 ====
 
 .Set orientation from a quoted quaternion string
-[example]
 ====
-mged> **orient "0 0 1 0"**
+[source,console]
+----
+mged> orient "0 0 1 0"
+----
 
 Sets the view using a 180° rotation about the Z axis (quaternion `(0, 0, 1, 0)`).
 ====

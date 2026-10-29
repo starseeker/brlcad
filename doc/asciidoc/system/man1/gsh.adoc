@@ -61,9 +61,9 @@ display window of its own.
 
 .Run a single command non-interactively
 ====
-[source,bash]
+[source,console]
 ----
-gsh moss.g tops
+$ gsh moss.g tops
 ----
 Opens the database `moss.g`, runs the *tops* command to list the top level
 (non-referenced) objects, prints the result, and exits without entering the
@@ -72,9 +72,9 @@ interactive prompt. This form is well suited to shell scripts and makefiles.
 
 .Pipe a sequence of commands from stdin
 ====
-[source,bash]
+[source,console]
 ----
-printf 'title\nls\nsummary\n' | gsh moss.g
+$ printf 'title\nls\nsummary\n' | gsh moss.g
 ----
 Feeds several LIBGED commands into *gsh* on standard input. Because stdin is
 not a terminal, *gsh* executes each line in turn with no prompt, reporting the
@@ -83,9 +83,9 @@ database title, an object listing, and a summary of the contents of `moss.g`.
 
 .Inspect and modify geometry interactively
 ====
-[source,bash]
+[source,console]
 ----
-gsh
+$ gsh
 g> opendb sample.g y
 g> in box.s rpp 0 10 0 10 0 10
 g> r box.r u box.s

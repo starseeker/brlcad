@@ -26,10 +26,12 @@ Used to query and manipulate properties of the graph that corresponds to the cur
 The examples demonstrate the use of the *graph* command and subcommands to access information about the representation of the objects of a database.
 
 .Displays a list with the name and type of the objects along with the nodes' and edges' positions.
-[example]
 ====
 
-mged> **graph show**::
+[source,console]
+----
+mged> graph show
+----
 Displays a list with the name and type of the objects along with the nodes' and edges' positions.
 
 
@@ -37,10 +39,12 @@ Displays a list with the name and type of the objects along with the nodes' and 
 ====
 
 .Lists the names, types, positions of the corresponding nodes within the graph for the objects in the .g database.
-[example]
 ====
 
-mged> **graph positions**::
+[source,console]
+----
+mged> graph positions
+----
 Lists the names, types, positions of the corresponding nodes within the graph for the objects in the currently opened .g database.
 
 

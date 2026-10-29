@@ -62,9 +62,9 @@ automatically with *-a*.
 
 .Convert an autosized PIX rendering to PPM
 ====
-[source,bash]
+[source,console]
 ----
-pix-ppm -a render.pix -o render.ppm
+$ pix-ppm -a render.pix -o render.ppm
 ----
 Reads _render.pix_, infers its dimensions from the file size, and writes
 a binary PPM file _render.ppm_ suitable for viewing or importing into
@@ -73,9 +73,9 @@ common image tools.
 
 .Render and convert in a single pipeline
 ====
-[source,bash]
+[source,console]
 ----
-rt -s 1024 -o /dev/stdout model.g component | pix-ppm -s 1024 > component.ppm
+$ rt -s 1024 -o /dev/stdout model.g component | pix-ppm -s 1024 > component.ppm
 ----
 Pipes a 1024x1024 *rt*(1) raytrace directly into *pix-ppm*, producing a
 PPM image without writing an intermediate PIX file to disk.

@@ -99,9 +99,9 @@ debugging flags, and so on) are also accepted.
 
 .Total mass and centroid with a custom density file
 ====
-[source,bash]
+[source,console]
 ----
-rtweight -d steel.density -R -s 1024 engine.g block crankshaft > engine.wt
+$ rtweight -d steel.density -R -s 1024 engine.g block crankshaft > engine.wt
 ----
 Fires a 1024x1024 grid at the _block_ and _crankshaft_ regions of
 _engine.g_, using the material densities defined in _steel.density_,
@@ -110,9 +110,9 @@ and writes only the volume, mass, and centroid totals to _engine.wt_.
 
 .Per-region breakdown using densities stored in the database
 ====
-[source,bash]
+[source,console]
 ----
-rtweight -a 35 -e 25 model.g hull
+$ rtweight -a 35 -e 25 model.g hull
 ----
 Ray traces the _hull_ assembly from azimuth 35, elevation 25 degrees,
 pulling density values from the *_DENSITIES* table (or *material*

@@ -47,9 +47,9 @@ _window_size_::
 
 .Autocorrelate a sampled signal
 ====
-[source,bash]
+[source,console]
 ----
-dauto 1024 < signal.doubles > autocor.doubles
+$ dauto 1024 < signal.doubles > autocor.doubles
 ----
 Computes the unbiased autocorrelation of a stream of double-precision
 values in 1024-sample windows. The resulting stream of doubles can be

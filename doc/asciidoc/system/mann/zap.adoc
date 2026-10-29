@@ -26,19 +26,26 @@ No arguments are accepted. Providing any argument returns a usage error.
 == EXAMPLES
 
 .Clear the display
-[example]
 ====
-mged> **zap**
+[source,console]
+----
+mged> zap
+----
 
 Removes all currently displayed objects from the graphics window. The database is not modified.
 ====
 
 .Clear and redisplay a specific object
-[example]
 ====
-mged> **zap**
+[source,console]
+----
+mged> zap
+----
 
-mged> **draw hull.c**
+[source,console]
+----
+mged> draw hull.c
+----
 
 Clears the entire display, then draws only _hull.c_.
 ====

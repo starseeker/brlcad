@@ -71,9 +71,11 @@ Indicates that the units of the incoming __database_file__ should become the uni
 This example shows the use of the *dbconcat* command to copy all objects in a particular database to the current database. It also shows how to add a particular prefix to every object copied.
 
 .Copy objects in a specified database to the current one and lazily apply a prefix to the copied objects.
-[example]
 ====
-mged>**dbconcat -L model_two.g two_**
+[source,console]
+----
+mged> dbconcat -L model_two.g two_
+----
 
 Copies all the objects in __model_two.g__ to the current database, using the specified prefix __two___ to attempt to resolve name conflicts. If there is a still a conflict even with the prefix applied standard rules will continue to be applied for additional name generation.
 
@@ -82,18 +84,22 @@ Copies all the objects in __model_two.g__ to the current database, using the spe
 Another example shows a usage to import the title, units, color table, and all the objects of a database file into the current database. This is particularly useful if the current database is empty or just created by mged.
 
 .Copy an entire database, including title, units, and color table, to the current database without any affix
-[example]
 ====
-mged>**dbconcat -t -u -c model_two.g**
+[source,console]
+----
+mged> dbconcat -t -u -c model_two.g
+----
 
 Copies all the objects in __model_two.g__ to the current database, including the title, units, and color table. No suffix or prefix is added to the object names.
 
 ====
 
 .Copy a database, overwriting objects in the current databse
-[example]
 ====
-mged>**dbconcat -O model_two.g**
+[source,console]
+----
+mged> dbconcat -O model_two.g
+----
 
 Copies all the objects in __model_two.g__ to the current database. No object names are changed while conflicts in the current database are overwritten with objects from __model_two.g__
 

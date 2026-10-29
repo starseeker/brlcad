@@ -10,7 +10,6 @@ librt - library for raytracing a BRL-CAD geometry database
 
 [source,c]
 ----
-
 #include "vmath.h"
 #include "raytrace.h"
 
@@ -29,7 +28,6 @@ void rt_pr_seg(struct seg *segp);
 segp;
 
 struct soltab *rt_find_solid(void);
-
 ----
 
 
@@ -94,7 +92,10 @@ Helpful in generating a grid of ray origins, the bounding RPP of the model is co
 
 A program can be loaded as follows:
 
-$ _cc -I/usr/brlcad/include main.c /usr/brlcad/lib/librt.a -l<system-specific> -lm_
+[source,console]
+----
+$ cc -I/usr/brlcad/include main.c /usr/brlcad/lib/librt.a -l<system-specific> -lm
+----
 
 where _<system-specific>_ indicates libraries required on a particular architecture. The table below indicates which system specific libraries are necessary on a particular architecture.
 
@@ -106,8 +107,8 @@ Here is a portion of a hypothetical program which uses the library:
 [quote]
 ____
 
-....
-
+[source,c]
+----
 #include <vmath.h>
 #include <raytrace.h>
 int
@@ -181,8 +182,7 @@ do_if_missed(register struct application *ap)
 {
   return 0; /* Report miss to main routine */
 }
-  
-....
+----
 
 ____
 
@@ -230,7 +230,7 @@ For example, run a single-threaded ray tracing application in a debugger
 and stop at `rt_shootray` for the suspect ray. Capture just that call,
 then compare it with a capture of the same ray from a reference build:
 
-[source,shell]
+[source,console]
 ----
 $ LIBRT_DEBUG=10000000 LIBRT_RTCMP_FILE=trial.json \
     gdb --args ./ray_application model.g

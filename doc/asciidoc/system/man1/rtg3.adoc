@@ -145,9 +145,9 @@ The following *-c* "set ..." commands are specific to *rtg3*:
 
 .Generate a shotline file at a fixed view
 ====
-[source,bash]
+[source,console]
 ----
-rtg3 -s64 -a 35 -e 25 model.g all.g > all.cov
+$ rtg3 -s64 -a 35 -e 25 model.g all.g > all.cov
 ----
 Fires a 64x64 grid from azimuth 35, elevation 25 at the _all.g_ assembly,
 autosizing to span the geometry, and writes a COVART shotline file ready to
@@ -156,10 +156,10 @@ hand to *covart*(1V) for a vulnerability analysis.
 
 .Visualize the rays alongside the model bounding boxes
 ====
-[source,bash]
+[source,console]
 ----
-rtg3 -s32 -X 80000000 model.g component.g
-cat rtrpp.plot3 rtg3.plot3 | plot3-fb
+$ rtg3 -s32 -X 80000000 model.g component.g
+$ cat rtrpp.plot3 rtg3.plot3 | plot3-fb
 ----
 The ray-plot debug bit writes _rtg3.plot3_, coloring ray segments green
 through solids and blue through air.  Combined with the bounding-box plot

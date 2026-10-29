@@ -27,7 +27,7 @@ To process a *bw*(5) format file, use a value of 1 for _nbytes/pixel_. To proces
 
 .Downsample a large pix image so it fits on a framebuffer
 ====
-[source,bash]
+[source,console]
 ----
 $ decimate 3 1024 1024 512 512 < input.pix | pix-fb -w 512 -n 512
 ----

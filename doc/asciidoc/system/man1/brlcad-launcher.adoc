@@ -57,9 +57,9 @@ sessions.
 
 .List the discovered applications
 ====
-[source,bash]
+[source,console]
 ----
-brlcad-launcher --list
+$ brlcad-launcher --list
 ----
 Prints the manifest entries, executable names, descriptions, and whether each
 application is installed.
@@ -67,9 +67,9 @@ application is installed.
 
 .Use the text menu
 ====
-[source,bash]
+[source,console]
 ----
-brlcad-launcher --text
+$ brlcad-launcher --text
 ----
 Starts the console interface even when a graphical framebuffer is available.
 ====

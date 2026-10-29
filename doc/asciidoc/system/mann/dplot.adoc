@@ -34,17 +34,21 @@ The available `cmd` subcommands are:
 == EXAMPLES
 
 .Iterate through intersecting surface pairs
-[example]
 ====
-mged> **dplot intersect.log ssx**
+[source,console]
+----
+mged> dplot intersect.log ssx
+----
 
 Parses `intersect.log` and visually overlays the first surface-surface intersection pair, prompting the user to press Enter to advance to the next pair.
 ====
 
 .View clipped face curves for a specific intersection
-[example]
 ====
-mged> **dplot intersect.log fcurves 2**
+[source,console]
+----
+mged> dplot intersect.log fcurves 2
+----
 
 Displays the clipped face curves associated with the third (0-indexed `2`) surface-surface intersection pair recorded in `intersect.log`.
 ====

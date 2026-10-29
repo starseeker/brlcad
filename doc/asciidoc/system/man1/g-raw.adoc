@@ -80,9 +80,9 @@ Coordinates are emitted in millimeters unless *-i* requests inches.
 
 .Convert selected regions to a single RAW file
 ====
-[source,bash]
+[source,console]
 ----
-g-raw -o engine.raw engine.g block piston
+$ g-raw -o engine.raw engine.g block piston
 ----
 Tessellates the regions named "block" and "piston" from engine.g and
 writes both as triangles into engine.raw.
@@ -90,10 +90,10 @@ writes both as triangles into engine.raw.
 
 .Export every region to its own file in inches
 ====
-[source,bash]
+[source,console]
 ----
-mkdir parts
-g-raw -i -m parts -a 0.1 model.g top_assembly
+$ mkdir parts
+$ g-raw -i -m parts -a 0.1 model.g top_assembly
 ----
 Walks the "top_assembly" tree in model.g, tessellating each region with an
 absolute tolerance of 0.1 mm, and writes a separate ".raw" file per region

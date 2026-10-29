@@ -79,7 +79,7 @@ The following examples demonstrate how to display a _bw_ format file on a frameb
 
 .Displaying a 1024x1024 _bw_ file
 ====
-[source,bash]
+[source,console]
 ----
 $ bw-fb -s 1024 image.bw
 ----
@@ -89,7 +89,7 @@ Displays the 1024x1024 file _image.bw_ on the currently selected framebuffer.
 
 .Autosizing and zooming an image
 ====
-[source,bash]
+[source,console]
 ----
 $ bw-fb -a -z image.bw
 ----
@@ -99,7 +99,7 @@ Attempts to automatically determine the image dimensions from the file size of _
 
 .Displaying an image only in the red color plane
 ====
-[source,bash]
+[source,console]
 ----
 $ bw-fb -R image.bw
 ----

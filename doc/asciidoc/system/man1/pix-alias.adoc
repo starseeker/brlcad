@@ -50,10 +50,10 @@ when its standard input is a terminal.
 
 .Convert a rendered frame to Alias format
 ====
-[source,bash]
+[source,console]
 ----
-rt -s 1024 -o frame.pix model.g component
-pix-alias -s 1024 < frame.pix > frame.alias
+$ rt -s 1024 -o frame.pix model.g component
+$ pix-alias -s 1024 < frame.pix > frame.alias
 ----
 Render a 1024x1024 image with *rt*(1), then convert that *pix*(5) file into an
 Alias PIX file for use with tools that expect the Alias format. The *-s* flag
@@ -62,9 +62,9 @@ tells *pix-alias* the input is square so it allocates the correct buffer.
 
 .Convert a non-square image
 ====
-[source,bash]
+[source,console]
 ----
-pix-alias -w 1280 -n 720 < wide.pix > wide.alias
+$ pix-alias -w 1280 -n 720 < wide.pix > wide.alias
 ----
 Convert a 1280x720 (720p) *pix*(5) file, specifying width and height
 independently with *-w* and *-n*.

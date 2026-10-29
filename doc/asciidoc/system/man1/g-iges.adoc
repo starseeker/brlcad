@@ -130,9 +130,9 @@ not an estimate of remaining time.
 
 .Convert selected regions to a CSG IGES file
 ====
-[source,bash]
+[source,console]
 ----
-g-iges assembly.g assembly.iges hull turret
+$ g-iges assembly.g assembly.iges hull turret
 ----
 Writes the hull and turret regions of assembly.g as a CSG IGES file, preserving
 the Boolean tree where IGES primitive equivalents exist and using B-Rep
@@ -141,9 +141,9 @@ representations for other supported geometry.
 
 .Produce a faceted B-Rep IGES file with tight tolerances
 ====
-[source,bash]
+[source,console]
 ----
-g-iges -f -a 0.1 -n 0.01 -o widget.iges widget.g widget
+$ g-iges -f -a 0.1 -n 0.01 -o widget.iges widget.g widget
 ----
 Tessellates the widget region to within an absolute tolerance of 0.1 mm and a
 surface-normal tolerance of 0.01 radians, then writes it as a manifold-solid
@@ -153,10 +153,10 @@ CSG.
 
 .Split a model into one IGES file per region
 ====
-[source,bash]
+[source,console]
 ----
-mkdir parts
-g-iges -m -o parts model.g topgroup
+$ mkdir parts
+$ g-iges -m -o parts model.g topgroup
 ----
 Writes each region under topgroup as its own trimmed-NURBS IGES file inside the
 parts directory, which is convenient for importing assemblies part-by-part.

@@ -50,12 +50,12 @@ _string_::
 
 .Scale a hidden-line rendering and view it
 ====
-[source,bash]
+[source,console]
 ----
-rthide -o model.plot3 model.g component 2> rt.log
-rtscale 30 mm 10 rt.log "UH-60 a90 e0" > scale.plot3
-cat scale.plot3 model.plot3 > model.w.scale.plot3
-plot3rot -a35 -e25 -g model.w.scale.plot3 | plot3-fb
+$ rthide -o model.plot3 model.g component 2> rt.log
+$ rtscale 30 mm 10 rt.log "UH-60 a90 e0" > scale.plot3
+$ cat scale.plot3 model.plot3 > model.w.scale.plot3
+$ plot3rot -a35 -e25 -g model.w.scale.plot3 | plot3-fb
 ----
 *rthide* renders the geometry and records the view in rt.log. *rtscale* then
 emits a 30 mm scale with ten intervals and a descriptive label. The scale must

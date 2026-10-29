@@ -44,9 +44,9 @@ as those produced by other tools in the BRL-CAD signal-processing suite.
 
 .Estimate pitch periodicity of a speech signal
 ====
-[source,bash]
+[source,console]
 ----
-dauto2 1024 < voice.doubles > voice.autocor.doubles
+$ dauto2 1024 < voice.doubles > voice.autocor.doubles
 ----
 Computes the center-clipped autocorrelation of _voice.doubles_ using a
 1024-sample window. The center-clipping suppresses the strong formant

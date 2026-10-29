@@ -44,10 +44,12 @@ region codes in the files of two objects.
 
 .Edit the region codes of two objects.
 
-[example]
 ====
 
-mged> **edcodes object1 object2**::
+[source,console]
+----
+mged> edcodes object1 object2
+----
 
 Enables the user to edit the region codes for all regions below
 _object1_ and _object2_.

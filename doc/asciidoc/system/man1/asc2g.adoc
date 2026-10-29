@@ -51,21 +51,21 @@ the current binary version, use *dbupgrade*(1) instead.
 
 .Round-trip a database through ASCII to migrate it between machines
 ====
-[source,bash]
+[source,console]
 ----
-g2asc model.g model.asc
-scp model.asc remote:model.asc
-ssh remote "asc2g model.asc model.g"
+$ g2asc model.g model.asc
+$ scp model.asc remote:model.asc
+$ ssh remote "asc2g model.asc model.g"
 ----
 On the local machine *g2asc*(1) serializes the binary database to a portable ASCII file, which is copied to a remote host and converted back to a binary ".g" with *asc2g*. This is the classic workflow for moving geometry between systems, and is also handy for round-tripping a database through a text editor or revision-control system.
 ====
 
 .Build a database from a hand-written or generated script
 ====
-[source,bash]
+[source,console]
 ----
-asc2g model.asc model.g
-mged model.g ls
+$ asc2g model.asc model.g
+$ mged model.g ls
 ----
 The current ASCII format is a Tcl script of geometry commands (for example *put*, *attr*, *color*, and *title*), so a database can be produced procedurally by emitting such a script and feeding it to *asc2g*. The resulting _model.g_ can then be opened with *mged*(1).
 ====

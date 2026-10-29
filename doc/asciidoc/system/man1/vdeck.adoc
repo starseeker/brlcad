@@ -74,13 +74,13 @@ equivalent are written as a placeholder record and skipped with a warning.
 
 .Build and concatenate a COMGEOM deck for a group
 ====
-[source,bash]
+[source,console]
 ----
-vdeck havoc.g
+$ vdeck havoc.g
 command ( ? for menu ) >> insert havoc
 command ( ? for menu ) >> deck havoc
 command ( ? for menu ) >> quit
-cat havoc.st havoc.rt havoc.id > havoc.cg
+$ cat havoc.st havoc.rt havoc.id > havoc.cg
 ----
 Selects the *havoc* group from the database, writes the three deck files
 *havoc.st*, *havoc.rt*, and *havoc.id*, then concatenates them in

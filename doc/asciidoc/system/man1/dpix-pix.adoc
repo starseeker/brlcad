@@ -33,10 +33,10 @@ refused if directed to a terminal.
 
 .Convert a dpix file and view the result
 ====
-[source,bash]
+[source,console]
 ----
-dpix-pix image.dpix > image.pix
-pix-fb -w 512 -n 512 image.pix
+$ dpix-pix image.dpix > image.pix
+$ pix-fb -w 512 -n 512 image.pix
 ----
 Converts the double-precision image `image.dpix` into a *pix*(5) file,
 auto-scaling its values into the 0-255 range, then displays the result

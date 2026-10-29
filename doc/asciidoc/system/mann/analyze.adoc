@@ -74,13 +74,15 @@ Increase reporting verbosity for the top-level analyze reporting mode.
 == EXAMPLES
 
 .Analyze a particular _ARB_
-[example]
 ====
-mged>**analyze box.s**
+[source,console]
+----
+mged> analyze box.s
+----
 
 
-....
-
+[source,text]
+----
 box.s:  ARB8
 	1 (30.0283, -5.21153, -16.3791)
 	2 (30.0283, 21.5812, -16.3791)
@@ -115,19 +117,20 @@ box.s:  ARB8
     | Surface Area =  4307.11036376 |
     | Gallons      =     0.00508088 |
     +-------------------------------+
-      
-....
+----
 
 ====
 
 .Analyze a particular _TOR_
-[example]
 ====
-mged>**analyze tor**
+[source,console]
+----
+mged> analyze tor
+----
 
 
-....
-
+[source,text]
+----
 tor:  torus (TOR)
 	V (4.91624, -32.8022, 31.7118), r1=25.4 (A), r2=5.08 (H)
 	N=(0, 1, 0)
@@ -143,19 +146,20 @@ tor:  torus (TOR)
     | Surface Area =  5093.97853992 |
     | Gallons      =     0.00341804 |
     +-------------------------------+
-      
-....
+----
 
 ====
 
 .Points inside a sphere
-[example]
 ====
-mged>**l sph.s**
+[source,console]
+----
+mged> l sph.s
+----
 
 
-....
-
+[source,text]
+----
 sph.s:  ellipsoid (ELL)
 	V (0, 0, 0)
 	A (10, 0, 0) mag=10
@@ -167,14 +171,16 @@ sph.s:  ellipsoid (ELL)
 	B rotation angle=90, fallback angle=0
 	C direction cosines=(90, 90, 0)
 	C rotation angle=0, fallback angle=90
-      
-....
+----
 
-mged>**l pnts.s**
+[source,console]
+----
+mged> l pnts.s
+----
 
 
-....
-
+[source,text]
+----
 pnts.s:  Point Cloud (PNTS)
 Total number of points: 6
 Default scale: 0.000000
@@ -185,23 +191,27 @@ point#, (point)
 4, 	 (0.000000 0.000000 20.000000)
 5, 	 (10.000000 0.000000 10.000000)
 6, 	 (0.000000 10.000000 20.000000)
-      
-....
+----
 
-mged>**analyze intersect -o inside.s pnts.s sph.s**
+[source,console]
+----
+mged> analyze intersect -o inside.s pnts.s sph.s
+----
 
 
-....
-
+[source,text]
+----
 3
-      
-....
+----
 
-mged>**l inside.s**
+[source,console]
+----
+mged> l inside.s
+----
 
 
-....
-
+[source,text]
+----
 inside.s:  Point Cloud (PNTS)
 Total number of points: 3
 Default scale: 0.000000
@@ -209,19 +219,20 @@ point#, (point)
 1, 	 (0.000000 0.000000 10.000000)
 2, 	 (0.000000 0.000000 -5.000000)
 3, 	 (2.000000 2.000000 2.000000)
-      
-....
+----
 
 ====
 
 .Points outside a sphere
-[example]
 ====
-mged>**l sph.s**
+[source,console]
+----
+mged> l sph.s
+----
 
 
-....
-
+[source,text]
+----
 sph.s:  ellipsoid (ELL)
 	V (0, 0, 0)
 	A (10, 0, 0) mag=10
@@ -233,14 +244,16 @@ sph.s:  ellipsoid (ELL)
 	B rotation angle=90, fallback angle=0
 	C direction cosines=(90, 90, 0)
 	C rotation angle=0, fallback angle=90
-      
-....
+----
 
-mged>**l pnts.s**
+[source,console]
+----
+mged> l pnts.s
+----
 
 
-....
-
+[source,text]
+----
 pnts.s:  Point Cloud (PNTS)
 Total number of points: 6
 Default scale: 0.000000
@@ -251,23 +264,27 @@ point#, (point)
 4, 	 (0.000000 0.000000 20.000000)
 5, 	 (10.000000 0.000000 10.000000)
 6, 	 (0.000000 10.000000 20.000000)
-      
-....
+----
 
-mged>**analyze subtract -o outside.s pnts.s sph**
+[source,console]
+----
+mged> analyze subtract -o outside.s pnts.s sph
+----
 
 
-....
-
+[source,text]
+----
 3
-      
-....
+----
 
-mged>**l outside.s**
+[source,console]
+----
+mged> l outside.s
+----
 
 
-....
-
+[source,text]
+----
 outside.s:  Point Cloud (PNTS)
 Total number of points: 3
 Default scale: 0.000000
@@ -275,8 +292,7 @@ point#, (point)
 1, 	 (0.000000 10.000000 20.000000)
 2, 	 (10.000000 0.000000 10.000000)
 3, 	 (0.000000 0.000000 20.000000)
-      
-....
+----
 
 ====
 

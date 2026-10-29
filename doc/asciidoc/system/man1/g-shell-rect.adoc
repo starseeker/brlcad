@@ -91,10 +91,10 @@ as *g-stl*(1) or *g-obj*(1).
 
 .Generate a BOT shell and export it to STL
 ====
-[source,bash]
+[source,console]
 ----
-g-shell-rect -b -g 10 -o shell.g model.g hull
-g-stl -o hull.stl shell.g shell
+$ g-shell-rect -b -g 10 -o shell.g model.g hull
+$ g-stl -o hull.stl shell.g shell
 ----
 Raytrace the _hull_ region of _model.g_ on a 10 mm grid, writing a Bag of
 Triangles named _shell_ into the new database _shell.g_, then convert
@@ -104,9 +104,9 @@ workflows.
 
 .Force an initial direction and skip refinement for a quick approximation
 ====
-[source,bash]
+[source,console]
 ----
-g-shell-rect -n -i Z -g 25 -o quick.g engine.g block
+$ g-shell-rect -n -i Z -g 25 -o quick.g engine.g block
 ----
 Build a coarse NMG shell of the _block_ object using only first/last hits
 along Z-fired rays at 25 mm spacing, skipping the slower refinement pass.

@@ -29,9 +29,11 @@ The arguments are:
 == EXAMPLES
 
 .Identify a PIPE segment near a view coordinate
-[example]
 ====
-mged> **find_pipe_pnt pipe.s "0 0 1"**
+[source,console]
+----
+mged> find_pipe_pnt pipe.s "0 0 1"
+----
 
 Searches `pipe.s` for a segment that is closest to the view coordinate `(0, 0, 1)` and returns the numeric index of that segment.
 ====

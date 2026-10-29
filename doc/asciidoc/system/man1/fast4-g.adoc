@@ -74,10 +74,10 @@ For FASTGEN2 or FASTGEN3 files, convert them using *rpatch*(1) and then
 
 .Convert a model and inspect it
 ====
-[source,bash]
+[source,console]
 ----
-fast4-g vehicle.fastgen4 vehicle.g
-mged vehicle.g
+$ fast4-g vehicle.fastgen4 vehicle.g
+$ mged vehicle.g
 ----
 Converts the FASTGEN4 bulk data file into _vehicle.g_, then opens the
 result in *mged*(1) where the generated `all` group can be drawn.
@@ -85,9 +85,9 @@ result in *mged*(1) where the generated `all` group can be drawn.
 
 .Convert selected components with a plot overlay
 ====
-[source,bash]
+[source,console]
 ----
-fast4-g -w -c 3002,5678,1002-1100 -o turret.plot3 vehicle.fastgen4 turret.g
+$ fast4-g -w -c 3002,5678,1002-1100 -o turret.plot3 vehicle.fastgen4 turret.g
 ----
 Processes only the listed component ident ranges, warns when default
 names are generated, and writes the converted CTRI and CQUAD facets to

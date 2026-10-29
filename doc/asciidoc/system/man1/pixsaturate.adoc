@@ -45,9 +45,9 @@ Both standard input and standard output must be pipes or redirected files;
 
 .Desaturate a rendered image to grayscale
 ====
-[source,bash]
+[source,console]
 ----
-pixsaturate 0.0 < scene.pix > scene-gray.pix
+$ pixsaturate 0.0 < scene.pix > scene-gray.pix
 ----
 Produces a monochrome version of an image rendered by *rt*(1), preserving
 perceptual luminance, suitable for use as a matte or for printing.
@@ -55,9 +55,9 @@ perceptual luminance, suitable for use as a matte or for printing.
 
 .Boost color and convert to a viewable PNG
 ====
-[source,bash]
+[source,console]
 ----
-pixsaturate 1.5 < render.pix | pix-png -w 1024 -n 768 > render.png
+$ pixsaturate 1.5 < render.pix | pix-png -w 1024 -n 768 > render.png
 ----
 Increases the color intensity of a 1024x768 *pix*(5) image by 50% and pipes the
 result through *pix-png*(1) to create a more vivid PNG for previewing.

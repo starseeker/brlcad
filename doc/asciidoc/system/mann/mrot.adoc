@@ -26,9 +26,11 @@ Rotates the view using model _x y z_.
 The example shows the use of the *mrot* command to rotate the view using model _x y z_.
 
 .Rotate the view using model _x y z_.
-[example]
 ====
-mged>**mrot 0 0 10**
+[source,console]
+----
+mged> mrot 0 0 10
+----
 
 Rotates the view about the model _z_ axis by 10°.
 

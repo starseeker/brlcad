@@ -40,18 +40,18 @@ operate on streams of doubles and unsigned chars respectively.
 
 .Summarize a file of signed-short sample data
 ====
-[source,bash]
+[source,console]
 ----
-istats samples.shorts
+$ istats samples.shorts
 ----
 Report the count, range, sum, mean, and sample standard deviation of
 the 16-bit signed integers stored in _samples.shorts_. This is a quick
 way to sanity check the dynamic range of intermediate signal-processing
 data. The same data may instead be supplied on standard input, for
 example as the output of another short-integer filter:
-[source,bash]
+[source,console]
 ----
-imod -s 2 < samples.shorts | istats
+$ imod -s 2 < samples.shorts | istats
 ----
 ====
 

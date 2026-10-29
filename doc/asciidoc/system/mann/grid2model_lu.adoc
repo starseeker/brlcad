@@ -26,9 +26,11 @@ The inverse operation is `model2grid_lu`.
 == EXAMPLES
 
 .Convert a grid offset to model coordinates
-[example]
 ====
-mged> **grid2model_lu 50 25**
+[source,console]
+----
+mged> grid2model_lu 50 25
+----
 
 Returns the 3D model-space coordinates (in local units) corresponding to a 2D grid position 50 units right and 25 units up from the projected model origin.
 ====

@@ -62,9 +62,9 @@ usage and exits.
 
 .Animate a waveform as a bar graph
 ====
-[source,bash]
+[source,console]
 ----
-dmod -s2.0 < signal.d | ddisp -b -c -p
+$ dmod -s2.0 < signal.d | ddisp -b -c -p
 ----
 Scales a stream of doubles with *dmod*(1), then feeds the result to *ddisp*,
 which clears the framebuffer and draws each record as a green bar graph,
@@ -73,9 +73,9 @@ pausing three seconds between frames to animate the signal.
 
 .Display a scrolling intensity map
 ====
-[source,bash]
+[source,console]
 ----
-ddisp < spectrogram.d
+$ ddisp < spectrogram.d
 ----
 Reads records of doubles from _spectrogram.d_ and draws each record as a
 horizontal grayscale line, scrolling down the framebuffer to build up a

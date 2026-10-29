@@ -85,9 +85,9 @@ re-trace the differing pixels for debugging renders.
 
 .Visualize the difference between two renders
 ====
-[source,bash]
+[source,console]
 ----
-imgdiff -o changed.png baseline.png current.png
+$ imgdiff -o changed.png baseline.png current.png
 ----
 Compares two PNG renders pixel by pixel, prints how many channels match or
 differ, and, if they differ, writes _changed.png_ highlighting exactly which
@@ -96,9 +96,9 @@ pixels changed -- useful for spotting regressions in *rt*(1) output.
 
 .Compare raw pix images of known size and trace differing pixels
 ====
-[source,bash]
+[source,console]
 ----
-imgdiff --width-img1 512 --height-img1 512 \
+$ imgdiff --width-img1 512 --height-img1 512 \
         --width-img2 512 --height-img2 512 \
         -n shots ref.pix new.pix
 ----

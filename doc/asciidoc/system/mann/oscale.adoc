@@ -26,9 +26,11 @@ This command of matrix edit mode modifies the matrix to perform a uniform scale 
 The example shows the use of the *oscale* command to increase the size of a currently edited object by a specified factor.
 
 .Increase a currently edited object by a specified factor.
-[example]
 ====
-mged>**oscale 3**
+[source,console]
+----
+mged> oscale 3
+----
 
 Increases the size of the currently edited object by a factor of 3.
 

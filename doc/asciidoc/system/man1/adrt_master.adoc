@@ -78,9 +78,9 @@ exits.
 
 .Launch a master that auto-starts slaves from a host list
 ====
-[source,bash]
+[source,console]
 ----
-adrt_master -v -p 1980 -o 1982 -l hosts.txt -e start_slaves.sh
+$ adrt_master -v -p 1980 -o 1982 -l hosts.txt -e start_slaves.sh
 ----
 Starts the master in verbose mode, listening for slaves on port 1980 and
 for observers on port 1982. The slave hosts named in _hosts.txt_ are
@@ -90,9 +90,9 @@ then connect to port 1982 to view the rendered geometry interactively.
 
 .Run the master as a background daemon with a component server
 ====
-[source,bash]
+[source,console]
 ----
-adrt_master -d -c compsrv.example.org -l hosts.txt -e start_slaves.sh
+$ adrt_master -d -c compsrv.example.org -l hosts.txt -e start_slaves.sh
 ----
 Connects to the component-name server on _compsrv.example.org_ so shotline
 hits can be reported by component name, launches the listed slaves, and

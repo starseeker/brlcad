@@ -26,10 +26,12 @@ Takes as input a primitive or a collection of primitives ,__old_obj__, and creat
 The following example shows the use of the *voxelize* command to create a voxelized version of an existing object (__old_object__) and naming the output(__new_object__).
 
 .Create a voxelized version of an existing primitive or collection.
-[example]
 ====
 
-mged> **voxelize -d 2 -s "100 100 100" -t 0.3 newregion.r oldregion.r**::
+[source,console]
+----
+mged> voxelize -d 2 -s "100 100 100" -t 0.3 newregion.r oldregion.r
+----
 Creates a voxelized region corresponding to the original region _oldregion.r_.
 +
 The region _newregion.r_ consists of the resulting voxels.

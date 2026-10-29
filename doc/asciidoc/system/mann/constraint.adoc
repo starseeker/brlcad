@@ -113,50 +113,62 @@ The following geometric constraint types are supported in expressions:
 == EXAMPLES
 
 .Set a constraint attribute on an existing object
-[example]
 ====
-mged> **constraint set c1 coincident_expr "coincident ell.V arb8.P[4]"**
+[source,console]
+----
+mged> constraint set c1 coincident_expr "coincident ell.V arb8.P[4]"
+----
 
 Stores a `coincident_expr` attribute on the existing database object `c1`.
 ====
 
 .Set a formula constraint
-[example]
 ====
-mged> **constraint set p0 formula_expr "formula ell.R[0]=10.0"**
+[source,console]
+----
+mged> constraint set p0 formula_expr "formula ell.R[0]=10.0"
+----
 
 Stores a parametric formula on object `p0`.
 ====
 
 .Get the constraints on an object
-[example]
 ====
-mged> **constraint get c1**
+[source,console]
+----
+mged> constraint get c1
+----
 
 Prints the raw constraint attributes of `c1` in the form:
 `c1 attribute_name value`
 ====
 
 .Show constraints in readable form
-[example]
 ====
-mged> **constraint show c1 c2 c3**
+[source,console]
+----
+mged> constraint show c1 c2 c3
+----
 
 Prints the constraint attributes for `c1`, `c2`, and `c3` with labeled headers and `attribute = value` format.
 ====
 
 .Evaluate a constraint
-[example]
 ====
-mged> **constraint eval c3**
+[source,console]
+----
+mged> constraint eval c3
+----
 
 Evaluates the constraint expression stored on `c3`.
 ====
 
 .Get help
-[example]
 ====
-mged> **constraint help**
+[source,console]
+----
+mged> constraint help
+----
 
 Prints the full help text including all expression types, entity functions, and value functions.
 ====

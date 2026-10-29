@@ -85,19 +85,19 @@ To go the other direction (save a framebuffer image to a *pix*(5) file), use *fb
 
 .Render and display a model
 ====
-[source,bash]
+[source,console]
 ----
-rt -o moss.pix -w 1024 -n 1024 moss.g all.g
-pix-fb -F /dev/X -a moss.pix
+$ rt -o moss.pix -w 1024 -n 1024 moss.g all.g
+$ pix-fb -F /dev/X -a moss.pix
 ----
 Ray traces the _all.g_ object from the _moss.g_ database into a 1024x1024 *pix*(5) image, then displays it on an X11 framebuffer. The *-a* flag autosizes from the file so the explicit dimensions need not be repeated.
 ====
 
 .Pause so the result stays visible
 ====
-[source,bash]
+[source,console]
 ----
-pix-fb -w 512 -n 512 -p 5 render.pix
+$ pix-fb -w 512 -n 512 -p 5 render.pix
 ----
 Displays a 512x512 image and keeps the framebuffer open for 5 seconds before closing, useful in scripts or pop-up framebuffers that would otherwise vanish immediately.
 ====

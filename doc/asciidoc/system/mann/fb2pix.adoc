@@ -33,9 +33,11 @@ If size parameters are omitted, it defaults to capturing a 512x512 region.
 == EXAMPLES
 
 .Save the framebuffer to a PIX file
-[example]
 ====
-mged> **fb2pix -s 1024 output.pix**
+[source,console]
+----
+mged> fb2pix -s 1024 output.pix
+----
 
 Captures a 1024x1024 region of the active framebuffer and saves it to `output.pix`.
 ====

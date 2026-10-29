@@ -24,13 +24,18 @@ Exits gr grouper mode.  See gr man page.
 == EXAMPLES
 
 .Exit grouper mode after starting it with *gr*.
-[example]
 ====
-mged> **gr hull_parts.c + 25**
+[source,console]
+----
+mged> gr hull_parts.c + 25
+----
 
 Starts grouper mode for adding selected objects to _hull_parts.c_.
 
-mged> **dg**
+[source,console]
+----
+mged> dg
+----
 
 Exits grouper mode after the desired display selections have been made.
 

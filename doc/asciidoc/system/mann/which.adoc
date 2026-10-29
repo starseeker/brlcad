@@ -37,9 +37,11 @@ Search only in the tree below the specified `root_name`.
 == EXAMPLES
 
 .Basic usage of the *which* command.
-[example]
 ====
-mged> **which 1000**
+[source,console]
+----
+mged> which 1000
+----
 
 Lists all regions in the database that have a region ID of 1000.
 ====

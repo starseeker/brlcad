@@ -59,9 +59,9 @@ standard output the stream is set to binary mode.
 
 .Export a Y-up mesh for an OpenGL viewer
 ====
-[source,bash]
+[source,console]
 ----
-g-var -y -o havoc.mesh havoc.g havoc
+$ g-var -y -o havoc.mesh havoc.g havoc
 ----
 Collects all BOT primitives under the _havoc_ combination in _havoc.g_, rotates
 them into a Y-up coordinate frame, and writes the result to _havoc.mesh_ ready
@@ -70,10 +70,10 @@ for loading by an OpenGL application.
 
 .Tessellate non-BOT geometry first, then export
 ====
-[source,bash]
+[source,console]
 ----
-mged -c moss.g "facetize -o moss.bot all.g; q"
-g-var -s 1.0 -o moss.mesh moss.g moss.bot
+$ mged -c moss.g "facetize -o moss.bot all.g; q"
+$ g-var -s 1.0 -o moss.mesh moss.g moss.bot
 ----
 Because *g-var* only exports BOT primitives, this uses *mged*(1) and its
 *facetize* command to convert other primitives into a single BOT, then exports

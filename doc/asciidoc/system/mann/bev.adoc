@@ -26,10 +26,12 @@ Performs the operations indicated in the __Boolean_formula__ and stores the resu
 The example demonstrates the use of the *bev* command with the _-t_ option to create a triangulated object.
 
 .Creating a triangulated object by intersecting two objects
-[example]
 ====
 
-mged> **bev -t triangulated_lens sphere1 + sphere2**::
+[source,console]
+----
+mged> bev -t triangulated_lens sphere1 + sphere2
+----
 Creates a triangulated object by intersecting objects _sphere1_ and _sphere2_
 
 

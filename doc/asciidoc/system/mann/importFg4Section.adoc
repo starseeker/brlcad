@@ -28,9 +28,11 @@ The arguments are:
 == EXAMPLES
 
 .Importing FASTGEN4 geometry data
-[example]
 ====
-mged> **importfg4section wing.bot $fg4_data_string**
+[source,console]
+----
+mged> importfg4section wing.bot $fg4_data_string
+----
 
 Creates a new BOT primitive named `wing.bot` by parsing the raw FASTGEN4 geometry records stored in the variable `$fg4_data_string`.
 ====

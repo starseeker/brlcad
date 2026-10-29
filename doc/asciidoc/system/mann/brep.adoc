@@ -88,17 +88,21 @@ Set plotting resolution for subcommands that sample curves or surfaces for displ
 == EXAMPLES
 
 .Inspect a few specific faces of a BRep object.
-[example]
 ====
-mged>**brep hull.brep info F 0-3**
+[source,console]
+----
+mged> brep hull.brep info F 0-3
+----
 
 Prints textual information for faces 0 through 3 of _hull.brep_, which is useful when checking face orientation, trims, or surface indexing before a repair step.
 ====
 
 .Split selected faces into plate-mode BReps with an explicit thickness.
-[example]
 ====
-mged>**brep hull.brep split -t 1.5 -o hull_plate 4 5 6**
+[source,console]
+----
+mged> brep hull.brep split -t 1.5 -o hull_plate 4 5 6
+----
 
 Creates plate-mode output from faces 4, 5, and 6 of _hull.brep_ with a default thickness of 1.5 model units, writing the result under the _hull_plate_ naming root.
 ====

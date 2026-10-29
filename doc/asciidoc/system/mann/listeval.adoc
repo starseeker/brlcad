@@ -26,10 +26,12 @@ Combinations may include transformation matrices to be applied to their members.
 The example shows the use of the *listeval* command to display the parameters for a specified shape after applying the transformations from the given path.
 
 .Display parameters for a given shape after applying transformations from a given path.
-[example]
 ====
 
-mged> **listeval group1/region1/shapeb**::
+[source,console]
+----
+mged> listeval group1/region1/shapeb
+----
 Displays the parameters for _shapeb_ after applying the transformation matrix from _group1_ for _region1_ and the transformation matrix from _region1_ for _shapeb_.
 
 

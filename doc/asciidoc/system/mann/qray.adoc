@@ -72,36 +72,44 @@ Prints the usage message.
 The four examples show the use of the *qray* command without a subcommand and with three of the listed subcommands.
 
 .Print the usage message.
-[example]
 ====
-mged>**qray**
+[source,console]
+----
+mged> qray
+----
 
 Prints the usage message.
 
 ====
 
 .Return the overlap format string.
-[example]
 ====
-mged>**qray fmt o**
+[source,console]
+----
+mged> qray fmt o
+----
 
 Returns the overlap format string.
 
 ====
 
 .Return the rgb color used to color odd partitions.
-[example]
 ====
-mged>**qray oddcolor**
+[source,console]
+----
+mged> qray oddcolor
+----
 
 Returns the rgb color used to color odd partitions.
 
 ====
 
 .Set the odd partition color to red.
-[example]
 ====
-mged>**qray oddcolor 255 0 0**
+[source,console]
+----
+mged> qray oddcolor 255 0 0
+----
 
 Sets the odd partition color to red.
 

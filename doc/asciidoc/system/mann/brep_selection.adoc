@@ -27,9 +27,11 @@ Translate a surface control vertex
 == EXAMPLES
 
 .Append a ray-defined selection.
-[example]
 ====
-mged> **brep hull.brep selection append leading_edge 0 0 0 0 0 1**
+[source,console]
+----
+mged> brep hull.brep selection append leading_edge 0 0 0 0 0 1
+----
 
 Creates or extends the _leading_edge_ selection on _hull.brep_ using a ray that starts at the model origin and points in the positive Z direction.
 

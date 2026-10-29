@@ -98,13 +98,12 @@ Write output to _filename_ instead of the command prompt.
 == EXAMPLES
 
 .Default Output
-[example]
 ====
 **stat ***
 
 
-....
-
+[source,text]
+----
  Object Name             uses   References   Flags   Type     Size 
 ----------------------- ------ ------------ ------- -------- ------
  Default                 0      1            2       comb     288B 
@@ -118,19 +117,17 @@ Write output to _filename_ instead of the command prompt.
  Solid1_4.r              0      1            6       region   280B 
  Solid1_4.r.s            0      1            1       brep     771K 
  _GLOBAL                 0      0            8                96B 
-      
-....
+----
 
 ====
 
 .Sorting by Size
-[example]
 ====
 **stat -S "size" ***
 
 
-....
-
+[source,text]
+----
  Object Name             uses   References   Flags   Type     Size 
 ----------------------- ------ ------------ ------- -------- ------
  _GLOBAL                 0      0            8                96B  
@@ -144,19 +141,17 @@ Write output to _filename_ instead of the command prompt.
  Solid1_2.r.s            0      1            1       brep     672K 
  Solid1_4.r.s            0      1            1       brep     771K 
  Solid1.r.s              0      1            1       brep     859K 
-      
-....
+----
 
 ====
 
 .Sorting by Size, Reversed Order
-[example]
 ====
 **stat -S "!size" ***
 
 
-....
-
+[source,text]
+----
  Object Name             uses   References   Flags   Type     Size 
 ----------------------- ------ ------------ ------- -------- ------
  Solid1.r.s              0      1            1       brep     859K 
@@ -170,38 +165,34 @@ Write output to _filename_ instead of the command prompt.
  Solid1_4.r              0      1            6       region   280B 
  NIST_MBE_PMI_7-10.3dm   0      0            2       comb     264B 
  _GLOBAL                 0      0            8                96B 
-      
-....
+----
 
 ====
 
 .Filtering by Type
-[example]
 ====
 **stat -F "-type brep" ***
 
 
-....
-
+[source,text]
+----
  Object Name    uses   References   Flags   Type   Size 
 -------------- ------ ------------ ------- ------ ------
  Solid1.r.s     0      1            1       brep   859K 
  Solid1_2.r.s   0      1            1       brep   672K 
  Solid1_3.r.s   0      1            1       brep   431K 
  Solid1_4.r.s   0      1            1       brep   771K
-      
-....
+----
 
 ====
 
 .Custom Columns
-[example]
 ====
 **stat -C "name,type,size,color" ***
 
 
-....
-
+[source,text]
+----
  Object Name             Type     Size   color       
 ----------------------- -------- ------ -------------
  Default                 comb     288B   0/0/0       
@@ -215,7 +206,6 @@ Write output to _filename_ instead of the command prompt.
  Solid1_4.r              region   280B   178/178/178 
  Solid1_4.r.s            brep     771K               
  _GLOBAL                          96B                
-      
-....
+----
 
 ====

@@ -52,9 +52,9 @@ deprecation warning on startup.
 
 .Halve the amplitude of a double stream
 ====
-[source,bash]
+[source,console]
 ----
-d-f 0.5 < signal.d > signal.f
+$ d-f 0.5 < signal.d > signal.f
 ----
 Reads double-precision samples from signal.d, scales each by one half,
 and writes single-precision floats to signal.f, producing a more
@@ -63,9 +63,9 @@ compact file at reduced amplitude.
 
 .Round-trip through single precision
 ====
-[source,bash]
+[source,console]
 ----
-d-f < values.d | f-d > rounded.d
+$ d-f < values.d | f-d > rounded.d
 ----
 Converts doubles to floats and back again with *f-d*(1), which is a
 convenient way to see the precision lost when signal-processing data is

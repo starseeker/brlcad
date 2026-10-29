@@ -76,13 +76,13 @@ buffer length is 1024 bytes.
 
 .Measure raw TCP throughput between two hosts
 ====
-[source,bash]
+[source,console]
 ----
 # on the receiving host (e.g. server.example.com):
-ttcp -r -s -l65536
+$ ttcp -r -s -l65536
 
 # on the sending host:
-ttcp -t -s -l65536 -n4096 server.example.com
+$ ttcp -t -s -l65536 -n4096 server.example.com
 ----
 The receiver discards everything it gets while the transmitter sources
 4096 buffers of 65536 bytes each.  Both report the achieved throughput on
@@ -92,13 +92,13 @@ without needing a real data set.
 
 .Transfer an actual file (and verify the pipe)
 ====
-[source,bash]
+[source,console]
 ----
 # on the receiving host:
-ttcp -r -p3000 > received.dat
+$ ttcp -r -p3000 > received.dat
 
 # on the sending host:
-ttcp -t -p3000 server.example.com < model.g
+$ ttcp -t -p3000 server.example.com < model.g
 ----
 Here *ttcp* is used as a plain copy: a BRL-CAD *.g* geometry database is
 piped from the transmitter's standard input to the receiver's standard

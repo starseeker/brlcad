@@ -72,9 +72,9 @@ mode) and exits. This allows scripts and other BRL-CAD tools to invoke
 
 .Edit a BRL-CAD command script
 ====
-[source,bash]
+[source,console]
 ----
-brledit build.tcl
+$ brledit build.tcl
 ----
 Open the existing file `build.tcl` for editing. Make changes, press *^O* to
 write the file out, then *^X* to exit. This is a convenient way to tweak an
@@ -83,9 +83,9 @@ write the file out, then *^X* to exit. This is a convenient way to tweak an
 
 .Non-interactive file replacement from a script
 ====
-[source,bash]
+[source,console]
 ----
-BRLEDIT_REPLACE_FILE=new_model.g brledit model.g
+$ BRLEDIT_REPLACE_FILE=new_model.g brledit model.g
 ----
 Overwrite `model.g` with the contents of `new_model.g` and exit immediately,
 without entering the interactive editor. This form is useful inside shell

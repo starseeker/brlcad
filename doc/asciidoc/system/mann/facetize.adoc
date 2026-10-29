@@ -201,57 +201,69 @@ Primitive tessellation also applies internal minimum tolerance floors to avoid p
 == EXAMPLES
 
 .Create a facetized BOT version of an existing object.
-[example]
 ====
 The example shows the use of the *facetize* command to create a facetized BOT version of an existing object (__old_object__) and renaming that facetized object (__new_object__).
 
-mged>**facetize region1.r region1.bot**
+[source,console]
+----
+mged> facetize region1.r region1.bot
+----
 
 ====
 
 .Facetize all regions in a hierarchy.
-[example]
 ====
 This runs the per region conversion on all regions under the "model" assembly and creates a new conversion hierarchy under model_facetized.
 
-mged>**facetize -r model model.f**
+[source,console]
+----
+mged> facetize -r model model.f
+----
 
 ====
 
 .Facetize all regions in a hierarchy, attempting only NMG conversion.
-[example]
 ====
 This runs the NMG approach per region conversion on all regions, but in the case of failure will not attempt any fallback conversion methods.
 
-mged>**facetize -r --methods NMG model model.f**
+[source,console]
+----
+mged> facetize -r --methods NMG model model.f
+----
 
 ====
 
 .Retry failed conversion objects in a previous facetization attempt with new methodology.
-[example]
 ====
 This resumes a failed conversion of _model_.
 
-mged>**facetize -r --resume model model.f**
+[source,console]
+----
+mged> facetize -r --resume model model.f
+----
 
 ====
 
 .Generate a partial BoT from a difficult tree.
-[example]
 ====
 This attempts to facetize _large_model_ while explicitly allowing failed primitives or subtrees to be omitted. The final result should be inspected carefully: if any failures are tolerated, *facetize* will report that the output is partial.
 
-mged>**facetize --tolerate-failures large_model large_model.partial.bot**
+[source,console]
+----
+mged> facetize --tolerate-failures large_model large_model.partial.bot
+----
 
 ====
 
 .Refine a Manifold Dual Contouring conversion
-[example]
 ====
 This selects MDC directly and requests a finer cell size with a larger ray
 budget than the default:
 
-mged>**facetize --methods MDC --method-opts "MDC feature_size=0.1 max_rays=400000" ellipse.r ell.bot**
+[source,console]
+----
+mged> facetize --methods MDC --method-opts "MDC feature_size=0.1 max_rays=400000" ellipse.r ell.bot
+----
 
 Smaller feature sizes increase mesh detail, ray count, memory use, and runtime.
 
@@ -264,20 +276,24 @@ Smaller feature sizes increase mesh detail, ray count, memory use, and runtime.
 These are some useful commands related to the facetization process.
 
 .List invalid BoT objects below a comb
-[example]
 ====
 Use lint -I to report on invalid objects below a comb.
 
-mged>**lint -I model.f**
+[source,console]
+----
+mged> lint -I model.f
+----
 
 ====
 
 .Pre-extrude Plate Mode BoTs
-[example]
 ====
 Use search -exec to extrude all plate mode bots before attempting a facetize operation.
 
-mged>**search model.f -type bot -type plate -exec bot extrude -i "{}" ";"**
+[source,console]
+----
+mged> search model.f -type bot -type plate -exec bot extrude -i "{}" ";"
+----
 
 ====
 

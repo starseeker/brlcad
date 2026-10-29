@@ -38,9 +38,9 @@ standard input.
 
 .Summarize the commands in a plot3 file
 ====
-[source,bash]
+[source,console]
 ----
-plot3stat model.plot3
+$ plot3stat model.plot3
 ----
 Reads _model.plot3_ and prints a per-command frequency summary to standard
 error, revealing which drawing primitives (lines, points, color changes, etc.)
@@ -49,9 +49,9 @@ make up the file.
 
 .Profile a pipeline that generates plot3 on the fly
 ====
-[source,bash]
+[source,console]
 ----
-plot3rot -z 45 < model.plot3 | plot3stat -v 2>summary.txt >commands.txt
+$ plot3rot -z 45 < model.plot3 | plot3stat -v 2>summary.txt >commands.txt
 ----
 Rotates _model.plot3_ with *plot3rot*(1) and pipes the result into *plot3stat*.
 The verbose stream of command names is captured in _commands.txt_ while the count

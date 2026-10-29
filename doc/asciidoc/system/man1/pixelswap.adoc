@@ -46,10 +46,10 @@ always processes 3-byte RGB pixels and ignores the requested depth.
 
 .Recolor a rendered frame
 ====
-[source,bash]
+[source,console]
 ----
-rt -o frame.pix scene.g region > /dev/null
-pixelswap 255 0 0 0 0 255 < frame.pix > swapped.pix
+$ rt -o frame.pix scene.g region > /dev/null
+$ pixelswap 255 0 0 0 0 255 < frame.pix > swapped.pix
 ----
 Ray traces a model with *rt*(1), then swaps every pure-red pixel for pure-blue
 and every pure-blue pixel for pure-red, producing _swapped.pix_.  This is a

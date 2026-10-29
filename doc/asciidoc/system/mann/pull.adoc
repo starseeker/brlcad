@@ -26,9 +26,11 @@ Pulls the effects of all matrix transformations that appear in any combinations 
 The example shows the use of the *pull* command to pull the effects of any transformation matrices from leaves(primitive shapes) of a tree up to the specified head objects.
 
 .Pull the effects of any transformation matrices from the leaves(primitive shapes) of the tree up to the specified head nodes(objects).
-[example]
 ====
-mged>**pull group1 regiona**
+[source,console]
+----
+mged> pull group1 regiona
+----
 
 Pulls the effects of any transformation matrices from the primitive shapes in the tree up to the root nodes specified by _group1_ and _regiona_.
 

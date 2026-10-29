@@ -505,18 +505,18 @@ _d_ coordinate of exit from overlap.
 
 .Scripted line-of-sight query through a model
 ====
-[source,bash]
+[source,console]
 ----
-printf 'xyz 0 0 0\ndir 1 0 0\ns\n' | nirt -s model.g component
+$ printf 'xyz 0 0 0\ndir 1 0 0\ns\n' | nirt -s model.g component
 ----
 Because standard input is a pipe, *nirt* runs silently. The script positions the ray origin, aims it down the +X axis, and fires a single shot, printing only the ray report for the _component_ object. This is a convenient way to measure line-of-sight distances or material thickness from a shell script.
 ====
 
 .Reporting custom attributes for each region hit
 ====
-[source,bash]
+[source,console]
 ----
-nirt -A material_id -A los_density model.g all
+$ nirt -A material_id -A los_density model.g all
 ----
 Each region the ray passes through is reported together with its _material_id_ and _los_density_ attribute values via the *attributes* output item, which is useful for vulnerability and mass-properties analyses.
 ====

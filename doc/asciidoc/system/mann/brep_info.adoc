@@ -74,13 +74,15 @@ Return information for one or more 3D vertices.
 == EXAMPLES
 
 .Object Summary
-[example]
 ====
-mged>**brep Brep_1.s info**
+[source,console]
+----
+mged> brep Brep_1.s info
+----
 
 
-....
-
+[source,text]
+----
 Brep_1.s -- Valid: YES, Solid: YES, Plate mode: NO
 faces:     597
 surfaces:  597
@@ -90,8 +92,7 @@ vertices:  976
 loops:     715
 trims:     3056
 2d curves: 3056
-        
-....
+----
 
 
 
@@ -100,13 +101,15 @@ Reports counts for the various object types, as well as object level info about 
 ====
 
 .First Object Face
-[example]
 ====
-mged>**brep Brep_1.s info F 1**
+[source,console]
+----
+mged> brep Brep_1.s info F 1
+----
 
 
-....
-
+[source,text]
+----
 face[ 1]: surface(1) reverse(0) loops(1)
 	loop[ 1]: type(outer) 4 trims(4, 5, 6, 7)
 		trim[ 4]: edge( 1) v0( 2) v1( 1) tolerance(0.001, 0.001)
@@ -125,8 +128,7 @@ face[ 1]: surface(1) reverse(0) loops(1)
 			type(mated   -north side iso) rev3d(1) 2d_curve(7)
 			domain(0, 1) start(16.62, 3.14159) end(1.62, 3.14159)
 			surface points start(32.4121, 148.588, 40) end(32.4121, 148.588, 55)
-        
-....
+----
 
 
 
@@ -135,13 +137,15 @@ Reports information about the consituent components that make up the topological
 ====
 
 .First Surface
-[example]
 ====
-mged>**brep Brep_1.s info S 1**
+[source,console]
+----
+mged> brep Brep_1.s info S 1
+----
 
 
-....
-
+[source,text]
+----
 surface[ 1]: ON_NurbsSurface u(0, 18.24) v(0, 3.14159)
 NURBS form of Surface:
 ON_NurbsSurface dim = 3 is_rat = 1
@@ -168,8 +172,7 @@ Control Points  10 rational points
   CV[ 1][ 2] [26.412069387140399, 154.58793061285999, 38.380000000000003, 1] = (26.412069387140399, 154.58793061285999, 38.380000000000003)
   CV[ 1][ 3] [22.918794055935898, 109.31017402594885, 27.138758261939714, 0.70710678118654802] = (32.412069387140399, 154.58793061285999, 38.380000000000003)
   CV[ 1][ 4] [32.412069387140399, 148.58793061285999, 38.380000000000003, 1] = (32.412069387140399, 148.58793061285999, 38.380000000000003)
-        
-....
+----
 
 
 
@@ -178,13 +181,15 @@ Detailed information on the geometric data defining the surface.
 ====
 
 .Multiple loops
-[example]
 ====
-mged>**brep Brep_1.s info L 1,5,12**
+[source,console]
+----
+mged> brep Brep_1.s info L 1,5,12
+----
 
 
-....
-
+[source,text]
+----
 loop[1] on face 1 with 4 trims
 trims: 4,5,6,7
 
@@ -193,8 +198,7 @@ trims: 20,21,22,23
 
 loop[12] on face 12 with 4 trims
 trims: 48,49,50,51
-        
-....
+----
 
 
 

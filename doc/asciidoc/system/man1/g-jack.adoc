@@ -78,9 +78,9 @@ Coordinates are converted from millimeters to centimeters on output.
 
 .Convert selected regions and inspect them
 ====
-[source,bash]
+[source,console]
 ----
-g-jack -p model_ -v -r 0.005 mannequin.g torso left_arm right_arm
+$ g-jack -p model_ -v -r 0.005 mannequin.g torso left_arm right_arm
 ----
 Tessellates the three named regions from _mannequin.g_ using a tighter relative
 tolerance, writing verbose progress to the terminal. The output files are named

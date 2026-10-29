@@ -44,9 +44,9 @@ and *dstats*(1) in the *sig* signal-processing suite.
 
 .Locating spectral peaks after an FFT
 ====
-[source,bash]
+[source,console]
 ----
-dfft < signal.doubles | dpeak 1024 > peaks.doubles
+$ dfft < signal.doubles | dpeak 1024 > peaks.doubles
 ----
 Computes the power spectrum of _signal.doubles_ with *dfft*(1) and pipes it to
 *dpeak*, which reports the bin index of the strongest peak in each 1024-sample

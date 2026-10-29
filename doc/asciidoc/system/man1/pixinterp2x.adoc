@@ -56,9 +56,9 @@ The default input dimensions are 512 by 512 pixels.
 
 .Double a 1024x768 image and view the result
 ====
-[source,bash]
+[source,console]
 ----
-pixinterp2x -w 1024 -n 768 render.pix | pix-fb -w 2048 -n 1536
+$ pixinterp2x -w 1024 -n 768 render.pix | pix-fb -w 2048 -n 1536
 ----
 Interpolates a 1024x768 rendering up to 2048x1536 and pipes it directly to the
 framebuffer with *pix-fb*(1) for inspection, without writing an intermediate file.
@@ -66,9 +66,9 @@ framebuffer with *pix-fb*(1) for inspection, without writing an intermediate fil
 
 .Upscale a square image and save it
 ====
-[source,bash]
+[source,console]
 ----
-pixinterp2x -s 256 small.pix > large.pix
+$ pixinterp2x -s 256 small.pix > large.pix
 ----
 Reads a 256x256 *pix*(5) image and writes a smoothly interpolated 512x512 image.
 ====

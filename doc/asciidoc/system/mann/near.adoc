@@ -133,9 +133,11 @@ intended for programmatic consumption.
 == EXAMPLES
 
 .Find regions near an object with default parameters
-[example]
 ====
-mged> **near wheel.r**
+[source,console]
+----
+mged> near wheel.r
+----
 
 Target: wheel.r
 Distance: 0.254 m
@@ -149,9 +151,11 @@ Nearby regions:
 ====
 
 .Find regions within 2.5 centimeters of an explicit point, with denser sampling
-[example]
 ====
-mged> **near -ray_spacing 1mm -max_samples 200 0.05m 1.2m 0.0m 2.5cm**
+[source,console]
+----
+mged> near -ray_spacing 1mm -max_samples 200 0.05m 1.2m 0.0m 2.5cm
+----
 
 Target: point {0.05, 1.2, 0}
 Distance: 2.5 cm
@@ -164,10 +168,12 @@ Nearby regions:
 ====
 
 .Limit the scope to a subtree and run programmatically (quiet mode)
-[example]
 ====
 # return value is a Tcl list of results (suitable for scripts)
-mged> **near -scope {/building/floor1 /building/floor2} -quiet 1 desk.s 10cm**
+[source,console]
+----
+mged> near -scope {/building/floor1 /building/floor2} -quiet 1 desk.s 10cm
+----
 
 The command returns a Tcl value like:
 

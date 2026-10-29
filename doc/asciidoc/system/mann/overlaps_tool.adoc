@@ -137,8 +137,8 @@ Providing the `-F` ("first") option to the overlaps_tool command causes the over
 For example, if _a_ overlaps _b_ and they look like this:
 
 
-....
-
+[source,text]
+----
 a/R
   u adapter.s
   u alert.c
@@ -151,22 +151,20 @@ b/R
       u bend.s
   - blend.c
     u balance.s
-      
-....
+----
 
 Then subtracting _b_ from _a_ would rewrite _a_ to:
 
 
-....
-
+[source,text]
+----
 a/R
   u adapter.s
   - bend.s
   u alert.c
     u ac.s
   - ant.s
-      
-....
+----
 
 
 
@@ -174,18 +172,22 @@ a/R
 == EXAMPLES
 
 .Launch the overlaps menu.
-[example]
 ====
-mged> **overlaps_tool**
+[source,console]
+----
+mged> overlaps_tool
+----
 
 Opens the overlaps menu GUI for the currently open database so a new overlap check can be configured.
 
 ====
 
 .Open an existing overlaps file in first-solid mode.
-[example]
 ====
-mged> **overlaps_tool -F model.g.ck/overlaps**
+[source,console]
+----
+mged> overlaps_tool -F model.g.ck/overlaps
+----
 
 Launches the checker GUI directly on _model.g.ck/overlaps_ and enables first-solid assumptions for automatic subtraction.
 

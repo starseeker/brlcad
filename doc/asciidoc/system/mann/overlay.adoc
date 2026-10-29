@@ -80,18 +80,22 @@ Explicitly specify the framebuffer image format.
 == EXAMPLES
 
 .Plot a UNIX plot file in the MGED display.
-[example]
 ====
-mged>**overlay file.plot3 tmp**
+[source,console]
+----
+mged> overlay file.plot3 tmp
+----
 
 Plots the UNIX plot file _file.plot3_ in the MGED display, using _tmp_ as the base for the phony object names.
 
 ====
 
 .Plot a PNG file in the MGED framebuffer.
-[example]
 ====
-mged>**overlay -c -F image.png**
+[source,console]
+----
+mged> overlay -c -F image.png
+----
 
 Plots the image file _image.png_ in the MGED framebuffer, first clearing any pre-existing images in the framebuffer.
 

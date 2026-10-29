@@ -30,25 +30,31 @@ The command performs the following steps:
 == EXAMPLES
 
 .Rename an object
-[example]
 ====
-mged> **move old_name.s new_name.s**
+[source,console]
+----
+mged> move old_name.s new_name.s
+----
 
 Renames the solid `old_name.s` to `new_name.s` in the database.
 ====
 
 .Using the mv alias
-[example]
 ====
-mged> **mv wing_left.r wing.r**
+[source,console]
+----
+mged> mv wing_left.r wing.r
+----
 
 Renames `wing_left.r` to `wing.r`. The `mv` alias is equivalent to `move`.
 ====
 
 .Attempting to rename to an existing name
-[example]
 ====
-mged> **move box.s sphere.s**
+[source,console]
+----
+mged> move box.s sphere.s
+----
 
 `sphere.s: already exists`
 

@@ -26,9 +26,11 @@ Translates the view or an object. Exactly what is done is determined by MGED's s
 The example shows the use of the *tra* command to translate a view.
 
 .Translate a view along the _x_-axis.
-[example]
 ====
-mged>**tra 10 0 0**
+[source,console]
+----
+mged> tra 10 0 0
+----
 
 Translates by 10 units along the _x_ axis.
 

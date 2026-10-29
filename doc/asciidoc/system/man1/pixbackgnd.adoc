@@ -75,9 +75,9 @@ pipe; *pixbackgnd* refuses to write *pix*(5) data to a terminal.
 
 .Composite a foreground image onto a shaded backdrop
 ====
-[source,bash]
+[source,console]
 ----
-pixbackgnd 160 200 | pixmerge fg.pix - | pix-fb
+$ pixbackgnd 160 200 | pixmerge fg.pix - | pix-fb
 ----
 Generate a blue shaded background (hue 160, saturation 200), merge an
 existing foreground image fg.pix over it with *pixmerge*(1), and display
@@ -86,9 +86,9 @@ the result on a framebuffer with *pix-fb*(1).
 
 .Produce a high-resolution untitled backdrop
 ====
-[source,bash]
+[source,console]
 ----
-pixbackgnd -H -a 200 -b 30 160 200 > backdrop.pix
+$ pixbackgnd -H -a 200 -b 30 160 200 > backdrop.pix
 ----
 Write a 1024x1024 backdrop with a stronger top-to-bottom intensity ramp
 (from 200 down to 30) to the file backdrop.pix for later compositing.

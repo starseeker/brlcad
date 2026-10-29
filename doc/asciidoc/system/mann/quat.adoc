@@ -31,35 +31,49 @@ To set the view by azimuth/elevation angles instead of a quaternion, use `ae`.
 == EXAMPLES
 
 .Get the current view quaternion
-[example]
 ====
-mged> **quat**
+[source,console]
+----
+mged> quat
+----
 
 Returns the current view rotation as a quaternion, e.g. `0.5 -0.5 -0.5 0.5` for a typical isometric view. The four values are the `x y z w` components.
 ====
 
 .Set the view to look down the -Z axis (top view)
-[example]
 ====
-mged> **quat 0.707107 0 0 0.707107**
+[source,console]
+----
+mged> quat 0.707107 0 0 0.707107
+----
 
 Sets the view orientation to a 90° rotation about the X axis — a top-down view. The quaternion `(sin(45°), 0, 0, cos(45°))` encodes this rotation.
 ====
 
 .Set the view to the identity (front view, no rotation)
-[example]
 ====
-mged> **quat 0 0 0 1**
+[source,console]
+----
+mged> quat 0 0 0 1
+----
 
 Sets the view to the identity quaternion — the default front-facing orientation with no rotation applied.
 ====
 
 .Round-trip: capture and restore orientation
-[example]
 ====
-mged> **set q [quat]**
-mged> **ae 35 25**
-mged> **quat {*}$q**
+[source,console]
+----
+mged> set q [quat]
+----
+[source,console]
+----
+mged> ae 35 25
+----
+[source,console]
+----
+mged> quat {*}$q
+----
 
 Saves the current quaternion, changes to a 35/25 azimuth-elevation view, then restores the original orientation using Tcl list expansion.
 ====

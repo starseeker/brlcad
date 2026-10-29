@@ -24,18 +24,22 @@ The *source* command reads and executes an external file. The command will look 
 == EXAMPLES
 
 .Read in an external file.
-[example]
 ====
-mged>**source example.txt**
+[source,console]
+----
+mged> source example.txt
+----
 
 Reads and executes the file example.txt located in the current working directory.
 
 ====
 
 .Read in an external file using the full path to the file.
-[example]
 ====
-mged>**source C:/cad_work/example.txt**
+[source,console]
+----
+mged> source C:/cad_work/example.txt
+----
 
 Reads and executes the file example.txt located at C:\cad_work\.
 

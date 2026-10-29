@@ -26,9 +26,11 @@ Makes a duplicate of an object (shape or combination). If __from_object__ is a s
 The example shows the use of the command *cp* to duplicate a combination.
 
 .Duplicate a combination.
-[example]
 ====
-mged>**cp comb1 comb2**
+[source,console]
+----
+mged> cp comb1 comb2
+----
 
 Duplicate combination comb1 and call it comb2.
 

@@ -26,9 +26,11 @@ Creates a UNIX plot of the current MGED display. If an __output_file__ is specif
 The example shows the use of the *plot* command to create a UNIX plot of the current MGED display and pipe the results to the specified command.
 
 .Create a UNIX plot of the current MGED display and send the results to a specified command.
-[example]
 ====
-mged>plot -float | pldebug
+[source,console]
+----
+mged> plot -float | pldebug
+----
 
 Creates a UNIX plot of the current MGED display and pipe the results to the *pldebug* command.
 

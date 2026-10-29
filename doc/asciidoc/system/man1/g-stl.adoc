@@ -86,9 +86,9 @@ millimeters; see *-i*. Related converters include *g-obj*(1), *g-ply*(1), and
 
 .Convert a component to a binary STL file for 3D printing
 ====
-[source,bash]
+[source,console]
 ----
-g-stl -b -i -a 0.1 -o bracket.stl model.g bracket
+$ g-stl -b -i -a 0.1 -o bracket.stl model.g bracket
 ----
 Tessellates the _bracket_ region from _model.g_ with a 0.1 mm absolute
 tolerance, writing a compact binary STL in inch units suitable for slicing and
@@ -97,10 +97,10 @@ printing.
 
 .Export every region of an assembly to separate files
 ====
-[source,bash]
+[source,console]
 ----
-mkdir parts
-g-stl -m parts model.g assembly
+$ mkdir parts
+$ g-stl -m parts model.g assembly
 ----
 Walks the _assembly_ tree and writes one ASCII STL file per region into the
 _parts_ directory, each named after the region's full path. This is convenient

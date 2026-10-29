@@ -93,10 +93,15 @@ Specify the number of rays along the radii of the circular grids of rays fired d
 == EXAMPLES
 
 .Simulate a falling rigid body for one second.
-[example]
 ====
-mged>**attr set drop_test.r simulate::mass 2.5**
-mged>**simulate drop_test.r 1.0**
+[source,console]
+----
+mged> attr set drop_test.r simulate::mass 2.5
+----
+[source,console]
+----
+mged> simulate drop_test.r 1.0
+----
 
 Assigns a mass to _drop_test.r_ and runs a one-second Bullet simulation using the current geometry hierarchy and default gravity.
 ====

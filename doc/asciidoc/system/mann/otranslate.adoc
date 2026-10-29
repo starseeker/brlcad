@@ -28,25 +28,31 @@ The resulting effective matrix is applied to the object's internal representatio
 == EXAMPLES
 
 .Translate an object along the X axis
-[example]
 ====
-mged> **otranslate box.s 50 0 0**
+[source,console]
+----
+mged> otranslate box.s 50 0 0
+----
 
 Moves `box.s` 50 local units in the positive X direction.
 ====
 
 .Translate diagonally
-[example]
 ====
-mged> **otranslate part.s 10 -5 20**
+[source,console]
+----
+mged> otranslate part.s 10 -5 20
+----
 
 Displaces `part.s` by the vector (10, -5, 20) in local units, moving it simultaneously along all three axes.
 ====
 
 .Move an object back to the origin neighborhood
-[example]
 ====
-mged> **otranslate widget.s 0 0 -100**
+[source,console]
+----
+mged> otranslate widget.s 0 0 -100
+----
 
 Moves `widget.s` 100 local units in the negative Z direction.
 ====

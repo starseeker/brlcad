@@ -47,9 +47,9 @@ _val_...::
 
 .Posterize an image into three intensity levels
 ====
-[source,bash]
+[source,console]
 ----
-pix-bw photo.pix | bwthresh 85 170 > poster.bw
+$ pix-bw photo.pix | bwthresh 85 170 > poster.bw
 ----
 Convert a color *pix*(5) image to grayscale with *pix-bw*(1), then collapse it
 to three flat intensity levels: pixels below 85 become 0 (black), pixels below
@@ -59,9 +59,9 @@ way to produce a hard-edged, posterized mask from a continuous-tone image.
 
 .Binarize an image at a single threshold
 ====
-[source,bash]
+[source,console]
 ----
-bwthresh 128 < input.bw > mask.bw
+$ bwthresh 128 < input.bw > mask.bw
 ----
 With a single threshold, every pixel below 128 becomes 0 and every pixel at or
 above 128 becomes 255, yielding a pure black-and-white mask.

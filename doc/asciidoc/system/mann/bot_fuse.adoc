@@ -37,17 +37,21 @@ Without either flag, open edge detection runs silently and results are not visua
 == EXAMPLES
 
 .Fuse a BOT and save to a new name
-[example]
 ====
-mged> **bot_fuse clean_hull.bot raw_hull.bot**
+[source,console]
+----
+mged> bot_fuse clean_hull.bot raw_hull.bot
+----
 
 Fuses duplicate vertices and faces in `raw_hull.bot` and writes the cleaned result to `clean_hull.bot`.
 ====
 
 .Fuse and display open edges
-[example]
 ====
-mged> **bot_fuse -s clean_hull.bot raw_hull.bot**
+[source,console]
+----
+mged> bot_fuse -s clean_hull.bot raw_hull.bot
+----
 
 Fuses the BOT and then highlights any open edges in the display.
 ====

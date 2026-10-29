@@ -42,28 +42,34 @@ avoid the ambiguity.
 == EXAMPLES
 
 .Reset view size and center so that all displayed objects are within the view.
-[example]
 ====
 
-mged> **autoview**::
+[source,console]
+----
+mged> autoview
+----
 The view resets so that all objects displayed can be seen.
 
 ====
 
 .Frame only the named objects.
-[example]
 ====
 
-mged> **autoview engine.r wheel.r**::
+[source,console]
+----
+mged> autoview engine.r wheel.r
+----
 The view is centered and sized to frame just engine.r and wheel.r.
 
 ====
 
 .Frame the named object using a specific scale.
-[example]
 ====
 
-mged> **autoview -s 0.5 engine.r**::
+[source,console]
+----
+mged> autoview -s 0.5 engine.r
+----
 The view is centered on engine.r and sized using a scale of 0.5.
 
 ====

@@ -34,36 +34,44 @@ Attempts to repair and canonicalize an existing ARB primitive. If `-o output_nam
 The first example shows the use of the *arb* command to create a new ARB shape with a specified name. The second example shows the use of the *ae* command to determine the view orientation of the arb. The third example demonstrates repairing a degenerate ARB.
 
 .Create __new_arb__ with a specific rotation angle and fallback angle.
-[example]
 ====
-mged>**arb create new_arb 35 25**
+[source,console]
+----
+mged> arb create new_arb 35 25
+----
 
 Create new_arb with a rotation angle of 35° and a fallback angle of 25°.
 
 ====
 
 .Using the *ae* command to determine the view orientation of the arb
-[example]
 ====
-mged>**ae 35 25**
+[source,console]
+----
+mged> ae 35 25
+----
 
 Rotates view to look straight on at square face of __new_arb__.
 
 ====
 
 .Repair an existing ARB and save it to a new object
-[example]
 ====
-mged>**arb repair -o fixed_arb broken_arb**
+[source,console]
+----
+mged> arb repair -o fixed_arb broken_arb
+----
 
 Attempts to canonicalize and repair `broken_arb`, and saves the result to `fixed_arb`.
 
 ====
 
 .Repair an ARB using a tight tolerance
-[example]
 ====
-mged>**arb repair -t 1e-7 broken_arb**
+[source,console]
+----
+mged> arb repair -t 1e-7 broken_arb
+----
 
 Attempts to canonicalize and repair `broken_arb` in-place, using a tight `1e-7` tolerance to strictly enforce planar faces (matching the default tolerance of the `lint` command).
 

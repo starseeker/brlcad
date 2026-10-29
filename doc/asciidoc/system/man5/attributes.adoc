@@ -98,11 +98,9 @@ The following table lists all known standard (core) BRL-CAD attributes and alias
 
 
 
-....
-
-
-  
-....
+[source,text]
+----
+----
 
 Given the importance of these attributes, it is appropriate to briefly outline the meaning and purpose of each of them:
 

@@ -108,9 +108,9 @@ giving *-z* -90 *-x* -90 in the same place.  Do not combine *-m* with
 
 .Rotate a plot about two axes
 ====
-[source,bash]
+[source,console]
 ----
-plot3rot -z 30 -x 20 < file.plot3 > file2.plot3
+$ plot3rot -z 30 -x 20 < file.plot3 > file2.plot3
 ----
 Performs a 30 degree positive rotation about the Z axis (counter
 clockwise as viewed from the top), then a 20 degree rotation about the
@@ -120,10 +120,10 @@ produce the same result, since rotations do not commute.
 
 .View a model as a ray tracer would, then frame buffer display it
 ====
-[source,bash]
+[source,console]
 ----
-rthide -a 35 -e 25 -o file.plot3 model.g component
-plot3rot -a 35 -e 25 -g < file.plot3 | plot3-fb
+$ rthide -a 35 -e 25 -o file.plot3 model.g component
+$ plot3rot -a 35 -e 25 -g < file.plot3 | plot3-fb
 ----
 *rthide*(1) renders a hidden-line plot at azimuth 35 and elevation 25.
 The trailing *-g* converts that *gift*-style azimuth/elevation into the

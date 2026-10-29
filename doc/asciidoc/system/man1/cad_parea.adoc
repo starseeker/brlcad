@@ -50,7 +50,7 @@ to standard output, making *cad_parea* convenient in a pipeline.
 
 .Area of a unit square from a file
 ====
-[source,bash]
+[source,console]
 ----
 $ cat square.txt
 0 0
@@ -66,7 +66,7 @@ reports the positive area 1. Listing them clockwise would instead report -1.
 
 .Area of a region traced interactively in a pipeline
 ====
-[source,bash]
+[source,console]
 ----
 $ printf '0 0\n4 0\n4 3\n0 3\n' | cad_parea -o area.txt
 $ cat area.txt

@@ -71,10 +71,10 @@ is used (see *brlcad*(1)).
 
 .Verify the geometry of a rendered image
 ====
-[source,bash]
+[source,console]
 ----
-pix-fb -F /tmp/fb moss.pix
-fbgrid -F /tmp/fb -d
+$ pix-fb -F /tmp/fb moss.pix
+$ fbgrid -F /tmp/fb -d
 ----
 Display a rendered image on a memory frame buffer and overlay a decimal
 grid. The grid lines at every 10, 50, and 100 pixels make it easy to
@@ -83,9 +83,9 @@ measure feature positions and sizes directly off the screen.
 
 .Calibrate a 1024x1024 display with a binary grid
 ====
-[source,bash]
+[source,console]
 ----
-fbgrid -c -b -s 1024
+$ fbgrid -c -b -s 1024
 ----
 Clear the frame buffer and draw a binary grid (lines every 8, 64, and
 128 pixels) sized to 1024x1024, useful for checking power-of-two display

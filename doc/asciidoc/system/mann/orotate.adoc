@@ -31,25 +31,31 @@ The rotation is built from the three Euler angles via `bn_mat_angles(rmat, rX, r
 == EXAMPLES
 
 .Rotate an object about its own center
-[example]
 ====
-mged> **orotate wheel.s 0 0 45**
+[source,console]
+----
+mged> orotate wheel.s 0 0 45
+----
 
 Rotates `wheel.s` by 45° about the Z axis, using the object's bounding box center as the keypoint.
 ====
 
 .Rotate about an explicit keypoint
-[example]
 ====
-mged> **orotate arm.s 0 30 0 0 0 0**
+[source,console]
+----
+mged> orotate arm.s 0 30 0 0 0 0
+----
 
 Rotates `arm.s` by 30° about the Y axis, pivoting about the model origin (0, 0, 0) as the keypoint.
 ====
 
 .Rotate about an off-center pivot point
-[example]
 ====
-mged> **orotate blade.s 15 0 0 0 50 100**
+[source,console]
+----
+mged> orotate blade.s 15 0 0 0 50 100
+----
 
 Rotates `blade.s` by 15° about the X axis, using the point (0, 50, 100) in local units as the pivot.
 ====

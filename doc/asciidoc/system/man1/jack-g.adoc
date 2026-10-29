@@ -56,9 +56,9 @@ created.
 
 .Convert a Jack human figure into a named region and group
 ====
-[source,bash]
+[source,console]
 ----
-jack-g -r torso -g body torso.pss model.g
+$ jack-g -r torso -g body torso.pss model.g
 ----
 Reads the Jack Psurf file `torso.pss`, writes a BOT solid `s.torso`
 inside region `r.torso` into `model.g`, and adds that region to the
@@ -68,9 +68,9 @@ group `body`.  The resulting `model.g` can then be raytraced with
 
 .Convert geometry piped from standard input
 ====
-[source,bash]
+[source,console]
 ----
-cat figure.pss | jack-g -r figure model.g
+$ cat figure.pss | jack-g -r figure model.g
 ----
 Reads the Psurf data from standard input, which is useful when the
 geometry is produced by another tool in a pipeline rather than stored

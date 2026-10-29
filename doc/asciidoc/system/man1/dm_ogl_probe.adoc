@@ -58,9 +58,9 @@ _display_::
 
 .Probe the default display
 ====
-[source,bash]
+[source,console]
 ----
-dm_ogl_probe; echo $?
+$ dm_ogl_probe; echo $?
 ----
 Tests the display named by *DISPLAY* and prints the exit status. A printed
 *0* means an *ogl* display manager can be opened on this display.
@@ -68,9 +68,9 @@ Tests the display named by *DISPLAY* and prints the exit status. A printed
 
 .Gate launching an OpenGL session on probe success
 ====
-[source,bash]
+[source,console]
 ----
-if dm_ogl_probe ":0"; then
+$ if dm_ogl_probe ":0"; then
     mged -c model.g
 else
     echo "GLX/OpenGL not available on :0, falling back" >&2

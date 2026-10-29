@@ -86,9 +86,9 @@ different unit. The conversion is the inverse direction of importers such as
 
 .Convert specific tops objects to a VRML file
 ====
-[source,bash]
+[source,console]
 ----
-g-vrml -o havoc.wrl -u m havoc.g havoc
+$ g-vrml -o havoc.wrl -u m havoc.g havoc
 ----
 Tessellates and Boolean-evaluates the *havoc* object from havoc.g and writes
 a VRML 2.0 model in meters to havoc.wrl, ready to load in a web or desktop
@@ -97,9 +97,9 @@ VRML viewer.
 
 .Export only the triangle meshes from a model
 ====
-[source,bash]
+[source,console]
 ----
-g-vrml -b -o meshes.wrl model.g body wheels
+$ g-vrml -b -o meshes.wrl model.g body wheels
 ----
 Dumps the *BOT* meshes contained under the *body* and *wheels* objects
 directly, skipping CSG primitives and the comparatively slow Boolean

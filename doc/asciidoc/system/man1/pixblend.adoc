@@ -60,9 +60,9 @@ interpolation with a value of 0.5 (an even mix of the two images).
 
 .Cross-fade two images
 ====
-[source,bash]
+[source,console]
 ----
-pixblend -i 0.25 a.pix b.pix > out.pix
+$ pixblend -i 0.25 a.pix b.pix > out.pix
 ----
 Produces an image that is 75% _a.pix_ and 25% _b.pix_, useful for
 generating intermediate frames of a dissolve between two renderings.
@@ -70,9 +70,9 @@ generating intermediate frames of a dissolve between two renderings.
 
 .Animated dissolve sequence
 ====
-[source,bash]
+[source,console]
 ----
-for f in $(seq 0 9); do
+$ for f in $(seq 0 9); do
     pixblend -i 0.$f a.pix b.pix > frame$f.pix
 done
 ----
@@ -83,9 +83,9 @@ the basis of a smooth cross-dissolve animation that can be fed to
 
 .Reproducible random speckle blend
 ====
-[source,bash]
+[source,console]
 ----
-pixblend -r 0.5 -s 23 a.pix b.pix > out.pix
+$ pixblend -r 0.5 -s 23 a.pix b.pix > out.pix
 ----
 Randomly selects each pixel from one of the two images with an even
 probability, using a fixed seed of 23 so the result is repeatable.

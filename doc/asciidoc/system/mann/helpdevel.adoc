@@ -26,10 +26,12 @@ Returns a list of available _developer_ commands along with a one-line usage mes
 The example shows the use of the *helpdevel* command to display a one-line usage message for a specified developer command.
 
 .Display a one-line usage message for a specified developer command.
-[example]
 ====
 
-mged> **helpdevel winset**::
+[source,console]
+----
+mged> helpdevel winset
+----
 Displays a one-line usage message for the *winset* command.
 
 

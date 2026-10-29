@@ -37,25 +37,31 @@ When creating a new region and the database has a non-zero default item number (
 == EXAMPLES
 
 .Create a region by unioning and subtracting primitives
-[example]
 ====
-mged> **region hull.r u body.s u bow.s - keel.s**
+[source,console]
+----
+mged> region hull.r u body.s u bow.s - keel.s
+----
 
 Creates the region `hull.r` as the union of `body.s` and `bow.s` with `keel.s` subtracted.
 ====
 
 .Create a region using the short alias
-[example]
 ====
-mged> **r engine.r u block.s u piston.s**
+[source,console]
+----
+mged> r engine.r u block.s u piston.s
+----
 
 Using the `r` alias, creates `engine.r` as the union of `block.s` and `piston.s`.
 ====
 
 .Add a member to an existing region
-[example]
 ====
-mged> **region hull.r u propeller.s**
+[source,console]
+----
+mged> region hull.r u propeller.s
+----
 
 Appends `propeller.s` (union) to the existing region `hull.r`.
 ====

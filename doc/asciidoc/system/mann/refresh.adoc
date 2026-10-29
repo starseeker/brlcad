@@ -26,9 +26,11 @@ Updates the MGED display.
 The example shows the use of the *refresh* command to update the MGED display.
 
 .Update the MGED display.
-[example]
 ====
-mged>**refresh**
+[source,console]
+----
+mged> refresh
+----
 
 Updates the MGED display.
 

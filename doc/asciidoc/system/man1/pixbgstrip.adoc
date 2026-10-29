@@ -70,11 +70,11 @@ explicitly with *-w*, *-n*, and *-s*, or guessed from the file length with
 
 .Key out a rendered background and composite over a new one
 ====
-[source,bash]
+[source,console]
 ----
-rt -o image.pix model.g component.r
-pixbgstrip -w 1024 -n 1024 image.pix > stripped.pix
-pixmerge -g stripped.pix newbg.pix > composite.pix
+$ rt -o image.pix model.g component.r
+$ pixbgstrip -w 1024 -n 1024 image.pix > stripped.pix
+$ pixmerge -g stripped.pix newbg.pix > composite.pix
 ----
 A 1024x1024 image is rendered with *rt*(1), its solid background color is
 replaced with black by *pixbgstrip*, and the result is then layered over a
@@ -84,9 +84,9 @@ transparent), yielding a composite image.
 
 .Strip a slightly noisy bordered background
 ====
-[source,bash]
+[source,console]
 ----
-pixbgstrip -a -x 5 -t 4 frame.pix > clean.pix
+$ pixbgstrip -a -x 5 -t 4 frame.pix > clean.pix
 ----
 The input size is guessed automatically (*-a*), the background color is
 sampled five pixels in from the left edge to skip a thin border (*-x 5*), and

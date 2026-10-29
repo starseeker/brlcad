@@ -31,9 +31,11 @@ Specify the local units (defaults to "model" if not provided).
 == EXAMPLES
 
 .Basic usage of the *ert* command.
-[example]
 ====
-mged> **ert -s512**
+[source,console]
+----
+mged> ert -s512
+----
 
 Raytraces the current view at a resolution of 512x512 and displays it in the embedded framebuffer.
 ====

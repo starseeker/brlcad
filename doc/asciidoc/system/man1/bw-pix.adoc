@@ -54,9 +54,9 @@ With no input file, input is read from standard input.
 
 .Convert a grayscale image to pix
 ====
-[source,bash]
+[source,console]
 ----
-bw-pix moon.bw moon.pix
+$ bw-pix moon.bw moon.pix
 ----
 Converts the grayscale image _moon.bw_ into _moon.pix_, with the grayscale
 value copied into each of the red, green, and blue planes.
@@ -64,9 +64,9 @@ value copied into each of the red, green, and blue planes.
 
 .Recombine separated color channels into a viewable image
 ====
-[source,bash]
+[source,console]
 ----
-bw-pix red.bw green.bw blue.bw | pix-fb
+$ bw-pix red.bw green.bw blue.bw | pix-fb
 ----
 Merges the three single-channel *bw*(5) files _red.bw_, _green.bw_, and
 _blue.bw_ into a color *pix*(5) image and displays it on a framebuffer with

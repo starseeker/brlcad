@@ -30,10 +30,12 @@ The user must be editing an _ARB_ shape and be rotating a face of the _ARB_ for 
 The example shows the use of the *eqn* command to rotate the face of the ARB being edited to be parallel to the _xy_ plane.
 
 .Rotate the face of an _ARB_ to be parallel to the _xy_ plane.
-[example]
 ====
 
-mged> **eqn 0 0 1**::
+[source,console]
+----
+mged> eqn 0 0 1
+----
 The face of the _ARB_ is rotated to be parallel to the _xy_ plane.
 
 

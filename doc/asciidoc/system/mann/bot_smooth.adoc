@@ -32,17 +32,21 @@ Maximum angle (in degrees) between adjacent face normals for them to be averaged
 == EXAMPLES
 
 .Compute smooth normals for a BOT
-[example]
 ====
-mged> **bot_smooth smooth_hull.bot hull.bot**
+[source,console]
+----
+mged> bot_smooth smooth_hull.bot hull.bot
+----
 
 Computes smooth surface normals for `hull.bot` (using the default 180° tolerance, smoothing all faces) and writes the result to `smooth_hull.bot`.
 ====
 
 .Smooth with a crease angle for hard edges
-[example]
 ====
-mged> **bot_smooth -t 60 smooth_part.bot rough_part.bot**
+[source,console]
+----
+mged> bot_smooth -t 60 smooth_part.bot rough_part.bot
+----
 
 Smooths `rough_part.bot` but preserves hard edges between faces whose normals differ by more than 60°.
 ====

@@ -60,10 +60,10 @@ implicitly given a weight of 1.0 divided by the number of selected planes.
 
 .Convert a color rendering to grayscale and view it
 ====
-[source,bash]
+[source,console]
 ----
-png-bw -ntsc render.png > render.bw
-bw-pix render.bw | pix-fb -w 512 -n 512
+$ png-bw -ntsc render.png > render.bw
+$ bw-pix render.bw | pix-fb -w 512 -n 512
 ----
 Reduces a color _PNG_ to a perceptually weighted grayscale *bw*(5) image
 using NTSC luminance weights, then converts it back to *pix*(5) and displays
@@ -72,9 +72,9 @@ it on a framebuffer with *pix-fb*(1).
 
 .Blend selected color planes with custom weights
 ====
-[source,bash]
+[source,console]
 ----
-png-bw -R0.30 -G0.59 -B0.11 file.png > file.bw
+$ png-bw -R0.30 -G0.59 -B0.11 file.png > file.bw
 ----
 Combines the red, green, and blue planes with the given weights; this
 produces the same result as the *-ntsc* flag. Selecting planes without

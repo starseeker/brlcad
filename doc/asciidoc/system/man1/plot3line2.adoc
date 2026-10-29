@@ -41,9 +41,9 @@ shell scripts.
 
 .Draw a red diagonal segment on top of an existing plot
 ====
-[source,bash]
+[source,console]
 ----
-plot3line2 0 0 100 100 255 0 0 < base.plot3 > annotated.plot3
+$ plot3line2 0 0 100 100 255 0 0 < base.plot3 > annotated.plot3
 ----
 This copies the contents of _base.plot3_ to _annotated.plot3_ and appends a
 red line from the origin to (100, 100), letting you overlay an annotation on
@@ -52,9 +52,9 @@ an existing UNIX plot file.
 
 .Build a plot incrementally in a pipeline
 ====
-[source,bash]
+[source,console]
 ----
-plot3line2 0 0 50 80 |
+$ plot3line2 0 0 50 80 |
     plot3line2 50 80 100 0 0 255 0 |
     plot3-plot3 > graph.plot3
 ----

@@ -57,10 +57,10 @@ in effect.
 
 .Reset a framebuffer before compositing
 ====
-[source,bash]
+[source,console]
 ----
-fbclear -c -F /dev/X 64 64 96
-pix-fb -F /dev/X scene.pix
+$ fbclear -c -F /dev/X 64 64 96
+$ pix-fb -F /dev/X scene.pix
 ----
 Open the X11 framebuffer, clear it to a dark blue while resetting any
 leftover colormap and zoom from a previous session, then display a

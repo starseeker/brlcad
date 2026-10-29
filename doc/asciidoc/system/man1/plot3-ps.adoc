@@ -59,10 +59,10 @@ plotting units by its bounding box.
 
 .Embed a wireframe view as an EPS figure
 ====
-[source,bash]
+[source,console]
 ----
-mged -c model.g 'set glob_compat_mode 0; B component; saveview /dev/null' 2>/dev/null
-plot3-ps -e drawing.plot3 > drawing.eps
+$ mged -c model.g 'set glob_compat_mode 0; B component; saveview /dev/null' 2>/dev/null
+$ plot3-ps -e drawing.plot3 > drawing.eps
 ----
 Convert a *plot3*(5) wireframe produced by BRL-CAD into an Encapsulated
 PostScript figure (*drawing.eps*) that can be included in a TeX or LaTeX
@@ -71,9 +71,9 @@ document.
 
 .Render a centered 7.5 inch square page
 ====
-[source,bash]
+[source,console]
 ----
-plot3-ps -c -s 7.5 drawing.plot3 > drawing.ps
+$ plot3-ps -c -s 7.5 drawing.plot3 > drawing.ps
 ----
 Produce a full PostScript page with the plot drawn 7.5 inches square and
 centered on an 8.5 x 11 inch sheet, ready to send to a printer.

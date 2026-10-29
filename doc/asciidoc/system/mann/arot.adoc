@@ -26,9 +26,11 @@ Performs a rotation about the specified axis (_x y z_) using screen units (-2048
 The example demonstrates the use of the *arot* command to rotate a view or shape about the z axis.
 
 .Rotating a view or shape 10 degrees about the z axis.
-[example]
 ====
-mged>**arot 0 0 1 10**
+[source,console]
+----
+mged> arot 0 0 1 10
+----
 
 The view or shape is rotated 10 degrees about the z axis.
 

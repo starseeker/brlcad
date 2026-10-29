@@ -57,9 +57,9 @@ pairs well with *dconv*(1), *dmod*(1), and *dstats*(1).
 
 .Extract a window of samples
 ====
-[source,bash]
+[source,console]
 ----
-dsel 512 1024 < data.d > window.d
+$ dsel 512 1024 < data.d > window.d
 ----
 Skips the first 512 doubles of _data.d_ (for example, a header or settling
 region) and copies the next 1024 doubles to _window.d_, ignoring the rest.
@@ -67,9 +67,9 @@ region) and copies the next 1024 doubles to _window.d_, ignoring the rest.
 
 .Take a leading block and scale it inline
 ====
-[source,bash]
+[source,console]
 ----
-dsel 1024 < signal.d | dmod -m 2.0 > head_scaled.d
+$ dsel 1024 < signal.d | dmod -m 2.0 > head_scaled.d
 ----
 Copies only the first 1024 doubles of _signal.d_ (a single argument is always
 a _keep_ count), then pipes them through *dmod*(1) to scale each value by 2.0

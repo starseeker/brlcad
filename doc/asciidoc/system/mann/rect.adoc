@@ -62,51 +62,69 @@ Print the usage summary for all subcommands.
 == EXAMPLES
 
 .Show the rectangle
-[example]
 ====
-mged> **rect default draw 1**
+[source,console]
+----
+mged> rect default draw 1
+----
 
 Enables display of the rubber band rectangle on the `default` view.
 ====
 
 .Position and size the rectangle
-[example]
 ====
-mged> **rect default cdim 1024 768**
-mged> **rect default pos 200 100**
-mged> **rect default dim 400 300**
+[source,console]
+----
+mged> rect default cdim 1024 768
+----
+[source,console]
+----
+mged> rect default pos 200 100
+----
+[source,console]
+----
+mged> rect default dim 400 300
+----
 
 Sets the canvas to 1024×768 pixels, anchors the rectangle at pixel (200, 100), and gives it a 400×300 pixel size. The normalized view coordinates are calculated automatically.
 ====
 
 .Set the rectangle color to red
-[example]
 ====
-mged> **rect default color 255 0 0**
+[source,console]
+----
+mged> rect default color 255 0 0
+----
 
 Sets the border color of the rectangle to red.
 ====
 
 .Use dashed lines
-[example]
 ====
-mged> **rect default lstyle 1**
+[source,console]
+----
+mged> rect default lstyle 1
+----
 
 Switches the rectangle border to a dashed line style.
 ====
 
 .Zoom to the rectangle area
-[example]
 ====
-mged> **rect default zoom**
+[source,console]
+----
+mged> rect default zoom
+----
 
 Adjusts the view so that the area within the rectangle fills the display.
 ====
 
 .Inspect all rectangle parameters
-[example]
 ====
-mged> **rect default vars**
+[source,console]
+----
+mged> rect default vars
+----
 
 Prints all current rectangle settings, e.g. position, dimensions, colors, draw flag, line style, and line width.
 ====

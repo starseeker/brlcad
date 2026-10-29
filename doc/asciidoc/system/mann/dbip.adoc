@@ -30,9 +30,11 @@ MGED also accepts the alternate command name *get_dbip*.
 == EXAMPLES
 
 .Inspect the current database handle.
-[example]
 ====
-mged> **dbip**
+[source,console]
+----
+mged> dbip
+----
 
 Prints the address of the current `db_i` structure.
 

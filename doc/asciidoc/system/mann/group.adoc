@@ -28,25 +28,31 @@ To create a region (rather than a plain combination), use the *region* or *r* co
 == EXAMPLES
 
 .Create a new group from two objects
-[example]
 ====
-mged> **group vehicle.c hull.r turret.r**
+[source,console]
+----
+mged> group vehicle.c hull.r turret.r
+----
 
 Creates a new combination `vehicle.c` with `hull.r` and `turret.r` as union members.
 ====
 
 .Use the short alias
-[example]
 ====
-mged> **g assembly.c part1.r part2.r part3.r**
+[source,console]
+----
+mged> g assembly.c part1.r part2.r part3.r
+----
 
 Creates `assembly.c` containing three union members using the short `g` alias.
 ====
 
 .Append to an existing group
-[example]
 ====
-mged> **group vehicle.c wheels.r**
+[source,console]
+----
+mged> group vehicle.c wheels.r
+----
 
 Adds `wheels.r` as a union member to the existing combination `vehicle.c`.
 ====

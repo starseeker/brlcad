@@ -22,16 +22,15 @@ There is no requirement for all 256 entries to be specified. What is done with a
 The beginning of an eight bit inverse video colormap might look as follows:
 
 
-....
-
+[source,text]
+----
 	# Inverse video colormap
 	0       ff00 ff00 ff00
 	1       fe00 fe00 fe00
 	2       fd00 fd00 fd00
 	3       fc00 fc00 fc00
 	4       fb00 fb00 fb00
-
-....
+----
 
 
 [[utilities]]

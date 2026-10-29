@@ -56,9 +56,9 @@ reported on standard error and the remaining objects are still written.
 
 .Upgrade an old database to the current format
 ====
-[source,bash]
+[source,console]
 ----
-dbupgrade legacy_v4.g model.g
+$ dbupgrade legacy_v4.g model.g
 ----
 Reads the v4 database `legacy_v4.g` and writes a current v5 database `model.g`,
 converting any heightfields, polysolids, and B-splines along the way.
@@ -66,9 +66,9 @@ converting any heightfields, polysolids, and B-splines along the way.
 
 .Refresh a current database in place of obsolete geometry
 ====
-[source,bash]
+[source,console]
 ----
-dbupgrade -f model.g model_updated.g && mged model_updated.g
+$ dbupgrade -f model.g model_updated.g && mged model_updated.g
 ----
 Forces *dbupgrade* to rewrite the already-v5 `model.g`, applying the internal
 geometry-type conversions (for example, polysolids to BOTs) even though the

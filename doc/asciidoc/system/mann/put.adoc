@@ -70,10 +70,12 @@ Creates a new _object_ of indicated _type_. Objects attributes are per-object de
 The following are run from the MGED command prompt.
 
 .Create a sphere.
-[example]
 ====
 
-mged> **put ball sph V {0 0 0} A {100 0 0} B {0 100 0} C {0 0 100}**::
+[source,console]
+----
+mged> put ball sph V {0 0 0} A {100 0 0} B {0 100 0} C {0 0 100}
+----
 Creates a sphere named "ball", centered at (0,0,0), and with radius 100
 
 

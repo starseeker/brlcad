@@ -42,28 +42,35 @@ The full set of operations performed:
 == EXAMPLES
 
 .Rename and propagate throughout the database
-[example]
 ====
-mged> **move_all old_part.s new_part.s**
+[source,console]
+----
+mged> move_all old_part.s new_part.s
+----
 
 Renames `old_part.s` to `new_part.s` and updates every combination in the database that referenced `old_part.s`.
 ====
 
 .Dry-run: find all references before renaming
-[example]
 ====
-mged> **move_all -n wing.r fuselage_wing.r**
+[source,console]
+----
+mged> move_all -n wing.r fuselage_wing.r
+----
 
 Prints the names of all combinations that reference `wing.r` without making any changes. Useful for previewing the impact of the rename.
 ====
 
 .Batch rename from a mapping file
-[example]
 ====
-mged> **move_all -f renames.txt**
+[source,console]
+----
+mged> move_all -f renames.txt
+----
 
 Reads `renames.txt` and applies each rename pair listed. Example file contents:
 
+[source,text]
 ----
 # Rename all parts for new revision
 old_hub.s      new_hub.s

@@ -26,19 +26,29 @@ The face index numbers shown by *labelface* correspond to the indices used by th
 == EXAMPLES
 
 .Label faces of an NMG solid
-[example]
 ====
-mged> **draw my_nmg.s**
-mged> **labelface my_nmg.s**
+[source,console]
+----
+mged> draw my_nmg.s
+----
+[source,console]
+----
+mged> labelface my_nmg.s
+----
 
 Draws `my_nmg.s` and then overlays its face index numbers in the display. Each face is labeled with its integer index number, which can then be used as the argument to `nmg kill F`.
 ====
 
 .Use labelface to find and kill a face
-[example]
 ====
-mged> **labelface my_nmg.s**
-mged> **nmg my_nmg.s kill F 4**
+[source,console]
+----
+mged> labelface my_nmg.s
+----
+[source,console]
+----
+mged> nmg my_nmg.s kill F 4
+----
 
 First labels the faces of `my_nmg.s` to identify their indices, then removes face index 4 from the model.
 ====

@@ -161,9 +161,11 @@ names, such as _compact_car_, _pickup_truck_, and _mining_haul_truck_.
 == EXAMPLES
 
 .Create a tire from ISO dimensions.
-[example]
 ====
-mged> **tire --obj-name tire_235_75r15 --dimensions 235/75R15**
+[source,console]
+----
+mged> tire --obj-name tire_235_75r15 --dimensions 235/75R15
+----
 
 Generates tire geometry named _tire_235_75r15_ using the specified ISO tire
 size.
@@ -171,18 +173,22 @@ size.
 ====
 
 .Create a mud-terrain treaded tire.
-[example]
 ====
-mged> **tire --obj-name tire_mt --dimensions 235/75R15 --tread-pattern mud-terrain**
+[source,console]
+----
+mged> tire --obj-name tire_mt --dimensions 235/75R15 --tread-pattern mud-terrain
+----
 
 Generates tire geometry using the built-in _mud-terrain_ tread preset.
 
 ====
 
 .Create the built-in tire sampler.
-[example]
 ====
-mged> **tire --demo-file tire_demo.g**
+[source,console]
+----
+mged> tire --demo-file tire_demo.g
+----
 
 Generates the sampler objects and top-level `all` combination in the current
 database.

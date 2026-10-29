@@ -59,12 +59,23 @@ set maintained by the current view.
 == EXAMPLES
 
 .Create and display red guide lines in the current view.
-[example]
 ====
-mged> **data_lines points {{0 -1000 0} {0 1000 0} {100 -1000 0} {100 1000 0}}**
-mged> **data_lines color 255 0 0**
-mged> **data_lines line_width 100**
-mged> **data_lines draw 1**
+[source,console]
+----
+mged> data_lines points {{0 -1000 0} {0 1000 0} {100 -1000 0} {100 1000 0}}
+----
+[source,console]
+----
+mged> data_lines color 255 0 0
+----
+[source,console]
+----
+mged> data_lines line_width 100
+----
+[source,console]
+----
+mged> data_lines draw 1
+----
 
 Defines two vertical guide lines, colors them red, sets a wider line width, and
 turns drawing on for the line set.

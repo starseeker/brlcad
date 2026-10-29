@@ -45,14 +45,15 @@ that function.
 The conceptual model behind *edit scale* uses two independent reference
 pairs — a SCALE ruler and a FACTOR ruler:
 
-....
+[source,text]
+----
   SCALE  = vector from SCALE_FROM (-k) to SCALE_TO (-a|-r)
            the reference "ruler" — measures a known distance in the scene
   FACTOR = the desired result ruler — how large the result should be
            expressed as the positional argument(s), or -r when combined
            with a -k/-a pair
   effective factor[i] = FACTOR[i] / |SCALE[i]|   per axis
-....
+----
 
 The three supported calling patterns are:
 
@@ -123,68 +124,103 @@ Global options (`-S`, `-f`, `-F`, `-i`) are described in
 == EXAMPLES
 
 .Double the size of cube from its center — simple forms
-[example]
 ====
 A single scalar factor:
 
-  mged> **edit cube scale 2**
+[source,console]
+----
+mged> edit cube scale 2
+----
 
 Three equal factors (still uniform):
 
-  mged> **edit cube scale 2 2 2**
+[source,console]
+----
+mged> edit cube scale 2 2 2
+----
 
 Explicit relative flag:
 
-  mged> **edit cube scale -r 2**
-  mged> **edit cube scale -r 2 2 2**
+[source,console]
+----
+mged> edit cube scale -r 2
+----
+[source,console]
+----
+mged> edit cube scale -r 2 2 2
+----
 
 Using the FROM/TO reference pair (origin → 2 = factor of 2):
 
-  mged> **edit cube scale -k 0 0 0 -a 2 2 2**
+[source,console]
+----
+mged> edit cube scale -k 0 0 0 -a 2 2 2
+----
 ====
 
 .Halve the size of sph.s
-[example]
 ====
-  mged> **edit sph.s scale 0.5**
+[source,console]
+----
+mged> edit sph.s scale 0.5
+----
 
 Using the FROM/TO reference pair:
 
-  mged> **edit sph.s scale -k 0 0 0 -a 0.5 0.5 0.5**
+[source,console]
+----
+mged> edit sph.s scale -k 0 0 0 -a 0.5 0.5 0.5
+----
 
 Using explicit `-r`:
 
-  mged> **edit sph.s scale -r 0.5**
+[source,console]
+----
+mged> edit sph.s scale -r 0.5
+----
 ====
 
 .Scale with a fixed pivot center
-[example]
 ====
 Scale sph.s by 2 but keep its surface nearest the origin fixed
 (pivot at the origin):
 
-  mged> **edit sph.s scale -c 0 0 0 2**
+[source,console]
+----
+mged> edit sph.s scale -c 0 0 0 2
+----
 
 Scale cube from a named object's position as the pivot:
 
-  mged> **edit cube scale -c sphere1 2**
+[source,console]
+----
+mged> edit cube scale -c sphere1 2
+----
 
 Scale from the cube's own center (the default; written explicitly):
 
-  mged> **edit cube scale -c cube 2**
+[source,console]
+----
+mged> edit cube scale -c cube 2
+----
 ====
 
 .Understanding the -k / -a vector model and the two-pair ratio form
-[example]
 ====
 When FROM is the origin and TO is the desired factor, the model is
 intuitive: `scale -k 0 0 0 -a F F F` applies a uniform factor F.
 
-  mged> **edit cube scale -k 0 0 0 -a 3 3 3**
+[source,console]
+----
+mged> edit cube scale -k 0 0 0 -a 3 3 3
+----
 
 The above triples the object.  The following halves it:
 
-  mged> **edit cube scale -k 0 0 0 -a 0.5 0.5 0.5**
+[source,console]
+----
+mged> edit cube scale -k 0 0 0 -a 0.5 0.5 0.5
+----
 
 When FROM is *not* the origin, the effective factor is simply TO - FROM.
 `scale -k 1 1 1 -a 3 3 3` yields factors `{2, 2, 2}` — it doubles,
@@ -195,13 +231,19 @@ supplied together, the `-k`/`-a` pair is the SCALE reference ruler and
 `-r` is the FACTOR ruler.  The effective factor is computed as
 `FACTOR / |SCALE|` per axis.  For example:
 
-  mged> **edit cube scale -k 0 0 0 -a 1 1 1 -r 2**
+[source,console]
+----
+mged> edit cube scale -k 0 0 0 -a 1 1 1 -r 2
+----
 
 Here SCALE=(1,1,1) and FACTOR=(2,2,2), so effective factor = 2/1 = 2
 (doubles the cube).  A more complex example illustrating that the sign
 of SCALE components is ignored (only magnitude matters):
 
-  mged> **edit cube scale -k 5 10 15 -a 7 11 -2 -r 4 2 34**
+[source,console]
+----
+mged> edit cube scale -k 5 10 15 -a 7 11 -2 -r 4 2 34
+----
 
 SCALE vector = (2, 1, -17), |per axis| = (2, 1, 17).
 FACTOR = (4, 2, 34).
@@ -213,58 +255,90 @@ reference distance, then use `-r` to state the desired result size.
 ====
 
 .Non-uniform (anisotropic) scale: stretch X by 2, shrink Y by 0.5, leave Z unchanged
-[example]
 ====
 Only primitives that implement `ft_mat` support per-axis scale.  For
 primitives without `ft_mat` (e.g. `arb8`, `bot`, `brep`) this will
 return an error:
 
-  mged> **edit ell.s scale 2 0.5 1**
+[source,console]
+----
+mged> edit ell.s scale 2 0.5 1
+----
 
 The three values map to X, Y, Z scale factors respectively.  A zero
 in any position is rejected:
 
-  mged> **edit ell.s scale 0 1 1**   ← error, zero factor
+[source,console]
+----
+mged> edit ell.s scale 0 1 1**   ← error, zero factor
+----
 
 Equal factors are treated as uniform (uses the native scale path):
 
-  mged> **edit ell.s scale 2 2 2**   ← uniform, equivalent to scale 2
+[source,console]
+----
+mged> edit ell.s scale 2 2 2**   ← uniform, equivalent to scale 2
+----
 ====
 
 .Scale with an explicit center and an explicit factor
-[example]
 ====
 Apply a factor of 1.5 to cube, pivoting on sphere1's keypoint:
 
-  mged> **edit cube scale -c sphere1 1.5**
+[source,console]
+----
+mged> edit cube scale -c sphere1 1.5
+----
 
 Pivot on a world-space coordinate:
 
-  mged> **edit cube scale -c 10 0 0 1.5**
+[source,console]
+----
+mged> edit cube scale -c 10 0 0 1.5
+----
 ====
 
 .Batch scale: each object scales from its own center using -c .
-[example]
 ====
 Use `-c .` to pivot each object on its own keypoint (bounding-box center)
 in a single command per object:
 
-  mged> **edit sph.s scale -c . 2**
-  mged> **edit other.s scale -c . 2**
+[source,console]
+----
+mged> edit sph.s scale -c . 2
+----
+[source,console]
+----
+mged> edit other.s scale -c . 2
+----
 
 The `.` causes each object's own current keypoint to serve as the
 pivot center, equivalent to naming each object explicitly:
 
-  mged> **edit sph.s scale -c sph.s 2**
-  mged> **edit other.s scale -c other.s 2**
+[source,console]
+----
+mged> edit sph.s scale -c sph.s 2
+----
+[source,console]
+----
+mged> edit other.s scale -c other.s 2
+----
 ====
 
 .Use the intermediate buffer: scale tentatively, then revert if unsatisfied
-[example]
 ====
-  mged> **edit cube checkpoint**
-  mged> **edit -i cube scale 2**
-  mged> **edit cube revert**
+[source,console]
+----
+mged> edit cube checkpoint
+----
+[source,console]
+----
+mged> edit -i cube scale 2
+----
+[source,console]
+----
+mged> edit cube revert
+----
 ====
 
 == SEE ALSO

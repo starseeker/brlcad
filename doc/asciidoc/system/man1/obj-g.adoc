@@ -109,9 +109,9 @@ By default conversion uses native-bot mode, grouping by OBJ *group*
 
 .Quick native-bot conversion in millimeters
 ====
-[source,bash]
+[source,console]
 ----
-obj-g -u mm -i model.obj model.g
+$ obj-g -u mm -i model.obj model.g
 ----
 Converts model.obj using native-bot mode with a unit scale of 1.0
 (OBJ units are millimeters), ignoring any normals in the file. Closed
@@ -121,10 +121,10 @@ grouped by OBJ 'group' elements.
 
 .Watertight solids via NMG, logging to a file
 ====
-[source,bash]
+[source,console]
 ----
-obj-g -m v -o p -H 5 -g o -v -v model.obj model.g 2> model.log
-mged model.g 'tops'
+$ obj-g -m v -o p -H 5 -g o -v -v model.obj model.g 2> model.log
+$ mged model.g 'tops'
 ----
 Converts model.obj with bot-via-nmg mode for robust solid detection,
 emitting 5mm plate bots for open volumes and grouping by OBJ 'object'

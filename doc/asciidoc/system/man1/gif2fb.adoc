@@ -53,9 +53,9 @@ shell '<' redirection construct).
 
 .Report the dimensions of a GIF image
 ====
-[source,bash]
+[source,console]
 ----
-gif2fb -H image.gif
+$ gif2fb -H image.gif
 ----
 With *-H*, *gif2fb* prints the image dimensions to standard error as
 "-w_width_ -n_height_" and exits without displaying the image.  The
@@ -65,9 +65,9 @@ tools such as *fbserv*(1) or *pixautosize*(1).
 
 .Decode a GIF piped from standard input
 ====
-[source,bash]
+[source,console]
 ----
-gif2fb -v -F /dev/X < image.gif
+$ gif2fb -v -F /dev/X < image.gif
 ----
 Reads the GIF from standard input and displays it on frame buffer
 /dev/X while printing header diagnostics, useful for inspecting an

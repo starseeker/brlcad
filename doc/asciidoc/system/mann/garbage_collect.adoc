@@ -41,10 +41,12 @@ Execute the garbage-collection operation.
 The example shows the use of the *garbage_collect* command to delete unused space in a BRL-CAD database file.
 
 .Delete unused space in a BRL-CAD database file.
-[example]
 ====
 
-mged> **garbage_collect**:: -c
+[source,console]
+----
+mged> garbage_collect**:: -c
+----
 Cleans out unused space in the database.
 
 

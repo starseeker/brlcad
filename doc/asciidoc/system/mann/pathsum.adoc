@@ -36,17 +36,21 @@ long parameter lists, such as BoTs.
 == EXAMPLES
 
 .Use the shared path-evaluation logic through *listeval* for a terse report.
-[example]
 ====
-mged>**listeval -t vehicle.r/turret.r/bolt.s**
+[source,console]
+----
+mged> listeval -t vehicle.r/turret.r/bolt.s
+----
 
 Evaluates the full transform stack along the specified path and prints a concise description of the resulting primitive.
 ====
 
 .Enumerate all leaf paths below a subassembly.
-[example]
 ====
-mged>**paths vehicle.r/turret.r**
+[source,console]
+----
+mged> paths vehicle.r/turret.r
+----
 
 Lists every primitive path that begins at _vehicle.r/turret.r_, which is useful before selecting one specific path for *listeval* or *copyeval*.
 ====

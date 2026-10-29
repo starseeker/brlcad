@@ -24,17 +24,21 @@ If the optional `-n` flag is provided, the command performs the reverse operatio
 == EXAMPLES
 
 .Highlight an object in the display
-[example]
 ====
-mged> **illum region1.r**
+[source,console]
+----
+mged> illum region1.r
+----
 
 Highlights `region1.r` in the current display.
 ====
 
 .Un-highlight an object
-[example]
 ====
-mged> **illum -n region1.r**
+[source,console]
+----
+mged> illum -n region1.r
+----
 
 Removes the highlight from `region1.r` in the current display.
 ====

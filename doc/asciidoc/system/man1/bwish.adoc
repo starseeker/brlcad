@@ -44,9 +44,9 @@ are left for the executed script to handle via `argv`.
 
 .Run a Tk script with arguments
 ====
-[source,bash]
+[source,console]
 ----
-bwish make_dialog.tcl 800x600 model.g
+$ bwish make_dialog.tcl 800x600 model.g
 ----
 Evaluates the Tcl/Tk script `make_dialog.tcl`, with the BRL-CAD
 extensions already loaded, passing `800x600` and `model.g` to the script
@@ -56,9 +56,9 @@ query BRL-CAD geometry databases directly.
 
 .Interactive geometry scripting
 ====
-[source,bash]
+[source,console]
 ----
-bwish
+$ bwish
 bwish> package require Tk
 bwish> set db [go_open db file model.g]
 bwish> button .quit -text Quit -command exit; pack .quit

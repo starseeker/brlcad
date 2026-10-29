@@ -112,9 +112,9 @@ rejected rather than silently ignored.
 
 .Convert a STEP file into a BRL-CAD database
 ====
-[source,bash]
+[source,console]
 ----
-gcv assembly.stp assembly.g
+$ gcv assembly.stp assembly.g
 ----
 Reads the STEP file _assembly.stp_ and writes a BRL-CAD database
 _assembly.g_. Both formats are detected from the file extensions, after
@@ -123,9 +123,9 @@ which the result can be inspected with *mged*(1) or rendered with *rt*(1).
 
 .Tune a filter while converting OBJ to a .g database
 ====
-[source,bash]
+[source,console]
 ----
-gcv -I --units mm model.obj model.g
+$ gcv -I --units mm model.obj model.g
 ----
 Converts a Wavefront OBJ mesh to a BRL-CAD database, passing the
 *--units mm* option only to the OBJ read filter so that the source
@@ -134,9 +134,9 @@ coordinates are interpreted as millimeters.
 
 .Override detection with explicit formats
 ====
-[source,bash]
+[source,console]
 ----
-gcv --input-format step --output-format stl in.dat out.dat
+$ gcv --input-format step --output-format stl in.dat out.dat
 ----
 Forces the input to be read as STEP and the output written as STL even
 though the *.dat* extensions give no hint of the formats involved.

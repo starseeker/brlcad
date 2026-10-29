@@ -72,10 +72,10 @@ frame buffer with fast single-pixel writes.
 
 .Slide show with fade transitions
 ====
-[source,bash]
+[source,console]
 ----
-fbclear
-for i in *.pix; do
+$ fbclear
+$ for i in *.pix; do
     pix-fb "$i"
     fbfade -f /dev/mem
     sleep 5

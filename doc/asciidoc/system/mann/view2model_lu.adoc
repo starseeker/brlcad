@@ -28,18 +28,25 @@ The inverse operation is `model2view_lu`.
 == EXAMPLES
 
 .Convert a view-space point back to model coordinates
-[example]
 ====
-mged> **view2model_lu 0 0 0**
+[source,console]
+----
+mged> view2model_lu 0 0 0
+----
 
 Returns the model-space position (in local units) of the view origin. When the view is looking at the model origin, this returns the center of the current view.
 ====
 
 .Round-trip conversion
-[example]
 ====
-mged> **set vp [model2view_lu 100 50 0]**
-mged> **view2model_lu {*}$vp**
+[source,console]
+----
+mged> set vp [model2view_lu 100 50 0]
+----
+[source,console]
+----
+mged> view2model_lu {*}$vp
+----
 
 Converts the model point (100, 50, 0) to view space and back; the result should match the original model coordinates.
 ====

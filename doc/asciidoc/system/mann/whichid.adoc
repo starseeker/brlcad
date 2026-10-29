@@ -48,13 +48,15 @@ Limit reporting to regions in the CSG tree below _objname_.
 For these examples the geometry file used is the standard _ktank.g_ included with BRL-CAD.
 
 .Report all regions using region ids between 4000 and 7000.
-[example]
 ====
-mged>**whichid 4000-7000**
+[source,console]
+----
+mged> whichid 4000-7000
+----
 
 
-....
-
+[source,text]
+----
 Region[s] with ident 4001:
    r23
    r25
@@ -65,21 +67,22 @@ Region[s] with ident 6001:
    r210
 Region[s] with ident 6002:
    r212
-    
-....
+----
 
 
 
 ====
 
 .Report all regions using region ids between 1000-2000 and 4000-5000.
-[example]
 ====
-mged>**whichid 1000-2000 4000-5000**
+[source,console]
+----
+mged> whichid 1000-2000 4000-5000
+----
 
 
-....
-
+[source,text]
+----
 Region[s] with ident 1010:
    r213
 Region[s] with ident 1011:
@@ -90,42 +93,44 @@ Region[s] with ident 4001:
 Region[s] with ident 4050:
    r24
    r26
-    
-....
+----
 
 
 
 ====
 
 .Report all regions using region ids between 1000-2000 and 4000-5000, limiting results to regions in the _tank_ geomtry tree.
-[example]
 ====
-mged>**whichid --root tank 1000-2000 4000-5000**
+[source,console]
+----
+mged> whichid --root tank 1000-2000 4000-5000
+----
 
 
-....
-
+[source,text]
+----
 Region[s] with ident 4001:
    r23
    r25
 Region[s] with ident 4050:
    r24
    r26
-    
-....
+----
 
 
 
 ====
 
 .Report all unused region_id ranges in the database between 1 and 1000.
-[example]
 ====
-mged>**whichid -U 1-1000**
+[source,console]
+----
+mged> whichid -U 1-1000
+----
 
 
-....
-
+[source,text]
+----
 Unused idents:
    1
    4
@@ -143,8 +148,7 @@ Unused idents:
    730-829
    840-939
    950-1000
-    
-....
+----
 
 
 

@@ -45,10 +45,10 @@ host machine.
 
 .Down-scale 16-bit samples to an 8-bit bw image
 ====
-[source,bash]
+[source,console]
 ----
-u-bw < heightfield.shorts > heightfield.bw
-pix-fb -F /dev/X heightfield.bw
+$ u-bw < heightfield.shorts > heightfield.bw
+$ pix-fb -F /dev/X heightfield.bw
 ----
 Convert a file of unsigned shorts (for example a 16-bit elevation or
 sensor grid) into 8-bit *bw*(5) data by taking the high byte of each
@@ -57,9 +57,9 @@ sample, then display the result on a framebuffer with *pix-fb*(1).
 
 .Keep the low byte to inspect fine detail
 ====
-[source,bash]
+[source,console]
 ----
-u-bw -l < data.shorts > low.bw
+$ u-bw -l < data.shorts > low.bw
 ----
 Retain the least significant byte of each short instead of the high
 byte, useful for examining the low-order bits of the source values.

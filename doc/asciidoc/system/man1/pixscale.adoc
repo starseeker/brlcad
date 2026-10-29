@@ -52,18 +52,18 @@ For 2X interpolation, a much faster alternative is *pixinterp2x*(1).
 
 .Generate a thumbnail
 ====
-[source,bash]
+[source,console]
 ----
-pixscale -w 1024 -n 768 -W 128 -N 96 image.pix > thumb.pix
+$ pixscale -w 1024 -n 768 -W 128 -N 96 image.pix > thumb.pix
 ----
 Reads a 1024x768 color *pix*(5) image and produces a 128x96 thumbnail using the box filter, preserving the 4:3 aspect ratio.
 ====
 
 .Double an image with crisp pixels
 ====
-[source,bash]
+[source,console]
 ----
-pixscale -r -s 256 -S 512 image.pix | pix-png > big.png
+$ pixscale -r -s 256 -S 512 image.pix | pix-png > big.png
 ----
 Reads a 256x256 image and doubles it to 512x512 using nearest neighbor replication (sharp edges, no blurring), then pipes the result through *pix-png*(1) to create a PNG.
 ====

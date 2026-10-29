@@ -47,34 +47,45 @@ Creates one or more new vertices in the NMG `object`. Each group of three coordi
 == EXAMPLES
 
 .Create an empty NMG model
-[example]
 ====
-mged> **nmg my_nmg.s mm my_nmg.s**
+[source,console]
+----
+mged> nmg my_nmg.s mm my_nmg.s
+----
 
 Creates an empty NMG model named `my_nmg.s` in the database.
 ====
 
 .Create a triangular face
-[example]
 ====
-mged> **nmg my_nmg.s cmface 0 0 0 100 0 0 50 100 0**
+[source,console]
+----
+mged> nmg my_nmg.s cmface 0 0 0 100 0 0 50 100 0
+----
 
 Adds a triangular manifold face to `my_nmg.s` with vertices at (0,0,0), (100,0,0), and (50,100,0).
 ====
 
 .Move a vertex to a new position
-[example]
 ====
-mged> **nmg my_nmg.s move V 50 100 0 50 150 25**
+[source,console]
+----
+mged> nmg my_nmg.s move V 50 100 0 50 150 25
+----
 
 Moves the vertex currently at (50, 100, 0) to the new position (50, 150, 25).
 ====
 
 .Kill a face by index
-[example]
 ====
-mged> **labelface my_nmg.s**
-mged> **nmg my_nmg.s kill F 2**
+[source,console]
+----
+mged> labelface my_nmg.s
+----
+[source,console]
+----
+mged> nmg my_nmg.s kill F 2
+----
 
 First displays face index numbers with `labelface`, then removes face 2 from `my_nmg.s`.
 ====

@@ -59,14 +59,14 @@ section.
 
 .Scripting a geometry query with arguments
 ====
-[source,bash]
+[source,console]
 ----
-cat > volume.tcl <<'EOF'
+$ cat > volume.tcl <<'EOF'
 opendb [lindex $argv 0] y
 puts [bb -v [lindex $argv 1]]
 EOF
 
-btclsh volume.tcl moss.g all.g
+$ btclsh volume.tcl moss.g all.g
 ----
 Runs a Tcl script that opens the geometry database *moss.g* (passed as
 the first argument) and prints the bounding-box and volume report for
@@ -77,9 +77,9 @@ arguments forwarded through the Tcl *argv* variable.
 
 .Interactive session
 ====
-[source,bash]
+[source,console]
 ----
-btclsh
+$ btclsh
 btclsh> opendb moss.g y
 btclsh> ls
 btclsh> q

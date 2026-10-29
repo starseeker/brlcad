@@ -31,17 +31,21 @@ NOTE: *cc* is a low-level object creator. For the full constraint management int
 == EXAMPLES
 
 .Create a constraint object with a formula expression
-[example]
 ====
-mged> **cc p0 "formula ell.R[0]=10.0"**
+[source,console]
+----
+mged> cc p0 "formula ell.R[0]=10.0"
+----
 
 Creates a new constraint object named `p0` storing the expression `formula ell.R[0]=10.0`. Fails if either `p0` or `formula ell.R[0]=10.0` already exists as an object name.
 ====
 
 .Create a geometric constraint
-[example]
 ====
-mged> **cc c1 "coincident ell.V arb8.P[4]"**
+[source,console]
+----
+mged> cc c1 "coincident ell.V arb8.P[4]"
+----
 
 Creates a new constraint object `c1` with a coincident point constraint expression.
 ====

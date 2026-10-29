@@ -39,9 +39,9 @@ bits, and any alpha channel is composited over the image background color.
 
 .Display a PNG screenshot on a framebuffer
 ====
-[source,bash]
+[source,console]
 ----
-png-pix tank.png | pix-fb -w 512 -n 512
+$ png-pix tank.png | pix-fb -w 512 -n 512
 ----
 Decode the PNG into pix data and pipe it directly to *pix-fb*(1) for display,
 without creating an intermediate file. The width and height must match the

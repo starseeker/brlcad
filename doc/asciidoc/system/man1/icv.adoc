@@ -117,27 +117,27 @@ Without a subcommand, *icv* acts as an image format converter, reading the input
 
 .Convert a raw PIX render to PNG
 ====
-[source,bash]
+[source,console]
 ----
-icv -w 1024 -n 512 render.pix render.png
+$ icv -w 1024 -n 512 render.pix render.png
 ----
 Reads a headerless 1024x512 PIX file and writes a PNG. The dimensions are required because PIX (and BW) carry no size information in the file; when omitted, *icv* attempts to deduce them from the file size.
 ====
 
 .Inspect images before further processing
 ====
-[source,bash]
+[source,console]
 ----
-icv info *.png
+$ icv info *.png
 ----
 Reports the width, height, format, channel count, color space, and any embedded render information (originating database and objects) for every PNG in the directory, useful for confirming a batch of renders is consistent before compositing.
 ====
 
 .Regression-test a render against a known-good reference
 ====
-[source,bash]
+[source,console]
 ----
-icv diff -o delta.png reference.png current.png
+$ icv diff -o delta.png reference.png current.png
 ----
 Compares two renders, prints per-channel match statistics to standard error, and writes a highlighted difference image to delta.png. Omitting *-o* streams a raw PIX diff to standard output for piping, exactly as *pixdiff*(1) does.
 ====

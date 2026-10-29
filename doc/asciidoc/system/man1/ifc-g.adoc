@@ -54,10 +54,10 @@ configured with experimental STEP support enabled.
 
 .Convert a building model and inspect it
 ====
-[source,bash]
+[source,console]
 ----
-ifc-g -v -o building.g building.ifc
-mged building.g 'tops'
+$ ifc-g -v -o building.g building.ifc
+$ mged building.g 'tops'
 ----
 Converts the IFC model _building.ifc_ into _building.g_ with verbose progress
 output, then lists the top-level objects of the resulting database with
@@ -66,9 +66,9 @@ output, then lists the top-level objects of the resulting database with
 
 .Validate an IFC file without producing output
 ====
-[source,bash]
+[source,console]
 ----
-ifc-g -D -S import.log -o /tmp/check.g model.ifc
+$ ifc-g -D -S import.log -o /tmp/check.g model.ifc
 ----
 Performs a dry run that loads _model.ifc_ and records a summary of the parse in
 _import.log_ without committing geometry, allowing a file to be checked before

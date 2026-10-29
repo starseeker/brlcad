@@ -60,18 +60,25 @@ Output coordinate units (e.g., `mm`, `cm`, `in`, `ft`).
 == EXAMPLES
 
 .Export all currently displayed BOTs to STL
-[example]
 ====
-mged> **draw hull.bot turret.bot**
-mged> **dbot_dump -o displayed.stl**
+[source,console]
+----
+mged> draw hull.bot turret.bot
+----
+[source,console]
+----
+mged> dbot_dump -o displayed.stl
+----
 
 Draws two BOTs, then exports them both (with view data and displayed color/material info) to `displayed.stl`.
 ====
 
 .Export displayed geometry to OBJ format
-[example]
 ====
-mged> **dbot_dump -t obj -o scene.obj**
+[source,console]
+----
+mged> dbot_dump -t obj -o scene.obj
+----
 
 Exports all currently drawn BOT objects to Wavefront OBJ format, including displayed color/material properties.
 ====

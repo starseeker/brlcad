@@ -64,9 +64,9 @@ For example, `hui` is a host unsigned int and `nl` is a network
 
 .Convert host signed shorts to network 32-bit integers
 ====
-[source,bash]
+[source,console]
 ----
-cv hss n32 data.short data.net
+$ cv hss n32 data.short data.net
 ----
 Reads the binary file `data.short` of machine-specific signed shorts and
 writes network-independent 32-bit integers to `data.net`, producing a
@@ -75,9 +75,9 @@ portable file that can be read identically on any platform.
 
 .Repack network doubles as host doubles in a pipeline
 ====
-[source,bash]
+[source,console]
 ----
-cat data.nd | cv nd hd > data.hd
+$ cat data.nd | cv nd hd > data.hd
 ----
 Reads network-independent double-precision floats from standard input and
 emits host-native doubles on standard output, the typical first step

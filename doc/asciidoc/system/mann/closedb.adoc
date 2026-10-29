@@ -29,10 +29,15 @@ MGED also accepts the alternate command name *close* for the same operation.
 == EXAMPLES
 
 .Close the current database after opening a model.
-[example]
 ====
-mged> **opendb model.g**
-mged> **closedb**
+[source,console]
+----
+mged> opendb model.g
+----
+[source,console]
+----
+mged> closedb
+----
 
 Closes _model.g_ and removes any geometry from the current display.
 

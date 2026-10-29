@@ -65,50 +65,65 @@ The first argument `vname` is the name of the view to configure. The second argu
 == EXAMPLES
 
 .Enable the grid
-[example]
 ====
-mged> **grid default draw 1**
+[source,console]
+----
+mged> grid default draw 1
+----
 
 Turns on grid display for the view named `default`.
 ====
 
 .Set grid spacing to 10 mm
-[example]
 ====
-mged> **grid default rh 10**
-mged> **grid default rv 10**
+[source,console]
+----
+mged> grid default rh 10
+----
+[source,console]
+----
+mged> grid default rv 10
+----
 
 Sets horizontal and vertical grid spacing to 10 units in the current working units.
 ====
 
 .Enable snap-to-grid
-[example]
 ====
-mged> **grid default snap 1**
+[source,console]
+----
+mged> grid default snap 1
+----
 
 Enables snap-to-grid for the `default` view. The view center will snap to the nearest grid point during interactive navigation.
 ====
 
 .Set grid color to green
-[example]
 ====
-mged> **grid default color 0 200 0**
+[source,console]
+----
+mged> grid default color 0 200 0
+----
 
 Sets the grid line color to green (R=0, G=200, B=0).
 ====
 
 .Get the current horizontal resolution
-[example]
 ====
-mged> **grid default rh**
+[source,console]
+----
+mged> grid default rh
+----
 
 Returns the current horizontal grid resolution in working units, for example: `10`.
 ====
 
 .Snap view center to nearest grid point
-[example]
 ====
-mged> **grid default vsnap**
+[source,console]
+----
+mged> grid default vsnap
+----
 
 Moves the view center to the nearest grid intersection.
 ====

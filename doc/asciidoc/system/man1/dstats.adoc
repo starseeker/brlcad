@@ -41,9 +41,9 @@ The unsigned-char and short-integer analogues are *ustats*(1) and *istats*(1).
 
 .Inspect the range of converted sample data
 ====
-[source,bash]
+[source,console]
 ----
-a-d < data.txt | dstats
+$ a-d < data.txt | dstats
 ----
 Convert ASCII sample data to raw doubles with *a-d*(1) and pipe the
 result into *dstats* to quickly check the value range, mean, and variance of a

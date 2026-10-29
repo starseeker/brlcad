@@ -57,19 +57,19 @@ By default the pattern repeats forever. The *-r* option limits the output to a f
 
 .Generate a solid green 512x512 pix image
 ====
-[source,bash]
+[source,console]
 ----
-gencolor -p -s 512 0 255 0 > green.pix
+$ gencolor -p -s 512 0 255 0 > green.pix
 ----
 The three-byte RGB pattern (0 255 0) is repeated to fill a 512x512 *pix*(5) image, yielding 512 * 512 * 3 bytes. The resulting file can be viewed with *pix-fb*(1) or *pixmatte*(1).
 ====
 
 .Tile a gradient background under a rendering
 ====
-[source,bash]
+[source,console]
 ----
-gencolor -b -w 1024 -n 768 128 > gray.bw
-pix-fb scene.pix
+$ gencolor -b -w 1024 -n 768 128 > gray.bw
+$ pix-fb scene.pix
 ----
 The first command produces a 1024x768 single-channel *bw*(5) image filled with mid-gray (value 128), suitable as a neutral backdrop or matte before compositing a rendered *pix*(5) image onto the framebuffer.
 ====

@@ -45,10 +45,10 @@ the BRL-CAD database to create.
 
 .Convert an INTAVAL target and inspect the result
 ====
-[source,bash]
+[source,console]
 ----
-tgf-g tank.mat tank.geo tank.g
-mged tank.g 'ls'
+$ tgf-g tank.mat tank.geo tank.g
+$ mged tank.g 'ls'
 ----
 Convert the INTAVAL material file *tank.mat* and geometry file *tank.geo* into a
 new BRL-CAD database *tank.g*, then list the resulting regions and primitives

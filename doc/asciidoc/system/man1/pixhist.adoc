@@ -49,10 +49,10 @@ standard error.
 
 .Inspect the tonal distribution of a rendered image
 ====
-[source,bash]
+[source,console]
 ----
-rt -o frame.pix model.g component &&
-pixhist -v frame.pix
+$ rt -o frame.pix model.g component &&
+$ pixhist -v frame.pix
 ----
 Renders a region to a *pix*(5) image with *rt*(1), then displays its color
 histogram on the framebuffer while also printing the per-level red, green, and

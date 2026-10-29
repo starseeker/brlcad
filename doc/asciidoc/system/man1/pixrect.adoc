@@ -70,9 +70,9 @@ Output is written to standard output and/or to the file named with *-o*.
 
 .Crop a 256x256 tile from a large image
 ====
-[source,bash]
+[source,console]
 ----
-pixrect -w 1024 -n 1024 -x 384 -y 384 -S 256 image.pix > center.pix
+$ pixrect -w 1024 -n 1024 -x 384 -y 384 -S 256 image.pix > center.pix
 ----
 Treats image.pix as a 1024x1024 image and extracts a 256x256 square starting
 at pixel (384,384), producing a centered tile in center.pix.
@@ -80,9 +80,9 @@ at pixel (384,384), producing a centered tile in center.pix.
 
 .Extract a region and view it directly
 ====
-[source,bash]
+[source,console]
 ----
-pixrect -s 512 -x 0 -y 256 -W 512 -N 256 render.pix | pix-fb -w 512 -n 256
+$ pixrect -s 512 -x 0 -y 256 -W 512 -N 256 render.pix | pix-fb -w 512 -n 256
 ----
 Pulls the top half of a 512x512 image and pipes the 512x256 result straight
 to a framebuffer with *pix-fb*(1) for immediate inspection.

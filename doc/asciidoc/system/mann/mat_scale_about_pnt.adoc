@@ -29,17 +29,21 @@ Arguments:
 == EXAMPLES
 
 .Scale by 2x about a specific point
-[example]
 ====
-mged> **mat_scale_about_pnt "10 10 0" 2.0**
+[source,console]
+----
+mged> mat_scale_about_pnt "10 10 0" 2.0
+----
 
 Returns a 4x4 matrix that scales geometry by a factor of 2 relative to the point (10, 10, 0). Objects at that point remain fixed while all other geometry moves away from it proportionally.
 ====
 
 .Scale down by half about the origin
-[example]
 ====
-mged> **mat_scale_about_pnt "0 0 0" 0.5**
+[source,console]
+----
+mged> mat_scale_about_pnt "0 0 0" 0.5
+----
 
 Returns a uniform 0.5x scale matrix centered at the origin, equivalent to a standard scale-by-half transformation.
 ====

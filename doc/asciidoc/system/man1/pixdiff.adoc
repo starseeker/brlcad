@@ -59,10 +59,10 @@ Show usage information.
 
 .Diff two renderings and view the result
 ====
-[source,bash]
+[source,console]
 ----
-pixdiff frame_a.pix frame_b.pix > diff.pix
-pix-png -w 512 -n 512 diff.pix > diff.png
+$ pixdiff frame_a.pix frame_b.pix > diff.pix
+$ pix-png -w 512 -n 512 diff.pix > diff.png
 ----
 Compares two 512x512 renderings, writing a highlight image to _diff.pix_,
 then converts it to PNG with *pix-png*(1) for easy viewing. Differing
@@ -73,9 +73,9 @@ on standard error give a quick quantitative sense of how much changed.
 
 .Diff two grayscale images
 ====
-[source,bash]
+[source,console]
 ----
-pixdiff -b depth_a.bw depth_b.bw > depth_diff.bw
+$ pixdiff -b depth_a.bw depth_b.bw > depth_diff.bw
 ----
 Writes a grayscale highlight image using byte-wise comparison. Matching
 samples retain half their input intensity as context.

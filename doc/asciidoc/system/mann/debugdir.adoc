@@ -40,9 +40,11 @@ Displays a dump of the in-memory directory for the current database file. The in
 The example shows the use of the *debugdir* command to get a dump of the in-memory directory.
 
 .Get a dump of the in-memory directory.
-[example]
 ====
-mged>**debugdir**
+[source,console]
+----
+mged> debugdir
+----
 
 Gets a dump of the in-memory directory.
 

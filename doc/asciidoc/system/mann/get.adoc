@@ -24,15 +24,14 @@ Low level command for extracting specific parameter information from geometry ob
 == EXAMPLES
 
 .Elliptical Torus 'r' Parameter Extraction
-[example]
 ====
 Use the *get* command to extract the r parameter value from an elliptical torus.
 
 
 
 
-....
-
+[source,console]
+----
 mged> make eto.s eto
 mged> l eto.s
 eto.s:  Elliptical Torus (ETO)
@@ -41,21 +40,18 @@ eto.s:  Elliptical Torus (ETO)
       C=(200, 0, 200) mag=282.843
       r=800
       d=100
-
-    
-....
+----
 
 
 
 
 
 
-....
-
+[source,console]
+----
 mged> get eto.s r
 800
-    
-....
+----
 
 
 

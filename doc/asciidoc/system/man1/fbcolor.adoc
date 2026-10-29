@@ -80,10 +80,10 @@ restoring the original color map.
 
 .Pick a color, then paint the whole framebuffer with it
 ====
-[source,bash]
+[source,console]
 ----
-fbcolor -F /tmp/myfb -s 512
-fbclear -F /tmp/myfb 200 100 50
+$ fbcolor -F /tmp/myfb -s 512
+$ fbclear -F /tmp/myfb 200 100 50
 ----
 Open a 512x512 framebuffer file and interactively dial in a color,
 reading the printed RGB triple from the terminal (for example

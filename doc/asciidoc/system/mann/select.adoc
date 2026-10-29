@@ -32,9 +32,11 @@ The implementation supports the following options:
 The example shows a circular selection.
 
 .Select displayed items around a screen-space point.
-[example]
 ====
-mged>**select 0.1 0.2 0.05**
+[source,console]
+----
+mged> select 0.1 0.2 0.05
+----
 
 Returns the displayed items inside the specified circular selection region.
 

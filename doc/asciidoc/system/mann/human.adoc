@@ -36,17 +36,21 @@ It calculates body proportions based on target height, percentile, and stance/po
 == EXAMPLES
 
 .Generate a custom human model
-[example]
 ====
-mged> **human -H 72 -n TallGuy.c -p 90**
+[source,console]
+----
+mged> human -H 72 -n TallGuy.c -p 90
+----
 
 Generates a 90th-percentile human model that is 72 inches (6 feet) tall under the root combination name `TallGuy.c`.
 ====
 
 .Generate an army of bounding boxes
-[example]
 ====
-mged> **human -b -N 4 -n Soldier.c**
+[source,console]
+----
+mged> human -b -N 4 -n Soldier.c
+----
 
 Generates a 4x4 grid (16 total) of default 5-foot-8 humans with their respective bounding boxes, prefixed with the name `Soldier`.
 ====

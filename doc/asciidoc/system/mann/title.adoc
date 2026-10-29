@@ -26,9 +26,11 @@ Returns the title string for the current database or, if used with an argument, 
 The example shows the use of the *title* command with an argument to rename the current database.
 
 .Rename the current database.
-[example]
 ====
-mged>**title This is my \\"database\\"**
+[source,console]
+----
+mged> title This is my \\"database\\"
+----
 
 Sets the title of the current database to _This is my "database."_
 

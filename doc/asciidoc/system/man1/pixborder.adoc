@@ -98,9 +98,9 @@ nearby colors be treated as the nominal interior or exterior color.
 
 .Outline red regions in yellow
 ====
-[source,bash]
+[source,console]
 ----
-pixborder -i '255 0 0' -b '255 255 0' -t '40 40 40' scene.pix > outlined.pix
+$ pixborder -i '255 0 0' -b '255 255 0' -t '40 40 40' scene.pix > outlined.pix
 ----
 Outlines every red region (red 255 0 0, with a tolerance of 40 per channel to
 catch anti-aliased edges) by recoloring its boundary pixels yellow.
@@ -108,9 +108,9 @@ catch anti-aliased edges) by recoloring its boundary pixels yellow.
 
 .Draw a multi-pixel-wide border with a pipeline
 ====
-[source,bash]
+[source,console]
 ----
-pixborder -i '255 0 0' -b '0 0 0' scene.pix | \
+$ pixborder -i '255 0 0' -b '0 0 0' scene.pix | \
     pixborder -i '255 0 0' -b '0 0 0' > thick.pix
 ----
 *pixborder* only thickens by one pixel per pass, so chaining several invocations

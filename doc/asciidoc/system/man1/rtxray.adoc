@@ -137,9 +137,9 @@ options of *rt*(1) are disabled in *rtxray*.
 
 .Pseudo X-ray from a three-quarter view
 ====
-[source,bash]
+[source,console]
 ----
-rtxray -a 35 -e 25 -s 1024 -A 4.0 -o xray.png model.g all
+$ rtxray -a 35 -e 25 -s 1024 -A 4.0 -o xray.png model.g all
 ----
 Ray traces the group _all_ in _model.g_ from azimuth 35, elevation 25
 degrees on a 1024x1024 grid and writes a grayscale PNG with a contrast
@@ -150,9 +150,9 @@ sparse model from washing out to white.
 
 .Raw path lengths for post-processing
 ====
-[source,bash]
+[source,console]
 ----
-rtxray -M -l 1 -o paths.los model.g component < component.rt
+$ rtxray -M -l 1 -o paths.los model.g component < component.rt
 ----
 Reuses the camera from an *mged*(1) _saveview_ script (the matrix is read
 from standard input via *-M*) and, with the alternate lighting model,

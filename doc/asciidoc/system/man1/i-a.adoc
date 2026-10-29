@@ -35,9 +35,9 @@ deprecation warning on startup.
 
 .Inspect the integer samples in a binary file
 ====
-[source,bash]
+[source,console]
 ----
-i-a < samples.i | head
+$ i-a < samples.i | head
 ----
 Decodes the 16-bit integers stored in samples.i and prints the first ten
 values as human-readable decimal numbers, one per line, which is useful

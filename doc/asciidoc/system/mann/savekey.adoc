@@ -38,30 +38,51 @@ To save the *complete* view state (including eye point, orientation, and size in
 == EXAMPLES
 
 .Save the current view as a keyframe at time 0
-[example]
 ====
-mged> **savekey anim.key 0**
+[source,console]
+----
+mged> savekey anim.key 0
+----
 
 Appends the current view as a keyframe at time 0.0 to `anim.key`. The file is created if it does not exist.
 ====
 
 .Accumulate multiple keyframes for animation
-[example]
 ====
-mged> **ae 0 0**
-mged> **savekey anim.key 0**
-mged> **ae 90 0**
-mged> **savekey anim.key 1**
-mged> **ae 180 0**
-mged> **savekey anim.key 2**
+[source,console]
+----
+mged> ae 0 0
+----
+[source,console]
+----
+mged> savekey anim.key 0
+----
+[source,console]
+----
+mged> ae 90 0
+----
+[source,console]
+----
+mged> savekey anim.key 1
+----
+[source,console]
+----
+mged> ae 180 0
+----
+[source,console]
+----
+mged> savekey anim.key 2
+----
 
 Sets three view orientations and saves them as keyframes at times 0, 1, and 2 in `anim.key`, building an animation that rotates the view 180° over 2 seconds.
 ====
 
 .Save without a timestamp
-[example]
 ====
-mged> **savekey view.key**
+[source,console]
+----
+mged> savekey view.key
+----
 
 Appends the current view to `view.key` with no timestamp. Useful when time-stamping will be handled externally.
 ====

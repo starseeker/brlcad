@@ -106,10 +106,10 @@ in MGED.
 
 .Generate a terrain and build a dsp solid
 ====
-[source,bash]
+[source,console]
 ----
-terrain -w 256 -n 256 -f r -O 8 -S 1.5 > hills.dsp
-mged terrain.g <<'EOF'
+$ terrain -w 256 -n 256 -f r -O 8 -S 1.5 > hills.dsp
+$ mged terrain.g <<'EOF'
 in mountains.dsp dsp f hills.dsp 256 256 0 ad 1 100
 EOF
 ----
@@ -121,9 +121,9 @@ ridgeline of mountains in the database terrain.g.
 
 .Create a tileable, square fBm patch
 ====
-[source,bash]
+[source,console]
 ----
-terrain -s 512 -f f -O 5 -L 2.0 -D 0,0,0 > patch.dsp
+$ terrain -s 512 -f f -O 5 -L 2.0 -D 0,0,0 > patch.dsp
 ----
 A 512x512 fractional Brownian motion field generated with five octaves
 and a lacunarity of 2.0, sampled at the origin of noise space for a

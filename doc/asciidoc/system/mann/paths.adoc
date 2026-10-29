@@ -31,9 +31,11 @@ invoked as *listeval*; *paths* itself does not use that option.
 The example shows the use of the *paths* command to list all existing paths that start from the specified path start and end at a primitive shape.
 
 .List all paths that start from a specified path start and end at a primitive shape.
-[example]
 ====
-mged>**paths group1 region2**
+[source,console]
+----
+mged> paths group1 region2
+----
 
 Lists all existing paths that start from _group1/region2_ and end at a primitive shape.
 

@@ -83,17 +83,21 @@ This command exists primarily for backward compatibility with older MGED scripts
 == EXAMPLES
 
 .Set the azimuth/elevation via view_func
-[example]
 ====
-mged> **view_func ae 35 25**
+[source,console]
+----
+mged> view_func ae 35 25
+----
 
 Sets the view to azimuth 35°, elevation 25° — equivalent to `aet 35 25`.
 ====
 
 .Get the current view center
-[example]
 ====
-mged> **view_func center**
+[source,console]
+----
+mged> view_func center
+----
 
 Returns the current view center coordinates — equivalent to `center`.
 ====

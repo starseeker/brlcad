@@ -116,9 +116,9 @@ colored *plot3*(5) geometry instead of text.
 
 .Find overlaps with a fine grid and a tolerance
 ====
-[source,bash]
+[source,console]
 ----
-glint -c -g 1.0 -t 0.01 vehicle.g hull
+$ glint -c -g 1.0 -t 0.01 vehicle.g hull
 ----
 Fires one ray per 1mm grid cell from the center of each cell at the _hull_
 combination in _vehicle.g_, reporting only overlaps longer than 0.01mm.  A
@@ -127,9 +127,9 @@ fine grid catches small interferences that a coarse grid would step over.
 
 .Audit air regions and visualize the results in MGED
 ====
-[source,bash]
+[source,console]
 ----
-glint -r 62 -p cabin.g interior > air.plot3
+$ glint -r 62 -p cabin.g interior > air.plot3
 ----
 Selects every report type except plain overlaps (62 = 2+4+8+16+32) and emits
 *plot3*(5) geometry, which can be overlaid on the model with the *overlay*

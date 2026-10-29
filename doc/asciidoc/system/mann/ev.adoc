@@ -41,10 +41,12 @@ Evaluates the _objects_ specified by tessellating all primitive shapes in the ob
 The first example shows the use of the *ev* command to display two evaluated objects as shaded polygons. The second example shows the use of the *ev* command to display an evaluated object as wireframe without triangulating.
 
 .Display evaluated objects as polygons.
-[example]
 ====
 
-mged> **ev region1 shapea**::
+[source,console]
+----
+mged> ev region1 shapea
+----
 Displays evaluated _region1_ and _shapea_ as shaded polygons.
 
 
@@ -52,9 +54,11 @@ Displays evaluated _region1_ and _shapea_ as shaded polygons.
 ====
 
 .Display an evaluated object as wireframe without triangulation.
-[example]
 ====
-mged>**ev -wT region1**
+[source,console]
+----
+mged> ev -wT region1
+----
 
 Displays an evaluated object, _region1_, as wireframe without triangulation.
 

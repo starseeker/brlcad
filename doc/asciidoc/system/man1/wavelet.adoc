@@ -96,9 +96,9 @@ reconstruction, convert the data to the next larger data type (via the
 
 .Display a horizontal decomposition
 ====
-[source,bash]
+[source,console]
 ----
-wavelet -d -# 3 -s 512 < img.pix | pix-fb
+$ wavelet -d -# 3 -s 512 < img.pix | pix-fb
 ----
 Decomposes each scanline of a 512x512 color *pix*(5) image and displays
 the result on a framebuffer with *pix-fb*(1).  Each scanline shows a
@@ -107,9 +107,9 @@ shrinking "average" toward the left with detail coefficients to the right.
 
 .Two-dimensional decomposition with a stopping size
 ====
-[source,bash]
+[source,console]
 ----
-wavelet -d -2 -# 3 -s 1024 -S 64 < img.pix > img.wlt
+$ wavelet -d -2 -# 3 -s 1024 -S 64 < img.pix > img.wlt
 ----
 Performs a 2D decomposition of a 1024x1024 color image, stopping once the
 average has been reduced to 64x64.  The output image holds a 64x64 version

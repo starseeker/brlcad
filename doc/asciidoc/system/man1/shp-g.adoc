@@ -52,10 +52,10 @@ Z and measure values present in the shapefile are ignored.
 
 .Convert a shapefile and inspect the result
 ====
-[source,bash]
+[source,console]
 ----
-shp-g -v roads.shp roads.g
-mged roads.g
+$ shp-g -v roads.shp roads.g
+$ mged roads.g
 ----
 Converts the *roads.shp* shapefile to *roads.g* with verbose progress
 reporting, then opens the resulting database in *mged*(1).  Each road feature

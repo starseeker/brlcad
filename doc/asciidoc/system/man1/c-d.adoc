@@ -63,9 +63,9 @@ a terminal.
 
 .Extract the magnitude of a complex stream
 ====
-[source,bash]
+[source,console]
 ----
-d2-c real.d imag.d | c-d -m > magnitude.d
+$ d2-c real.d imag.d | c-d -m > magnitude.d
 ----
 Packs separate real and imaginary double streams into interleaved
 complex pairs with *d2-c*(1), then uses *c-d* to reduce each complex
@@ -74,9 +74,9 @@ number to its magnitude, producing one double per complex value.
 
 .Split a complex stream into real and imaginary channels
 ====
-[source,bash]
+[source,console]
 ----
-c-d -r -i < complex.d > interleaved.d
+$ c-d -r -i < complex.d > interleaved.d
 ----
 Emits the real part immediately followed by the imaginary part of every
 complex number, yielding two interleaved real-valued doubles per input

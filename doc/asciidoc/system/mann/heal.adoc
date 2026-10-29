@@ -24,9 +24,11 @@ An optional zipper tolerance (`zipper_tol`) can be provided as a floating point 
 == EXAMPLES
 
 .Heal a BOT mesh with a specific tolerance
-[example]
 ====
-mged> **heal my_mesh.bot 0.5**
+[source,console]
+----
+mged> heal my_mesh.bot 0.5
+----
 
 Performs mesh healing operations on `my_mesh.bot` using a zipper tolerance of 0.5.
 ====

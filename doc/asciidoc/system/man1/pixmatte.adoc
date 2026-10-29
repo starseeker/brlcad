@@ -76,9 +76,9 @@ byte of the element for the true output to be selected.
 
 .Composite a foreground over a generated background
 ====
-[source,bash]
+[source,console]
 ----
-pixbackgnd -t0 160 200 | pixmatte -n fg.pix =63/0/127 fg.pix - | pix-fb
+$ pixbackgnd -t0 160 200 | pixmatte -n fg.pix =63/0/127 fg.pix - | pix-fb
 ----
 Keeps every foreground pixel that is not equal to the chroma-key color
 63/0/127 and replaces matching pixels with a *pixbackgnd*(1) gradient read
@@ -88,9 +88,9 @@ drop an *rt*(1) image over a nicer background.
 
 .Threshold against a constant
 ====
-[source,bash]
+[source,console]
 ----
-pixmatte -g fg.pix =20/20/20 fg.pix =200/0/200 > out.pix
+$ pixmatte -g fg.pix =20/20/20 fg.pix =200/0/200 > out.pix
 ----
 Keeps foreground pixels whose bytes are all greater than 20/20/20 and
 replaces the rest with the constant magenta 200/0/200.
@@ -98,9 +98,9 @@ replaces the rest with the constant magenta 200/0/200.
 
 .Build a black-and-white stencil matte
 ====
-[source,bash]
+[source,console]
 ----
-pixmatte -n fg.pix bg.pix =255/255/255 =0/0/0 > matte.pix
+$ pixmatte -n fg.pix bg.pix =255/255/255 =0/0/0 > matte.pix
 ----
 Produces a stencil that is white where _fg.pix_ and _bg.pix_ differ and black
 where they match, for further compositing.
@@ -108,9 +108,9 @@ where they match, for further compositing.
 
 .Match a dithered background approximately
 ====
-[source,bash]
+[source,console]
 ----
-pixmatte -a -e fg.pix bg.pix =0/0/0 fg.pix > out.pix
+$ pixmatte -a -e fg.pix bg.pix =0/0/0 fg.pix > out.pix
 ----
 Sets to black all foreground pixels that match _bg.pix_ to within plus or
 minus one per byte, preserving everything else.

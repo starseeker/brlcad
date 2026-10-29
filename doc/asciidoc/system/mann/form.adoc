@@ -24,9 +24,11 @@ The `type` argument can be any valid geometric primitive type recognized by BRL-
 == EXAMPLES
 
 .Query the format for a Sphere (sph)
-[example]
 ====
-mged> **form sph**
+[source,console]
+----
+mged> form sph
+----
 
 Returns the expected arguments and syntax needed to define a sphere primitive.
 ====

@@ -41,9 +41,11 @@ Builds a simple representation of the linked track of a vehicle such as a tank. 
 The example shows the use of the *track* command with arguments to build a simple track.
 
 .Build a simple track.
-[example]
 ====
-mged>**track 500 0 10 10 -50 50 10 550 50 10 -50 -20 2**
+[source,console]
+----
+mged> track 500 0 10 10 -50 50 10 550 50 10 -50 -20 2
+----
 
 Builds a simple track using the provided arguments.
 

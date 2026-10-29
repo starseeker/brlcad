@@ -31,26 +31,35 @@ When perspective is disabled (`perspective 0`), the projection matrix is the ide
 == EXAMPLES
 
 .Retrieve the current perspective matrix
-[example]
 ====
-mged> **pmat**
+[source,console]
+----
+mged> pmat
+----
 
 Returns the current perspective projection matrix as 16 numbers. When perspective is active (e.g. after `perspective 45`), this will be a non-identity matrix; when orthographic, it will be the identity.
 ====
 
 .Inspect the matrix after setting perspective
-[example]
 ====
-mged> **perspective 60**
-mged> **pmat**
+[source,console]
+----
+mged> perspective 60
+----
+[source,console]
+----
+mged> pmat
+----
 
 Sets the perspective angle to 60° and then retrieves the resulting projection matrix to examine the constructed values.
 ====
 
 .Set the perspective matrix explicitly
-[example]
 ====
-mged> **pmat "1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"**
+[source,console]
+----
+mged> pmat "1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"
+----
 
 Sets the projection matrix to the identity, equivalent to `perspective 0`. The quoted string must contain exactly 16 space-separated values.
 ====

@@ -26,9 +26,11 @@ Selects which matrix in the illuminated path should be edited. A number may be s
 The example shows the use of the *matpick* command to select the matrix for editing in a particular region and group.
 
 .Select a matrix to be edited in a particular region and group.
-[example]
 ====
-mged>**matpick group1/region3**
+[source,console]
+----
+mged> matpick group1/region3
+----
 
 Selects the matrix for _region3_ in _group1_ for editing.
 

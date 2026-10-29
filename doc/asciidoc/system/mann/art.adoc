@@ -30,18 +30,22 @@ The following example commands are performed in mged, but since art is en evolvi
 The first example shows the use of the *art* command to run the art program to produce a color-shaded image. The second example shows the use of the *art* command to run the art program to produce a brightened image. Both commands use a sample object.
 
 .Run the _art_ program to produce a color-shaded image.
-[example]
 ====
-mged>**art -C 255,255,255 -s 1024 share/db/moss.g all.g**
+[source,console]
+----
+mged> art -C 255,255,255 -s 1024 share/db/moss.g all.g
+----
 
 Runs the _art_ program to produce a color-shaded image of a sample object. The image will be 1024 pixels square and will be displayed on a lingering _X_ framebuffer.
 
 ====
 
 .Run the _art_ program to produce a brightened image of an object.
-[example]
 ====
-mged>**art -A 2 share/db/moss.g all.g**
+[source,console]
+----
+mged> art -A 2 share/db/moss.g all.g
+----
 
 Runs the _art_ program to produce a brightened image of the sample object. The image will be brightened by a factor of 2.
 

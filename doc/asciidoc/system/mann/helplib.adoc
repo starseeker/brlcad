@@ -26,10 +26,12 @@ Returns a list of available _library_ commands along with a one-line usage messa
 The example shows the use of the *helplib* command to display a one-line usage message for a specific library command.
 
 .Display a one-line usage message for a specific library command.
-[example]
 ====
 
-mged> **helplib mat_trn**::
+[source,console]
+----
+mged> helplib mat_trn
+----
 Displays a one-line usage message for the *mat_trn* command.
 
 

@@ -57,9 +57,9 @@ deprecation warning on startup.
 
 .Quantize a normalized signal
 ====
-[source,bash]
+[source,console]
 ----
-d-u -n < signal.d > signal.u
+$ d-u -n < signal.d > signal.u
 ----
 Reads doubles in the range 0.0 to 1.0 from signal.d and writes 16-bit
 unsigned shorts spanning the full 0 to 65535 range, suitable as input
@@ -68,9 +68,9 @@ to *u-d*(1) or other unsigned-short tools.
 
 .Apply an explicit gain and round-trip the data
 ====
-[source,bash]
+[source,console]
 ----
-d-u 1000 < values.d | u-d > scaled.d
+$ d-u 1000 < values.d | u-d > scaled.d
 ----
 Scales each double in values.d by 1000 before quantizing to unsigned
 shorts, then converts the result back to doubles with *u-d*(1),

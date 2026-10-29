@@ -58,9 +58,9 @@ database is removed when processing completes.
 
 .Check every top-level object in a database
 ====
-[source,bash]
+[source,console]
 ----
-gchecker -f model.g
+$ gchecker -f model.g
 ----
 Removes any stale *model.g.ck* directory, copies *model.g* into a fresh one, and
 checks all tops objects for overlaps.  The resulting *ck.model.g.overlaps* file
@@ -69,9 +69,9 @@ checks all tops objects for overlaps.  The resulting *ck.model.g.overlaps* file
 
 .Check specific assemblies with verbose output
 ====
-[source,bash]
+[source,console]
 ----
-gchecker -v moss.g all.g component.r
+$ gchecker -v moss.g all.g component.r
 ----
 Limits the overlap analysis to the named objects *all.g* and *component.r*
 rather than scanning the entire database, while printing detailed progress and

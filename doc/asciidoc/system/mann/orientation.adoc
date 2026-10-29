@@ -26,9 +26,11 @@ Sets the view direction for MGED from the quaternion specified on the command li
 The example shows the use of the *orientation* command to set the view direction for MGED from the specified quaternion.
 
 .Set the view direction for MGED.
-[example]
 ====
-mged>**orientation 1 0 0 0**
+[source,console]
+----
+mged> orientation 1 0 0 0
+----
 
 Sets the viewing direction to bottom.
 

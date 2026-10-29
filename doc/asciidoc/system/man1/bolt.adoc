@@ -68,10 +68,10 @@ letter is immediately followed by its value with no intervening space
 
 .Generate a hex-head bolt with washer and stem, then raytrace it
 ====
-[source,bash]
+[source,console]
 ----
-bolt -o3 -fbolt.g -n1 -hd30 -hh10 -wd40 -wh3 -sd12 -sh80
-rt -o bolt.png bolt.g bolta
+$ bolt -o3 -fbolt.g -n1 -hd30 -hh10 -wd40 -wh3 -sd12 -sh80
+$ rt -o bolt.png bolt.g bolta
 ----
 This creates a single complete bolt (option 3: head, washer, and stem)
 in bolt.g with a 30 mm hex head 10 mm tall, a 40 mm washer 3 mm thick,

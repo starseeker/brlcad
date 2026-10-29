@@ -26,9 +26,11 @@ The inverse operation is `grid2view_lu`.
 == EXAMPLES
 
 .Convert a view-space point to a 2D grid offset
-[example]
 ====
-mged> **view2grid_lu 50 25 0**
+[source,console]
+----
+mged> view2grid_lu 50 25 0
+----
 
 Returns the 2D grid offset `u v` corresponding to the view-space point (50, 25, 0) in local units, measured from the projected model origin.
 ====

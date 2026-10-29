@@ -51,9 +51,11 @@ Intersect a surface from the first object with a surface from the second.
 == EXAMPLES
 
 .Visualize a surface/surface intersection.
-[example]
 ====
-mged> **brep hull.brep intersect cutter.brep 0 0 SS**
+[source,console]
+----
+mged> brep hull.brep intersect cutter.brep 0 0 SS
+----
 
 Intersects surface 0 from _hull.brep_ with surface 0 from _cutter.brep_ and draws the resulting intersection curves.
 

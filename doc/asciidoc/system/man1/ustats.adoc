@@ -40,10 +40,10 @@ as *istats*(1) (signed shorts) and *dstats*(1) (doubles).
 
 .Summarize 16-bit unsigned image data
 ====
-[source,bash]
+[source,console]
 ----
-pix-bw scene.pix | bw-d | d-u > scene.ushorts
-ustats scene.ushorts
+$ pix-bw scene.pix | bw-d | d-u > scene.ushorts
+$ ustats scene.ushorts
 ----
 Converts a color image to single-channel data, then to unsigned shorts,
 and reports the value distribution (min, max, mean, standard deviation)
@@ -53,9 +53,9 @@ processing.
 
 .Compute statistics from a pipeline
 ====
-[source,bash]
+[source,console]
 ----
-ustats < samples.ushorts
+$ ustats < samples.ushorts
 ----
 Reads unsigned short values directly from standard input and prints the
 statistical summary, suitable for inclusion in a shell pipeline.

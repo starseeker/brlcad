@@ -26,18 +26,22 @@ Moves the view center to (_x, y, z_). If _z_ is not provided, then _z_=0 is used
 The two examples show the use of the *sv* command to move the view center to a particular location on the screen.
 
 .Keep the view center at the center of the screen.
-[example]
 ====
-mged>**sv 0 0 0**
+[source,console]
+----
+mged> sv 0 0 0
+----
 
 The view is unchanged.
 
 ====
 
 .Move the view center half way between the current view center and the right side of the view screen.
-[example]
 ====
-mged>**sv .5 0 0**
+[source,console]
+----
+mged> sv .5 0 0
+----
 
 The view center is moved half way between the current view center and the right side of the view screen.
 

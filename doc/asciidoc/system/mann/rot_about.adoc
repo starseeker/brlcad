@@ -47,25 +47,31 @@ The *rot_about* command gets or sets the pivot point used when rotating the view
 == EXAMPLES
 
 .Get the current rotate-about mode
-[example]
 ====
-mged> **rot_about**
+[source,console]
+----
+mged> rot_about
+----
 
 Returns the current rotate-about mode character, e.g. `v` if rotating about the view center.
 ====
 
 .Rotate about the model origin
-[example]
 ====
-mged> **rot_about m**
+[source,console]
+----
+mged> rot_about m
+----
 
 Sets rotations to orbit around the model coordinate origin (0, 0, 0). Subsequent `rot` commands will pivot about that point.
 ====
 
 .Rotate about the view center
-[example]
 ====
-mged> **rot_about v**
+[source,console]
+----
+mged> rot_about v
+----
 
 Sets rotations to orbit around the center of the current display window. This is the most common interactive setting.
 ====

@@ -28,45 +28,59 @@ It is often convenient to use the center of the view when visually selecting key
 The examples show the use of the *center* command to print coordinates of the center of the mged display, move the center of the _mged_ display to a given point, set a Tcl variable to the display center coordinates, move the center point a given distance in a given direction, and update a vertex in the database to be located at the current center of view.
 
 .Printing the coordinates of the center of the _mged_ display.
-[example]
 ====
-mged>**center**
+[source,console]
+----
+mged> center
+----
 
 Prints out the coordinates of the center of the mged display.
 
 ====
 
 .Moving the center of the _mged_ display to a specified point.
-[example]
 ====
-mged>**center 12.5 5.6 8.7**
+[source,console]
+----
+mged> center 12.5 5.6 8.7
+----
 
 The center of the _mged_ display is moved to the point (12.5, 5.6, 8.7).
 
 ====
 
 .Set Tcl variable $oldcent to the display center coordinates.
-[example]
 ====
-mged>**set oldcent [center]**
+[source,console]
+----
+mged> set oldcent [center]
+----
 
 Sets the Tcl variable $oldcent to the display center coordinates.
 
 ====
 
 .Move the center point a given distance in a given direction.
-[example]
 ====
 
-mged> **set glob_compat_mode 0**::
+[source,console]
+----
+mged> set glob_compat_mode 0
+----
 
 
 
-mged> **units mm**::
+[source,console]
+----
+mged> units mm
+----
 
 
 
-mged> **eval center [vadd2[center] {2 0 0}]**::
+[source,console]
+----
+mged> eval center [vadd2[center] {2 0 0}]
+----
 Moves the center point 2 mm in the model + x direction.
 
 
@@ -74,14 +88,19 @@ Moves the center point 2 mm in the model + x direction.
 ====
 
 .Update the vertex of a shape in the database to be located at the current view center.
-[example]
 ====
 
-mged> **units mm**::
+[source,console]
+----
+mged> units mm
+----
 
 
 
-mged> **db adjust sphere.s V [center]**::
+[source,console]
+----
+mged> db adjust sphere.s V [center]
+----
 
 
 

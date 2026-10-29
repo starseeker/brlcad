@@ -77,9 +77,9 @@ sample points, ray directions, and hit points can be emitted as an
 
 .Estimate exterior surface area with a single sampling pass
 ====
-[source,bash]
+[source,console]
 ----
-rtsurf havoc.g havoc
+$ rtsurf havoc.g havoc
 ----
 Runs a single sampling iteration on the *havoc* object in havoc.g and
 prints the estimated exterior surface area in square millimeters.
@@ -87,9 +87,9 @@ prints the estimated exterior surface area in square millimeters.
 
 .Iterate to convergence
 ====
-[source,bash]
+[source,console]
 ----
-rtsurf -t 0.1 havoc.g havoc
+$ rtsurf -t 0.1 havoc.g havoc
 ----
 Samples the *havoc* object iteratively, refining the estimate over
 successive batches of rays until it converges to within 0.1%.
@@ -97,9 +97,9 @@ successive batches of rays until it converges to within 0.1%.
 
 .Per-region and per-material breakdown with a fixed sample count
 ====
-[source,bash]
+[source,console]
 ----
-rtsurf -r -m density.txt -n 1000000 havoc.g havoc 2> rtsurf.log
+$ rtsurf -r -m density.txt -n 1000000 havoc.g havoc 2> rtsurf.log
 ----
 Fires one million rays and reports the total exterior surface area along
 with per-region and per-material subtotals (labeled using density.txt).
@@ -108,10 +108,10 @@ The estimate output is on stderr, so it is redirected to a log file.
 
 .Visualize the sampling in MGED
 ====
-[source,bash]
+[source,console]
 ----
-rtsurf -o -n 1000 havoc.g havoc > rays.mged
-mged -c havoc.g source rays.mged
+$ rtsurf -o -n 1000 havoc.g havoc > rays.mged
+$ mged -c havoc.g source rays.mged
 ----
 Runs a small thousand-ray pass and writes an *mged*(1) command script of
 the bounding sphere, sample points, ray directions, and hit points to

@@ -43,9 +43,9 @@ sums rather than on individual samples.
 
 .Summarize a rendered frame
 ====
-[source,bash]
+[source,console]
 ----
-pixstat moss.pix
+$ pixstat moss.pix
 ----
 Prints the per-channel min, max, mode, median, mean, standard deviation,
 variance, and skew for the image, a quick way to confirm an image is not
@@ -54,9 +54,9 @@ over- or under-exposed before further processing.
 
 .Inspect the full value distribution from a render
 ====
-[source,bash]
+[source,console]
 ----
-rt -o - -s512 moss.g all.g | pixstat -v
+$ rt -o - -s512 moss.g all.g | pixstat -v
 ----
 Renders a 512x512 image of the *moss.g* model, pipes the raw *pix*(5) stream
 directly into *pixstat*, and emits both the summary statistics and the

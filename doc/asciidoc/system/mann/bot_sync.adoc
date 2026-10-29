@@ -23,9 +23,11 @@ Synchronizes the normals of all facets within a BOT primitive so they are all in
 == EXAMPLES
 
 .Normalize facet winding before checking overall orientation.
-[example]
 ====
-mged>**bot_sync imported_mesh.bot**
+[source,console]
+----
+mged> bot_sync imported_mesh.bot
+----
 
 Synchronizes neighboring facet normals in _imported_mesh.bot_ so they all point consistently, making it easier to see whether a later *bot_flip* is needed.
 ====

@@ -52,13 +52,13 @@ file or piped to another program.
 
 .Temporally smoothing a rendered animation frame
 ====
-[source,bash]
+[source,console]
 ----
-rt -s 1024 -o frame1.pix model.g region &&
-rt -s 1024 -o frame2.pix model.g region &&
-rt -s 1024 -o frame3.pix model.g region
-lowp frame1.pix frame2.pix frame3.pix 1024 > smoothed.pix
-pix-png -s 1024 smoothed.pix > smoothed.png
+$ rt -s 1024 -o frame1.pix model.g region &&
+$ rt -s 1024 -o frame2.pix model.g region &&
+$ rt -s 1024 -o frame3.pix model.g region
+$ lowp frame1.pix frame2.pix frame3.pix 1024 > smoothed.pix
+$ pix-png -s 1024 smoothed.pix > smoothed.png
 ----
 Renders three 1024x1024 frames with *rt*(1), blends them into a smoothed
 middle frame to reduce per-frame noise and aliasing, and converts the result to

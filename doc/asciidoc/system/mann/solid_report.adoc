@@ -28,9 +28,11 @@ This command is a compatibility alias for *who solids*. New scripts and interact
 The example shows the compatibility form and also points users toward the preferred *who solids* spelling for the same report.
 
 .List the displayed solid paths with the compatibility alias.
-[example]
 ====
-mged>**solid_report -1**
+[source,console]
+----
+mged> solid_report -1
+----
 
 Lists the full paths to the displayed solid shapes. The equivalent preferred form is *who solids -1*.
 

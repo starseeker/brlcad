@@ -73,10 +73,10 @@ passing the result as an argument to another program.
 
 .Interactively pick a point and crop a region from an image
 ====
-[source,bash]
+[source,console]
 ----
-pix-fb moss.pix
-pix-fb `fbpoint -x-X -y-Y` moss.pix
+$ pix-fb moss.pix
+$ pix-fb `fbpoint -x-X -y-Y` moss.pix
 ----
 Display an image on the framebuffer, then use *fbpoint* to navigate to a
 point of interest. The *-x-X* and *-y-Y* flags prefix the returned

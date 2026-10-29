@@ -50,10 +50,10 @@ Graphviz (`dot`), Tulip, or OmniGraffle.
 
 .Render a model hierarchy as a PNG image
 ====
-[source,bash]
+[source,console]
 ----
-g-dot -o moss.dot moss.g all.g
-dot -Tpng moss.dot -o moss.png
+$ g-dot -o moss.dot moss.g all.g
+$ dot -Tpng moss.dot -o moss.png
 ----
 Exports the hierarchy rooted at `all.g` from `moss.g` to `moss.dot`,
 then uses the Graphviz *dot* program to render it as a PNG image.
@@ -61,9 +61,9 @@ then uses the Graphviz *dot* program to render it as a PNG image.
 
 .Pipe a database in and a graph out
 ====
-[source,bash]
+[source,console]
 ----
-mged -c moss.g <<< 'q' >/dev/null 2>&1
+$ mged -c moss.g <<< 'q' >/dev/null 2>&1
 g-dot moss.g | dot -Tsvg -o moss.svg
 ----
 Exports all top-level objects of `moss.g` and pipes the DOT stream

@@ -58,36 +58,44 @@ Specify the maximum number of processor cores to be used on multicore systems. T
 == EXAMPLES
 
 .Use _rtweight_ to calculate the total volume and weight of the currently drawn group using a specified number of rays
-[example]
 ====
-mged>**rtweight -s1024**
+[source,console]
+----
+mged> rtweight -s1024
+----
 
 Runs _rtweight_ using 1024x1024 rays.
 
 ====
 
 .Use _rtweight_ to calculate the total volume and weight of the currently drawn group using a specified gridsize
-[example]
 ====
-mged>**rtweight -g10**
+[source,console]
+----
+mged> rtweight -g10
+----
 
 Runs _rtweight_ at a gridsize of 10 millimeters (regardless of model units).
 
 ====
 
 .Use _rtweight_ to calculate the total volume and weight of the currently drawn group and specify a density file
-[example]
 ====
-mged>**rtweight -d density.txt**
+[source,console]
+----
+mged> rtweight -d density.txt
+----
 
 Runs _rtweight_ and uses the density.txt file located in the current directory.
 
 ====
 
 .Use _rtweight_ to calculate the total volume and weight of the currently drawn group and specify an output file
-[example]
 ====
-mged>**rtweight -o weightfile.txt**
+[source,console]
+----
+mged> rtweight -o weightfile.txt
+----
 
 Runs _rtweight_ and outputs the results to weightfile.txt
 

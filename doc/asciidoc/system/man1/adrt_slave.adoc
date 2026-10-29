@@ -55,9 +55,9 @@ driven by *isst*(1).
 
 .Run a slave as a daemon awaiting work
 ====
-[source,bash]
+[source,console]
 ----
-adrt_slave -t 8 -p 1981
+$ adrt_slave -t 8 -p 1981
 ----
 Start a worker that listens on port 1981 using eight rendering
 threads.  A dispatcher (for example, one launched from *isst*(1)) can
@@ -66,9 +66,9 @@ then connect to this host and hand it tiles to render.
 
 .Connect a slave to a running dispatcher
 ====
-[source,bash]
+[source,console]
 ----
-adrt_slave -t 16 dispatcher.example.com
+$ adrt_slave -t 16 dispatcher.example.com
 ----
 Connect to the ADRT dispatcher on the host
 _dispatcher.example.com_ (port 1980) and contribute sixteen rendering

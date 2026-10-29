@@ -67,10 +67,10 @@ written to _tankill.g_ unless *-o* is used.
 
 .Convert a TANKILL model and inspect the result
 ====
-[source,bash]
+[source,console]
 ----
-tankill-g -t 0.01 -i tank.tankill -o tank.g
-mged tank.g 'tops'
+$ tankill-g -t 0.01 -i tank.tankill -o tank.g
+$ mged tank.g 'tops'
 ----
 Convert _tank.tankill_ into _tank.g_, merging vertices within 0.01 mm of
 each other, then list the top-level objects of the new database (such as
@@ -79,9 +79,9 @@ the _all_ group) with *mged*(1).
 
 .Pipe TANKILL data through a filter and keep 1001 components as NMGs
 ====
-[source,bash]
+[source,console]
 ----
-gunzip -c tank.tankill.gz | tankill-g -n -k -o tank.g
+$ gunzip -c tank.tankill.gz | tankill-g -n -k -o tank.g
 ----
 Read gzip-compressed TANKILL data from standard input, retain the normally
 skipped component code 1001, and write *nmg*(5) solids to _tank.g_.

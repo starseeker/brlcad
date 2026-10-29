@@ -26,9 +26,11 @@ The *debugnmg* command with no options displays a list of all possible debug fla
 The example shows the use of the *debugnmg* with a hex code argument to set the NMG debug flag value.
 
 .Using the hex code argument to set the NMG debug flag value.
-[example]
 ====
-mged>**debugnmg 100**
+[source,console]
+----
+mged> debugnmg 100
+----
 
 Sets the _NMG_ debug flag to get details on the classification process.
 

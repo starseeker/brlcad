@@ -26,17 +26,21 @@ The *nmg_make_v* command is the standalone form of the `nmg <object> make V` sub
 == EXAMPLES
 
 .Create a single vertex
-[example]
 ====
-mged> **nmg_make_v my_nmg.s V 10 20 30**
+[source,console]
+----
+mged> nmg_make_v my_nmg.s V 10 20 30
+----
 
 Creates a new vertex at model point (10, 20, 30) in `my_nmg.s`.
 ====
 
 .Create multiple vertices at once
-[example]
 ====
-mged> **nmg_make_v my_nmg.s V 0 0 0 50 0 0 50 50 0**
+[source,console]
+----
+mged> nmg_make_v my_nmg.s V 0 0 0 50 0 0 50 50 0
+----
 
 Creates three new vertices at (0,0,0), (50,0,0), and (50,50,0) in one command.
 ====

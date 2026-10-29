@@ -34,17 +34,21 @@ The *comb_std* command (alias *c*) is a simplified alternative to *comb* that us
 == EXAMPLES
 
 .Create a combination with union and subtraction
-[example]
 ====
-mged> **c vehicle.c u hull.r u engine.r - hole.r**
+[source,console]
+----
+mged> c vehicle.c u hull.r u engine.r - hole.r
+----
 
 Creates `vehicle.c` with `hull.r` and `engine.r` unioned, then `hole.r` subtracted.
 ====
 
 .Use the c alias
-[example]
 ====
-mged> **c plate.c u top.s u bottom.s**
+[source,console]
+----
+mged> c plate.c u top.s u bottom.s
+----
 
 Creates `plate.c` as the union of `top.s` and `bottom.s` using the short alias.
 ====

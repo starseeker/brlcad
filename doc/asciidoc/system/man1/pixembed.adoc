@@ -64,9 +64,9 @@ the inset.
 
 .Embed a 512x512 image into a 1024x1024 frame
 ====
-[source,bash]
+[source,console]
 ----
-pixembed -s 512 -S 1024 < input.pix > output.pix
+$ pixembed -s 512 -S 1024 < input.pix > output.pix
 ----
 Centers the 512x512 input within a 1024x1024 image, replicating the input's
 edge pixels to fill the surrounding border, then writes the larger image to
@@ -75,9 +75,9 @@ output.pix.
 
 .Generate a clean matte for compositing
 ====
-[source,bash]
+[source,console]
 ----
-pixembed -w 640 -n 480 -W 800 -N 600 -b 4 render.pix | pix-png -w 800 -n 600 > matte.png
+$ pixembed -w 640 -n 480 -W 800 -N 600 -b 4 render.pix | pix-png -w 800 -n 600 > matte.png
 ----
 Embeds a 640x480 render into an 800x600 frame, sampling the border color from
 4 pixels inside the edge to avoid noisy outer rows, and pipes the result

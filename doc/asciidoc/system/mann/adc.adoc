@@ -124,36 +124,44 @@ Print the help message.
 The examples show the use of the *adc* command with no arguments, with _i_, and with subcommands.
 
 .Toggle display of the angle/distance cursor
-[example]
 ====
-mged> **adc**
+[source,console]
+----
+mged> adc
+----
 
 Toggles the display of angle/distance cursor.
 
 ====
 
 .Set angle1
-[example]
 ====
-mged> **adc a1 37.5**
+[source,console]
+----
+mged> adc a1 37.5
+----
 
 Sets angle1 to 37.5 degrees.
 
 ====
 
 .Get angle1
-[example]
 ====
-mged> **adc a1 37.5**
+[source,console]
+----
+mged> adc a1 37.5
+----
 
 Gets angle1.
 
 ====
 
 .Move the ADC position
-[example]
 ====
-mged> **adc xyz 100 0 0**
+[source,console]
+----
+mged> adc xyz 100 0 0
+----
 
 Moves ADC position to (100,0,0), model coordinates and local units.
 

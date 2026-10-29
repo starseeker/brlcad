@@ -42,33 +42,41 @@ Print usage help.
 == EXAMPLES
 
 .Write a PNG image file of the MGED framebuffer contents.
-[example]
 ====
-mged> **screengrab -F fb.png**
+[source,console]
+----
+mged> screengrab -F fb.png
+----
 
 Writes the contents of the active MGED framebuffer to the image file _fb.png_.
 ====
 
 .Capture a specific named display manager
-[example]
 ====
-mged> **screengrab -D Mged0 output.png**
+[source,console]
+----
+mged> screengrab -D Mged0 output.png
+----
 
 Captures the display manager named `Mged0` to _output.png_.
 ====
 
 .Capture the scene display (default, no flags needed)
-[example]
 ====
-mged> **screengrab scene.png**
+[source,console]
+----
+mged> screengrab scene.png
+----
 
 Writes the current display manager's rendered scene to _scene.png_.
 ====
 
 .Force JPEG format regardless of extension
-[example]
 ====
-mged> **screengrab --format jpg view.img**
+[source,console]
+----
+mged> screengrab --format jpg view.img
+----
 
 Writes the display manager scene to _view.img_ in JPEG format.
 ====

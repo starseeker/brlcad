@@ -325,9 +325,9 @@ with *rt*(1) renderings.
 
 .Plain edge image to a file
 ====
-[source,bash]
+[source,console]
 ----
-rtedge -s 1024 -o havoc.pix havoc.g havoc
+$ rtedge -s 1024 -o havoc.pix havoc.g havoc
 ----
 Produces a 1024x1024 image of white edges on a black background for the
 _havoc_ object in havoc.g. Edges appear where there are differences in region
@@ -336,9 +336,9 @@ id, hit distance, or surface normal, or between hits and misses.
 
 .Colored edges using region colors
 ====
-[source,bash]
+[source,console]
 ----
-rtedge -s 1024 -o havoc.pix -c "set rc=1 dr=1" havoc.g havoc
+$ rtedge -s 1024 -o havoc.pix -c "set rc=1 dr=1" havoc.g havoc
 ----
 Enables region-boundary detection and colors each edge with its region's
 material color instead of the default white.
@@ -346,11 +346,11 @@ material color instead of the default white.
 
 .Overlaying edges on a shaded rt rendering with occlusion
 ====
-[source,bash]
+[source,console]
 ----
 #!/bin/sh
 # First render the weapons in full color to a framebuffer file.
-rt -M -s1280 -F new.pix -C255/255/255 havoc.g weapons 2>> ex.log << EOF
+$ rt -M -s1280 -F new.pix -C255/255/255 havoc.g weapons 2>> ex.log << EOF
 viewsize 8.000e+03;
 orientation 2.4809e-01 4.7650e-01 7.4809e-01 3.8943e-01;
 eye_pt 2.2146e+04 7.1103e+03 7.1913e+03;
@@ -358,7 +358,7 @@ start 0; clean; end;
 EOF
 
 # Then overlay black edges of the airframe, dithering occluded non-edges.
-rtedge -M -s1280 -F new.pix \
+$ rtedge -M -s1280 -F new.pix \
     -c "set dr=1 dn=1 om=3" \
     -c "set fg=0,0,0 bg=200,200,200" \
     -c "set oo=\"weapons\"" \

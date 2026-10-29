@@ -46,8 +46,8 @@ Accuracy depends on the grid resolution: finer cell spacing (smaller
 are off by default and can be enabled with *-c "set cc=1"*.
 
 [width="100%"]
-....
-
+[source,text]
+----
 |----------------| rear region          |----------------| rear region
 |                |                      |****************|
 |        |--------------| front region  |****************-------| front region
@@ -58,10 +58,11 @@ are off by default and can be enabled with *-c "set cc=1"*.
 
   exposed = presented area of front       exposed = presented area for groups
   region (fully visible)                  (e.g. comb of both visible regions)
-....
+----
 
 [width="100%"]
-....
+[source,text]
+----
 |----------------| rear region          |----------------| rear region
 |****************|                      |****************|
 |********|--------------| front region  |****************-------| front region
@@ -71,7 +72,7 @@ are off by default and can be enabled with *-c "set cc=1"*.
          |--------------|                        |--------------|
   exposed area of rear                    presented area of rear
   region (partially occluded)             region (partically occluded)
-....
+----
 
 WARNING: The terminology and output format of *rtarea* may change in future releases.
 
@@ -134,9 +135,9 @@ WARNING: The terminology and output format of *rtarea* may change in future rele
 
 .Areas of a group with centers, in inches
 ====
-[source,bash]
+[source,console]
 ----
-rtarea -u in -a 35 -e 25 -s 1024 -c "set cc=1" model.g all
+$ rtarea -u in -a 35 -e 25 -s 1024 -c "set cc=1" model.g all
 ----
 Ray traces the group _all_ in _model.g_ from azimuth 35, elevation 25
 degrees on a 1024x1024 grid, reporting exposed and presented areas in
@@ -147,9 +148,9 @@ than the defaults.
 
 .Front-view area from a saved MGED view
 ====
-[source,bash]
+[source,console]
 ----
-rtarea -M model.g component < saveview.rt
+$ rtarea -M model.g component < saveview.rt
 ----
 Reuses the camera from an *mged*(1) _saveview_ script (the matrix is
 read from standard input via *-M*) so the area of _component_ is

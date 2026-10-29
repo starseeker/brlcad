@@ -29,9 +29,11 @@ See *quit* for the detailed behavior.
 The example shows the use of the *exit* command to stop MGED.
 
 .End MGED using the alternate command name.
-[example]
 ====
-mged> **exit**
+[source,console]
+----
+mged> exit
+----
 
 Performs the same operation as *quit*.
 ====

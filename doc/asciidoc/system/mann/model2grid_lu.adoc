@@ -26,9 +26,11 @@ The inverse operation is `grid2model_lu`.
 == EXAMPLES
 
 .Convert a model point to a 2D grid offset
-[example]
 ====
-mged> **model2grid_lu 100 50 0**
+[source,console]
+----
+mged> model2grid_lu 100 50 0
+----
 
 Returns a 2-element `u v` grid offset in local units representing the screen-space position of model point (100, 50, 0) relative to the projected model origin.
 ====

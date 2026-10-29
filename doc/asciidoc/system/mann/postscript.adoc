@@ -52,18 +52,22 @@ Set the Y offset in inches.
 The first example shows the use of the *postscript* command to place a _PostScript_ version of the current MGED display in a specified file and give it a particular title. The second example is much like the first except that a line width is specified and the title and output file names are different.
 
 .Place a _PostScript_ version of the current MGED display in a specified file.
-[example]
 ====
-mged>**postscript -t "Test Title" test.ps**
+[source,console]
+----
+mged> postscript -t "Test Title" test.ps
+----
 
 Places a _PostScript_ version of the current MGED display in a file named _test.ps_ and titles it Test Title.
 
 ====
 
 .Specify the line width of a _PostScript_ version of the current MGED display in a specified file.
-[example]
 ====
-mged>**postscript -l 10 -t "Test Fat Lines" fat_lines.ps**
+[source,console]
+----
+mged> postscript -l 10 -t "Test Fat Lines" fat_lines.ps
+----
 
 Places a _PostScript_ version of the current MGED display with fat lines in a file named __fat_lines.ps__ and titles it Test Fat Lines.
 

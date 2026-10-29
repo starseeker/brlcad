@@ -54,17 +54,21 @@ Other primitive types are not currently supported and will return an error.
 == EXAMPLES
 
 .Rotate the height vector of a TGC cone by 45° about Z
-[example]
 ====
-mged> **protate cone.s h "0 0 45"**
+[source,console]
+----
+mged> protate cone.s h "0 0 45"
+----
 
 Rotates the height vector of the TGC primitive `cone.s` by 45° about the Z axis.
 ====
 
 .Rotate the cross-section axis of an ETO
-[example]
 ====
-mged> **protate ring.s c "30 0 0"**
+[source,console]
+----
+mged> protate ring.s c "30 0 0"
+----
 
 Rotates the semi-minor axis vector of the ETO primitive `ring.s` by 30° about the X axis.
 ====

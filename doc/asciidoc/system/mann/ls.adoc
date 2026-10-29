@@ -42,10 +42,12 @@ when any of the above options are used, the output is not formatted.
 The examples show the use of the *ls* command and its options to list objects, primitives, regions, or combinations having a specific object.
 
 .List all objects beginning with a particular name.
-[example]
 ====
 
-mged> **ls shape***::
+[source,console]
+----
+mged> ls shape*
+----
 Lists all objects with names beginning with "shape" (output is formatted).
 
 
@@ -53,45 +55,55 @@ Lists all objects with names beginning with "shape" (output is formatted).
 ====
 
 .List all objects beginning with a particular name.
-[example]
 ====
-mged>**ls -a shape***
+[source,console]
+----
+mged> ls -a shape*
+----
 
 Lists all objects with names beginning with "shape."
 
 ====
 
 .List all primitives beginning with a particular name.
-[example]
 ====
-mged>**ls -p wheel***
+[source,console]
+----
+mged> ls -p wheel*
+----
 
 Lists all primitives with names beginning with "wheel."
 
 ====
 
 .List all regions beginning with a particular name.
-[example]
 ====
-mged>**ls -r wheel***
+[source,console]
+----
+mged> ls -r wheel*
+----
 
 Lists all regions with names beginning with "wheel."
 
 ====
 
 .List all combinations beginning with a particular name.
-[example]
 ====
-mged>**ls -c suspension***
+[source,console]
+----
+mged> ls -c suspension*
+----
 
 Lists all combinations with names beginning with "suspension."
 
 ====
 
 .List all regions having particular attributes.
-[example]
 ====
-mged>**ls -A -o -r Comment{First comment} Comment{Second comment}**
+[source,console]
+----
+mged> ls -A -o -r Comment{First comment} Comment{Second comment}
+----
 
 Lists all regions that have a "Comment" attribute that is set to either "First comment" or "Second comment."
 

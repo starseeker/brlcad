@@ -26,10 +26,12 @@ Displays the list of commands executed during the current MGED session. The one 
 The example shows the use of the *history* command to display the command history list for the current MGED session.
 
 .Display the command history list for the current MGED session.
-[example]
 ====
 
-mged> **history**::
+[source,console]
+----
+mged> history
+----
 Displays the command history list for the current MGED session.
 
 

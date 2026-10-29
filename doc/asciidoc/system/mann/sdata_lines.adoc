@@ -44,12 +44,23 @@ The related *data_lines* command edits a separate line set in the same view.
 == EXAMPLES
 
 .Create a highlighted secondary guide line set through the `view` command form.
-[example]
 ====
-mged> **view sdata_lines points {{0 -1000 0} {0 1000 0} {-1000 10 0} {1000 10 0}}**
-mged> **view sdata_lines color 255 0 0**
-mged> **view sdata_lines line_width 100**
-mged> **view sdata_lines draw 1**
+[source,console]
+----
+mged> view sdata_lines points {{0 -1000 0} {0 1000 0} {-1000 10 0} {1000 10 0}}
+----
+[source,console]
+----
+mged> view sdata_lines color 255 0 0
+----
+[source,console]
+----
+mged> view sdata_lines line_width 100
+----
+[source,console]
+----
+mged> view sdata_lines draw 1
+----
 
 Defines two guide lines in the secondary line set, colors them red, widens
 them, and enables drawing.

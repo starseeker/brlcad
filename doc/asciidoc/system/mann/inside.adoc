@@ -31,10 +31,12 @@ The ARBN preserves the exact offset planes without faceting the result.
 The first example shows the use of the *inside* command to create a shape inside another shape such that all its faces are 1 unit from the corresponding faces of the outside shape. The second example shows the use of the *inside* command to create a shape inside the current key shape or the shape currently being edited. The faces of the new shape will be 1 unit from the corresponding faces of the current outside shape.
 
 .Create a shape inside of an existing shape.
-[example]
 ====
 
-mged> **inside out_arb in_arb 1 1 1 1 1 1**::
+[source,console]
+----
+mged> inside out_arb in_arb 1 1 1 1 1 1
+----
 Creates a shape named __in_arb__ such that each face is 1 unit from the corresponding face in __out_arb__.
 
 
@@ -42,9 +44,11 @@ Creates a shape named __in_arb__ such that each face is 1 unit from the correspo
 ====
 
 .Creates a shape inside of the current key shape or the shape being edited.
-[example]
 ====
-mged>**inside in_arb 1 1 1 1 1 1**
+[source,console]
+----
+mged> inside in_arb 1 1 1 1 1 1
+----
 
 Creates a shape named __in_arb__ such that each face is 1 unit from the corresponding face in the current key shape or the shape currently being edited.
 

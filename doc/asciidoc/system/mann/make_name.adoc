@@ -36,12 +36,21 @@ Set the internal counter to `num`. If `num` is omitted, the counter is reset to 
 == EXAMPLES
 
 .Generate unique names with a prefix template
-[example]
 ====
-mged> **make_name part@.s**
-mged> **make_name part@.s**
-mged> **make_name part@.s**
+[source,console]
+----
+mged> make_name part@.s
+----
+[source,console]
+----
+mged> make_name part@.s
+----
+[source,console]
+----
+mged> make_name part@.s
+----
 
+[source,text]
 ----
 part0.s
 part1.s
@@ -52,9 +61,11 @@ Each call increments the internal counter, producing a new unique name. If `part
 ====
 
 .Generate a name with no @ placeholder
-[example]
 ====
-mged> **make_name widget**
+[source,console]
+----
+mged> make_name widget
+----
 
 `widget0`
 
@@ -62,12 +73,21 @@ With no `@` in the template, the counter is appended to the end of the string.
 ====
 
 .Reset the counter and restart numbering
-[example]
 ====
-mged> **make_name part@.s**
-mged> **make_name -s 100**
-mged> **make_name part@.s**
+[source,console]
+----
+mged> make_name part@.s
+----
+[source,console]
+----
+mged> make_name -s 100
+----
+[source,console]
+----
+mged> make_name part@.s
+----
 
+[source,text]
 ----
 part3.s
 part100.s

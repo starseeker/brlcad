@@ -165,55 +165,57 @@ at distance _d_.
 == EXAMPLES
 
 .Clone an object into a rectangular 4x3 array.
-[example]
 ====
-mged>**clone rect -n x=4 -d x=9000 -n y=3 -d y=6000 rib.s**
+[source,console]
+----
+mged> clone rect -n x=4 -d x=9000 -n y=3 -d y=6000 rib.s
+----
 
 Creates twelve copies of _rib.s_ arranged in a 4 by 3 grid, which is useful for repeated structural parts, bolt patterns, or ribs.
 ====
 
 Linear (the original behaviour):
 
-[source]
+[source,console]
 ----
-clone -n 4 -t 100 0 0 widget        # 4 copies along X, 100 apart
-clone -a 4 100 0 0 widget           # equivalent
-clone -m x 0 widget                 # mirror about the YZ plane
+mged> clone -n 4 -t 100 0 0 widget        # 4 copies along X, 100 apart
+mged> clone -a 4 100 0 0 widget           # equivalent
+mged> clone -m x 0 widget                 # mirror about the YZ plane
 ----
 
 Rectangular grid:
 
-[source]
+[source,console]
 ----
-clone rect -n 3 -d 100 widget                       # 3×3×3 grid, 100 apart
-clone rect -n x=4 -d x=9000 -n y=3 -d y=6000 widget # 4×3 grid in XY plane
+mged> clone rect -n 3 -d 100 widget                       # 3×3×3 grid, 100 apart
+mged> clone rect -n x=4 -d x=9000 -n y=3 -d y=6000 widget # 4×3 grid in XY plane
 ----
 
 Spherical pattern:
 
-[source]
+[source,console]
 ----
-clone sph -n az=8 -d az=45 -n el=3 -d el=30 \
+mged> clone sph -n az=8 -d az=45 -n el=3 -d el=30 \
           --start el=-60 -n r=1 -d r=9000 widget
-clone sph -n az=4 -d az=90 -n r=1 -d r=300 --align az widget
+mged> clone sph -n az=4 -d az=90 -n r=1 -d r=300 --align az widget
 ----
 
 Cylindrical pattern:
 
-[source]
+[source,console]
 ----
-clone cyl -n az=8 -d az=45 -n r=1 -d r=7000 \
+mged> clone cyl -n az=8 -d az=45 -n r=1 -d r=7000 \
           -n h=3 -d h=7000 widget
-clone cyl -n az=4 -d az=90 -n r=1 -d r=300 \
+mged> clone cyl -n az=4 -d az=90 -n r=1 -d r=300 \
           -n h=2 -d h=200 --align az widget
 ----
 
 The pattern keyword position is irrelevant:
 
-[source]
+[source,console]
 ----
-clone -n 4 rect -d 100 widget       # equivalent to:
-clone rect -n 4 -d 100 widget
+mged> clone -n 4 rect -d 100 widget       # equivalent to:
+mged> clone rect -n 4 -d 100 widget
 ----
 
 == AUTHOR

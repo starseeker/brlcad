@@ -65,9 +65,9 @@ floating point streams.
 
 .Bias and scale a sample stream
 ====
-[source,bash]
+[source,console]
 ----
-umod -a 100 -m 3 data.s > scaled.s
+$ umod -a 100 -m 3 data.s > scaled.s
 ----
 For each value, 100 is added first and the result is then multiplied by 3,
 writing the modified unsigned shorts to _scaled.s_. Because operations apply in
@@ -76,9 +76,9 @@ command-line order, swapping *-a* and *-m* would yield a different result.
 
 .Convert a pixel image to a stream and stretch its contrast
 ====
-[source,bash]
+[source,console]
 ----
-pix-bw scene.pix | bw-d | d-u | umod -s 8000 -m 2 > stretched.s
+$ pix-bw scene.pix | bw-d | d-u | umod -s 8000 -m 2 > stretched.s
 ----
 The intensity of a *pix*(5) image is reduced to a single channel, converted to
 an unsigned short stream, then darkened by subtracting an offset and brightened

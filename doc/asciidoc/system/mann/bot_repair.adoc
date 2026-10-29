@@ -54,36 +54,44 @@ Specify the largest viable hole size for repair as a percentage (0-100) of the m
 == EXAMPLES
 
 .In-Place Repair
-[example]
 ====
-mged>**bot repair input.bot**
+[source,console]
+----
+mged> bot repair input.bot
+----
 
 If a repair is needed, input.bot will be replaced by a new input.bot primitive with the repairs applied.
 
 ====
 
 .Outputting Repaired Mesh to Another Object.
-[example]
 ====
-mged>**bot repair -o output.bot input.bot**
+[source,console]
+----
+mged> bot repair -o output.bot input.bot
+----
 
 If a repair was needed, output.bot holds the altered mesh. The input.bot original is unaltered.
 
 ====
 
 .Try Repairing Larger Holes.
-[example]
 ====
-mged>**bot repair -p 10.2 input.bot output.bot**
+[source,console]
+----
+mged> bot repair -p 10.2 input.bot output.bot
+----
 
 Attempt repairing holes with area up to 10.2 percent of the mesh area.
 
 ====
 
 .Repair all BoT Solids in Database
-[example]
 ====
-mged>**bot repair ***
+[source,console]
+----
+mged> bot repair *
+----
 
 Attempt in-place repair of all BoT solids. Any object matching the pattern that is not of the appropriate type is ignored. This option is useful when batch processing large numbers of objects. Output for the user is a list of repaired BoTs, as well as any attempted repairs that failed.
 

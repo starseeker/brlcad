@@ -29,19 +29,19 @@ The command takes no options.
 
 .Visualize the color space of an image
 ====
-[source,bash]
+[source,console]
 ----
-pix-fb -i image.pix &
-pixhist3d-plot3 image.pix | plot3-fb
+$ pix-fb -i image.pix &
+$ pixhist3d-plot3 image.pix | plot3-fb
 ----
 Plot the set of colors used by _image.pix_ as a 3D point cloud inside the RGB cube and display it on a framebuffer with *plot3-fb*(1). Running an interactive viewer that rotates the plot reveals clustering, gaps, and clipping in the image's color usage.
 ====
 
 .Save the color cube plot for later viewing
 ====
-[source,bash]
+[source,console]
 ----
-pixhist3d-plot3 < render.pix > render.plot3
+$ pixhist3d-plot3 < render.pix > render.plot3
 ----
 Read _render.pix_ from standard input and store the resulting 3D plot in _render.plot3_, which can subsequently be displayed or converted with other *plot3*(5) tools.
 ====

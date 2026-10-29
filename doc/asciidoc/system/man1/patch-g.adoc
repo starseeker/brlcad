@@ -101,10 +101,10 @@ the verbosity, with higher levels producing more output.
 
 .Convert a FASTGEN target to a polysolid BRL-CAD database
 ====
-[source,bash]
+[source,console]
 ----
-rpatch < tank.fastgen > tank.rp
-patch-g -p -f tank.rp -t "M1 Tank" -o tank tank.g
+$ rpatch < tank.fastgen > tank.rp
+$ patch-g -p -f tank.rp -t "M1 Tank" -o tank tank.g
 ----
 First *rpatch*(1) preprocesses the raw FASTGEN file into the intermediate
 *tank.rp*. *patch-g* then converts it, writing BoT (polysolid) geometry under

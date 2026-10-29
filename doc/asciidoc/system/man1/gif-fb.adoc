@@ -58,9 +58,9 @@ the available frame buffer.
 
 .Convert a GIF to a BRL-CAD pix file
 ====
-[source,bash]
+[source,console]
 ----
-gif-fb -F /dev/mem image.gif && fb-pix -F /dev/mem image.pix
+$ gif-fb -F /dev/mem image.gif && fb-pix -F /dev/mem image.pix
 ----
 Decode a GIF into an in-memory frame buffer and capture it with *fb-pix*(1),
 producing a *pix*(5) file for use with the rest of the BRL-CAD image tools.
@@ -68,9 +68,9 @@ producing a *pix*(5) file for use with the rest of the BRL-CAD image tools.
 
 .View a single frame of an animated GIF, zoomed
 ====
-[source,bash]
+[source,console]
 ----
-gif-fb -z -i 3 animation.gif
+$ gif-fb -z -i 3 animation.gif
 ----
 Display only the third image of a multi-image GIF on the default frame buffer,
 zoomed to fill the display while preserving square pixels.

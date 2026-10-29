@@ -32,9 +32,10 @@ mean-line sections, 5-digit reflex mean-line sections, and the NACA 6/6A
 families covered by the public-domain NACA456 reference implementation from
 Public Domain Aeronautical Software:
 
-....
+[source,text]
+----
 https://www.pdas.com/naca456download.html
-....
+----
 
 NOTE: the generated models are intended for procedural geometry, rendering,
 inspection, and BRL-CAD workflow testing.  They are not validated for aircraft
@@ -495,9 +496,10 @@ as *--sweep-offset* for exact model-space placement.
 The section mathematics are implemented from the public-domain NACA456 program
 by Ralph Carmichael, distributed by Public Domain Aeronautical Software (PDAS):
 
-....
+[source,text]
+----
 https://www.pdas.com/naca456download.html
-....
+----
 
 The BRL-CAD implementation references the NACA456 source files `nacax.f90`,
 `epspsi.f90`, and `splprocs.f90`.  In particular, it uses the NACA456
@@ -532,22 +534,23 @@ references for the underlying airfoil coordinate algorithms and data:
 
 The broader PDAS bibliography is maintained at:
 
-....
+[source,text]
+----
 https://www.pdas.com/naca456refs.html
-....
+----
 
 [[examples]]
 == EXAMPLES
 
 .Paired airplane wings
 ====
-[source,bash]
+[source,console]
 ----
-naca456 --mode bot --force --output airplane-wings.g --name main_wing \
+$ naca456 --mode bot --force --output airplane-wings.g --name main_wing \
   --wing pair --airfoil 2412 --full-span 2000 --root-chord 250 \
   --tip-chord 125 --sweep-angle 4.6 --dihedral 5 --tip-twist -2
 
-mged airplane-wings.g "l main_wing"
+$ mged airplane-wings.g "l main_wing"
 ----
 Generates matching right and left wings as `main_wing_right.r` and
 `main_wing_left.r`.  The top-level `main_wing` combination contains both, so it
@@ -556,9 +559,9 @@ can be drawn or referenced as one airplane wing assembly.
 
 .Swept, dihedral, tapered BoT wing
 ====
-[source,bash]
+[source,console]
 ----
-naca456 --mode bot --force --output wing.g --name wing_2412 \
+$ naca456 --mode bot --force --output wing.g --name wing_2412 \
   --airfoil 2412 --semi-span 1000 --root-chord 250 --tip-chord 125 \
   --sweep-angle 4.6 --dihedral 5 --tip-twist -2 --stations 9 --samples 65
 ----
@@ -570,9 +573,9 @@ ready to be raytraced with *rt*(1) or edited in *mged*(1).
 
 .BREP wing blending a 5-digit root into a 6-series tip
 ====
-[source,bash]
+[source,console]
 ----
-naca456 --mode brep --force --output wing-brep.g --name wing_brep \
+$ naca456 --mode brep --force --output wing-brep.g --name wing_brep \
   --airfoil 23012 --tip-airfoil 65-210 --full-span 2000 \
   --root-chord 280 --tip-chord 110 --sweep-offset 120 \
   --dihedral 4 --tip-twist -3 --stations 8 --samples 29
@@ -585,19 +588,19 @@ interpolated from a NACA 23012 root to a NACA 65-210 tip. The full span is
 
 .Wing with a JSON-specified raked tip, then inspected in mged
 ====
-[source,bash]
+[source,console]
 ----
-cat > tip-raked.json <<'EOF'
+$ cat > tip-raked.json <<'EOF'
 { "version": 1, "style": "raked", "extension": 120.0, "rake_offset": 80.0,
   "terminal_chord": 70.0, "terminal_airfoil": "0008", "cap_style": "flat" }
 EOF
 
-naca456 --mode brep --force --output wing-raked-brep.g \
+$ naca456 --mode brep --force --output wing-raked-brep.g \
   --name wing_raked --airfoil 2412 --semi-span 780 \
   --root-chord 230 --tip-chord 110 --sweep-offset 70 \
   --tip-specification tip-raked.json --stations 7 --samples 25
 
-mged wing-raked-brep.g "attr get wing_raked.r naca456::tip_style"
+$ mged wing-raked-brep.g "attr get wing_raked.r naca456::tip_style"
 ----
 Builds a raked wing-tip extension described by an external versioned JSON tip
 specification, then reads back the `naca456::tip_style` attribute that
@@ -606,10 +609,10 @@ specification, then reads back the `naca456::tip_style` attribute that
 
 .Built-in airplane sampler database
 ====
-[source,bash]
+[source,console]
 ----
-naca456 --demo-file naca456-demo.g
-mged naca456-demo.g "l all"
+$ naca456 --demo-file naca456-demo.g
+$ mged naca456-demo.g "l all"
 ----
 Writes a 36-airplane sampler (24 with BoT wings and 12 with BREP wings)
 covering the 4-digit, 5-digit, 5-digit reflex, 6-series, and 6A-series families.

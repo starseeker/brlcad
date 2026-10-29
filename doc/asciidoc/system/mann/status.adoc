@@ -72,27 +72,33 @@ Print the usage message.
 The three examples show the use of the *status* command with and without subcommands.
 
 .Get default information such as current state, view size of the current display manager, the conversion factor from local model units to the base units (mm) stored in the database, and the view matrices of the current display manager.
-[example]
 ====
-mged>**status**
+[source,console]
+----
+mged> status
+----
 
 Gets default information (i.e., state, view size, local2base, toViewcenter, Viewrot, model2view and view2model).
 
 ====
 
 .Get the view rotation matrix.
-[example]
 ====
-mged>**status Viewrot**
+[source,console]
+----
+mged> status Viewrot
+----
 
 Gets the view rotation matrix.
 
 ====
 
 .Get the edit state.
-[example]
 ====
-mged>**status state**
+[source,console]
+----
+mged> status state
+----
 
 Gets the edit state.
 

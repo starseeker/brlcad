@@ -73,9 +73,9 @@ destinations.
 
 .Convert a color image to greyscale using NTSC luminance weighting
 ====
-[source,bash]
+[source,console]
 ----
-pix-bw -e ntsc < image.pix > image.bw
+$ pix-bw -e ntsc < image.pix > image.bw
 ----
 Produces a perceptually weighted greyscale *bw*(5) image, giving green the most
 influence and blue the least, matching standard NTSC luminance.
@@ -83,9 +83,9 @@ influence and blue the least, matching standard NTSC luminance.
 
 .Extract a single color plane
 ====
-[source,bash]
+[source,console]
 ----
-pix-bw -G1.0 -w 512 -n 512 scene.pix | bw-pix > green.pix
+$ pix-bw -G1.0 -w 512 -n 512 scene.pix | bw-pix > green.pix
 ----
 Selects only the green plane of a 512x512 image and pipes the resulting
 *bw*(5) image through *bw-pix*(1) to view the isolated green channel as a

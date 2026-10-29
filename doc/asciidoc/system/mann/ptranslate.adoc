@@ -55,17 +55,21 @@ Only TGC and EXTRUDE are currently supported. Other primitive types return an er
 == EXAMPLES
 
 .Translate the height vector of a TGC
-[example]
 ====
-mged> **ptranslate cone.s h "0 0 100"**
+[source,console]
+----
+mged> ptranslate cone.s h "0 0 100"
+----
 
 Displaces the height vector of the TGC primitive `cone.s` by 100 units in the Z direction (absolute). Cross-section axes are recomputed to remain perpendicular to the new height.
 ====
 
 .Relatively translate an extrusion direction
-[example]
 ====
-mged> **ptranslate -r wall.s h "10 0 0"**
+[source,console]
+----
+mged> ptranslate -r wall.s h "10 0 0"
+----
 
 Adds (10, 0, 0) to the current extrusion direction vector of the EXTRUDE primitive `wall.s`.
 ====

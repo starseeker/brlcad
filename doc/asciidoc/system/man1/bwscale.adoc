@@ -72,9 +72,9 @@ _outwidth_ _outheight_.
 
 .Halve the resolution of a 1024x1024 image
 ====
-[source,bash]
+[source,console]
 ----
-bwscale -s 1024 -S 512 hires.bw > thumb.bw
+$ bwscale -s 1024 -S 512 hires.bw > thumb.bw
 ----
 Down-samples a 1024x1024 image to 512x512 using the box filter, which
 averages the contributing input pixels to avoid aliasing.
@@ -82,9 +82,9 @@ averages the contributing input pixels to avoid aliasing.
 
 .Build a small preview from a streamed image
 ====
-[source,bash]
+[source,console]
 ----
-gencolor -r 1048576 200 | bwscale -s 1024 -S 128 > tiny.bw
+$ gencolor -r 1048576 200 | bwscale -s 1024 -S 128 > tiny.bw
 ----
 Feeds a 1024x1024 grayscale stream into *bwscale*, producing a 128x128 preview.
 *bwscale* reads the *bw*(5) data from standard input because no file name is
@@ -93,9 +93,9 @@ supplied.
 
 .Enlarge with crisp pixels
 ====
-[source,bash]
+[source,console]
 ----
-bwscale -r -s 64 -S 256 icon.bw | bw-png -s 256 - > icon.png
+$ bwscale -r -s 64 -S 256 icon.bw | bw-png -s 256 - > icon.png
 ----
 Quadruples a 64x64 icon to 256x256 using pixel replication (*-r*) so the result
 stays blocky rather than blurred, then converts it to PNG with *bw-png*(1).

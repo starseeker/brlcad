@@ -95,13 +95,13 @@ _cmd_::
 
 .Add manual workers to a remrt session
 ====
-[source,bash]
+[source,console]
 ----
 # On the dispatcher host, start remrt and note the port + session token:
-remrt -o output.pix scene.g all < scene.rt
+$ remrt -o output.pix scene.g all < scene.rt
 
 # On any reachable machine, attach a foreground worker to that session:
-rtsrv -d -S 3f8a1c0b...e4 dispatcher.example.com 4446
+$ rtsrv -d -S 3f8a1c0b...e4 dispatcher.example.com 4446
 ----
 Starts *remrt* (which prints its listening port and session token), then
 attaches an *rtsrv* worker to it.  Launch several *rtsrv* processes against
@@ -110,9 +110,9 @@ the same dispatcher to spread the render across additional CPUs and hosts.
 
 .Drive a running remrt remotely
 ====
-[source,bash]
+[source,console]
 ----
-rtsrv dispatcher.example.com 4446 status
+$ rtsrv dispatcher.example.com 4446 status
 ----
 Sends the *status* command to the *remrt* instance on port 4446 of
 *dispatcher.example.com* and exits, without performing any ray tracing.  This

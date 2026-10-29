@@ -68,10 +68,10 @@ options override a kernel's built-in divisor and offset.
 
 .Edge detection on a rendered image
 ====
-[source,bash]
+[source,console]
 ----
-rt -s 1024 -o scene.pix scene.g all.g
-pixfilter -s 1024 -f la scene.pix > edges.pix
+$ rt -s 1024 -o scene.pix scene.g all.g
+$ pixfilter -s 1024 -f la scene.pix > edges.pix
 ----
 Renders a 1024x1024 image with *rt*(1), then applies the Laplacian
 kernel to produce an edge-emphasized image whose values are centered on

@@ -32,25 +32,31 @@ The combination `comb` must already exist. To create a new combination at the sa
 == EXAMPLES
 
 .Add an object to a combination as a union member
-[example]
 ====
-mged> **instance wheel.r vehicle.c**
+[source,console]
+----
+mged> instance wheel.r vehicle.c
+----
 
 Adds `wheel.r` to `vehicle.c` as a union member (default operator).
 ====
 
 .Add an object as a subtracted member
-[example]
 ====
-mged> **i hole.s main_body.r -**
+[source,console]
+----
+mged> i hole.s main_body.r -
+----
 
 Subtracts `hole.s` from `main_body.r` using the short `i` alias.
 ====
 
 .Add an intersecting member
-[example]
 ====
-mged> **instance clipping_box.s hull.r +**
+[source,console]
+----
+mged> instance clipping_box.s hull.r +
+----
 
 Intersects `clipping_box.s` with `hull.r`.
 ====

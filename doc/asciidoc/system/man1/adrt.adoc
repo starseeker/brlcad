@@ -86,27 +86,27 @@ The output format is selected from the extension of the file named by *-o*.
 
 .Render with the path tracer
 ====
-[source,bash]
+[source,console]
 ----
-adrt -s 1024 -H 64 -o model.png model.g all.g
+$ adrt -s 1024 -H 64 -o model.png model.g all.g
 ----
 Renders _all.g_ into a 1024x1024 PNG with 64 samples per pixel.
 ====
 
 .Inspect surface normals
 ====
-[source,bash]
+[source,console]
 ----
-adrt -m normal -a 45 -e 30 -o normals.png model.g part.r
+$ adrt -m normal -a 45 -e 30 -o normals.png model.g part.r
 ----
 Renders a diagnostic normal image of _part.r_ from the specified view.
 ====
 
 .Visualize a spall cone
 ====
-[source,bash]
+[source,console]
 ----
-adrt -m spall -A 40 -o spall.png model.g target.r
+$ adrt -m spall -A 40 -o spall.png model.g target.r
 ----
 Uses the spall visualization mode with a 40-degree full cone angle.
 ====

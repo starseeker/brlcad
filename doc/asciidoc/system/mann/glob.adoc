@@ -26,9 +26,11 @@ The *glob* command is an exact alias for the *db_glob* command.
 == EXAMPLES
 
 .Expand a list command with wildcards
-[example]
 ====
-mged> **glob "l r23[0-9]"**
+[source,console]
+----
+mged> glob "l r23[0-9]"
+----
 
 Returns a command string where the wildcard is expanded to match database objects, such as: `l r230 r231 r232`.
 ====

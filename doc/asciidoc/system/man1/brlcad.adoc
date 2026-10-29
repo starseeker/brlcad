@@ -165,9 +165,9 @@ The following examples demonstrate typical usage of some common BRL-CAD system f
 ====
 To set the default framebuffer device to a specific X11 window using an environment variable, which many BRL-CAD display utilities will then use automatically:
 
-[source,bash]
+[source,console]
 ----
-export FB_FILE=/dev/X
+$ export FB_FILE=/dev/X
 ----
 ====
 
@@ -175,9 +175,9 @@ export FB_FILE=/dev/X
 ====
 To display a rendered `pix` format file on the default framebuffer, scaling the image to a square screen size of 1024:
 
-[source,bash]
+[source,console]
 ----
-pix-fb -S 1024 image.pix
+$ pix-fb -S 1024 image.pix
 ----
 ====
 

@@ -60,11 +60,11 @@ positioned at the lower-left of an 8.5x11 inch page.
 
 .Convert a rendering for printing
 ====
-[source,bash]
+[source,console]
 ----
-rt -o image.pix -s 1024 model.g component.r
-pix-bw image.pix > image.bw
-bw-ps -s 1024 -c -L image.bw > image.ps
+$ rt -o image.pix -s 1024 model.g component.r
+$ pix-bw image.pix > image.bw
+$ bw-ps -s 1024 -c -L image.bw > image.ps
 ----
 Renders a region with *rt*(1), reduces the color frame to grayscale with
 *pix-bw*(1), then produces a 1024x1024 PostScript page centered in
@@ -73,9 +73,9 @@ landscape orientation, ready to send to a printer.
 
 .Generate an embeddable EPS figure
 ====
-[source,bash]
+[source,console]
 ----
-bw-ps -e -w 800 -n 600 plot.bw > plot.eps
+$ bw-ps -e -w 800 -n 600 plot.bw > plot.eps
 ----
 Wraps an 800x600 grayscale image as Encapsulated PostScript whose bounding
 box matches the pixel dimensions, so it can be included as a figure in a

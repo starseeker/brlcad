@@ -56,9 +56,9 @@ deprecation warning on startup.
 
 .Normalize a black-and-white image to the 0.0-1.0 range
 ====
-[source,bash]
+[source,console]
 ----
-bw-d -n < image.bw > image.d
+$ bw-d -n < image.bw > image.d
 ----
 Converts every pixel byte in image.bw to a double in the range 0.0 to
 1.0, producing a normalized binary double stream suitable for signal
@@ -67,9 +67,9 @@ processing tools such as *dmod*(1) or *dstats*(1).
 
 .Scale and round-trip through the double pipeline
 ====
-[source,bash]
+[source,console]
 ----
-bw-d 0.5 < image.bw | dmod -a 0.1 | d-bw > brighter.bw
+$ bw-d 0.5 < image.bw | dmod -a 0.1 | d-bw > brighter.bw
 ----
 Converts the image to doubles at half intensity, adds a constant offset
 with *dmod*(1), and converts the result back to a black-and-white byte

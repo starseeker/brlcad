@@ -26,10 +26,12 @@ Modifies an ARB shape by extruding the specified face through the specified _dis
 The example shows the use of the *extrude* command to move a face a specific distance from its opposing face.
 
 .Moving a face a specific distance from its opposing face.
-[example]
 ====
 
-mged> **extrude 1234 5**::
+[source,console]
+----
+mged> extrude 1234 5
+----
 Moves face 5678 so that it is 5 units from face 1234.
 
 

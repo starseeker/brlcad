@@ -156,27 +156,33 @@ Plot the wireframe view of a constrained Delaunay triangulation of one or more B
 == EXAMPLES
 
 .Plot single face
-[example]
 ====
-mged>**brep Brep_1.s plot F 1**
+[source,console]
+----
+mged> brep Brep_1.s plot F 1
+----
 
 Plots the various loops making up the definition of Face 1 in Brep_1.s
 
 ====
 
 .Plot a range of faces
-[example]
 ====
-mged>**brep Brep_1.s plot F 1-10**
+[source,console]
+----
+mged> brep Brep_1.s plot F 1-10
+----
 
 Plots the various loops making up the definition of faces 1 to 10 in Brep_1.s
 
 ====
 
 .Plot a list of faces
-[example]
 ====
-mged>**brep Brep_1.s plot F 1,3,5,10**
+[source,console]
+----
+mged> brep Brep_1.s plot F 1,3,5,10
+----
 
 Plots the various loops making up the definition of faces 1, 3, 5 and 10 in Brep_1.s
 

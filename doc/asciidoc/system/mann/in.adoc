@@ -63,10 +63,12 @@ Allows the user to type in the arguments needed to create a shape with the name 
 The example shows the use of the *in* command to create a shape of a specified type.
 
 .Create a new shape in the form of a right angle wedge.
-[example]
 ====
 
-mged> **in new1 raw 0 0 0 0 0 1 1 0 0 0 1 0**::
+[source,console]
+----
+mged> in new1 raw 0 0 0 0 0 1 1 0 0 0 1 0
+----
 Creates an _ARB_ named _new1_ in the form of a right angle wedge.
 
 
@@ -74,10 +76,12 @@ Creates an _ARB_ named _new1_ in the form of a right angle wedge.
 ====
 
 .Creating ebm from bitmap file
-[example]
 ====
 
-mged> **in new1.s ebm f image_name.bw 350 350 20**::
+[source,console]
+----
+mged> in new1.s ebm f image_name.bw 350 350 20
+----
 Creates an _ebm_ named _new1.s_ using file image_name.bw, dimensions of image_name.bw (e.g. '350 350'), and the desired extrusion distance (e.g. '20').
 
 
@@ -85,10 +89,12 @@ Creates an _ebm_ named _new1.s_ using file image_name.bw, dimensions of image_na
 ====
 
 .Creating ebm with database objects
-[example]
 ====
 
-mged> **in new1.s ebm o dbobj 350 350 20**::
+[source,console]
+----
+mged> in new1.s ebm o dbobj 350 350 20
+----
 Creates an _ebm_ named _new1.s_ using database object dbobj, dimensions of original bitmap image (e.g. '350 350'), and the desired extrusion distance (e.g. '20'). (see 'bo' command for creating database object).
 
 

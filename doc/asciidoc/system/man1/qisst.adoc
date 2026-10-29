@@ -54,9 +54,9 @@ _object_::
 
 .Interactively raytrace a model
 ====
-[source,bash]
+[source,console]
 ----
-qisst moss.g all.g
+$ qisst moss.g all.g
 ----
 Opens the sample _moss.g_ database, tessellates and loads the _all.g_
 combination into the *tie* engine, and presents the model in an interactive
@@ -65,10 +65,10 @@ raytraced window where it can be navigated and inspected.
 
 .Inspect a single component built with mged
 ====
-[source,bash]
+[source,console]
 ----
-mged -c part.g "make box rpp; r assembly.r u box; q"
-qisst part.g assembly.r
+$ mged -c part.g "make box rpp; r assembly.r u box; q"
+$ qisst part.g assembly.r
 ----
 Uses *mged*(1) to create a small assembly, then launches *qisst* on just the
 _assembly.r_ region so that one component can be examined in isolation rather

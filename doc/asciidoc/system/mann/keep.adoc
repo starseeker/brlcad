@@ -33,10 +33,12 @@ recursive traversal and keeps only the named objects themselves.
 The example shows the use of the *keep* command to copy specified objects to a designated file.
 
 .Copy specified objects to a designated file.
-[example]
 ====
 
-mged> **keep sample.g sample1 sample2**::
+[source,console]
+----
+mged> keep sample.g sample1 sample2
+----
 Creates _sample.g_ file with objects _sample1_ and _sample2_ in it.
 
 

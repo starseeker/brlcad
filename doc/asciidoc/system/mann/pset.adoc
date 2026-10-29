@@ -40,17 +40,21 @@ Currently only METABALL primitives are supported. Other primitive types return a
 == EXAMPLES
 
 .Set the render method of a metaball
-[example]
 ====
-mged> **pset blob.s m 2**
+[source,console]
+----
+mged> pset blob.s m 2
+----
 
 Sets the render method of the metaball primitive `blob.s` to Blob mode (method 2).
 ====
 
 .Set the threshold of a metaball
-[example]
 ====
-mged> **pset cloud.s t 1.5**
+[source,console]
+----
+mged> pset cloud.s t 1.5
+----
 
 Sets the field threshold of the metaball primitive `cloud.s` to 1.5.
 ====

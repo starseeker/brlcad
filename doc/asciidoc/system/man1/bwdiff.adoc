@@ -53,9 +53,9 @@ Sets the background to the corresponding pixels of _file1_ at a lowered intensit
 ====
 To find the difference between two black and white images:
 
-[source,bash]
+[source,console]
 ----
-bwdiff image1.bw image2.bw > diff.bw
+$ bwdiff image1.bw image2.bw > diff.bw
 ----
 ====
 
@@ -63,9 +63,9 @@ bwdiff image1.bw image2.bw > diff.bw
 ====
 Suppose you ran *pixstat*(1) on a file and found the modes to be red=107, green=93, blue=70. You can display those pixels whose colors are exactly at these values by comparing the file against a solid color stream:
 
-[source,bash]
+[source,console]
 ----
-gencolor 107 93 70 | bwdiff -e file.pix - | pix-fb
+$ gencolor 107 93 70 | bwdiff -e file.pix - | pix-fb
 ----
 ====
 

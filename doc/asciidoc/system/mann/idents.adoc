@@ -62,17 +62,21 @@ When building the `idents` table, non-union members of combinations (subtracted 
 == EXAMPLES
 
 .Write an idents summary for two groups
-[example]
 ====
-mged> **idents regions_file group1 group2**
+[source,console]
+----
+mged> idents regions_file group1 group2
+----
 
 Writes a region identity summary for all regions reachable from `group1` and `group2` to the file `regions_file`. The result string reports how many regions were processed.
 ====
 
 .Write a summary for a specific region
-[example]
 ====
-mged> **idents report.txt hull.r**
+[source,console]
+----
+mged> idents report.txt hull.r
+----
 
 Writes the idents table for the single region `hull.r` to `report.txt`.
 ====

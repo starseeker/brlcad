@@ -26,9 +26,11 @@ Places MGED directly into the primitive edit mode. The path must uniquely identi
 The example shows the use of the *sed* command to place MGED into the primitive edit mode for a specified shape.
 
 .Enter the primitive edit mode for a particular shape.
-[example]
 ====
-mged>**sed shape1**
+[source,console]
+----
+mged> sed shape1
+----
 
 Enters the primitive edit state for shape1.
 

@@ -86,9 +86,9 @@ white (R=G=B=255), and inactive pixels and any border are black.
 
 .Convert a MacPaint document, centering it on a default canvas
 ====
-[source,bash]
+[source,console]
 ----
-mac-pix -c drawing.mac > drawing.pix
+$ mac-pix -c drawing.mac > drawing.pix
 ----
 Reads _drawing.mac_ and writes a 1024x1024 color *pix*(5) image with the artwork
 centered, ready to view with *pix-fb*(1) or compose with *pixmerge*(1).
@@ -96,9 +96,9 @@ centered, ready to view with *pix-fb*(1) or compose with *pixmerge*(1).
 
 .Recolor and trim a MacPaint bitmap to its native size
 ====
-[source,bash]
+[source,console]
 ----
-mac-pix -l -C 255/0/0 drawing.mac | pix-png > drawing.png
+$ mac-pix -l -C 255/0/0 drawing.mac | pix-png > drawing.png
 ----
 Produces a red-on-black *pix*(5) image sized to the input dimensions and pipes
 it through *pix-png*(1) to obtain a PNG for sharing.

@@ -92,10 +92,10 @@ white (255/255/255).
 
 .Caption a rendered image
 ====
-[source,bash]
+[source,console]
 ----
-pix-fb moss.pix
-fblabel -C 255/255/0 10 10 "moss scene"
+$ pix-fb moss.pix
+$ fblabel -C 255/255/0 10 10 "moss scene"
 ----
 Display a rendered image with *pix-fb*(1), then stamp a yellow caption in
 the lower-left corner, anti-aliased over the existing pixels.
@@ -103,9 +103,9 @@ the lower-left corner, anti-aliased over the existing pixels.
 
 .Position a label interactively with fbpoint
 ====
-[source,bash]
+[source,console]
 ----
-fblabel -f oldenglish.14 `fbpoint` "Title"
+$ fblabel -f oldenglish.14 `fbpoint` "Title"
 ----
 Use *fbpoint*(1) to click a location on the framebuffer; its emitted
 coordinates become the _x_position_ and _y_position_ for the label, drawn

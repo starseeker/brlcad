@@ -39,10 +39,10 @@ BRL-CAD converters such as *g-raw*(1).
 
 .Convert a RAW file and inspect the result
 ====
-[source,bash]
+[source,console]
 ----
-raw-g hull.raw hull.g
-mged hull.g
+$ raw-g hull.raw hull.g
+$ mged hull.g
 ----
 Converts the triangle data in _hull.raw_ into solid BOT regions inside the new
 database _hull.g_, then opens the result in *mged*(1) for viewing and editing.

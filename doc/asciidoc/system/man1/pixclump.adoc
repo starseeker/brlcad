@@ -59,9 +59,9 @@ onto the original palette.
 
 .Map an image onto a four-color palette
 ====
-[source,bash]
+[source,console]
 ----
-pixclump -c 0/0/0 -c 255/255/255 -c 255/0/0 -c 0/0/255 in.pix > out.pix
+$ pixclump -c 0/0/0 -c 255/255/255 -c 255/0/0 -c 0/0/255 in.pix > out.pix
 ----
 Quantizes every pixel of _in.pix_ to the nearest of black, white, red, or blue
 and writes the result to _out.pix_.
@@ -69,9 +69,9 @@ and writes the result to _out.pix_.
 
 .Renormalize a scaled image to its original palette
 ====
-[source,bash]
+[source,console]
 ----
-pixscale -s 512 -w 256 -n 256 orig.pix | pixclump -f palette.txt > fixed.pix
+$ pixscale -s 512 -w 256 -n 256 orig.pix | pixclump -f palette.txt > fixed.pix
 ----
 After *pixscale*(1) interpolates new intermediate colors while resizing, this
 maps each pixel back onto the original palette listed in _palette.txt_,

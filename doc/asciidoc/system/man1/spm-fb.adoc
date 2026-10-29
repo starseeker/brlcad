@@ -55,10 +55,10 @@ coordinates back onto the sphere.
 
 .Display a sphere map produced from an environment image
 ====
-[source,bash]
+[source,console]
 ----
-pix-spm world.pix 512 > world.spm
-spm-fb -s -S 512 512 world.spm
+$ pix-spm world.pix 512 > world.spm
+$ spm-fb -s -S 512 512 world.spm
 ----
 Convert a *pix*(5) image into a 512-bin sphere map with *pix-spm*(1), then
 resample that map onto a 512x512 framebuffer.  The *-s* option fills the

@@ -44,13 +44,15 @@ The *process* offers a program-agnostic means of managing subprocesses launched 
 The below examples walk through a sample *process* workflow:
 
 .Process Help
-[example]
 ====
-mged>**process**
+[source,console]
+----
+mged> process
+----
 
 
-....
-
+[source,text]
+----
 Usage: process [subcommand]
 
 Subcommands:
@@ -59,35 +61,37 @@ Subcommands:
   pabort <pid>  - Abort the specified subprocess.
 
   gabort <glob> - Abort all subprocesses whose command matches the glob expression.
-      
-....
+----
 
 
 
 ====
 
 .List Currently Running Processes
-[example]
 ====
-mged>**process list**
+[source,console]
+----
+mged> process list
+----
 
 
-....
-
+[source,text]
+----
     PID CMD
 5524692 rt -M -u model /home/user/test.g
 6515118 rtcheck -M /home/user/test.g obj
-      
-....
+----
 
 
 
 ====
 
 .Eliminate a Running Subprocess
-[example]
 ====
-mged>**process pabort 6515118**
+[source,console]
+----
+mged> process pabort 6515118
+----
 
 Using the reported PID from *process list*, the above line terminates the *rtcheck* subprocess.
 

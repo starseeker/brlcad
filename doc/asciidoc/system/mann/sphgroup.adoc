@@ -28,18 +28,25 @@ NOTE: The containment test uses the *center* of each region's bounding box, not 
 == EXAMPLES
 
 .Group all regions centered inside a sphere primitive
-[example]
 ====
-mged> **sphgroup cluster.c search_sphere.s**
+[source,console]
+----
+mged> sphgroup cluster.c search_sphere.s
+----
 
 Creates the combination `cluster.c` containing all regions whose bounding-box centers lie within the sphere primitive `search_sphere.s`. The sphere `search_sphere.s` must already exist in the database and must be an ELL or SPH primitive.
 ====
 
 .First create the bounding sphere, then group
-[example]
 ====
-mged> **make search_sphere.s sph**
-mged> **sphgroup nearby.c search_sphere.s**
+[source,console]
+----
+mged> make search_sphere.s sph
+----
+[source,console]
+----
+mged> sphgroup nearby.c search_sphere.s
+----
 
 Creates a unit sphere at the origin with `make`, then groups all regions centered within it into `nearby.c`.
 ====

@@ -37,41 +37,51 @@ Extra verbose mode. Increases the detail of the output (may be specified multipl
 == EXAMPLES
 
 .List the parameters of a primitive
-[example]
 ====
-mged> **l sph.s**
+[source,console]
+----
+mged> l sph.s
+----
 
 Displays the sphere's center, radius, and other geometric parameters in the current working units.
 ====
 
 .List the Boolean tree of a combination
-[example]
 ====
-mged> **list hull.c**
+[source,console]
+----
+mged> list hull.c
+----
 
 Shows the combination tree for `hull.c`, listing all members and their Boolean operators.
 ====
 
 .List evaluated parameters via a path
-[example]
 ====
-mged> **l vehicle.c/hull.r/hull.s**
+[source,console]
+----
+mged> l vehicle.c/hull.r/hull.s
+----
 
 Displays the parameters of `hull.s` with the cumulative transformation matrices from `vehicle.c` through `hull.r` applied.
 ====
 
 .List recursively with all transformations
-[example]
 ====
-mged> **l -r assembly.c**
+[source,console]
+----
+mged> l -r assembly.c
+----
 
 Recursively evaluates all primitives under `assembly.c` and displays their parameters with all transformations applied.
 ====
 
 .Terse recursive listing
-[example]
 ====
-mged> **list -r -t vehicle.c**
+[source,console]
+----
+mged> list -r -t vehicle.c
+----
 
 Lists all evaluated paths under `vehicle.c` in compact form without detailed parameter output.
 ====

@@ -153,10 +153,10 @@ raster-only controls *-O*, *-F*, *-C*, *-W*, *-l*, *-m*, *-i*, *-t*, *-S*,
 
 .Bas-relief line drawing of a model
 ====
-[source,bash]
+[source,console]
 ----
-rthide -s512 -a35 -e25 -A89.0 moss.g all.g > moss.plot3
-plot3-fb moss.plot3
+$ rthide -s512 -a35 -e25 -A89.0 moss.g all.g > moss.plot3
+$ plot3-fb moss.plot3
 ----
 Ray-traces the _all.g_ assembly in _moss.g_ over a 512x512 grid from azimuth
 35deg, elevation 25deg, suppressing curvature cross-hatching with a 89.0deg
@@ -167,12 +167,12 @@ overlaid in *mged*(1) with the _overlay_ command.
 
 .Overlaying hidden-line work onto a shaded rt image
 ====
-[source,bash]
+[source,console]
 ----
-AZ=35; EL=25
-rt     -s512 -a$AZ -e$EL moss.g all.g
-rthide -A89.9 -s512 -a$AZ -e$EL -o rthide.plot3 moss.g all.g
-plot3-fb -o rthide.plot3
+$ AZ=35; EL=25
+$ rt     -s512 -a$AZ -e$EL moss.g all.g
+$ rthide -A89.9 -s512 -a$AZ -e$EL -o rthide.plot3 moss.g all.g
+$ plot3-fb -o rthide.plot3
 ----
 Renders a shaded image with *rt*(1) into the framebuffer, traces the matching
 hidden-line plot with *rthide* using the same view and grid size, then overlays

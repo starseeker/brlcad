@@ -128,10 +128,10 @@ are:
 
 .Driving a local remrt/rtsrv render by hand
 ====
-[source,bash]
+[source,console]
 ----
 # 1. start a framebuffer server (X11 here; use /dev/wgl on Windows)
-fbserv -s2048 -p0 -F/dev/X
+$ fbserv -s2048 -p0 -F/dev/X
 
 # 2. in MGED, frame the scene and save a view script
 #       saveview remrt.rt
@@ -139,13 +139,13 @@ fbserv -s2048 -p0 -F/dev/X
 #    replace "-o file" with "-F0", and add "-s2048"
 
 # 3. run the edited script to start the dispatcher
-./remrt.rt
+$ ./remrt.rt
 
 # 4. from a directory holding the same model.g, start a worker
-rtsrv -d localhost 4446
+$ rtsrv -d localhost 4446
 
 # 5. when all frames report done, save the framebuffer to disk
-fb-png -F0 -s2048 image.png
+$ fb-png -F0 -s2048 image.png
 ----
 This drives the whole pipeline on one machine without *ssh*(1): the
 dispatcher listens on its default TCP port (4446), a manually started

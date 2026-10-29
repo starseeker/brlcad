@@ -81,9 +81,11 @@ With no arguments, will list all the MGED variables and their values. If a _vari
 The example shows the use of the *vars* command with an argument.
 
 .Display the sliders.
-[example]
 ====
-mged>**vars sliders=1**
+[source,console]
+----
+mged> vars sliders=1
+----
 
 Turns on the _sliders_.
 

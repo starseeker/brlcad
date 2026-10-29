@@ -37,7 +37,7 @@ The Applicon file holds three interleaved color separations (magenta, yellow, an
 
 .Convert an Applicon file and display it
 ====
-[source,bash]
+[source,console]
 ----
 $ ap-pix image.ap > image.pix
 $ pix-fb -w 3456 image.pix

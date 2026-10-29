@@ -55,7 +55,7 @@ Print a usage message and exit.
 
 .Capture a rendered image and convert it to PNG
 ====
-[source,bash]
+[source,console]
 ----
 $ rt -s 1024 -F /dev/fb havoc.g havoc
 $ fb-pix -s 1024 | pix-png -s 1024 > havoc.png
@@ -67,7 +67,7 @@ it into *pix-png*(1) to produce a PNG file.
 
 .Save the framebuffer color map baked into the pixels
 ====
-[source,bash]
+[source,console]
 ----
 $ fb-pix -c -F /dev/ogl scene.pix
 ----

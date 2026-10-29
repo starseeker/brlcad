@@ -67,9 +67,9 @@ output must be redirected; *smod* refuses to read from or write to a terminal.
 
 .Bias and scale a signal
 ====
-[source,bash]
+[source,console]
 ----
-smod -a 100 -m 2 data.s > scaled.s
+$ smod -a 100 -m 2 data.s > scaled.s
 ----
 Reads short integers from _data.s_, adds 100 to each value, then doubles the
 result, writing the modified stream to _scaled.s_. Operations are applied
@@ -78,9 +78,9 @@ left to right, so the bias is added before the scaling.
 
 .Compute signal magnitude in a pipeline
 ====
-[source,bash]
+[source,console]
 ----
-d-i < samples.d | smod -A -m 0.5 > half_magnitude.s
+$ d-i < samples.d | smod -A -m 0.5 > half_magnitude.s
 ----
 Converts double-precision samples to shorts with *d-i*(1), takes the absolute
 value of each sample, and halves it before writing the result. Any value that

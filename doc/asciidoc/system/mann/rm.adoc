@@ -100,60 +100,74 @@ Common cases:
 The examples below show the primary *rm* modes.
 
 .Safely delete an unreferenced primitive.
-[example]
 ====
-mged> **rm bolt.s**::
+[source,console]
+----
+mged> rm bolt.s
+----
 Deletes _bolt.s_ if it exists and is not referenced elsewhere.
 
 ====
 
 .Remove one child reference from a combination.
-[example]
 ====
-mged> **rm assembly.c/bolt.s**::
+[source,console]
+----
+mged> rm assembly.c/bolt.s
+----
 Removes the _bolt.s_ member from _assembly.c_ without deleting _bolt.s_ from the
 database.
 
 ====
 
 .Remove a specific duplicate child reference.
-[example]
 ====
-mged> **rm assembly.c/bolt.s@2**::
+[source,console]
+----
+mged> rm assembly.c/bolt.s@2
+----
 Removes the second _bolt.s_ member from _assembly.c_. This is required when a
 combination contains multiple same-name members with different matrices.
 
 ====
 
 .Reject the old combination/member command shape.
-[example]
 ====
-mged> **rm assembly.c bolt.s**::
+[source,console]
+----
+mged> rm assembly.c bolt.s
+----
 Reports an ambiguous command and leaves both _assembly.c_ and _bolt.s_ unchanged.
 Use *comb assembly.c rm bolt.s* or *rm assembly.c/bolt.s* for member removal.
 
 ====
 
 .Force-delete an object.
-[example]
 ====
-mged> **rm -f old_part.r**::
+[source,console]
+----
+mged> rm -f old_part.r
+----
 Deletes _old_part.r_ directly, even if other objects still reference it.
 
 ====
 
 .Preview a globbed delete.
-[example]
 ====
-mged> **rm -n temp***::
+[source,console]
+----
+mged> rm -n temp
+----
 Lists matching database objects or paths that would be removed.
 
 ====
 
 .Recursively delete an unshared hierarchy.
-[example]
 ====
-mged> **rm -r scratch_group.c**::
+[source,console]
+----
+mged> rm -r scratch_group.c
+----
 Deletes _scratch_group.c_ and any members that are only referenced within that
 hierarchy. If any object below _scratch_group.c_ is referenced from outside the
 hierarchy, the command reports an error and leaves the hierarchy unchanged.
@@ -161,9 +175,11 @@ hierarchy, the command reports an error and leaves the hierarchy unchanged.
 ====
 
 .Force a recursive top-level delete while preserving shared descendants.
-[example]
 ====
-mged> **rm -rf scratch_group.c**::
+[source,console]
+----
+mged> rm -rf scratch_group.c
+----
 Deletes _scratch_group.c_ even if other objects reference it, and deletes
 unshared descendants below it. Descendants still referenced elsewhere remain in
 the database.

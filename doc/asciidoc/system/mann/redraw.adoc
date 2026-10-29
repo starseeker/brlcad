@@ -31,25 +31,31 @@ To add a new object to the display, use `draw` or `e`. To force an update with d
 == EXAMPLES
 
 .Redraw all displayed geometry
-[example]
 ====
-mged> **redraw**
+[source,console]
+----
+mged> redraw
+----
 
 Regenerates the display for all objects currently shown in the view. Useful after batch database edits to refresh all visible geometry at once.
 ====
 
 .Redraw a specific object after editing
-[example]
 ====
-mged> **redraw component/part.s**
+[source,console]
+----
+mged> redraw component/part.s
+----
 
 Redraws only `component/part.s`, which must already be displayed. If the object's geometry was modified since it was last drawn, the view is updated to reflect the changes.
 ====
 
 .Redraw multiple paths
-[example]
 ====
-mged> **redraw body.s wing.s engine.s**
+[source,console]
+----
+mged> redraw body.s wing.s engine.s
+----
 
 Refreshes the display for three separately named objects simultaneously.
 ====

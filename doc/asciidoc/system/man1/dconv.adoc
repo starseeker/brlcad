@@ -38,9 +38,9 @@ elements.
 
 .Low-pass filter a sampled signal
 ====
-[source,bash]
+[source,console]
 ----
-dconv lowpass.kernel < signal.d > filtered.d
+$ dconv lowpass.kernel < signal.d > filtered.d
 ----
 Convolves the double stream in _signal.d_ with the 2^i - 1 element kernel in
 _lowpass.kernel_, producing the smoothed result in _filtered.d_. A float-format

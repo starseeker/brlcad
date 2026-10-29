@@ -59,9 +59,9 @@ resulting region or combination.
 
 .Convert an ENF facet file with a custom ident range and name mapping
 ====
-[source,bash]
+[source,console]
 ----
-enf-g -v -i 2000 -l 32 -n parts.map widget.enf widget.g
+$ enf-g -v -i 2000 -l 32 -n parts.map widget.enf widget.g
 ----
 Converts _widget.enf_ into _widget.g_, starting region idents at 2000,
 limiting object names to 32 characters, and renaming parts via the
