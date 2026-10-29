@@ -43,6 +43,37 @@ cmakefiles(
   asciiquack/reader.hpp
   asciiquack/substitutors.hpp
   asciiquack/vendor/cxxopts.hpp
+  brlinst/CMakeLists.txt
+  brlinst/COPYING
+  brlinst/README.adoc
+  brlinst/THIRD_PARTY.txt
+  brlinst/cmake/BRLCAD.cmake
+  brlinst/cmake/Brlinst.cmake
+  brlinst/cmake/Package.cmake.in
+  brlinst/examples/brlcad.json.in
+  brlinst/include/installer/core.hpp
+  brlinst/include/installer/msi.hpp
+  brlinst/include/installer/windows.hpp
+  brlinst/resources/notices.hpp.in
+  brlinst/resources/runtime.manifest
+  brlinst/resources/runtime.rc
+  brlinst/src/core.cpp
+  brlinst/src/input.cpp
+  brlinst/src/msi.cpp
+  brlinst/src/msi_actions.cpp
+  brlinst/src/msi_model.cpp
+  brlinst/src/pack.cpp
+  brlinst/src/package.cpp
+  brlinst/src/resources.cpp
+  brlinst/src/runtime.cpp
+  brlinst/src/transaction.cpp
+  brlinst/src/windows.cpp
+  brlinst/src/wizard.cpp
+  brlinst/tests/core_tests.cpp
+  brlinst/tests/cpack_test.cmake
+  brlinst/tests/msi_model_tests.cpp
+  brlinst/tests/windows-msi-smoke.ps1
+  brlinst/tests/windows-smoke.ps1
   db2adoc/db2adoc.py
   db2adoc/db2adoc.xsl
   inactvhdrs/CMakeLists.txt
