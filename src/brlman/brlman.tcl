@@ -21,6 +21,15 @@
 
 package require Iwidgets
 package require ManBrowser 1.0
+
+proc ::brlman::quitKey {window} {
+    set widgetClass [winfo class $window]
+    if {$widgetClass in {Entry TEntry}} {
+	return -code break
+    }
+    ::exit
+}
+
 wm state . withdrawn
 if {[info exists ::section_number]} {
     set w [ ManBrowser .browser -useToC 1 -defaultDir $::section_number ]
@@ -37,7 +46,7 @@ if {[info exists ::man_file]} {
 
 wm protocol .browser WM_DELETE_WINDOW ::exit
 bind $w <Escape> ::exit
-bind $w <q> ::exit
+bind $w <q> [list ::brlman::quitKey %W]
 
 if {[info exists ::man_file]} {
     $w select $man_file

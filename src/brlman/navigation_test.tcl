@@ -139,11 +139,69 @@ if {[catch {
     assert_equal "typing preserves the displayed manual" [$browser title] "shared man3"
     $search.controls.clear invoke
 
+    set quitKeys 0
+    bind $viewer <q> {incr quitKeys}
+    focus -force $search.entry
+    event generate $search.entry <KeyPress-q>
+    event generate $search.entry <KeyRelease-q>
+    update
+    assert_equal "typing q updates the search entry" [$search.entry get] q
+    assert_equal "typing q does not reach the dialog shortcut" $quitKeys 0
+    bind $viewer <q> {}
+    $search.controls.clear invoke
+
     $viewer search deepneedle short
     assert_equal "short search excludes body text" [$listbox size] 0
     $viewer search deepneedle full
     assert_equal "full text search includes body text" [$listbox get 0 end] [list {gamma (n)}]
     assert_equal "full text result opens the correct section" [$browser title] "gamma mann"
+    assert_equal "full text search opens document find" [winfo manager $browser.find] pack
+    assert_equal "document find uses the filter query" [$browser.find.entry get] deepneedle
+    assert_equal "document find reports the current page match" \
+	[$browser.find.count cget -text] "1 of 1"
+
+    $viewer search manual full
+    assert_equal "full text search selects its first result" [$browser title] "alpha man1"
+    assert_equal "automatic find updates its query" [$browser.find.entry get] manual
+    choose_page $viewer "beta (3)"
+    assert_equal "automatic find follows page selection" [$browser title] "beta man3"
+    assert_equal "automatic find updates the selected page" \
+	[$browser.find.count cget -text] "1 of 2"
+
+    $browser.find.close invoke
+    assert_equal "closing automatic find hides it" [winfo manager $browser.find] ""
+    choose_page $viewer "shared (3)"
+    assert_equal "closed automatic find stays hidden" [winfo manager $browser.find] ""
+    $search.controls.full invoke
+    $search.controls.full invoke
+    assert_equal "re-enabling full text restores automatic find" \
+	[winfo manager $browser.find] pack
+
+    $search.controls.full invoke
+    $browser findbar Library
+    assert_equal "explicit find opens while full text is disabled" \
+	[winfo manager $browser.find] pack
+    $search.controls.full invoke
+    assert_equal "automatic find replaces the explicit query" \
+	[$browser.find.entry get] manual
+    $search.controls.full invoke
+    assert_equal "explicit find survives disabling full text" \
+	[winfo manager $browser.find] pack
+    $browser.find.close invoke
+
+    $viewer search manual full
+    focus -force $search.entry
+    foreach replacement {{} a manual {} b manual} {
+	$search.entry selection range 0 end
+	$search.entry delete 0 end
+	$search.entry insert 0 $replacement
+	event generate $search.entry <KeyRelease> -keysym a
+	update
+    }
+    assert_equal "replacing a selected full-text query remains stable" \
+	[$browser.find.entry get] manual
+
+    $viewer search deepneedle full
     assert_equal "select a page hidden by the query" [$viewer select alpha] 1
     assert_equal "selection clears a conflicting query" [$search.entry get] ""
     assert_equal "programmatic selection opens the page" [$browser title] "alpha man1"

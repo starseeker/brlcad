@@ -170,8 +170,8 @@ $browser goto /path/to/index.html
 ```
 
 The browser adds scrollbars and supports `goto`, `back`, `location`,
-`title`, `error`, `findbar ?pattern?`, and `html` (which returns the
-underlying widget).
+`title`, `error`, `findbar ?pattern?`, `autofind boolean ?pattern?`, and
+`html` (which returns the underlying widget).
 Relative and fragment links, file URIs, percent-encoded paths, and
 navigation history are handled without an HTTP client. A
 `-linkcommand` callback may replace the default navigation; it receives
@@ -193,6 +193,11 @@ hides the bar and clears find highlights. Clear Highlights clears the
 query without changing text selection. An open query is reapplied when
 another document is loaded successfully; failed navigation preserves
 the current results.
+
+`autofind true ?pattern?` lets an embedding application show and update
+the find bar without moving keyboard focus. Closing an automatically opened
+bar suppresses it until `autofind false` resets the automatic-find cycle.
+An explicit `findbar` request remains open when automatic find is disabled.
 
 Navigation reads local files in bounded chunks. Missing, unreadable,
 oversized, or invalid pages leave the current page and Back history

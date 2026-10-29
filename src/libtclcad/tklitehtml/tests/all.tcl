@@ -1034,7 +1034,41 @@ test browser-find-1.2 {find entry consumes application quit shortcuts and Escape
     catch {destroy .browser}
 } -result {q 0 1 1}
 
-test browser-find-1.3 {context menu preserves selection and exposes Copy and Find} -setup {
+test browser-find-1.3 {automatic and explicit find ownership is preserved} -setup {
+    set browser [::tklitehtml::browser .browser]
+    pack $browser -fill both -expand true
+    $browser load {<p>alpha beta alpha</p>}
+    update
+} -body {
+    focus -force [$browser html]
+    update
+    set originalFocus [focus]
+    $browser autofind true alpha
+    update
+    set automatic [list [winfo manager .browser.find] \
+        [.browser.find.count cget -text] [expr {[focus] eq $originalFocus}]]
+    .browser.find.close invoke
+    $browser autofind true beta
+    update
+    set suppressed [winfo manager .browser.find]
+    $browser autofind false
+    $browser autofind true beta
+    update
+    set restored [list [winfo manager .browser.find] \
+        [.browser.find.entry get]]
+    $browser autofind false
+    $browser findbar alpha
+    $browser autofind true beta
+    $browser autofind false
+    update
+    set explicit [list [winfo manager .browser.find] \
+        [.browser.find.entry get]]
+    list $automatic $suppressed $restored $explicit
+} -cleanup {
+    catch {destroy .browser}
+} -result {{pack {1 of 2} 1} {} {pack beta} {pack beta}}
+
+test browser-find-1.4 {context menu preserves selection and exposes Copy and Find} -setup {
     set browser [::tklitehtml::browser .browser]
     pack $browser -fill both -expand true
     $browser load {<p>Café and Café</p>}
@@ -1058,7 +1092,7 @@ test browser-find-1.3 {context menu preserves selection and exposes Copy and Fin
     catch {destroy .browser}
 } -result {Café normal Café {1 of 2} Café {}}
 
-test browser-find-1.6 {context menu clicks select all and find the selection} -constraints x11 -setup {
+test browser-find-1.5 {context menu clicks select all and find the selection} -constraints x11 -setup {
     set browser [::tklitehtml::browser .browser]
     pack $browser -fill both -expand true
     $browser load {<p>alpha alpha</p>}
@@ -1083,7 +1117,7 @@ test browser-find-1.6 {context menu clicks select all and find the selection} -c
     catch {destroy .browser}
 } -result {{alpha alpha} {alpha alpha} {1 of 1}}
 
-test browser-find-1.4 {find query follows successful document changes and cleans up} -setup {
+test browser-find-1.6 {find query follows successful document changes and cleans up} -setup {
     set browser [::tklitehtml::browser .browser -maxdocumentbytes 128]
     pack $browser -fill both -expand true
     $browser load {<p>needle needle</p>}
@@ -1110,7 +1144,7 @@ test browser-find-1.4 {find query follows successful document changes and cleans
     catch {destroy .browser}
 } -result {1 {1 of 2} {No matches} disabled {1 of 1} 0 0 0}
 
-test browser-find-1.5 {find and selection paint distinct highlights after reflow} -setup {
+test browser-find-1.7 {find and selection paint distinct highlights after reflow} -setup {
     set originalGeometry [wm geometry .]
     set originalImages [image names]
     wm geometry . 760x400
@@ -1146,7 +1180,7 @@ test browser-find-1.5 {find and selection paint distinct highlights after reflow
     update
 } -result {{255 191 105} {128 192 255} {128 192 255} Café}
 
-test browser-find-1.6 {pasted and deleted queries update matches without key events} -setup {
+test browser-find-1.8 {pasted and deleted queries update matches without key events} -setup {
     set browser [::tklitehtml::browser .browser]
     pack $browser -fill both -expand true
     $browser load {<p>Café Café</p>}

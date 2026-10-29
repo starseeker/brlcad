@@ -1296,7 +1296,6 @@ int HtmlWidget::load_document(int objc, Tcl_Obj* const objv[])
         return exception_result(interp_, "document load");
     }
     loading_ = false;
-    clear_text_colors();
     previous_document.reset();
     clear_images(previous_images);
     clear_highlights();
@@ -1439,6 +1438,10 @@ void HtmlWidget::redraw()
     }
     reset_clip();
     paint_text_.clear();
+    if(frame_document_ != document_)
+    {
+        clear_text_colors();
+    }
     // Tk may repaint the previous frame before the next redraw idle.
     // Keep its fonts alive when a page is replaced or cleared.
     frame_document_ = document_;

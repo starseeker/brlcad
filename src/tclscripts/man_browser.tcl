@@ -64,6 +64,7 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 	method loadSelectedPage	{listbox}
 	method refreshPageList	{}
 	method selectSection	{}
+	method syncDocumentFind	{}
     }
 
     private {
@@ -135,6 +136,7 @@ if {[llength [info commands manpage_search_terms]] == 0} {
     if {$title ne ""} {
 	configure -title $title
     }
+    syncDocumentFind
     return 1
 }
 
@@ -224,6 +226,25 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 	    $toc activate $index
 	    $toc see $index
 	}
+    }
+    syncDocumentFind
+}
+
+::itcl::body ManBrowser::syncDocumentFind {} {
+    if {!$itk_option(-useToC)} {
+	return
+    }
+    set viewer [$this childsite].browser.htmlview
+    set toc $itk_component(manpagelistbox)
+    set query [string trim $search_query]
+    if {$search_mode ne "full"} {
+	$viewer autofind false
+	return
+    }
+    if {$query ne "" && [llength [$toc curselection]] == 1} {
+	$viewer autofind true $query
+    } else {
+	$viewer autofind true
     }
 }
 
@@ -336,6 +357,9 @@ if {[llength [info commands manpage_search_terms]] == 0} {
 	entry $search_frame.entry \
 	    -textvariable [::itcl::scope search_query] \
 	    -width $index_width
+	bindtags $search_frame.entry \
+	    [linsert [bindtags $search_frame.entry] 2 ManBrowserSearchEntry]
+	bind ManBrowserSearchEntry <KeyPress-q> break
 	frame $search_frame.controls
 	checkbutton $search_frame.controls.full \
 	    -text "Full text" \

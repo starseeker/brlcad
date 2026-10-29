@@ -316,6 +316,9 @@ proc ::tklitehtml::browser {path args} {
         findquery {} \
         findcount 0 \
         findcurrent -1 \
+        findexplicit false \
+        findauto false \
+        findautosuppressed false \
         location {}]
     bind $path <Destroy> +[list ::tklitehtml::_browser_destroy $path %W]
     try {
@@ -371,6 +374,13 @@ proc ::tklitehtml::_browser_dispatch {path method args} {
         error "invalid browser \"$path\""
     }
     switch -- $method {
+        autofind {
+            if {[llength $args] < 1 || [llength $args] > 2 ||
+                ![string is boolean -strict [lindex $args 0]]} {
+                error "wrong # args: should be \"$path autofind boolean ?pattern?\""
+            }
+            return [_browser_auto_find $path {*}$args]
+        }
         back {
             if {[llength $args] != 0} {
                 error "wrong # args: should be \"$path back\""
@@ -404,7 +414,7 @@ proc ::tklitehtml::_browser_dispatch {path method args} {
             if {[llength $args] > 1} {
                 error "wrong # args: should be \"$path findbar ?pattern?\""
             }
-            _browser_find_open $path {*}$args
+            _browser_find_open $path true {*}$args
             return $path.find.entry
         }
         goto {
@@ -458,7 +468,7 @@ proc ::tklitehtml::_browser_controls {path} {
         -command [list ::tklitehtml::_browser_find_step $path next]
     label $path.find.count -anchor w
     button $path.find.close -text "Close" \
-        -command [list ::tklitehtml::_browser_find_hide $path]
+        -command [list ::tklitehtml::_browser_find_hide $path true]
     pack $path.find.label -side left
     pack $path.find.close $path.find.next $path.find.previous \
         $path.find.case $path.find.count -side right
@@ -469,14 +479,14 @@ proc ::tklitehtml::_browser_controls {path} {
     bindtags $path.find.entry [linsert [bindtags $path.find.entry] 2 TkLiteHtmlFind]
     bind $path.find.entry <Return> "[list ::tklitehtml::_browser_find_step $path next]\nbreak"
     bind $path.find.entry <Shift-Return> "[list ::tklitehtml::_browser_find_step $path previous]\nbreak"
-    bind $path.find.entry <Escape> "[list ::tklitehtml::_browser_find_hide $path]\nbreak"
+    bind $path.find.entry <Escape> "[list ::tklitehtml::_browser_find_hide $path true]\nbreak"
 
     menu $path.menu -tearoff false
     $path.menu add command -label "Copy" -command [list ::tklitehtml::_copy $path.html]
     $path.menu add command -label "Select All" -command [list $path.html selection set 0 end]
     $path.menu add separator
     $path.menu add command -label "Find..." -accelerator "Ctrl+F" \
-        -command [list ::tklitehtml::_browser_find_open $path]
+        -command [list ::tklitehtml::_browser_find_open $path true]
     $path.menu add command -label "Find Next" -accelerator F3 \
         -command [list ::tklitehtml::_browser_find_step $path next]
     $path.menu add command -label "Find Previous" -accelerator "Shift+F3" \
@@ -486,7 +496,7 @@ proc ::tklitehtml::_browser_controls {path} {
 
     bind $path.html <Button-3> "[list ::tklitehtml::_browser_popup $path %X %Y]\nbreak"
     foreach sequence {<Control-f> <<Find>>} {
-        bind $path.html $sequence "[list ::tklitehtml::_browser_find_open $path]\nbreak"
+        bind $path.html $sequence "[list ::tklitehtml::_browser_find_open $path true]\nbreak"
     }
     foreach window [list $path.html $path.find.entry] {
         bind $window <F3> "[list ::tklitehtml::_browser_find_step $path next]\nbreak"
@@ -499,7 +509,7 @@ proc ::tklitehtml::_browser_controls {path} {
         foreach sequence {<Button-2> <Control-Button-1>} {
             bind $path.html $sequence "[list ::tklitehtml::_browser_popup $path %X %Y]\nbreak"
         }
-        bind $path.html <Command-f> "[list ::tklitehtml::_browser_find_open $path]\nbreak"
+        bind $path.html <Command-f> "[list ::tklitehtml::_browser_find_open $path true]\nbreak"
     }
     trace add variable browserQuery($path) write \
         [list ::tklitehtml::_browser_find_changed $path]
@@ -520,9 +530,14 @@ proc ::tklitehtml::_browser_popup {path x y} {
     tk_popup $path.menu $x $y
 }
 
-proc ::tklitehtml::_browser_find_open {path args} {
+proc ::tklitehtml::_browser_find_open {path explicit args} {
+    variable browserState
     variable browserQuery
 
+    if {$explicit} {
+        dict set browserState($path) findexplicit true
+        dict set browserState($path) findautosuppressed false
+    }
     set selected [$path.html selection get]
     set query $browserQuery($path)
     if {[llength $args] != 0 || $selected ne ""} {
@@ -534,8 +549,37 @@ proc ::tklitehtml::_browser_find_open {path args} {
     } else {
         set browserQuery($path) $query
     }
-    focus $path.find.entry
-    $path.find.entry selection range 0 end
+    if {$explicit} {
+        focus $path.find.entry
+        $path.find.entry selection range 0 end
+    }
+}
+
+proc ::tklitehtml::_browser_auto_find {path enabled args} {
+    variable browserState
+
+    set enabled [expr {$enabled ? true : false}]
+    set wasEnabled [dict get $browserState($path) findauto]
+    dict set browserState($path) findauto $enabled
+    if {!$enabled} {
+        dict set browserState($path) findautosuppressed false
+        if {![dict get $browserState($path) findexplicit]} {
+            _browser_find_hide $path false
+        }
+        return
+    }
+    if {!$wasEnabled} {
+        dict set browserState($path) findautosuppressed false
+    }
+    if {[llength $args] == 0} {
+        if {![dict get $browserState($path) findexplicit]} {
+            _browser_find_hide $path false
+        }
+        return
+    }
+    if {![dict get $browserState($path) findautosuppressed]} {
+        _browser_find_open $path false {*}$args
+    }
 }
 
 proc ::tklitehtml::_browser_find_changed {path args} {
@@ -588,7 +632,7 @@ proc ::tklitehtml::_browser_find_step {path direction} {
 
     _browser_find_update $path
     if {[dict get $browserState($path) findquery] eq ""} {
-        _browser_find_open $path
+        _browser_find_open $path true
         return
     }
     set count [$path.html find $direction]
@@ -606,15 +650,25 @@ proc ::tklitehtml::_browser_find_clear {path} {
     _browser_find_update $path true
 }
 
-proc ::tklitehtml::_browser_find_hide {path} {
+proc ::tklitehtml::_browser_find_hide {path user} {
+    variable browserState
+
+    if {$user} {
+        dict set browserState($path) findexplicit false
+        if {[dict get $browserState($path) findauto]} {
+            dict set browserState($path) findautosuppressed true
+        }
+    }
     _browser_find_clear $path
     pack forget $path.find
-    focus $path.html
+    if {$user} {
+        focus $path.html
+    }
 }
 
 proc ::tklitehtml::_browser_find_escape {path} {
     if {[winfo manager $path.find] ne ""} {
-        _browser_find_hide $path
+        _browser_find_hide $path true
         return -code break
     }
 }
