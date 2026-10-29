@@ -459,9 +459,7 @@ opt_objs(struct bu_vls *msg, size_t argc, const char **argv, void *obj_tbl)
     while (objs[i]) {
 	/* If we have a separator or a quote, replace with a space */
 	if (objs[i] == ',' || objs[i] == ';' || objs[i] == '\'' || objs[i] == '\"') {
-	    if (i == 0)
-		objs[i] = ' ';
-	    if (objs[i-1] != '\\')
+	    if (i == 0 || objs[i-1] != '\\')
 		objs[i] = ' ';
 	}
 	i++;
