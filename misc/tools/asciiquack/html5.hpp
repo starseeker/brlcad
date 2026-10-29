@@ -91,66 +91,65 @@ namespace asciiquack {
 }
 
 /// Returns CSS rules that style the <h- data-h=TYPE> spans emitted by µlight.
-/// Uses a dark (One-Dark-compatible) palette matching the existing
-/// .listingblock pre background (#282c34).
+/// Uses a high-contrast light palette matching the default code block style.
 [[nodiscard]] inline std::string ulight_highlight_css()
 {
     // The selectors target the non-standard <h-> element by its data-h attribute.
     // Browsers treat unknown elements as inline, so no extra display:inline needed.
     return
         // errors
-        "h-[data-h=err]{color:#e06c75}\n"
+        "h-[data-h=err]{color:#cf222e}\n"
         // comments
         "h-[data-h=cmt],h-[data-h=cmt_dlim],"
-        "h-[data-h=cmt_doc],h-[data-h=cmt_doc_dlim]{color:#7f848e;font-style:italic}\n"
+        "h-[data-h=cmt_doc],h-[data-h=cmt_doc_dlim]{color:#57606a;font-style:italic}\n"
         // strings
         "h-[data-h=str],h-[data-h=str_dlim],"
-        "h-[data-h=str_deco]{color:#98c379}\n"
+        "h-[data-h=str_deco]{color:#116329}\n"
         "h-[data-h=str_esc],h-[data-h=str_intp],"
-        "h-[data-h=str_intp_dlim]{color:#56b6c2}\n"
+        "h-[data-h=str_intp_dlim]{color:#0550ae}\n"
         // numbers
         "h-[data-h=num],h-[data-h=num_dlim],"
-        "h-[data-h=num_deco]{color:#d19a66}\n"
+        "h-[data-h=num_deco]{color:#953800}\n"
         // keywords
         "h-[data-h=kw],h-[data-h=kw_ctrl],"
-        "h-[data-h=kw_op],h-[data-h=kw_this]{color:#c678dd}\n"
-        "h-[data-h=kw_type]{color:#e5c07b}\n"
+        "h-[data-h=kw_op],h-[data-h=kw_this]{color:#8250df}\n"
+        "h-[data-h=kw_type]{color:#953800}\n"
         // names / identifiers
-        "h-[data-h=name],h-[data-h=name_decl]{color:#abb2bf}\n"
+        "h-[data-h=name],h-[data-h=name_decl]{color:#24292f}\n"
         "h-[data-h=name_fun],h-[data-h=name_fun_decl],"
-        "h-[data-h=name_fun_pre]{color:#61afef}\n"
+        "h-[data-h=name_fun_pre]{color:#0550ae}\n"
         "h-[data-h=name_type],h-[data-h=name_type_decl],"
-        "h-[data-h=name_type_pre]{color:#e5c07b}\n"
-        "h-[data-h=name_var],h-[data-h=name_var_decl]{color:#e06c75}\n"
+        "h-[data-h=name_type_pre]{color:#953800}\n"
+        "h-[data-h=name_var],h-[data-h=name_var_decl]{color:#cf222e}\n"
         "h-[data-h=name_cons],h-[data-h=name_cons_decl],"
-        "h-[data-h=name_cons_pre]{color:#d19a66}\n"
+        "h-[data-h=name_cons_pre]{color:#953800}\n"
         "h-[data-h=name_mac],h-[data-h=name_mac_decl],"
         "h-[data-h=name_mac_pre],h-[data-h=name_dirt],"
-        "h-[data-h=name_dirt_pre]{color:#56b6c2}\n"
-        "h-[data-h=name_life],h-[data-h=name_life_decl]{color:#d19a66}\n"
-        "h-[data-h=name_attr],h-[data-h=name_attr_decl]{color:#e5c07b}\n"
+        "h-[data-h=name_dirt_pre]{color:#0550ae}\n"
+        "h-[data-h=name_life],h-[data-h=name_life_decl]{color:#953800}\n"
+        "h-[data-h=name_attr],h-[data-h=name_attr_decl]{color:#953800}\n"
         "h-[data-h=name_inst],h-[data-h=name_inst_decl],"
-        "h-[data-h=asm_inst_pre]{color:#56b6c2}\n"
-        "h-[data-h=name_labl],h-[data-h=name_labl_decl]{color:#e06c75}\n"
-        "h-[data-h=name_para],h-[data-h=name_para_decl]{color:#e06c75}\n"
-        "h-[data-h=name_cmd],h-[data-h=name_opt]{color:#61afef}\n"
-        "h-[data-h=name_nt],h-[data-h=name_nt_decl]{color:#56b6c2}\n"
+        "h-[data-h=asm_inst_pre]{color:#0550ae}\n"
+        "h-[data-h=name_labl],h-[data-h=name_labl_decl]{color:#cf222e}\n"
+        "h-[data-h=name_para],h-[data-h=name_para_decl]{color:#cf222e}\n"
+        "h-[data-h=name_cmd],h-[data-h=name_opt]{color:#0550ae}\n"
+        "h-[data-h=name_nt],h-[data-h=name_nt_decl]{color:#0550ae}\n"
         // symbols / operators / punctuation
-        "h-[data-h=sym_op]{color:#56b6c2}\n"
-        "h-[data-h=sym_punc]{color:#abb2bf}\n"
+        "h-[data-h=sym_op]{color:#0550ae}\n"
+        "h-[data-h=sym_punc]{color:#24292f}\n"
         "h-[data-h=sym_brac],h-[data-h=sym_par],"
-        "h-[data-h=sym_sqr],h-[data-h=sym_bket]{color:#abb2bf}\n"
+        "h-[data-h=sym_sqr],h-[data-h=sym_bket]{color:#24292f}\n"
         // diff
-        "h-[data-h=diff_del],h-[data-h=diff_del_dlim]{color:#e06c75}\n"
-        "h-[data-h=diff_ins],h-[data-h=diff_ins_dlim]{color:#98c379}\n"
+        "h-[data-h=diff_del],h-[data-h=diff_del_dlim]{color:#cf222e}\n"
+        "h-[data-h=diff_ins],h-[data-h=diff_ins_dlim]{color:#116329}\n"
         "h-[data-h=diff_head],h-[data-h=diff_head_dlim],"
-        "h-[data-h=diff_head_hunk],h-[data-h=diff_head_hunk_dlim]{color:#7f848e}\n"
-        "h-[data-h=diff_mod],h-[data-h=diff_mod_dlim]{color:#d19a66}\n"
+        "h-[data-h=diff_head_hunk],h-[data-h=diff_head_hunk_dlim]{color:#57606a}\n"
+        "h-[data-h=diff_mod],h-[data-h=diff_mod_dlim]{color:#953800}\n"
         // markup (HTML/XML)
         "h-[data-h=mk_tag],h-[data-h=mk_tag_decl],"
-        "h-[data-h=mk_tag_dlim]{color:#e06c75}\n"
-        "h-[data-h=mk_attr],h-[data-h=mk_attr_decl]{color:#d19a66}\n"
-        "h-[data-h=mk_attr_pre]{color:#61afef}\n";
+        "h-[data-h=mk_tag_dlim]{color:#cf222e}\n"
+        "h-[data-h=mk_attr],h-[data-h=mk_attr_decl]{color:#953800}\n"
+        "h-[data-h=mk_attr_pre]{color:#0550ae}\n";
 }
 #endif  // ASCIIQUACK_USE_ULIGHT
 
@@ -1391,10 +1390,9 @@ private:
             "h1,h2,h3,h4,h5,h6{color:#2c5282;line-height:1.2;margin-top:1.4em}\n"
             "h1{font-size:2em;border-bottom:2px solid #2c5282;padding-bottom:.25em}\n"
             "h2{font-size:1.6em;border-bottom:1px solid #ccc}\n"
-            "code,pre{font-family:monospace;background:#f5f5f5;border-radius:3px}\n"
-            "pre{padding:1em;overflow:auto;border-left:4px solid #ccc}\n"
+            "code,pre{font-family:monospace;background:#f6f8fa;color:#24292f;border-radius:4px}\n"
+            "pre{padding:1em;overflow:auto;border:1px solid #d0d7de;border-left:4px solid #8c959f}\n"
             "code{padding:.1em .3em}\n"
-            ".listingblock pre{background:#282c34;color:#abb2bf;border:none}\n"
             "table{border-collapse:collapse;width:100%}\n"
             "td,th{border:1px solid #ddd;padding:.5em .75em;text-align:left}\n"
             "th{background:#f0f0f0;font-weight:bold}\n"
