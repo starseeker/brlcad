@@ -1393,6 +1393,7 @@ private:
             "code,pre{font-family:monospace;background:#f6f8fa;color:#24292f;border-radius:4px}\n"
             "pre{padding:1em;overflow:auto;border:1px solid #d0d7de;border-left:4px solid #8c959f}\n"
             "code{padding:.1em .3em}\n"
+            "pre code{padding:0;font-weight:normal;font-style:normal}\n"
             "table{border-collapse:collapse;width:100%}\n"
             "td,th{border:1px solid #ddd;padding:.5em .75em;text-align:left}\n"
             "th{background:#f0f0f0;font-weight:bold}\n"
