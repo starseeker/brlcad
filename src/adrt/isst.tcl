@@ -47,14 +47,14 @@ proc ::isst::overwin {x y W} {
 
 proc ::isst::buildlist {listwidget toplevelwidget filename} {
     global oglwin selectedobjs
-    set selectedobjs [list ]
+    set selectedobjs [list]
     set selectednums [$listwidget curselection]
     foreach listitem $selectednums {
-	set selectedobjs [concat $selectedobjs [$listwidget get $listitem]]
+	lappend selectedobjs [$listwidget get $listitem]
     }
     puts $selectedobjs
-    if {$selectedobjs != ""} {
-        load_g $oglwin $filename [split $selectedobjs]
+    if {[llength $selectedobjs]} {
+        load_g $oglwin $filename $selectedobjs
     }
     destroy $toplevelwidget
 }
@@ -79,7 +79,7 @@ proc ::isst::geomlist {filename} {
 
     frame .geomlist.gl
     pack .geomlist.gl -side bottom
-    button .geomlist.gl.b1 -text " OK " -command "::isst::buildlist .geomlist.listing.l .geomlist $filename"
+    button .geomlist.gl.b1 -text " OK " -command [list ::isst::buildlist .geomlist.listing.l .geomlist $filename]
     pack .geomlist.gl.b1 -side left -anchor w -padx 5
 }
 

@@ -144,7 +144,7 @@ static int
 isst_load_g(ClientData UNUSED(clientData), Tcl_Interp *interp, int objc,
 	    Tcl_Obj *const *objv)
 {
-    char **argv;
+    const char **argv;
     int argc;
     double az, el;
     struct bu_vls tclstr = BU_VLS_INIT_ZERO;
@@ -155,11 +155,15 @@ isst_load_g(ClientData UNUSED(clientData), Tcl_Interp *interp, int objc,
 	return TCL_ERROR;
     }
 
-    argv = (char **)malloc(sizeof(char *) * (strlen(Tcl_GetString(objv[3])) + 1));	/* allocate way too much. */
-    argc = (int)bu_argv_from_string(argv, strlen(Tcl_GetString(objv[3])), Tcl_GetString(objv[3]));
+    if (Tcl_SplitList(interp, Tcl_GetString(objv[3]), &argc, &argv) != TCL_OK)
+	return TCL_ERROR;
 
-    load_g(isst->tie, Tcl_GetString(objv[2]), argc, (const char **)argv, &(isst->meshes));
-    free(argv);
+    int load_result = load_g(isst->tie, Tcl_GetString(objv[2]), argc, argv, &(isst->meshes));
+    Tcl_Free((char *)argv);
+    if (load_result < 0) {
+	Tcl_SetObjResult(interp, Tcl_NewStringObj("could not load geometry", -1));
+	return TCL_ERROR;
+    }
 
     VSETALL(isst->camera.pos, isst->tie->radius);
     VMOVE(isst->camera.focus, isst->tie->mid);
