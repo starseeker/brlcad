@@ -225,6 +225,11 @@ rt_edit_test_bot(void)
     v->gv_height = 512;
 
     struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    if (!s || !s->e_keytag || !BU_STR_EQUAL(s->e_keytag, "V"))
+	bu_exit(1, "ERROR: BOT create did not initialize the default keypoint\n");
+    if (rt_edit_reinit(s, &fp, dbip, &tol, v) != BRLCAD_OK ||
+	!s->e_keytag || !BU_STR_EQUAL(s->e_keytag, "V"))
+	bu_exit(1, "ERROR: BOT reinit did not initialize the default keypoint\n");
     s->mv_context = 1;
 
     struct rt_bot_internal *bot =

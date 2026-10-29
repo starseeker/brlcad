@@ -1473,7 +1473,7 @@ f_keypoint(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv
 	    break;
 	case 1:
 	    if (BU_STR_EQUAL(argv[1], "reset")) {
-		MEDIT(s)->e_keytag = "";
+		MEDIT(s)->e_keytag = NULL;
 		MEDIT(s)->e_keyfixed = 0;
 		rt_get_solid_keypoint(MEDIT(s), &MEDIT(s)->e_keypoint, &MEDIT(s)->e_keytag, MEDIT(s)->e_mat);
 		break;
@@ -1817,7 +1817,7 @@ f_oedit_apply(ClientData clientData, Tcl_Interp *interp, int UNUSED(argc), const
     struct mged_state *s = ctp->s;
 
     struct bu_vls vls = BU_VLS_INIT_ZERO;
-    const char *strp="";
+    const char *strp = NULL;
 
     CHECK_DBI_NULL;
     int bbox_keypoint = BU_STR_EQUAL(MEDIT(s)->e_keytag, "bounding-box center");
