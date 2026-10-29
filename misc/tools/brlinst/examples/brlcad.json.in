@@ -3,6 +3,7 @@
   "id": "org.brlcad.brlcad",
   "name": "BRL-CAD",
   "version": "@BRLCAD_VERSION@",
+  "architecture": "x64",
   "publisher": "BRL-CAD Development Team",
   "website": "https://brlcad.org/",
   "welcome": "BRL-CAD is an open source solid modeling system. This wizard installs this version separately from other versions.",

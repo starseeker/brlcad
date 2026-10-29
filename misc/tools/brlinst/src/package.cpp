@@ -18,6 +18,8 @@ constexpr std::array<char, 16> magic{
 constexpr std::uint64_t footer_size = 48;
 constexpr std::uint64_t max_file_size = 64ULL * 1024 * 1024 * 1024;
 constexpr std::uint64_t max_total_size = 1024ULL * 1024 * 1024 * 1024;
+constexpr std::uint16_t pe_machine_x64 = 0x8664;
+constexpr std::uint16_t pe_machine_arm64 = 0xaa64;
 std::uint64_t number(std::istream &in, unsigned bytes) {
     std::uint64_t n = 0;
     for (unsigned i = 0; i < bytes; ++i) {
@@ -32,9 +34,16 @@ void number(std::ostream &out, std::uint64_t value, unsigned bytes) {
     for (unsigned i = 0; i < bytes; ++i)
         out.put(static_cast<char>(value >> (i * 8)));
 }
-std::uint64_t pe_end(std::istream &in, std::uint64_t length) {
+struct PeInfo {
+    std::uint64_t end;
+    std::uint16_t machine;
+};
+std::uint16_t pe_machine(Architecture architecture) {
+    return architecture == Architecture::arm64 ? pe_machine_arm64 : pe_machine_x64;
+}
+PeInfo pe_info(std::istream &in, std::uint64_t length) {
     if (length < 256)
-        throw Error("Runtime is not a Windows x64 executable");
+        throw Error("Runtime is not a supported 64-bit Windows executable");
     in.seekg(0);
     if (number(in, 2) != 0x5a4d)
         throw Error("Runtime has no MZ header");
@@ -43,22 +52,25 @@ std::uint64_t pe_end(std::istream &in, std::uint64_t length) {
     if (pe > length - 200)
         throw Error("Invalid PE header offset");
     in.seekg(static_cast<std::streamoff>(pe));
-    if (number(in, 4) != 0x4550 || number(in, 2) != 0x8664)
-        throw Error("Expected Windows x64 PE runtime");
+    if (number(in, 4) != 0x4550)
+        throw Error("Runtime has no PE header");
+    const auto machine = static_cast<std::uint16_t>(number(in, 2));
+    if (machine != pe_machine_x64 && machine != pe_machine_arm64)
+        throw Error("Expected Windows x64 or arm64 PE runtime");
     in.seekg(static_cast<std::streamoff>(pe + 24));
     if (number(in, 2) != 0x20b)
         throw Error("Expected PE32+ runtime");
     in.seekg(static_cast<std::streamoff>(pe + 24 + 108));
     if (number(in, 4) < 5)
-        return length;
+        return {length, machine};
     in.seekg(static_cast<std::streamoff>(pe + 24 + 112 + 4 * 8));
     auto certificates = number(in, 4);
     auto size = number(in, 4);
     if (certificates == 0 && size == 0)
-        return length;
+        return {length, machine};
     if (certificates < pe + 200 || certificates > length || size != length - certificates || certificates % 8)
         throw Error("Invalid PE certificate table");
-    return certificates;
+    return {certificates, machine};
 }
 std::string folded(const std::string &path) {
 #ifdef _WIN32
@@ -244,7 +256,8 @@ Package open_package(const fs::path &executable) {
     auto length = fs::file_size(executable);
     if (length > max_package_size)
         throw Error("Package exceeds supported executable size");
-    auto end = pe_end(in, length);
+    const auto image = pe_info(in, length);
+    auto end = image.end;
     if (end < footer_size)
         throw Error("Missing package footer");
     in.seekg(static_cast<std::streamoff>(end - footer_size));
@@ -268,6 +281,8 @@ Package open_package(const fs::path &executable) {
         throw Error("Unsupported package version");
     package.product = data.at("product");
     validate_product(package.product, true);
+    if (image.machine != pe_machine(product_architecture(package.product)))
+        throw Error("Executable architecture does not match the package manifest");
     package.payload_offset = payload;
     if (!data.at("files").is_array() || data.at("files").size() > 200000)
         throw Error("Invalid package file list");
@@ -327,12 +342,17 @@ void create_package(const fs::path &config, const fs::path &source, const fs::pa
     check_entries(preflight, 0);
     {
         std::ifstream in(stub, std::ios::binary);
-        if (pe_end(in, fs::file_size(stub)) != fs::file_size(stub))
+        const auto executable = pe_info(in, fs::file_size(stub));
+        if (executable.machine != pe_machine(product_architecture(product)))
+            throw Error("Setup stub architecture does not match the package configuration");
+        if (executable.end != fs::file_size(stub))
             throw Error("Use an unsigned setup stub; sign the assembled installer");
     }
     {
         std::ifstream in(uninstaller, std::ios::binary);
-        pe_end(in, fs::file_size(uninstaller));
+        if (pe_info(in, fs::file_size(uninstaller)).machine !=
+            pe_machine(product_architecture(product)))
+            throw Error("Uninstaller architecture does not match the package configuration");
     }
     auto temporary = output;
     temporary += ".building";

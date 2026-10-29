@@ -21,9 +21,11 @@ struct Payload {
     std::uint64_t size;
 };
 struct Model {
+    explicit Model(Architecture value) : architecture(value) {}
     std::vector<Table> tables;
     std::vector<Payload> files;
     std::string product_code, name;
+    Architecture architecture;
     Table &table(const std::string &name);
 };
 using GuidFactory = std::function<std::string(const std::string &)>;

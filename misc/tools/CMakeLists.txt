@@ -14,7 +14,7 @@ add_subdirectory(asciiquack)
 # runtime, and install rules isolated from the main build while ensuring the
 # generated CPack package target has built it through its normal all dependency.
 if(WIN32 AND CMAKE_HOST_WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND
-    CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64)$")
+    CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|ARM64|arm64|aarch64)$")
   include(ExternalProject)
   set(_brlinst_host_binary_dir "${CMAKE_CURRENT_BINARY_DIR}/brlinst-host")
   set(_brlinst_zlib_source)

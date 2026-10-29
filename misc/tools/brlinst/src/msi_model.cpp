@@ -447,16 +447,19 @@ Model make_model(const PackageInput &input, const fs::path &notices, const fs::p
                  const GuidFactory &guid) {
     const auto &p = input.product;
     version(p.at("version").get<std::string>());
-    Model m;
+    Model m(product_architecture(p));
     schema(m);
     auto row = [&](const char *t, Json r) { m.table(t).rows.push_back(std::move(r)); };
     auto property = [&](const char *key, const std::string &value) { row("Property", {key, value}); };
     const auto identity = "brlinst/msi/v1/" + instance_id(p);
     m.product_code = guid(identity + "/product");
-    m.name = p.at("name").get<std::string>() + " " + p.at("version").get<std::string>() + " (x64, MSI)";
+    const auto architecture = architecture_name(m.architecture);
+    m.name = p.at("name").get<std::string>() + " " + p.at("version").get<std::string>() + " (" +
+             architecture + ", MSI)";
     property("ProductCode", m.product_code);
     property("ProductName", m.name);
-    property("UpgradeCode", guid("brlinst/msi/v1/family/" + p.at("id").get<std::string>() + "/x64"));
+    property("UpgradeCode",
+             guid("brlinst/msi/v1/family/" + p.at("id").get<std::string>() + "/" + architecture));
     property("ProductVersion", p.at("version"));
     property("Manufacturer", p.at("publisher"));
     property("ProductLanguage", "1033");

@@ -408,7 +408,7 @@ void summary(MSIHANDLE db, const Model &model, const Json &product) {
     text(3, model.name);
     text(4, product.at("publisher"));
     text(5, "Installer");
-    text(7, "x64;1033");
+    text(7, std::string(model.architecture == Architecture::arm64 ? "Arm64" : "x64") + ";1033");
     text(9, random_guid());
     number(14, 500); // Windows Installer 5.0, needed for dual-purpose authoring
     number(15, 2); // Compressed dual-purpose package; machine scope may require elevation

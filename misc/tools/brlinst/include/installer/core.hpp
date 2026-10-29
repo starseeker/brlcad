@@ -25,6 +25,7 @@ enum class ExitCode : int {
     cancelled = 5,
     failure = 6
 };
+enum class Architecture { x64, arm64 };
 struct Error : std::runtime_error {
     ExitCode code;
     explicit Error(const std::string &message, ExitCode c = ExitCode::failure)
@@ -73,6 +74,8 @@ void publish_file(const fs::path &source, const fs::path &destination);
 void durable_json(const fs::path &path, const Json &data);
 void validate_relative(const std::string &path, bool internal = false);
 void validate_product(const Json &product, bool packaged = false);
+Architecture product_architecture(const Json &product);
+std::string architecture_name(Architecture architecture);
 void check_no_links(const fs::path &path);
 std::string instance_id(const Json &product);
 std::string display_name(const Json &product, bool machine);

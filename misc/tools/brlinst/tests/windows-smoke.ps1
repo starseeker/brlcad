@@ -23,7 +23,7 @@ function Wait-Removed([string]$Path) {
 try {
     foreach ($version in @('1.0.0', '2.0.0')) {
         $config = @{
-            formatVersion = 1; id = $productId; name = $productName; version = $version
+            formatVersion = 1; id = $productId; name = $productName; version = $version; architecture = 'x64'
             publisher = 'BRL-CAD Development Team'; license = 'license.txt'
             shortcuts = @(@{name = 'Test command'; target = 'bin/app.exe'; desktop = $true})
         } | ConvertTo-Json -Depth 10

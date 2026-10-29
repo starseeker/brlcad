@@ -17,7 +17,8 @@ project. Run the following commands from that directory. Its sources are include
 in BRL-CAD source distributions; building BRL-CAD does not automatically build or
 install brlinst.
 
-Windows 10/11 x64 and a Visual Studio C++ toolchain with the Windows SDK:
+Windows 10/11 on x64 or ARM64 and a matching Visual Studio C++ toolchain with
+the Windows SDK. For example, an x64 build uses:
 
 [source,powershell]
 ----
@@ -90,6 +91,7 @@ not by these checksums.
   "id": "org.brlcad.brlcad",
   "name": "BRL-CAD",
   "version": "7.42.0",
+  "architecture": "x64",
   "publisher": "BRL-CAD Development Team",
   "website": "https://brlcad.org/",
   "welcome": "This wizard installs this version separately from other versions.",
@@ -107,8 +109,10 @@ not by these checksums.
 }
 ----
 
-`formatVersion`, `id`, `name`, `version`, `publisher`, `license`, and `shortcuts`
-are required. `shortcuts` may be empty. The optional icon is a Windows `.ico`;
+`formatVersion`, `id`, `name`, `version`, `architecture`, `publisher`, `license`,
+and `shortcuts` are required. Architecture is `x64` or `arm64` and must match
+the setup stub and uninstaller PE architecture. `shortcuts` may be empty. The
+optional icon is a Windows `.ico`;
 welcome text and an HTTPS website are optional. License and installer-icon paths
 are relative to the JSON file, or absolute. Other paths use forward slashes and
 are relative to the staged payload. Unknown fields and duplicate JSON keys are
@@ -135,8 +139,8 @@ changing the engine. Desktop eligibility does not enable desktop shortcuts by
 default; the installer user makes that choice.
 
 Product IDs and versions use ASCII letters, digits, dots, underscores, and
-hyphens. Registration identity includes ID, version, and x64, with registry hive
-selecting scope. Names shown to users and used by shortcuts include version,
+hyphens. Registration identity includes ID, version, and architecture, with the
+registry hive selecting scope. Names shown to users and used by shortcuts include version,
 architecture, and scope. There is no registry-state compatibility with legacy
 NSIS or MSI installations; those retain their original uninstallers.
 
@@ -267,7 +271,7 @@ Uninstall an existing version before reinstalling it. Automatic upgrades,
 repair, feature selection, patch generation, advertisement, and administrative
 extraction (`/a`) are outside this backend's initial scope.
 
-Defaults use a versioned folder with `(x64, MSI)` in its name, in the current
+Defaults use a versioned folder with the architecture and `MSI` in its name, in the current
 user's Programs folder or Program Files. MSI shortcuts are similarly marked,
 so EXE and MSI registrations do not claim the same shortcuts. A read-only
 preflight rejects nonempty destinations, linked paths, network/removable drives,
@@ -321,9 +325,10 @@ cmake --build C:/build/brlcad --config Release --target package
 
 CPack's ZIP generator remains available as a tool-independent fallback. Its
 External generator stages BRL-CAD once and invokes the locally built brlinst to
-produce both Windows installers. Native 32-bit Windows and cross-compiled builds
-currently produce ZIP only because brlinst authors x64 packages and its MSI
-backend requires Windows host APIs.
+produce both Windows installers. Native x64 and ARM64 builds are supported;
+native 32-bit Windows and cross-compiled builds produce ZIP only because the MSI
+backend requires Windows host APIs and the generated runtime must match the
+declared package architecture.
 
 The default configuration advertises MGED, Archer, and RtWizard only when their
 build targets exist, and adds manual links when those files are staged. Set `BRLINST_PRODUCT_CONFIG` to a complete custom JSON file
@@ -359,7 +364,8 @@ checks shortcuts/PATH/registry, and removes them through their uninstallers.
 It preserves logs and test user files. Run it on a disposable test account.
 It does not test machine-wide UAC or graphical layout.
 
-Before releasing BRL-CAD installers, test on clean Windows 10 and 11 x64 VMs:
+Before releasing BRL-CAD installers, test on clean Windows 10 and 11 VMs for
+each released architecture:
 interactive navigation, high DPI and keyboard use, Unicode destinations,
 current-user and all-users installs, UAC cancellation and alternate credentials,
 quiet exit codes, files in use, low disk space, interruption/recovery, signed

@@ -136,6 +136,7 @@ int main() {
                     {"id", "test.msi"},
                     {"name", "MSI Test"},
                     {"version", "1.2.3"},
+                    {"architecture", "x64"},
                     {"publisher", "Test"},
                     {"license", "license.txt"},
                     {"shortcuts", Json::array({{{"name", "Application"},
@@ -184,6 +185,15 @@ int main() {
         require(!has_key(model, "Binary", "WixUIBannerBmp") &&
                     !has_key(model, "Binary", "WixUIDialogBmp"),
                 "Unbranded MSI contains branding streams");
+        auto arm_input = input;
+        arm_input.product["architecture"] = "arm64";
+        auto arm_model = make_model(arm_input, root / "NOTICE.txt", root / "actions.dll", guid);
+        require(arm_model.architecture == Architecture::arm64, "ARM64 model architecture missing");
+        require(arm_model.name == "MSI Test 1.2.3 (arm64, MSI)", "ARM64 product name is incorrect");
+        require(arm_model.product_code != model.product_code, "Architectures share a ProductCode");
+        require(by_key(arm_model, "Property", "UpgradeCode")[1] !=
+                    by_key(model, "Property", "UpgradeCode")[1],
+                "Architectures share an UpgradeCode");
 
         write(root / "generic.ico", "generic icon");
         write(root / "msi.ico", "MSI icon");

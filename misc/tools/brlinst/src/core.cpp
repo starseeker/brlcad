@@ -203,8 +203,8 @@ static std::string text_field(const Json &j, const char *key) {
     return s;
 }
 void validate_product(const Json &p, bool packaged) {
-    fields(p, {"formatVersion", "id", "name", "version", "publisher", "website", "welcome", "license",
-               "licenseText", "icon", "branding", "shortcuts"});
+    fields(p, {"formatVersion", "id", "name", "version", "architecture", "publisher", "website",
+               "welcome", "license", "licenseText", "icon", "branding", "shortcuts"});
     if (!p.contains("formatVersion") || p["formatVersion"] != 1)
         throw Error("Unsupported configuration formatVersion", ExitCode::arguments);
     for (auto key : {"id", "version"}) {
@@ -216,6 +216,7 @@ void validate_product(const Json &p, bool packaged) {
             throw Error(std::string("Use ASCII letters, digits, dot, hyphen or underscore for ") + key,
                         ExitCode::arguments);
     }
+    product_architecture(p);
     auto name = text_field(p, "name");
     validate_relative(name);
     if (name.find('/') != std::string::npos || name.size() > 80)
@@ -289,11 +290,24 @@ void validate_product(const Json &p, bool packaged) {
             throw Error("desktop must be boolean", ExitCode::arguments);
     }
 }
+Architecture product_architecture(const Json &product) {
+    const auto name = text_field(product, "architecture");
+    if (name == "x64")
+        return Architecture::x64;
+    if (name == "arm64")
+        return Architecture::arm64;
+    throw Error("architecture must be x64 or arm64", ExitCode::arguments);
+}
+std::string architecture_name(Architecture architecture) {
+    return architecture == Architecture::arm64 ? "arm64" : "x64";
+}
 std::string instance_id(const Json &p) {
-    return p.at("id").get<std::string>() + "!" + p.at("version").get<std::string>() + "!x64";
+    return p.at("id").get<std::string>() + "!" + p.at("version").get<std::string>() + "!" +
+           architecture_name(product_architecture(p));
 }
 std::string display_name(const Json &p, bool machine) {
-    return p.at("name").get<std::string>() + " " + p.at("version").get<std::string>() + " (x64, " +
+    return p.at("name").get<std::string>() + " " + p.at("version").get<std::string>() + " (" +
+           architecture_name(product_architecture(p)) + ", " +
            (machine ? "all users)" : "current user)");
 }
 

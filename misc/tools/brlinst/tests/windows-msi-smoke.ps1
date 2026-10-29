@@ -51,7 +51,7 @@ $desktopRoot = [Environment]::GetFolderPath($(if ($Machine) { 'CommonDesktopDire
 try {
     foreach ($version in @('1.0.0', '2.0.0', '1.0.0')) {
         $config = @{
-            formatVersion = 1; id = "test.brlinst.msi.$token"; name = $productName; version = $version
+            formatVersion = 1; id = "test.brlinst.msi.$token"; name = $productName; version = $version; architecture = 'x64'
             publisher = 'BRL-CAD Development Team'; license = 'license.txt'
             shortcuts = @(@{name = 'Test command'; target = 'bin/app.exe'; arguments = '/c echo [literal]'; desktop = $true})
         } | ConvertTo-Json -Depth 10

@@ -308,15 +308,12 @@ void require_supported_windows() {
     OSVERSIONINFOW v{};
     v.dwOSVersionInfoSize = sizeof(v);
     if (!fn || fn(&v) != 0 || v.dwMajorVersion < 10)
-        throw Error("brlinst requires Windows 10 or Windows 11 x64");
-    SYSTEM_INFO info{};
-    GetNativeSystemInfo(&info);
-    if (info.wProcessorArchitecture != PROCESSOR_ARCHITECTURE_AMD64)
-        throw Error("This package requires an x64 Windows system");
+        throw Error("brlinst requires 64-bit Windows 10 or later");
 }
 fs::path default_directory(const Json &product, bool machine) {
     auto parent = known_directory(machine ? FOLDERID_ProgramFiles : FOLDERID_UserProgramFiles);
-    return parent / (wide(product.at("name")) + L" " + wide(product.at("version")) + L" x64");
+    return parent / (wide(product.at("name")) + L" " + wide(product.at("version")) + L" " +
+                     wide(architecture_name(product_architecture(product))));
 }
 void validate_destination(const fs::path &path, bool machine) {
     if (!path.is_absolute() || path.wstring().rfind(L"\\\\", 0) == 0)

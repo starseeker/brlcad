@@ -6,6 +6,8 @@
 #include <sstream>
 using namespace installer;
 namespace {
+constexpr std::uint16_t pe_machine_x64 = 0x8664;
+constexpr std::uint16_t pe_machine_arm64 = 0xaa64;
 void require(bool ok, const char *message) {
     if (!ok)
         throw std::runtime_error(message);
@@ -29,12 +31,12 @@ void put(std::string &s, std::size_t at, std::uint64_t value, unsigned bytes) {
     for (unsigned i = 0; i < bytes; ++i)
         s.at(at + i) = static_cast<char>(value >> (i * 8));
 }
-std::string stub() {
+std::string stub(std::uint16_t machine = pe_machine_x64) {
     std::string s(512, '\0');
     put(s, 0, 0x5a4d, 2);
     put(s, 0x3c, 64, 4);
     put(s, 64, 0x4550, 4);
-    put(s, 68, 0x8664, 2);
+    put(s, 68, machine, 2);
     put(s, 88, 0x20b, 2);
     put(s, 88 + 108, 16, 4);
     return s;
@@ -100,6 +102,7 @@ int main(int argc, char **argv) {
                     {"id", "test.product"},
                     {"name", "Test Product"},
                     {"version", "1.2.3"},
+                    {"architecture", "x64"},
                     {"publisher", "Tests"},
                     {"license", "license.txt"},
                     {"shortcuts", Json::array({{{"name", "Test"}, {"target", "bin/app.exe"}}})}};
@@ -113,6 +116,18 @@ int main(int argc, char **argv) {
               {"dialog", "dialog.bmp"},
               {"license", "license.rtf"}}}};
         validate_product(branded_config);
+        require(product_architecture(config) == Architecture::x64, "x64 architecture not parsed");
+        auto arm_config = config;
+        arm_config["architecture"] = "arm64";
+        validate_product(arm_config);
+        require(product_architecture(arm_config) == Architecture::arm64, "arm64 architecture not parsed");
+        require(instance_id(config) != instance_id(arm_config), "Architectures share an instance identity");
+        auto missing_architecture = config;
+        missing_architecture.erase("architecture");
+        fails([&] { validate_product(missing_architecture); }, "Missing architecture accepted");
+        auto invalid_architecture = config;
+        invalid_architecture["architecture"] = "amd64";
+        fails([&] { validate_product(invalid_architecture); }, "Invalid architecture accepted");
         auto incomplete_branding = branded_config;
         incomplete_branding["branding"]["exe"].erase("sidebar");
         fails([&] { validate_product(incomplete_branding); }, "Incomplete EXE branding accepted");
@@ -126,6 +141,23 @@ int main(int argc, char **argv) {
                        root / "repeat.exe");
         require(read_text(root / "setup.exe") == read_text(root / "repeat.exe"),
                 "package generation is not deterministic");
+#ifndef _WIN32
+        write(root / "product-arm64.json", arm_config.dump());
+        write(root / "stub-arm64.exe", stub(pe_machine_arm64));
+        write(root / "uninstall-arm64.exe", stub(pe_machine_arm64));
+        create_package(root / "product-arm64.json", root / "payload", root / "stub-arm64.exe",
+                       root / "uninstall-arm64.exe", root / "setup-arm64.exe");
+        auto arm_package = open_package(root / "setup-arm64.exe");
+        verify_package(arm_package);
+        require(product_architecture(arm_package.product) == Architecture::arm64,
+                "ARM64 package architecture was not retained");
+        fails(
+            [&] {
+                create_package(root / "product-arm64.json", root / "payload", root / "stub.exe",
+                               root / "uninstall-arm64.exe", root / "mismatched-arm64.exe");
+            },
+            "Mismatched setup architecture accepted");
+#endif
         auto package = open_package(root / "setup.exe");
         verify_package(package);
         require(package.files.size() == 5, "wrong packaged files");
