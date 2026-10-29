@@ -1,0 +1,163 @@
+Bundling xcb-util-cursor for Rocky Linux vmpkg builds
+====================================================
+
+Status
+------
+
+This is an implementation plan.  It has not been tested on Rocky Linux.
+
+The additional EPEL repository used by vmpkg is narrowly restricted to the
+xcb-util-cursor and xcb-util-cursor-devel RPMs.  Qt's XCB platform plugin uses
+the library for client-side cursor theme handling.  It is not an X server,
+graphics driver, kernel interface, or other facility that must be supplied by
+the operating system.
+
+Consequently, xcb-util-cursor can be built by bext and shipped privately with
+BRL-CAD.  The system X server and the existing Rocky libxcb, X11, GLX, Mesa,
+and related libraries would remain in use.
+
+
+Recommended design
+------------------
+
+Build only xcb-util-cursor in bext.  Do not bundle the core libxcb or libX11
+libraries for the normal system-X11 build.
+
+Use a shared xcb-util-cursor library installed in the normal bext bundled
+prefix.  This is consistent with the other bundled runtime libraries and lets
+the existing bext manifest, BRL-CAD staging, and RPATH processing include it in
+the final packages.  Building it statically is possible, but would require a
+position-independent archive, explicit Qt static-library selection, and more
+careful transitive-link validation without providing a clear advantage.
+
+Qt should not need a source patch.  Its normal configuration already searches
+for the XCB CURSOR component and links XCB::CURSOR into the XCB platform
+plugin.  The Xmin patch is different: it substitutes a complete alternative
+X11/XCB client implementation and therefore must change Qt's dependency
+targets.  A private xcb-util-cursor build implements the standard API Qt
+already expects.
+
+
+Bext work
+---------
+
+1. Add a pinned xcb-util-cursor source to bext, following the existing bext
+   source and license-recording conventions.  Prefer an upstream release tag
+   or archive rather than importing the EPEL RPM.  Version 0.1.3 is already
+   proven by the current EPEL 8 package; a newer release should be selected
+   only after confirming compatibility with Rocky 8's XCB libraries.
+
+2. Add an xcb-util-cursor bext project that installs into
+   CMAKE_BUNDLE_INSTALL_PREFIX.  Its direct build requirements are the XCB
+   render, render-util, and image development interfaces.  The corresponding
+   Rocky packages are already listed in misc/vmpkg/builder-packages.txt.
+
+3. If building from a Git checkout, account for the upstream build-time m4
+   macros and gperf-generated source.  A release archive may avoid needing
+   gperf because generated files are normally included.  Do not silently add
+   host tools; either build all required tools through the locked environment
+   or use a source artifact containing the generated outputs.
+
+4. Add the new bext project to qt/qt.deps so it is installed before Qt is
+   configured.
+
+5. Make discovery deterministic.  Expose the bext include, library, and
+   pkg-config directories to Qt's nested configure, preferably with an
+   explicit CMAKE_PREFIX_PATH and PKG_CONFIG_PATH.  Do not rely solely on a
+   library of the same name that may happen to be installed on the host.
+
+6. Add a configure-time check that XCB::CURSOR resolves inside the bext prefix
+   when the local xcb-util-cursor project is selected.  This prevents a build
+   from accidentally succeeding against EPEL or another host installation.
+
+7. Confirm that the bext install manifest classifies libxcb-cursor.so and its
+   SONAME links as bundled outputs.  Confirm that Qt's libqxcb platform plugin
+   receives a runtime search path that locates the packaged private library.
+
+8. Record the upstream license in the bext legal output and ensure the source
+   is included in the independently reusable bext source artifact and SBOM.
+
+
+Vmpkg cleanup after the bundled build works
+--------------------------------------------
+
+1. Remove xcb-util-cursor-devel from misc/vmpkg/builder-packages.txt.
+
+2. Remove xcb-util-cursor from misc/vmpkg/runtime-packages.txt.
+
+3. Remove the vmpkg-epel-xcb repository from misc/vmpkg/rocky.repo.
+
+4. Remove the EPEL signing-key input from misc/vmpkg/inputs.json.
+
+5. Simplify misc/vmpkg/guest-env.py so RPM locking, validation, and
+   installation no longer download, validate, or import the EPEL key.  Rocky's
+   signing key must continue to be imported and checked.
+
+6. Update misc/vmpkg/test_vmpkg.py for the revised signing-key and repository
+   policy.
+
+7. Update misc/vmpkg/README.md to state that RPM resolution uses only the
+   pinned Rocky BaseOS, AppStream, and PowerTools repositories, while
+   xcb-util-cursor is supplied by the pinned bext artifact.
+
+8. Generate fresh builder and runtime RPM locks.  Existing locks are invalid
+   after either package roots or repository policy changes.
+
+
+Rocky validation
+----------------
+
+Perform all validation in a fresh Rocky 8.10 guest with no EPEL repository or
+xcb-util-cursor RPM installed.
+
+1. Resolve and provision new builder and runtime locks using Rocky repositories
+   only.
+
+2. Build the bext artifact from a clean work directory and verify that its
+   receipt includes the xcb-util-cursor headers, library, SONAME links,
+   pkg-config metadata, source, and license information as appropriate.
+
+3. Inspect Qt's configure summary and CMake cache to verify that the XCB
+   platform plugin is enabled and XCB::CURSOR resolves to the bext prefix.
+
+4. Inspect the built and installed libqxcb platform plugin with readelf or ldd.
+   It must resolve libxcb-cursor.so.0 from the staged BRL-CAD/bext library
+   directory, while core libxcb and X11/GLX libraries continue to resolve to
+   the intended Rocky system libraries.
+
+5. Build the BRL-CAD RPM and inspect its automatic requirements and provides.
+   It must not require an external xcb-util-cursor RPM.  If the packaged shared
+   library generates a libxcb-cursor.so.0 requirement, the same BRL-CAD package
+   must satisfy that requirement with its bundled library.
+
+6. Install the RPM in the fresh runtime guest without EPEL enabled.  Run the
+   existing Xvfb/software-GL smoke tests and launch representative Qt programs
+   with QT_DEBUG_PLUGINS enabled to catch platform-plugin dependency failures.
+
+7. Exercise standard, themed, custom bitmap, and drag cursors.  These cover the
+   xcb-util-cursor path and Qt's fallback cursor paths rather than merely
+   proving that the plugin can be loaded.
+
+8. Run the normal BRL-CAD check target.  Before finalizing the change, also run
+   regress-repository and regress-licenses as required by repository policy.
+
+
+Risks and non-goals
+-------------------
+
+* Do not bundle core libxcb merely to solve this missing leaf dependency.
+  Loading private and system copies of core X11/XCB libraries in the same
+  process can create ABI and shared-state problems, particularly around
+  Xlib-XCB and GLX interoperability.
+
+* Do not patch cursor support out of Qt unless bundling proves impossible.
+  Qt's XCB plugin currently treats XCB::CURSOR as part of its required XCB
+  dependency set, and removing it would create a recurring Qt patch while
+  degrading themed and animated cursor behavior.
+
+* Bundling xcb-util-cursor does not make a graphical Qt build independent of
+  the host display system.  A usable X server, or Xvfb for automated tests,
+  and compatible system XCB/OpenGL libraries are still required.
+
+* Keep the bundled library private to the BRL-CAD installation.  It should not
+  overwrite or register itself as a replacement for a distribution package.
