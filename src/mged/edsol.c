@@ -1474,6 +1474,7 @@ f_keypoint(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
+    point_t keypoint = VINIT_ZERO;
 
     CHECK_DBI_NULL;
 
@@ -1505,7 +1506,6 @@ f_keypoint(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv
 
 	    break;
 	case 3:
-	    point_t keypoint;
 	    for (int i = 0; i < ELEMENTS_PER_VECT; ++i) {
 		if (bu_opt_fastf_t(NULL, 1, &argv[i + 1], &keypoint[i]) != 1 ||
 		    !isfinite(keypoint[i])) {
