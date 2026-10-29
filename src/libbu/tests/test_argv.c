@@ -30,17 +30,24 @@
 
 
 static size_t
-argv_test(const char *s, size_t expected)
+argv_test_limited(const char *s, size_t expected, size_t lmax, const char * const expected_argv[])
 {
     char *ts = bu_strdup(s);
-    char **av = (char **)bu_calloc(strlen(ts)+1, sizeof(char *), "av");
-    size_t ac = bu_argv_from_string(av, strlen(ts), ts);
+    char **av = (char **)bu_calloc(lmax+1, sizeof(char *), "av");
+    /* Require the parser to write the terminator rather than rely on calloc. */
+    av[expected] = ts;
+    size_t ac = bu_argv_from_string(av, lmax, ts);
     if (ac != expected)
 	bu_exit(EXIT_FAILURE, "Test failed: %s\n", s);
     bu_log("Test results (%zd elements): %s\n", ac,  s);
     for (size_t i = 0; i < ac; i++) {
 	bu_log("%zd\t: %s\n", i, av[i]);
+	if (expected_argv && !BU_STR_EQUAL(av[i], expected_argv[i]))
+	    bu_exit(EXIT_FAILURE, "Test failed: %s, argument %zu: expected '%s', got '%s'\n",
+		    s, i, expected_argv[i], av[i]);
     }
+    if (av[ac] != NULL)
+	bu_exit(EXIT_FAILURE, "Test failed: %s, missing argv terminator\n", s);
     bu_free(av, "array");
     bu_free(ts, "string copy");
     return ac;
@@ -48,20 +55,9 @@ argv_test(const char *s, size_t expected)
 
 
 static size_t
-argv_test_limited(const char *s, size_t expected, int lmax)
+argv_test(const char *s, size_t expected)
 {
-    char *ts = bu_strdup(s);
-    char **av = (char **)bu_calloc(strlen(ts)+1, sizeof(char *), "av");
-    size_t ac = bu_argv_from_string(av, lmax, ts);
-    if (ac != expected)
-	bu_exit(EXIT_FAILURE, "Test failed: %s\n", s);
-    bu_log("Test results (%zd elements): %s\n", ac,  s);
-    for (size_t i = 0; i < ac; i++) {
-	bu_log("%zd\t: %s\n", i, av[i]);
-    }
-    bu_free(av, "array");
-    bu_free(ts, "string copy");
-    return ac;
+    return argv_test_limited(s, expected, strlen(s), NULL);
 }
 
 
@@ -93,11 +89,48 @@ main(int UNUSED(argc), char *argv[])
     argv_test("\"a\\\\ 0\" a\\ 1", 2);
 
 
-    argv_test_limited("a0 a1 a2", 0, 0);
-    argv_test_limited("a0 a1 a2", 1, 1);
-    argv_test_limited("a0 a1 a2", 2, 2);
-    argv_test_limited("a0 a1 a2", 3, 3);
-    argv_test_limited("a0 a1 a2", 3, 4);
+    argv_test_limited("a0 a1 a2", 0, 0, NULL);
+    argv_test_limited("a0 a1 a2", 1, 1, NULL);
+    argv_test_limited("a0 a1 a2", 2, 2, NULL);
+    argv_test_limited("a0 a1 a2", 3, 3, NULL);
+    argv_test_limited("a0 a1 a2", 3, 4, NULL);
+
+    /* Empty quoted arguments must not absorb following arguments.  Check
+     * values as well as counts so a lost quote cannot go unnoticed. */
+    {
+	const struct {
+	    const char *input;
+	    const char *expected[5];
+	} tests[] = {
+	    {"", {NULL}},
+	    {" \t\r\n", {NULL}},
+	    {"a0 a1 ", {"a0", "a1", NULL}},
+	    {"a0 a1\t", {"a0", "a1", NULL}},
+	    {" r1 r2 ", {"r1", "r2", NULL}},
+	    {"\"\"", {"", NULL}},
+	    {"\"\" \"\"", {"", "", NULL}},
+	    {"\"\" a1", {"", "a1", NULL}},
+	    {"a0 \"\"", {"a0", "", NULL}},
+	    {"a0 \"\"  ", {"a0", "", NULL}},
+	    {"a0 \"\" a2", {"a0", "", "a2", NULL}},
+	    {"\"a0\" \"\" \"a2\"", {"a0", "", "a2", NULL}},
+	    {"a0 \"\" \"\" a3", {"a0", "", "", "a3", NULL}},
+	    {"check_cycle \"\" \"{}\" \";\"", {"check_cycle", "", "{}", ";", NULL}},
+	    {"a0 \\\"a1\\\"", {"a0", "\"a1\"", NULL}},
+	    {"a0 \\ a1", {"a0", " a1", NULL}},
+	    {"a0 a1\\", {"a0", "a1", NULL}},
+	    {"a0 caf\xc3\xa9", {"a0", "caf\xc3\xa9", NULL}},
+	    {"a0 \"\\\"a1\\\"\"", {"a0", "\"a1\"", NULL}}
+	};
+	for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); i++) {
+	    size_t expected = 0;
+	    while (tests[i].expected[expected])
+		expected++;
+	    for (size_t limit = 0; limit <= expected + 1; limit++)
+		argv_test_limited(tests[i].input, limit < expected ? limit : expected,
+				  limit, tests[i].expected);
+	}
+    }
 
     return 0;
 }

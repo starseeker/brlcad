@@ -68,7 +68,7 @@ process_escape(char **lp)
 static void
 skip_whitespace(char **lpp)
 {
-    while (*(*lpp) != '\0' && isspace((int)(*(*lpp)))) {
+    while (*(*lpp) != '\0' && isspace((unsigned char)(*(*lpp)))) {
 	/* null out spaces */
 	*(*lpp) = '\0';
 	(*lpp)++;
@@ -90,7 +90,7 @@ bu_argv_from_string(char *argv[], size_t lim, char *lp)
     /* argv is expected to be at least lim+1 */
     argv[0] = (char *)NULL;
 
-    if (UNLIKELY(lim == 0 || !lp)) {
+    if (UNLIKELY(lim == 0 || !lp || *lp == '\0')) {
 	/* nothing to do, only return NULL in argv[0] */
 	return 0;
     }
@@ -125,27 +125,21 @@ bu_argv_from_string(char *argv[], size_t lim, char *lp)
 
     for (; *lp != '\0'; lp++) {
 
-	if (*lp == '\\') {
-	    // If this escape character was previously escaped,
-	    // it's just a normal char
-	    if (escaped) {
-		escaped = 0;
-		continue;
-	    }
+	if (escaped) {
+	    escaped = 0;
+	    continue;
+	}
 
+	if (*lp == '\\') {
 	    // Handle the implications of the escaped char
 	    process_escape(&lp);
-	    escaped = 1;
+	    /* The loop increment skips the escaped character. */
+	    if (*lp == '\0')
+		break;
 	    continue;
 	}
 
 	if (*lp == '"') {
-	    if (escaped) {
-		// An escaped quote is a normal char
-		escaped = 0;
-		continue;
-	    }
-
 	    // Adjust the string based on the implications of the quote
 	    process_quote(&lp, &quoted);
 
@@ -157,12 +151,8 @@ bu_argv_from_string(char *argv[], size_t lim, char *lp)
 	    goto nextword;
 	}
 
-	// We've handled all the characters that might have been escaped -
-	// clear the flag for the next round
-	escaped = 0;
-
 	// skip over current word
-	if (quoted || !isspace((int)(*lp))) {
+	if (quoted || !isspace((unsigned char)(*lp))) {
 	    continue;
 	}
 
@@ -172,9 +162,9 @@ nextword:
 	// not the last arg, this replaces the space in the string with a
 	// NULL terminator to allow C to interpret the portion of the string
 	// pointed to by argv[argc] as its own string.
+	*lp = '\0';
 	if (lp == echar)
 	    goto nullterm;
-	*lp = '\0';
 	lp++;
 
 	// If we have additional whitespace, we need to clear it
@@ -208,6 +198,11 @@ nextword:
 	/* start of next word */
 	argv[argc] = lp;
 	argc++;
+
+	/* The loop increment must not skip the first character after an
+	 * opening quote or escape.  It may be an empty argument's closing
+	 * quote, which still needs to update the quoted state. */
+	lp--;
     }
 
 nullterm:
