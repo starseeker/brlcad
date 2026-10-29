@@ -173,10 +173,8 @@ int
 swrast_close(struct dm *dmp)
 {
     struct swrast_vars *pv = (struct swrast_vars *)dmp->i->dm_vars.priv_vars;
-    if (dmp->i->fbp) {
-	(void)fb_close_existing(dmp->i->fbp);
-	dmp->i->fbp = FB_NULL;
-    }
+    if (dm_close_fb(dmp) != BRLCAD_OK)
+	return BRLCAD_ERROR;
     if (pv->fs) {
 	(void)swrast_makeCurrent(dmp);
 	glfonsDelete(pv->fs);

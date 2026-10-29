@@ -122,8 +122,8 @@ dmo_closeFb(struct dm_obj *dmop)
     if (dmop->dmo_fbs.fbs_fbp == FB_NULL)
 	return BRLCAD_OK;
 
-    fb_flush(dmop->dmo_fbs.fbs_fbp);
-    fb_close_existing(dmop->dmo_fbs.fbs_fbp);
+    if (dm_close_fb(dmop->dmo_dmp) != BRLCAD_OK)
+	return BRLCAD_ERROR;
 
     dmop->dmo_fbs.fbs_fbp = FB_NULL;
 

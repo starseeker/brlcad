@@ -77,7 +77,7 @@ set(
 if(BRLCAD_ENABLE_TCL)
   # Archer scans only the plugin category directories for registration scripts.
   # Keep class definitions in their subdirectories so they are not sourced twice.
-  foreach(plugin_file IN LISTS archer_utility_FILES archer_wizard_FILES)
+  foreach(plugin_file IN LISTS archer_utility_FILES archer_wizard_FILES archer_plugin_support_FILES)
     get_filename_component(plugin_dir "${plugin_file}" DIRECTORY)
     file(RELATIVE_PATH plugin_dir "${CMAKE_CURRENT_SOURCE_DIR}/plugins" "${CMAKE_CURRENT_SOURCE_DIR}/${plugin_dir}")
     brlcad_adddata("${plugin_file}" "plugins/archer/${plugin_dir}")

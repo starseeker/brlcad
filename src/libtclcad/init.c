@@ -256,6 +256,19 @@ tclcad_init(Tcl_Interp *interp, int init_gui, struct bu_vls *tlog)
 
     tclcad_auto_path(interp);
 
+#ifdef HAVE_TK
+    /* Keep headless initialization display-free while allowing later loads. */
+    Tcl_StaticPackage(NULL, "Tklitehtml", Tklitehtml_Init, NULL);
+    if (Tcl_Eval(interp,
+	    "package ifneeded tklitehtml 0.1.0 {"
+	    "package require Tk 8.6; load {} Tklitehtml}") != TCL_OK) {
+	if (tlog)
+	    bu_vls_printf(tlog, "TkLiteHtml package registration ERROR:\n%s\n",
+		    Tcl_GetStringResult(interp));
+	return TCL_ERROR;
+    }
+#endif
+
     /* Initialize [incr Tcl] */
     if (Tcl_Eval(interp, "package require Itcl " TCLCAD_ITCL_MIN_VERSION) != TCL_OK) {
 	if (tlog)

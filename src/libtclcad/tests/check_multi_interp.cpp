@@ -425,7 +425,7 @@ main(int argc, const char **argv)
 	(init_gui && !init_tclcad(first, 1)) ||
 	!init_tclcad(first, init_gui) ||
 	!init_tclcad(second, 0) ||
-	(init_gui && !eval_ok(second, "package require Tk 8.6")) ||
+	(init_gui && !eval_ok(second, "package require tklitehtml 0.1.0")) ||
 	!init_tclcad(second, init_gui) ||
 	!check_initialized(first, "first", init_gui) ||
 	!check_initialized(second, "second", init_gui) ||

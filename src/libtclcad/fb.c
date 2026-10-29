@@ -981,8 +981,8 @@ to_close_fbs(struct bview *gdvp)
     if (tvd->gdv_fbs.fbs_fbp == FB_NULL)
 	return TCL_OK;
 
-    fb_flush(tvd->gdv_fbs.fbs_fbp);
-    fb_close_existing(tvd->gdv_fbs.fbs_fbp);
+    if (dm_close_fb((struct dm *)gdvp->dmp) != BRLCAD_OK)
+	return TCL_ERROR;
     tvd->gdv_fbs.fbs_fbp = FB_NULL;
 
     return TCL_OK;

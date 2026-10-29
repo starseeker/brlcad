@@ -2143,6 +2143,7 @@ include/dm.h: DM_EXPORT extern int dm_set_debug(struct dm *dmp, int lvl);
 include/dm.h: DM_EXPORT extern int dm_get_debug(struct dm *dmp);
 include/dm.h: DM_EXPORT extern int dm_logfile(struct dm *dmp, const char *filename);
 include/dm.h: DM_EXPORT extern struct fb *dm_get_fb(struct dm *dmp);
+include/dm.h: DM_EXPORT extern int dm_close_fb(struct dm *dmp);
 include/dm.h: DM_EXPORT extern int dm_get_fb_visible(struct dm *dmp);
 include/dm.h: DM_EXPORT extern int dm_set_fb_visible(struct dm *dmp, int is_fb_visible);
 include/dm.h: DM_EXPORT extern int dm_get_light(struct dm *dmp);

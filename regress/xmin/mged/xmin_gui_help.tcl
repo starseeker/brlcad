@@ -42,13 +42,13 @@ proc ::mged::xmin::help::exercise_command_manual {top} {
     set toc [$browser component manpagelistbox]
     ::gui::test::require {
 	[winfo exists $toc] && [$toc size] > 100 &&
-	[lsearch -exact [$toc get 0 end] rt] >= 0
-    } "manual browser did not populate the program-page table of contents"
+	[lsearch -exact [$toc get 0 end] {rt (n)}] >= 0
+    } "manual browser did not populate the command-page table of contents"
 
     man rt
     set selection [$toc curselection]
     ::gui::test::require {
-	[llength $selection] == 1 && [$toc get $selection] eq "rt"
+	[llength $selection] == 1 && [$toc get $selection] eq "rt (n)"
     } "man rt did not select and load the rt manual page"
 
     event generate $toc <<ListboxSelect>>
@@ -91,9 +91,9 @@ proc ::mged::xmin::help::exercise_command_manual {top} {
     ::mged::gui::test::settle
     ::gui::test::require {[$toc size] > 0} \
 	"manual browser search widget did not refresh results"
-    [$browser component search_frame].clear invoke
+    [$browser component search_frame].controls.clear invoke
     ::gui::test::require {
-	[$toc size] > 100 && [lsearch -exact [$toc get 0 end] rt] >= 0
+	[$toc size] > 100 && [lsearch -exact [$toc get 0 end] {rt (n)}] >= 0
     } "manual browser Clear did not restore the table of contents"
     $browser deactivate
 }
@@ -216,14 +216,15 @@ proc ::mged::xmin::help::exercise_html_manual {top} {
     set original_location [$viewer location]
     set missing_path [file join $::env(GUI_TEST_DIR) missing-manual.html]
     set navigation_status \
-	[::mged::manual::navigate $viewer goto $missing_path]
+	[::brlcad::mged::manual::navigate $viewer goto $missing_path]
     ::gui::test::require {
 	!$navigation_status && [$viewer location] eq $original_location &&
-	[$viewer title] eq "Table of Contents" && [$viewer error] ne ""
+	[$viewer title] eq "Table of Contents" && [$viewer error] ne "" &&
+	$::brlcad::mged::manual::message eq [$viewer error]
     } "internal Manual viewer did not preserve a failed navigation"
     ::gui::test::require {
-	[::mged::manual::navigate $viewer goto $original_location] &&
-	[$viewer error] eq ""
+	[::brlcad::mged::manual::navigate $viewer goto $original_location] &&
+	[$viewer error] eq "" && $::brlcad::mged::manual::message eq ""
     } "internal Manual viewer did not recover after a navigation failure"
     destroy $fallback
 }
