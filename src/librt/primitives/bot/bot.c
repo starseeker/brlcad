@@ -6232,6 +6232,9 @@ rt_bot_keypoint(point_t *pt, const char *keystr, const mat_t mat, const struct r
     struct rt_bot_internal *bot = (struct rt_bot_internal *)ip->idb_ptr;
     RT_BOT_CK_MAGIC(bot);
 
+    if (!bot->num_vertices || !bot->vertices)
+	return NULL;
+
     static const char *default_keystr = "V";
     const char *k = (keystr) ? keystr : default_keystr;
 

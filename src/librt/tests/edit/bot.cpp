@@ -236,6 +236,21 @@ rt_edit_test_bot(void)
 	(struct rt_bot_internal *)s->es_int.idb_ptr;
     struct rt_bot_edit *b = (struct rt_bot_edit *)s->ipe_ptr;
 
+    point_t default_keypoint = VINIT_ZERO;
+    VSET(s->e_keypoint, 1.0, 2.0, 3.0);
+    s->e_keytag = "invalid";
+    rt_get_solid_keypoint(s, &s->e_keypoint, &s->e_keytag, s->e_mat);
+    if (!s->e_keytag || !BU_STR_EQUAL(s->e_keytag, "V") ||
+	!VNEAR_EQUAL(s->e_keypoint, default_keypoint, VUNITIZE_TOL))
+	bu_exit(1, "ERROR: BOT invalid keypoint selector did not use the default\n");
+
+    b->bot_verts[0] = (int)bot->num_vertices;
+    rt_get_solid_keypoint(s, &s->e_keypoint, &s->e_keytag, s->e_mat);
+    if (!s->e_keytag || !BU_STR_EQUAL(s->e_keytag, "V") ||
+	!VNEAR_EQUAL(s->e_keypoint, default_keypoint, VUNITIZE_TOL))
+	bu_exit(1, "ERROR: BOT stale selection changed the default keypoint\n");
+    b->bot_verts[0] = -1;
+
     vect_t mousevec;
 
     /* ================================================================
@@ -688,6 +703,10 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	if (bmod->mode != RT_BOT_SOLID)
 	    bu_exit(1, "ERROR: ECMD_BOT_MODE(desc): mode=%d expected %d\n",
 		    (int)bmod->mode, RT_BOT_SOLID);
+	s->e_inpara = 1;
+	s->e_para[0] = 2.5;
+	if (rt_edit_process(s) != BRLCAD_ERROR || bmod->mode != RT_BOT_SOLID)
+	    bu_exit(1, "ERROR: ECMD_BOT_MODE accepted a fractional mode\n");
 	bu_log("ECMD_BOT_MODE(desc) SUCCESS: mode=%d (RT_BOT_SOLID)\n",
 	       (int)bmod->mode);
     }

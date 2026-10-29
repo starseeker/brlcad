@@ -24,9 +24,11 @@
 
 #include "common.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "bu/cmd.h"
+#include "bu/opt.h"
 #include "rt/geom.h"
 #include "raytrace.h"
 
@@ -41,7 +43,6 @@ ged_ptranslate_core(struct ged *gedp, int argc, const char *argv[])
     int rflag;
     struct rt_db_internal intern;
     vect_t tvec;
-    double scan[3];
     char *last;
     struct directory *dp;
     static const char *usage = "[-r] obj attribute tvec";
@@ -76,12 +77,11 @@ ged_ptranslate_core(struct ged *gedp, int argc, const char *argv[])
     } else
 	rflag = 0;
 
-    if (sscanf(argv[3], "%lf %lf %lf", &scan[0], &scan[1], &scan[2]) != 3) {
+    if (bu_opt_vect_t(NULL, 1, &argv[3], &tvec) != 1 ||
+	!isfinite(tvec[X]) || !isfinite(tvec[Y]) || !isfinite(tvec[Z])) {
 	bu_vls_printf(gedp->ged_result_str, "%s: bad translation vector - %s", cmd_name, argv[3]);
 	return BRLCAD_ERROR;
     }
-    /* convert from double to fastf_t */
-    VMOVE(tvec, scan);
 
     if ((last = strrchr(argv[1], '/')) == NULL)
 	last = (char *)argv[1];

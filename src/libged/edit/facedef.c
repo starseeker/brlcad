@@ -29,6 +29,7 @@
 
 #include "vmath.h"
 #include "bu/interrupt.h"
+#include "bu/opt.h"
 #include "rt/geom.h"
 #include "raytrace.h"
 #include "../ged_private.h"
@@ -65,21 +66,42 @@ char *p_nupnt[] = {
     "Enter Z of fixed point: "
 };
 
+static int
+parse_fastf_args(struct ged *gedp, fastf_t *values, size_t count,
+	const char *argv[])
+{
+    for (size_t i = 0; i < count; ++i) {
+	if (bu_opt_fastf_t(NULL, 1, &argv[i], &values[i]) != 1 ||
+	    !isfinite(values[i])) {
+	    bu_vls_printf(gedp->ged_result_str,
+		    "facedef: bad numeric value - %s\n", argv[i]);
+	    return BRLCAD_ERROR;
+	}
+    }
+
+    return BRLCAD_OK;
+}
+
 
 /*
  * Gets the planar equation from the array argv[] and puts the result
  * into 'plane'.
  */
-static void
+static int
 get_pleqn(struct ged *gedp, fastf_t *plane, const char *argv[])
 {
-    int i;
+    if (parse_fastf_args(gedp, plane, ELEMENTS_PER_PLANE, argv) != BRLCAD_OK)
+	return BRLCAD_ERROR;
 
-    for (i=0; i<4; i++)
-	plane[i]= atof(argv[i]);
+    if (NEAR_ZERO(MAGNITUDE(plane), SMALL_FASTF)) {
+	bu_vls_printf(gedp->ged_result_str,
+		"facedef: plane normal must be non-zero\n");
+	return BRLCAD_ERROR;
+    }
+
     VUNITIZE(&plane[0]);
     plane[W] *= gedp->dbip->dbi_local2base;
-    return;
+    return BRLCAD_OK;
 }
 
 
@@ -95,15 +117,15 @@ get_pleqn(struct ged *gedp, fastf_t *plane, const char *argv[])
 static int
 get_3pts(struct ged *gedp, fastf_t *plane, const char *argv[], const struct bn_tol *tol)
 {
-    int i;
     point_t a, b, c;
 
-    for (i=0; i<3; i++)
-	a[i] = atof(argv[0+i]) * gedp->dbip->dbi_local2base;
-    for (i=0; i<3; i++)
-	b[i] = atof(argv[3+i]) * gedp->dbip->dbi_local2base;
-    for (i=0; i<3; i++)
-	c[i] = atof(argv[6+i]) * gedp->dbip->dbi_local2base;
+    if (parse_fastf_args(gedp, a, ELEMENTS_PER_POINT, argv) != BRLCAD_OK ||
+	parse_fastf_args(gedp, b, ELEMENTS_PER_POINT, argv + 3) != BRLCAD_OK ||
+	parse_fastf_args(gedp, c, ELEMENTS_PER_POINT, argv + 6) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+    VSCALE(a, a, gedp->dbip->dbi_local2base);
+    VSCALE(b, b, gedp->dbip->dbi_local2base);
+    VSCALE(c, c, gedp->dbip->dbi_local2base);
 
     if (bg_make_plane_3pnts(plane, a, b, c, tol) < 0) {
 	bu_vls_printf(gedp->ged_result_str, "facedef: not a plane\n");
@@ -122,12 +144,13 @@ static int
 get_rotfb(struct ged *gedp, fastf_t *plane, const char *argv[], const struct rt_arb_internal *arb)
 {
     fastf_t rota, fb_a;
-    char *endptr;
-    int i;
     point_t pt;
 
-    rota= atof(argv[0]) * DEG2RAD;
-    fb_a  = atof(argv[1]) * DEG2RAD;
+    fastf_t angles[2];
+    if (parse_fastf_args(gedp, angles, 2, argv) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+    rota = angles[0] * DEG2RAD;
+    fb_a = angles[1] * DEG2RAD;
 
     /* calculate normal vector (length=1) from rot, fb */
     plane[0] = cos(fb_a) * cos(rota);
@@ -135,17 +158,20 @@ get_rotfb(struct ged *gedp, fastf_t *plane, const char *argv[], const struct rt_
     plane[2] = sin(fb_a);
 
     if (argv[2][0] == 'v') {
-	long vertex = strtol(argv[2] + 1, &endptr, 10);
+	int vertex;
+	const char *vertex_arg = argv[2] + 1;
 
-	if (endptr == argv[2] + 1 || *endptr != '\0' || vertex < 1 || vertex > 8) {
+	if (bu_opt_int(NULL, 1, &vertex_arg, &vertex) != 1 ||
+	    vertex < 1 || vertex > 8) {
 	    bu_vls_printf(gedp->ged_result_str, "facedef: bad vertex - %s\n", argv[2]);
 	    return -1;
 	}
 	plane[W]= VDOT(&plane[0], arb->pt[vertex - 1]);
     } else {
 	/* definite point given */
-	for (i=0; i<3; i++)
-	    pt[i]=atof(argv[2+i]) * gedp->dbip->dbi_local2base;
+	if (parse_fastf_args(gedp, pt, ELEMENTS_PER_POINT, argv + 2) != BRLCAD_OK)
+	    return BRLCAD_ERROR;
+	VSCALE(pt, pt, gedp->dbip->dbi_local2base);
 	plane[W]=VDOT(&plane[0], pt);
     }
 
@@ -158,15 +184,16 @@ get_rotfb(struct ged *gedp, fastf_t *plane, const char *argv[], const struct rt_
  * of D of 'plane' is changed such that the plane passes through the
  * input point.
  */
-static void
+static int
 get_nupnt(struct ged *gedp, fastf_t *plane, const char *argv[])
 {
-    int i;
     point_t pt;
 
-    for (i=0; i<3; i++)
-	pt[i] = atof(argv[i]) * gedp->dbip->dbi_local2base;
+    if (parse_fastf_args(gedp, pt, ELEMENTS_PER_POINT, argv) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+    VSCALE(pt, pt, gedp->dbip->dbi_local2base);
     plane[W] = VDOT(&plane[0], pt);
+    return BRLCAD_OK;
 }
 
 /*
@@ -225,7 +252,11 @@ edarb_facedef(void *data, int argc, const char *argv[])
     bu_vls_free(&error_msg);
 
     /* get face, initialize args and argcnt */
-    face = atoi(argv[3]);
+    if (bu_opt_int(NULL, 1, &argv[3], &face) != 1) {
+	bu_vls_printf(gedp->ged_result_str, "facedef: bad face - %s\n", argv[3]);
+	rt_db_free_internal(&intern);
+	return BRLCAD_ERROR;
+    }
 
     /* use product of vertices to distinguish faces */
     for (i=0, prod=1;i<4;i++) {
@@ -307,7 +338,10 @@ Enter form of new face definition: ");
 		rt_db_free_internal(&intern);
 		return GED_MORE;
 	    }
-	    get_pleqn(gedp, planes[plane], &argv[5]);
+	    if (get_pleqn(gedp, planes[plane], &argv[5]) != BRLCAD_OK) {
+		rt_db_free_internal(&intern);
+		return BRLCAD_ERROR;
+	    }
 	    break;
 	case 'b':
 	    /* special case for arb7, because of 2 4-pt planes meeting */
@@ -371,7 +405,10 @@ Enter form of new face definition: ");
 		rt_db_free_internal(&intern);
 		return GED_MORE;
 	    }
-	    get_nupnt(gedp, planes[plane], &argv[5]);
+	    if (get_nupnt(gedp, planes[plane], &argv[5]) != BRLCAD_OK) {
+		rt_db_free_internal(&intern);
+		return BRLCAD_ERROR;
+	    }
 	    break;
 	case 'q':
 	    rt_db_free_internal(&intern);

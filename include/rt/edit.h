@@ -521,7 +521,8 @@ rt_edit_process(struct rt_edit *s);
  *
  * If s->snap.enabled is zero the point is returned unchanged.
  * Otherwise each component is rounded to the nearest multiple of
- * s->snap.spacing.
+ * s->snap.spacing.  Invalid pointers and non-positive or non-finite spacing
+ * leave the point unchanged.
  *
  * @param[in,out] pt  2-D UV coordinate to snap (in model/base units).
  * @param[in]     s   rt_edit struct carrying snap configuration.
@@ -536,7 +537,8 @@ rt_edit_snap_point(point2d_t pt, const struct rt_edit *s);
  * The snapshot is stored inside the rt_edit struct.  Calling this
  * function again replaces the previous snapshot only on success.
  *
- * @return BRLCAD_OK on success, BRLCAD_ERROR if the export failed.
+ * @return BRLCAD_OK on success, BRLCAD_ERROR if there is no editable solid or
+ * the export failed.
  */
 RT_EXPORT extern int
 rt_edit_checkpoint(struct rt_edit *s);

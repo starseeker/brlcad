@@ -37,6 +37,7 @@
 
 #include "common.h"
 
+#include <cmath>
 #include <map>
 #include <cstring>
 
@@ -508,7 +509,7 @@ rt_get_solid_keypoint(struct rt_edit *s, point_t *pt, const char **strp, fastf_t
     bu_clbk_t f = NULL;
     void *d = NULL;
 
-    if (!strp)
+    if (!s || !pt || !strp || !mat)
 	return;
 
     if (*strp && !(*strp)[0])
@@ -519,12 +520,19 @@ rt_get_solid_keypoint(struct rt_edit *s, point_t *pt, const char **strp, fastf_t
 
     if (EDOBJ[ip->idb_type].ft_keypoint) {
 	bu_vls_trunc(s->log_str, 0);
-	*strp = (*EDOBJ[ip->idb_type].ft_keypoint)(pt, *strp, mat, s, s->tol);
+	const char *requested = *strp;
+	*strp = (*EDOBJ[ip->idb_type].ft_keypoint)(pt, requested, mat, s, s->tol);
+	if (!*strp && requested)
+	    *strp = (*EDOBJ[ip->idb_type].ft_keypoint)(pt, NULL, mat, s, s->tol);
 	if (bu_vls_strlen(s->log_str)) {
 	    rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_STR, BU_CLBK_DURING);
 	    if (f)
 		(*f)(0, NULL, d, NULL);
 	    bu_vls_trunc(s->log_str, 0);
+	}
+	if (!*strp) {
+	    VSETALL(*pt, 0.0);
+	    *strp = "(origin)";
 	}
 	return;
     }
@@ -582,10 +590,17 @@ rt_edit_set_edflag(struct rt_edit *s, int edflag)
 void
 rt_edit_set_translation_target(struct rt_edit *s, const point_t target)
 {
-    if (!s)
+    if (!s || !target)
 	return;
 
-    VSCALE(s->e_para, target, s->base2local);
+    vect_t local_target;
+    VSCALE(local_target, target, s->base2local);
+    for (int i = 0; i < 3; ++i) {
+	if (!std::isfinite(local_target[i]))
+	    return;
+    }
+
+    VMOVE(s->e_para, local_target);
     s->e_inpara = 3;
 }
 
@@ -597,6 +612,10 @@ rt_edit_knob_cmd_process(
 	struct bview *v, const char *cmd, fastf_t f,
 	char origin, int incr_flag, void *u_data)
 {
+    if (!s || !rvec || !do_rot || !tvec || !do_tran || !do_sca || !v ||
+	!cmd || !cmd[0] || !std::isfinite(f))
+	return BRLCAD_ERROR;
+
     char c = (cmd[1] == '\0') ? cmd[0] : cmd[1];
 
     int ind = -1;
@@ -960,24 +979,7 @@ rt_knob_edit_tran(struct rt_edit *s,
 
     if (!matrix_edit) {
 	s->e_keyfixed = 0;
-
-	// Get primitive keypoint
-	struct rt_db_internal *ip = &s->es_int;
-	fastf_t *mat = s->e_mat;
-	point_t *pt = &s->e_keypoint;
-	RT_CK_DB_INTERNAL(ip);
-	if (EDOBJ[ip->idb_type].ft_keypoint) {
-	    bu_vls_trunc(s->log_str, 0);
-	    s->e_keytag = (*EDOBJ[ip->idb_type].ft_keypoint)(pt, s->e_keytag, mat, s, s->tol);
-	    if (bu_vls_strlen(s->log_str)) {
-		bu_log("%s", bu_vls_cstr(s->log_str));
-		bu_vls_trunc(s->log_str, 0);
-	    }
-	} else {
-	    bu_log("rt_edit_knobs_tra: unrecognized solid type (setting keypoint to origin)\n");
-	    VSETALL(*pt, 0.0);
-	    s->e_keytag = "(origin)";
-	}
+	rt_get_solid_keypoint(s, &s->e_keypoint, &s->e_keytag, s->e_mat);
 
 	int save_edflag = s->edit_flag;
 	int save_mode = s->edit_mode;
@@ -1136,6 +1138,24 @@ rt_edit_process(struct rt_edit *s)
     if (!s)
 	return BRLCAD_ERROR;
 
+    if (s->e_inpara < 0 || s->e_inpara > RT_EDIT_MAXPARA ||
+	s->e_nstr < 0 || s->e_nstr > RT_EDIT_MAXSTR) {
+	bu_vls_printf(s->log_str,
+		"rt_edit_process: invalid input count (numeric=%d, string=%d)\n",
+		s->e_inpara, s->e_nstr);
+	rt_edit_clear_input(s);
+	s->e_nstr = 0;
+	return BRLCAD_ERROR;
+    }
+    for (int i = 0; i < s->e_inpara; ++i) {
+	if (!std::isfinite(s->e_para[i])) {
+	    bu_vls_printf(s->log_str,
+		    "rt_edit_process: numeric parameter %d is not finite\n", i);
+	    rt_edit_clear_input(s);
+	    return BRLCAD_ERROR;
+	}
+    }
+
     const int type = s->es_int.idb_type;
     if (type <= ID_NULL || type > ID_MAX_SOLID ||
 	!s->es_int.idb_ptr || EDOBJ[type].magic != RT_FUNCTAB_MAGIC) {
@@ -1231,7 +1251,8 @@ rt_edit_process(struct rt_edit *s)
 void
 rt_edit_snap_point(point2d_t pt, const struct rt_edit *s)
 {
-    if (!s || !s->snap.enabled || s->snap.spacing <= 0.0)
+    if (!pt || !s || !s->snap.enabled ||
+	!std::isfinite(s->snap.spacing) || s->snap.spacing <= 0.0)
 	return;
     fastf_t inv_sp = 1.0 / s->snap.spacing;
     pt[0] = floor(pt[0] * inv_sp + 0.5) * s->snap.spacing;
@@ -1245,7 +1266,13 @@ rt_edit_checkpoint(struct rt_edit *s)
     if (!s)
 	return BRLCAD_ERROR;
 
-    RT_CK_DB_INTERNAL(&s->es_int);
+    const int type = s->es_int.idb_type;
+    if (s->es_int.idb_magic != RT_DB_INTERNAL_MAGIC ||
+	type <= ID_NULL || type > ID_MAX_SOLID || !s->es_int.idb_ptr ||
+	!s->dbip) {
+	bu_vls_printf(s->log_str, "rt_edit_checkpoint: no editable solid\n");
+	return BRLCAD_ERROR;
+    }
 
     struct bu_external candidate = BU_EXTERNAL_INIT_ZERO;
     if (rt_obj_export(&candidate, &s->es_int, 1.0, s->dbip) < 0) {

@@ -1616,7 +1616,16 @@ ecmd_arb_setup_rotface(struct rt_edit *s)
 	/* Non-interactive path: caller supplies the 1-based vertex index
 	 * directly in e_para[0].  This allows programmatic / test use
 	 * without registering an interactive callback. */
-	a->fixv = (int)s->e_para[0];
+	fastf_t fixed_vertex = s->e_para[0];
+	if (fixed_vertex < 1.0 || fixed_vertex > ARB8_VERTEX_COUNT ||
+	    !EQUAL(fixed_vertex, floor(fixed_vertex))) {
+	    bu_vls_printf(s->log_str,
+		    "ERROR: fixed vertex must be an integer from 1 to %d\n",
+		    ARB8_VERTEX_COUNT);
+	    s->e_inpara = 0;
+	    return;
+	}
+	a->fixv = (int)fixed_vertex;
 	s->e_inpara = 0;
     } else {
 	bu_vls_printf(s->log_str,
@@ -2053,12 +2062,16 @@ rt_edit_arb_edit_xy(
 int
 rt_arb_f_eqn(struct rt_edit *s, int argc, const char **argv)
 {
-    short int i;
     vect_t tempvec;
     struct rt_arb_internal *arb;
-    struct rt_arb8_edit *a = (struct rt_arb8_edit *)s->ipe_ptr;
+    vect_t normal;
 
-    if (argc < 4 || 4 < argc)
+    if (!s || argc != 4 || !argv)
+	return BRLCAD_ERROR;
+
+    struct rt_arb8_edit *a = (struct rt_arb8_edit *)s->ipe_ptr;
+    if (!a || a->edit_menu < 0 || a->edit_menu >= ARB8_FACE_COUNT ||
+	a->fixv < 0 || a->fixv >= ARB8_VERTEX_COUNT || !s->es_int.idb_ptr)
 	return BRLCAD_ERROR;
 
     if (s->es_int.idb_type != ID_ARB8) {
@@ -2074,10 +2087,19 @@ rt_arb_f_eqn(struct rt_edit *s, int argc, const char **argv)
     arb = (struct rt_arb_internal *)s->es_int.idb_ptr;
     RT_ARB_CK_MAGIC(arb);
 
-    /* get the A, B, C from the command line */
-    for (i=0; i<3; i++)
-	a->es_peqn[a->edit_menu][i]= atof(argv[i+1]);
-    VUNITIZE(&a->es_peqn[a->edit_menu][0]);
+    for (int i = 0; i < 3; i++) {
+	if (bu_opt_fastf_t(NULL, 1, &argv[i + 1], &normal[i]) != 1 ||
+	    !isfinite(normal[i])) {
+	    bu_vls_printf(s->log_str, "Eqn: invalid plane normal\n");
+	    return BRLCAD_ERROR;
+	}
+    }
+    if (ZERO(MAGNITUDE(normal))) {
+	bu_vls_printf(s->log_str, "Eqn: plane normal cannot be zero\n");
+	return BRLCAD_ERROR;
+    }
+    VUNITIZE(normal);
+    VMOVE(a->es_peqn[a->edit_menu], normal);
 
     VMOVE(tempvec, arb->pt[a->fixv]);
     a->es_peqn[a->edit_menu][W]=VDOT(a->es_peqn[a->edit_menu], tempvec);
@@ -2096,9 +2118,13 @@ rt_arb_edgedir(struct rt_edit *s, int argc, const char **argv)
 {
     vect_t slope;
     fastf_t rot, fb_a;
-    struct rt_arb8_edit *a = (struct rt_arb8_edit *)s->ipe_ptr;
 
-    if (!s || !argc || !argv)
+    if (!s || (argc != 3 && argc != 4) || !argv)
+	return BRLCAD_ERROR;
+
+    struct rt_arb8_edit *a = (struct rt_arb8_edit *)s->ipe_ptr;
+    if (!a || a->edit_menu < 0 || a->edit_menu >= ARB8_EDGE_COUNT ||
+	!s->es_int.idb_ptr)
 	return BRLCAD_ERROR;
 
     if (s->edit_flag != EARB) {
@@ -2116,15 +2142,24 @@ rt_arb_edgedir(struct rt_edit *s, int argc, const char **argv)
      * else assume delta_x, delta_y, delta_z
      */
     if (argc == 3) {
-	rot = atof(argv[1]) * DEG2RAD;
-	fb_a = atof(argv[2]) * DEG2RAD;
+	if (bu_opt_fastf_t(NULL, 1, &argv[1], &rot) != 1 ||
+	    bu_opt_fastf_t(NULL, 1, &argv[2], &fb_a) != 1 ||
+	    !isfinite(rot) || !isfinite(fb_a)) {
+	    bu_vls_printf(s->log_str, "Edgedir: invalid angle\n");
+	    return BRLCAD_ERROR;
+	}
+	rot *= DEG2RAD;
+	fb_a *= DEG2RAD;
 	slope[0] = cos(fb_a) * cos(rot);
 	slope[1] = cos(fb_a) * sin(rot);
 	slope[2] = sin(fb_a);
     } else {
-	for (int i=0; i<3; i++) {
-	    /* put edge slope in slope[] array */
-	    slope[i] = atof(argv[i+1]);
+	for (int i = 0; i < 3; i++) {
+	    if (bu_opt_fastf_t(NULL, 1, &argv[i + 1], &slope[i]) != 1 ||
+		!isfinite(slope[i])) {
+		bu_vls_printf(s->log_str, "Edgedir: invalid slope\n");
+		return BRLCAD_ERROR;
+	    }
 	}
     }
 
@@ -2470,13 +2505,10 @@ arb_permute(struct rt_arb_internal *arb, const char *encoded_permutation, const 
      * Collect the vertices in the specified order
      */
     for (i = 0; i < 8; ++i) {
-	char buf[2];
-
 	if ((*p)[i] == '*') {
 	    VSETALL(tarb.pt[i], 0);
 	} else {
-	    sprintf(buf, "%c", (*p)[i]);
-	    k = atoi(buf);
+	    k = (*p)[i] - '0';
 	    VMOVE(tarb.pt[i], larb.pt[ARB_VERT_LOC(type, k)]);
 	}
     }

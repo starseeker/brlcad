@@ -25,6 +25,7 @@
 
 #include <stdlib.h>
 #include <ctype.h>
+#include <math.h>
 #include <string.h>
 
 #include "bu/cmd.h"
@@ -94,6 +95,13 @@ edarb_extrude(void *data, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
+    if (bu_opt_int(NULL, 1, &argv[3], &face) != 1 ||
+	bu_opt_fastf_t(NULL, 1, &argv[4], &dist) != 1 || !isfinite(dist)) {
+	bu_vls_printf(gedp->ged_result_str, "%s %s: invalid face or distance\n",
+		argv[0], argv[1]);
+	return BRLCAD_ERROR;
+    }
+
     GED_DB_LOOKUP(gedp, dp, (char *)argv[2], LOOKUP_QUIET, BRLCAD_ERROR);
     GED_DB_GET_INTERN(gedp, &intern, dp, (matp_t)NULL, BRLCAD_ERROR);
 
@@ -112,11 +120,6 @@ edarb_extrude(void *data, int argc, const char *argv[])
 
     arb = (struct rt_arb_internal *)intern.idb_ptr;
     RT_ARB_CK_MAGIC(arb);
-
-    face = atoi(argv[3]);
-
-    /* get distance to project face */
-    dist = atof(argv[4]);
 
     /* convert from the local unit (as input) to the base unit */
     dist = dist * gedp->dbip->dbi_local2base;
@@ -159,6 +162,12 @@ edarb_mirface(void *data, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
+    if (bu_opt_int(NULL, 1, &argv[3], &face) != 1) {
+	bu_vls_printf(gedp->ged_result_str, "%s %s: invalid face - %s\n",
+		argv[0], argv[1], argv[3]);
+	return BRLCAD_ERROR;
+    }
+
     GED_DB_LOOKUP(gedp, dp, (char *)argv[2], LOOKUP_QUIET, BRLCAD_ERROR);
     GED_DB_GET_INTERN(gedp, &intern, dp, (matp_t)NULL, BRLCAD_ERROR);
 
@@ -170,8 +179,6 @@ edarb_mirface(void *data, int argc, const char *argv[])
 
     arb = (struct rt_arb_internal *)intern.idb_ptr;
     RT_ARB_CK_MAGIC(arb);
-
-    face = atoi(argv[3]);
 
     if (arb_mirror_face_axis(arb, peqn, face, argv[4], &wdbp->wdb_tol)) {
 	bu_vls_printf(gedp->ged_result_str, "ERROR: mirror operation failed\n");
@@ -246,15 +253,31 @@ edarb_edgedir(void *data, int argc, const char *argv[])
      * else assume delta_x, delta_y, delta_z
      */
     if (argc == 6) {
-	rot = atof(argv[4]) * DEG2RAD;
-	fb_a = atof(argv[5]) * DEG2RAD;
+	if (bu_opt_fastf_t(NULL, 1, &argv[4], &rot) != 1 ||
+	    bu_opt_fastf_t(NULL, 1, &argv[5], &fb_a) != 1 ||
+	    !isfinite(rot) || !isfinite(fb_a)) {
+	    bu_vls_printf(gedp->ged_result_str,
+		    "%s %s: invalid rotation or fallback angle\n",
+		    argv[0], argv[1]);
+	    rt_db_free_internal(&intern);
+	    return BRLCAD_ERROR;
+	}
+	rot *= DEG2RAD;
+	fb_a *= DEG2RAD;
 	slope[0] = cos(fb_a) * cos(rot);
 	slope[1] = cos(fb_a) * sin(rot);
 	slope[2] = sin(fb_a);
     } else {
 	for (i=0; i<3; i++) {
 	    /* put edge slope in slope[] array */
-	    slope[i] = atof(argv[i+4]);
+	    if (bu_opt_fastf_t(NULL, 1, &argv[i+4], &slope[i]) != 1 ||
+		!isfinite(slope[i])) {
+		bu_vls_printf(gedp->ged_result_str,
+			"%s %s: invalid slope component - %s\n",
+			argv[0], argv[1], argv[i+4]);
+		rt_db_free_internal(&intern);
+		return BRLCAD_ERROR;
+	    }
 	}
     }
 

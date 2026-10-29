@@ -32,6 +32,7 @@
 #include <string.h>
 
 #include "vmath.h"
+#include "bu/opt.h"
 #include "nmg.h"
 #include "rt/geom.h"
 #include "ged.h"
@@ -266,8 +267,13 @@ _ged_scale_pipe(struct ged *gedp, struct rt_pipe_internal *pipeip, const char *a
     switch (attribute[0]) {
 	case 'b':
 	case 'r':
-	    if (sscanf(attribute+1, "%d", &seg_i) != 1)
+	    if (!attribute[1])
 		seg_i = 0;
+	    else {
+		const char *index = attribute + 1;
+		if (bu_opt_int(NULL, 1, &index, &seg_i) != 1)
+		    return BRLCAD_ERROR;
+	    }
 
 	    if ((ps = rt_pipe_get_seg_i(pipeip, seg_i)) == (struct wdb_pipe_pnt *)NULL)
 		return BRLCAD_ERROR;
@@ -279,8 +285,13 @@ _ged_scale_pipe(struct ged *gedp, struct rt_pipe_internal *pipeip, const char *a
 	    pipe_scale_radius(pipeip, sf);
 	    break;
 	case 'i':
-	    if (sscanf(attribute+1, "%d", &seg_i) != 1)
+	    if (!attribute[1])
 		seg_i = 0;
+	    else {
+		const char *index = attribute + 1;
+		if (bu_opt_int(NULL, 1, &index, &seg_i) != 1)
+		    return BRLCAD_ERROR;
+	    }
 
 	    if ((ps = rt_pipe_get_seg_i(pipeip, seg_i)) == (struct wdb_pipe_pnt *)NULL)
 		return BRLCAD_ERROR;
@@ -291,8 +302,13 @@ _ged_scale_pipe(struct ged *gedp, struct rt_pipe_internal *pipeip, const char *a
 	    pipe_scale_id(pipeip, sf);
 	    break;
 	case 'o':
-	    if (sscanf(attribute+1, "%d", &seg_i) != 1)
+	    if (!attribute[1])
 		seg_i = 0;
+	    else {
+		const char *index = attribute + 1;
+		if (bu_opt_int(NULL, 1, &index, &seg_i) != 1)
+		    return BRLCAD_ERROR;
+	    }
 
 	    if ((ps = rt_pipe_get_seg_i(pipeip, seg_i)) == (struct wdb_pipe_pnt *)NULL)
 		return BRLCAD_ERROR;

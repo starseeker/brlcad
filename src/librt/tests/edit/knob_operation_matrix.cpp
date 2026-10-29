@@ -70,6 +70,50 @@ set_absolute_scale(struct rt_edit *edit, struct bview *view, fastf_t value)
 }
 
 static int
+check_invalid_inputs(struct rt_edit *edit, struct bview *view)
+{
+    vect_t rotation = VINIT_ZERO;
+    vect_t translation = VINIT_ZERO;
+    int do_rotate = 0;
+    int do_translate = 0;
+    int do_scale = 0;
+
+    if (rt_edit_knob_cmd_process(NULL, &rotation, &do_rotate, &translation,
+	    &do_translate, &do_scale, view, "aS", 1.0, 'k', 0, NULL) !=
+	BRLCAD_ERROR ||
+	rt_edit_knob_cmd_process(edit, NULL, &do_rotate, &translation,
+	    &do_translate, &do_scale, view, "aS", 1.0, 'k', 0, NULL) !=
+	BRLCAD_ERROR ||
+	rt_edit_knob_cmd_process(edit, &rotation, NULL, &translation,
+	    &do_translate, &do_scale, view, "aS", 1.0, 'k', 0, NULL) !=
+	BRLCAD_ERROR ||
+	rt_edit_knob_cmd_process(edit, &rotation, &do_rotate, NULL,
+	    &do_translate, &do_scale, view, "aS", 1.0, 'k', 0, NULL) !=
+	BRLCAD_ERROR ||
+	rt_edit_knob_cmd_process(edit, &rotation, &do_rotate, &translation,
+	    NULL, &do_scale, view, "aS", 1.0, 'k', 0, NULL) !=
+	BRLCAD_ERROR ||
+	rt_edit_knob_cmd_process(edit, &rotation, &do_rotate, &translation,
+	    &do_translate, NULL, view, "aS", 1.0, 'k', 0, NULL) !=
+	BRLCAD_ERROR ||
+	rt_edit_knob_cmd_process(edit, &rotation, &do_rotate, &translation,
+	    &do_translate, &do_scale, NULL, "aS", 1.0, 'k', 0, NULL) !=
+	BRLCAD_ERROR ||
+	rt_edit_knob_cmd_process(edit, &rotation, &do_rotate, &translation,
+	    &do_translate, &do_scale, view, NULL, 1.0, 'k', 0, NULL) !=
+	BRLCAD_ERROR ||
+	rt_edit_knob_cmd_process(edit, &rotation, &do_rotate, &translation,
+	    &do_translate, &do_scale, view, "", 1.0, 'k', 0, NULL) !=
+	BRLCAD_ERROR ||
+	rt_edit_knob_cmd_process(edit, &rotation, &do_rotate, &translation,
+	    &do_translate, &do_scale, view, "aS", NAN, 'k', 0, NULL) !=
+	BRLCAD_ERROR)
+	return 1;
+
+    return 0;
+}
+
+static int
 check_solid(struct db_full_path *path, struct db_i *dbip,
 	    struct bn_tol *tol, struct bview *view, int specific,
 	    const char *unit)
@@ -243,6 +287,13 @@ check_unit(fastf_t local2base, const char *unit)
     bv_update(view);
 
     int failures = check_solid(&path, dbip, &tol, view, 0, unit);
+    struct rt_edit *edit = rt_edit_create(&path, dbip, &tol, view);
+    if (!edit) {
+	failures++;
+    } else {
+	failures += check_invalid_inputs(edit, view);
+	rt_edit_destroy(edit);
+    }
     failures += check_solid(&path, dbip, &tol, view, 1, unit);
     failures += check_matrix(&path, dbip, &tol, view,
 	RT_MATRIX_EDIT_SCALE, unit);

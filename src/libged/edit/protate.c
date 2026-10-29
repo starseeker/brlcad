@@ -24,9 +24,11 @@
 
 #include "common.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "bu/cmd.h"
+#include "bu/opt.h"
 #include "rt/geom.h"
 #include "raytrace.h"
 
@@ -42,8 +44,7 @@ ged_protate_core(struct ged *gedp, int argc, const char *argv[])
     struct rt_db_internal intern;
     struct directory *dp;
 
-    /* intentionally double for scan */
-    double rx, ry, rz;
+    vect_t rotation;
 
     static const char *usage = "obj attribute rvec";
 
@@ -65,7 +66,9 @@ ged_protate_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    if (sscanf(argv[3], "%lf %lf %lf", &rx, &ry, &rz) != 3) {
+    if (bu_opt_vect_t(NULL, 1, &argv[3], &rotation) != 1 ||
+	!isfinite(rotation[X]) || !isfinite(rotation[Y]) ||
+	!isfinite(rotation[Z])) {
 	bu_vls_printf(gedp->ged_result_str, "%s: bad rotation vector - %s", argv[0], argv[3]);
 	return BRLCAD_ERROR;
     }
@@ -95,7 +98,7 @@ ged_protate_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    bn_mat_angles(rmat, rx, ry, rz);
+    bn_mat_angles(rmat, V3ARGS(rotation));
 
     switch (intern.idb_minor_type) {
 	case DB5_MINORTYPE_BRLCAD_ETO:

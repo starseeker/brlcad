@@ -27,6 +27,7 @@
 #include <math.h>
 
 #include "vmath.h"
+#include "bu/opt.h"
 #include "rt/geom.h"
 #include "raytrace.h"
 #include "./mged.h"
@@ -64,10 +65,26 @@ char *p_nupnt[] = {
 };
 
 
-static void get_pleqn(struct mged_state *s, fastf_t *plane, const char *argv[]);
+static int get_pleqn(struct mged_state *s, fastf_t *plane, const char *argv[]);
 static int get_rotfb(struct mged_state *s, fastf_t *plane, const char *argv[], const struct rt_arb_internal *arb);
-static void get_nupnt(struct mged_state *s, fastf_t *plane, const char *argv[]);
+static int get_nupnt(struct mged_state *s, fastf_t *plane, const char *argv[]);
 static int get_3pts(struct mged_state *s, fastf_t *plane, const char *argv[], const struct bn_tol *tol);
+
+static int
+parse_fastf_args(struct mged_state *s, fastf_t *values, size_t count,
+	const char *argv[])
+{
+    for (size_t i = 0; i < count; ++i) {
+	if (bu_opt_fastf_t(NULL, 1, &argv[i], &values[i]) != 1 ||
+	    !isfinite(values[i])) {
+	    Tcl_AppendResult(s->interp, "Facedef: bad numeric value - ",
+		    argv[i], "\n", (char *)NULL);
+	    return TCL_ERROR;
+	}
+    }
+
+    return TCL_OK;
+}
 
 /*
  * Redefines one of the defining planes for a GENARB8. Finds which
@@ -137,7 +154,11 @@ f_facedef(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
     bu_vls_free(&error_msg);
 
     /* get face, initialize args and argcnt */
-    face = atoi(argv[1]);
+    if (bu_opt_int(NULL, 1, &argv[1], &face) != 1) {
+	Tcl_AppendResult(interp, "Facedef: bad face - ", argv[1], "\n",
+		(char *)NULL);
+	return TCL_ERROR;
+    }
 
     /* use product of vertices to distinguish faces */
     for (i=0, prod=1;i<4;i++) {
@@ -224,7 +245,10 @@ f_facedef(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
 		status = TCL_ERROR;
 		goto end;
 	    }
-	    get_pleqn(s, planes[plane], &argv[3]);
+	    if (get_pleqn(s, planes[plane], &argv[3]) != TCL_OK) {
+		status = TCL_ERROR;
+		goto end;
+	    }
 	    break;
 	case 'b':
 	    /* special case for arb7, because of 2 4-pt planes meeting */
@@ -294,7 +318,10 @@ f_facedef(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
 		status = TCL_ERROR;
 		goto end;
 	    }
-	    get_nupnt(s, planes[plane], &argv[3]);
+	    if (get_nupnt(s, planes[plane], &argv[3]) != TCL_OK) {
+		status = TCL_ERROR;
+		goto end;
+	    }
 	    break;
 	case 'q':
 	    status = TCL_OK;
@@ -336,19 +363,24 @@ f_facedef(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
  * Gets the planar equation from the array argv[] and puts the result
  * into 'plane'.
  */
-static void
+static int
 get_pleqn(struct mged_state *s, fastf_t *plane, const char *argv[])
 {
-    int i;
-
     if (s->dbip == DBI_NULL)
-	return;
+	return TCL_ERROR;
 
-    for (i=0; i<4; i++)
-	plane[i]= atof(argv[i]);
+    if (parse_fastf_args(s, plane, ELEMENTS_PER_PLANE, argv) != TCL_OK)
+	return TCL_ERROR;
+
+    if (NEAR_ZERO(MAGNITUDE(plane), SMALL_FASTF)) {
+	Tcl_AppendResult(s->interp, "Facedef: plane normal must be non-zero\n",
+		(char *)NULL);
+	return TCL_ERROR;
+    }
+
     VUNITIZE(&plane[0]);
     plane[W] *= s->dbip->dbi_local2base;
-    return;
+    return TCL_OK;
 }
 
 
@@ -364,17 +396,17 @@ get_pleqn(struct mged_state *s, fastf_t *plane, const char *argv[])
 static int
 get_3pts(struct mged_state *s, fastf_t *plane, const char *argv[], const struct bn_tol *tol)
 {
-    int i;
     point_t a, b, c;
 
     CHECK_DBI_NULL;
 
-    for (i=0; i<3; i++)
-	a[i] = atof(argv[0+i]) * s->dbip->dbi_local2base;
-    for (i=0; i<3; i++)
-	b[i] = atof(argv[3+i]) * s->dbip->dbi_local2base;
-    for (i=0; i<3; i++)
-	c[i] = atof(argv[6+i]) * s->dbip->dbi_local2base;
+    if (parse_fastf_args(s, a, ELEMENTS_PER_POINT, argv) != TCL_OK ||
+	parse_fastf_args(s, b, ELEMENTS_PER_POINT, argv + 3) != TCL_OK ||
+	parse_fastf_args(s, c, ELEMENTS_PER_POINT, argv + 6) != TCL_OK)
+	return TCL_ERROR;
+    VSCALE(a, a, s->dbip->dbi_local2base);
+    VSCALE(b, b, s->dbip->dbi_local2base);
+    VSCALE(c, c, s->dbip->dbi_local2base);
 
     if (bg_make_plane_3pnts(plane, a, b, c, tol) < 0) {
 	Tcl_AppendResult(s->interp, "Facedef: not a plane\n", (char *)NULL);
@@ -393,15 +425,16 @@ static int
 get_rotfb(struct mged_state *s, fastf_t *plane, const char *argv[], const struct rt_arb_internal *arb)
 {
     fastf_t rota, fb_a;
-    char *endptr;
-    int i;
     point_t pt;
 
     if (s->dbip == DBI_NULL)
 	return -1;
 
-    rota= atof(argv[0]) * DEG2RAD;
-    fb_a  = atof(argv[1]) * DEG2RAD;
+    fastf_t angles[2];
+    if (parse_fastf_args(s, angles, 2, argv) != TCL_OK)
+	return TCL_ERROR;
+    rota = angles[0] * DEG2RAD;
+    fb_a = angles[1] * DEG2RAD;
 
     /* calculate normal vector (length=1) from rot, struct fb */
     plane[0] = cos(fb_a) * cos(rota);
@@ -409,17 +442,20 @@ get_rotfb(struct mged_state *s, fastf_t *plane, const char *argv[], const struct
     plane[2] = sin(fb_a);
 
     if (argv[2][0] == 'v') {
-	long vertex = strtol(argv[2] + 1, &endptr, 10);
+	int vertex;
+	const char *vertex_arg = argv[2] + 1;
 
-	if (endptr == argv[2] + 1 || *endptr != '\0' || vertex < 1 || vertex > 8) {
+	if (bu_opt_int(NULL, 1, &vertex_arg, &vertex) != 1 ||
+	    vertex < 1 || vertex > 8) {
 	    Tcl_AppendResult(s->interp, "Facedef: bad vertex - ", argv[2], "\n", (char *)NULL);
 	    return -1;
 	}
 	plane[W]= VDOT(&plane[0], arb->pt[vertex - 1]);
     } else {
 	/* definite point given */
-	for (i=0; i<3; i++)
-	    pt[i]=atof(argv[2+i]) * s->dbip->dbi_local2base;
+	if (parse_fastf_args(s, pt, ELEMENTS_PER_POINT, argv + 2) != TCL_OK)
+	    return TCL_ERROR;
+	VSCALE(pt, pt, s->dbip->dbi_local2base);
 	plane[W]=VDOT(&plane[0], pt);
     }
 
@@ -432,18 +468,19 @@ get_rotfb(struct mged_state *s, fastf_t *plane, const char *argv[], const struct
  * of D of 'plane' is changed such that the plane passes through the
  * input point.
  */
-static void
+static int
 get_nupnt(struct mged_state *s, fastf_t *plane, const char *argv[])
 {
-    int i;
     point_t pt;
 
     if (s->dbip == DBI_NULL)
-	return;
+	return TCL_ERROR;
 
-    for (i=0; i<3; i++)
-	pt[i] = atof(argv[i]) * s->dbip->dbi_local2base;
+    if (parse_fastf_args(s, pt, ELEMENTS_PER_POINT, argv) != TCL_OK)
+	return TCL_ERROR;
+    VSCALE(pt, pt, s->dbip->dbi_local2base);
     plane[W] = VDOT(&plane[0], pt);
+    return TCL_OK;
 }
 
 

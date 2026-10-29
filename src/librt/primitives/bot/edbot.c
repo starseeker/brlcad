@@ -195,6 +195,30 @@ rt_edit_bot_menu_item(const struct bn_tol *UNUSED(tol))
     return bot_menu;
 }
 
+static int
+bot_vertex_is_valid(const struct rt_bot_internal *bot, int vertex)
+{
+    return bot && bot->vertices && vertex >= 0 &&
+	(size_t)vertex < bot->num_vertices;
+}
+
+static int
+bot_integer_param(struct rt_edit *s, int parameter, int minimum, int maximum,
+	const char *name, int *value)
+{
+    fastf_t input = s->e_para[parameter];
+    if (input < minimum || input > maximum ||
+	!EQUAL(input, floor(input))) {
+	bu_vls_printf(s->log_str,
+		"ERROR: %s must be an integer in [%d, %d]\n",
+		name, minimum, maximum);
+	return BRLCAD_ERROR;
+    }
+
+    *value = (int)input;
+    return BRLCAD_OK;
+}
+
 C_DECL void
 rt_edit_bot_labels(
 	int *num_lines,
@@ -217,9 +241,9 @@ rt_edit_bot_labels(
     struct rt_bot_internal *bot = (struct rt_bot_internal *)ip->idb_ptr;
 
     // Conditional labeling
-    if (b->bot_verts[2] > -1 &&
-	    b->bot_verts[1] > -1 &&
-	    b->bot_verts[0] > -1)
+    if (bot_vertex_is_valid(bot, b->bot_verts[2]) &&
+	    bot_vertex_is_valid(bot, b->bot_verts[1]) &&
+	    bot_vertex_is_valid(bot, b->bot_verts[0]))
     {
 
 	RT_BOT_CK_MAGIC(bot);
@@ -245,7 +269,8 @@ rt_edit_bot_labels(
 	VMOVE(lines[4], mid_pt);
 	VMOVE(lines[5], p3);
 
-    } else if (b->bot_verts[1] > -1 && b->bot_verts[0] > -1) {
+    } else if (bot_vertex_is_valid(bot, b->bot_verts[1]) &&
+	bot_vertex_is_valid(bot, b->bot_verts[0])) {
 
 	RT_BOT_CK_MAGIC(bot);
 
@@ -259,7 +284,7 @@ rt_edit_bot_labels(
 	POINT_LABEL_STR(pos_view, "edge");
 
     }
-    if (b->bot_verts[0] > -1) {
+    if (bot_vertex_is_valid(bot, b->bot_verts[0])) {
 
 	RT_BOT_CK_MAGIC(bot);
 
@@ -288,13 +313,15 @@ rt_edit_bot_keypoint(
 	point_t mpt = VINIT_ZERO;
 	struct rt_bot_internal *bot = (struct rt_bot_internal *)ip->idb_ptr;
 	RT_BOT_CK_MAGIC(bot);
+	if (!bot_vertex_is_valid(bot, b->bot_verts[0]))
+	    return strp;
 	VMOVE(mpt, &bot->vertices[b->bot_verts[0]*3]);
 	MAT4X3PNT(*pt, mat, mpt);
     }
     return strp;
 }
 
-void
+int
 ecmd_bot_mode(struct rt_edit *s)
 {
     struct rt_bot_internal *bot = (struct rt_bot_internal *)s->es_int.idb_ptr;
@@ -304,7 +331,13 @@ ecmd_bot_mode(struct rt_edit *s)
 
     if (s->e_inpara >= 1) {
 	/* Descriptor path: set mode directly from e_para[0] */
-	bot->mode = (unsigned char)s->e_para[0];
+	int mode;
+	if (bot_integer_param(s, 0, RT_BOT_SURFACE, RT_BOT_PLATE_NOCOS,
+		"BOT mode", &mode) != BRLCAD_OK) {
+	    s->e_inpara = 0;
+	    return BRLCAD_ERROR;
+	}
+	bot->mode = (unsigned char)mode;
 	s->e_inpara = 0;
     } else {
 	/* Interactive path: use callback */
@@ -330,9 +363,11 @@ ecmd_bot_mode(struct rt_edit *s)
 	    bot->face_mode = (struct bu_bitv *)NULL;
 	}
     }
+
+    return BRLCAD_OK;
 }
 
-void
+int
 ecmd_bot_orient(struct rt_edit *s)
 {
     struct rt_bot_internal *bot = (struct rt_bot_internal *)s->es_int.idb_ptr;
@@ -340,7 +375,13 @@ ecmd_bot_orient(struct rt_edit *s)
 
     if (s->e_inpara >= 1) {
 	/* Descriptor path: set orientation directly from e_para[0] */
-	bot->orientation = (unsigned char)s->e_para[0];
+	int orientation;
+	if (bot_integer_param(s, 0, RT_BOT_UNORIENTED, RT_BOT_CW,
+		"BOT orientation", &orientation) != BRLCAD_OK) {
+	    s->e_inpara = 0;
+	    return BRLCAD_ERROR;
+	}
+	bot->orientation = (unsigned char)orientation;
 	s->e_inpara = 0;
     } else {
 	/* Interactive path: use callback */
@@ -350,6 +391,8 @@ ecmd_bot_orient(struct rt_edit *s)
 	if (f)
 	    (*f)(0, NULL, d, s);
     }
+
+    return BRLCAD_OK;
 }
 
 int
@@ -417,7 +460,7 @@ ecmd_bot_thick(struct rt_edit *s)
     return BRLCAD_OK;
 }
 
-void
+int
 ecmd_bot_flags(struct rt_edit *s)
 {
     struct rt_bot_internal *bot = (struct rt_bot_internal *)s->es_int.idb_ptr;
@@ -425,7 +468,12 @@ ecmd_bot_flags(struct rt_edit *s)
 
     if (s->e_inpara >= 1) {
 	/* Descriptor path: set flags directly from e_para[0] */
-	bot->bot_flags = (unsigned char)s->e_para[0];
+	int flags;
+	if (bot_integer_param(s, 0, 0, UCHAR_MAX, "BOT flags", &flags) != BRLCAD_OK) {
+	    s->e_inpara = 0;
+	    return BRLCAD_ERROR;
+	}
+	bot->bot_flags = (unsigned char)flags;
 	s->e_inpara = 0;
     } else {
 	/* Interactive path: use callback */
@@ -435,9 +483,11 @@ ecmd_bot_flags(struct rt_edit *s)
 	if (f)
 	    (*f)(0, NULL, d, s);
     }
+
+    return BRLCAD_OK;
 }
 
-void
+int
 ecmd_bot_fmode(struct rt_edit *s)
 {
     struct rt_bot_edit *b = (struct rt_bot_edit *)s->ipe_ptr;
@@ -446,6 +496,11 @@ ecmd_bot_fmode(struct rt_edit *s)
 
     if (s->e_inpara >= 1) {
 	/* Descriptor path: set face mode bit for selected face from e_para[0] */
+	int face_mode;
+	if (bot_integer_param(s, 0, 0, 1, "BOT face mode", &face_mode) != BRLCAD_OK) {
+	    s->e_inpara = 0;
+	    return BRLCAD_ERROR;
+	}
 	int face_no = -1;
 	if (b->bot_verts[0] >= 0 && b->bot_verts[1] >= 0 && b->bot_verts[2] >= 0) {
 	    for (size_t i = 0; i < bot->num_faces; i++) {
@@ -458,7 +513,7 @@ ecmd_bot_fmode(struct rt_edit *s)
 	    }
 	}
 	if (face_no >= 0 && bot->face_mode) {
-	    if ((int)s->e_para[0])
+	    if (face_mode)
 		BU_BITSET(bot->face_mode, face_no);
 	    else
 		BU_BITCLR(bot->face_mode, face_no);
@@ -472,6 +527,8 @@ ecmd_bot_fmode(struct rt_edit *s)
 	if (f)
 	    (*f)(0, NULL, d, s);
     }
+
+    return BRLCAD_OK;
 }
 
 int
@@ -1116,7 +1173,9 @@ ecmd_bot_pickt(struct rt_edit *s, const vect_t mousevec)
 	b->bot_verts[2] = -1;
 	bu_vls_free(&vls);
     } else if (hits == 1) {
-	sscanf(bu_vls_cstr(&vls), " { { %d %d %d", &b->bot_verts[0], &b->bot_verts[1], &b->bot_verts[2]);
+	b->bot_verts[0] = v1;
+	b->bot_verts[1] = v2;
+	b->bot_verts[2] = v3;
 	bu_vls_free(&vls);
     } else {
 	// Set bot->mode using the callback
@@ -1160,19 +1219,15 @@ rt_edit_bot_edit(struct rt_edit *s)
 	    edit_srot(s);
 	    break;
 	case ECMD_BOT_MODE:
-	    ecmd_bot_mode(s);
-	    break;
+	    return ecmd_bot_mode(s);
 	case ECMD_BOT_ORIENT:
-	    ecmd_bot_orient(s);
-	    break;
+	    return ecmd_bot_orient(s);
 	case ECMD_BOT_THICK:
 	    return ecmd_bot_thick(s);
 	case ECMD_BOT_FLAGS:
-	    ecmd_bot_flags(s);
-	    break;
+	    return ecmd_bot_flags(s);
 	case ECMD_BOT_FMODE:
-	    ecmd_bot_fmode(s);
-	    break;
+	    return ecmd_bot_fmode(s);
 	case ECMD_BOT_FDEL:
 	    if (ecmd_bot_fdel(s) != BRLCAD_OK)
 		return -1;
