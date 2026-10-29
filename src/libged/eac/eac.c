@@ -87,7 +87,7 @@ ged_eac_core(struct ged *gedp, int argc, const char *argv[])
 	    intern.idb_meth->ft_ifree(&intern);
 
 	    bu_vls_strcat(&v, " ");
-	    bu_vls_strcat(&v, dp->d_namep);
+	    bu_vls_encode(&v, dp->d_namep);
 	    lim++;
 	} FOR_ALL_DIRECTORY_END;
     }

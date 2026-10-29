@@ -530,7 +530,7 @@ edit_com(struct mged_state *s,
 
 	    dp = (struct directory *)BU_PTBL_GET(tbl, i);
 	    bu_vls_putc(&vls, ' ');
-	    bu_vls_strcat(&vls, dp->d_namep);
+	    bu_vls_encode(&vls, dp->d_namep);
 	}
 
 	max_count = BU_PTBL_LEN(tbl) + last_opt + 1;
@@ -963,7 +963,7 @@ f_ill(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 
     char **nargv;
     char **orig_nargv;
-    struct bu_vls vlsargv = BU_VLS_INIT_ZERO;
+    int orig_argc = argc;
     struct bu_vls vls = BU_VLS_INIT_ZERO;
 
     CHECK_DBI_NULL;
@@ -975,19 +975,8 @@ f_ill(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	return TCL_ERROR;
     }
 
-    bu_vls_from_argv(&vlsargv, argc, argv);
-    nargv = (char **)bu_calloc(argc + 1, sizeof(char *), "calloc f_ill nargv");
+    nargv = bu_argv_dup(argc, argv);
     orig_nargv = nargv;
-    c = bu_argv_from_string(nargv, argc, bu_vls_addr(&vlsargv));
-
-    if (c != argc) {
-	Tcl_AppendResult(interp, "ERROR: unable to processes command arguments for f_ill()\n", (char *)NULL);
-
-	bu_free(orig_nargv, "free f_ill nargv");
-	bu_vls_free(&vlsargv);
-
-	return TCL_ERROR;
-    }
 
     bu_optind = 1;
 
@@ -1023,6 +1012,7 @@ f_ill(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     }
 
     if (early_out) {
+	bu_argv_free(orig_argc, orig_nargv);
 	return TCL_ERROR;
     }
 
@@ -1034,8 +1024,7 @@ f_ill(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	Tcl_Eval(interp, bu_vls_addr(&vls));
 	bu_vls_free(&vls);
 
-	bu_free(orig_nargv, "free f_ill nargv");
-	bu_vls_free(&vlsargv);
+	bu_argv_free(orig_argc, orig_nargv);
 
 	return TCL_ERROR;
     }
@@ -1169,8 +1158,7 @@ f_ill(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	bu_free((void *) path_piece, "f_ill: char **");
     }
 
-    bu_free(orig_nargv, "free f_ill nargv");
-    bu_vls_free(&vlsargv);
+    bu_argv_free(orig_argc, orig_nargv);
 
     return TCL_OK;
 
@@ -1193,8 +1181,7 @@ bail_out:
 	bu_free((void *) path_piece, "f_ill: char **");
     }
 
-    bu_free(orig_nargv, "free f_ill nargv");
-    bu_vls_free(&vlsargv);
+    bu_argv_free(orig_argc, orig_nargv);
 
     return TCL_ERROR;
 }

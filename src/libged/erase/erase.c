@@ -160,7 +160,7 @@ ged_erase_core(struct ged *gedp, int argc, const char *argv[])
 
 	    dp = (struct directory *)BU_PTBL_GET(tbl, i);
 	    bu_vls_putc(&vls, ' ');
-	    bu_vls_strcat(&vls, dp->d_namep);
+	    bu_vls_encode(&vls, dp->d_namep);
 	}
 
 	max_count = BU_PTBL_LEN(tbl) + last_opt + 1;
