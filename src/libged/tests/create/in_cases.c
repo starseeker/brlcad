@@ -91,7 +91,7 @@ int build_obj(struct ged *gedp, const char *name, const char *label, const char 
 
     if (args) {
 	tokbuf = bu_strdup(args);
-	ntok = bu_argv_from_string(tokv, sizeof(tokv) / sizeof(tokv[0]), tokbuf);
+	ntok = bu_argv_from_string(tokv, sizeof(tokv) / sizeof(tokv[0]) - 1, tokbuf);
 	for (i = 0; i < ntok && n < (int)(sizeof(av) / sizeof(av[0])) - 1; i++)
 	    av[n++] = tokv[i];
     }

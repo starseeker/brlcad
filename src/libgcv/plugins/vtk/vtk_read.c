@@ -64,6 +64,9 @@
 #include "wdb.h"
 
 
+#define VTK_HEADER_MAX_ARGS 16
+
+
 /* VTK cell type codes (subset we map) */
 #define VTK_TRIANGLE	5
 #define VTK_QUAD	9
@@ -384,7 +387,7 @@ vtk_read_field(struct vtk_state *s, int narr)
 {
     int k;
     for (k = 0; k < narr; k++) {
-	char *fargv[16];
+	char *fargv[VTK_HEADER_MAX_ARGS + 1];
 	struct bu_vls fwork = BU_VLS_INIT_ZERO;
 	size_t fac;
 	int fcomp, ftup;
@@ -395,7 +398,7 @@ vtk_read_field(struct vtk_state *s, int narr)
 	    break;
 	}
 	bu_vls_sprintf(&fwork, "%s", bu_vls_cstr(&s->line));
-	fac = bu_argv_from_string(fargv, 16, bu_vls_addr(&fwork));
+	fac = bu_argv_from_string(fargv, VTK_HEADER_MAX_ARGS, bu_vls_addr(&fwork));
 	if (fac < 4) {
 	    bu_vls_free(&fwork);
 	    continue;
@@ -439,7 +442,7 @@ vtk_read_data_arrays(struct vtk_state *s, size_t ntuple,
     *nvectors = 0;
 
     while (vtk_getline(s)) {
-	char *argv[16];
+	char *argv[VTK_HEADER_MAX_ARGS + 1];
 	struct bu_vls work = BU_VLS_INIT_ZERO;
 	size_t ac;
 
@@ -449,7 +452,7 @@ vtk_read_data_arrays(struct vtk_state *s, size_t ntuple,
 	}
 
 	bu_vls_sprintf(&work, "%s", bu_vls_cstr(&s->line));
-	ac = bu_argv_from_string(argv, 16, bu_vls_addr(&work));
+	ac = bu_argv_from_string(argv, VTK_HEADER_MAX_ARGS, bu_vls_addr(&work));
 	if (!ac) {
 	    bu_vls_free(&work);
 	    continue;
@@ -950,7 +953,7 @@ vtk_do_polydata(struct vtk_state *s)
     int nscalars = 0, nvectors = 0;
 
     while (vtk_getline(s)) {
-	char *argv[16];
+	char *argv[VTK_HEADER_MAX_ARGS + 1];
 	struct bu_vls work = BU_VLS_INIT_ZERO;
 	size_t ac;
 
@@ -960,7 +963,7 @@ vtk_do_polydata(struct vtk_state *s)
 	}
 
 	bu_vls_sprintf(&work, "%s", bu_vls_cstr(&s->line));
-	ac = bu_argv_from_string(argv, 16, bu_vls_addr(&work));
+	ac = bu_argv_from_string(argv, VTK_HEADER_MAX_ARGS, bu_vls_addr(&work));
 	if (!ac) {
 	    bu_vls_free(&work);
 	    continue;
@@ -1151,7 +1154,7 @@ vtk_do_unstructured(struct vtk_state *s)
     int have_cellscalar = 0;
 
     while (vtk_getline(s)) {
-	char *argv[16];
+	char *argv[VTK_HEADER_MAX_ARGS + 1];
 	struct bu_vls work = BU_VLS_INIT_ZERO;
 	size_t ac;
 
@@ -1161,7 +1164,7 @@ vtk_do_unstructured(struct vtk_state *s)
 	}
 
 	bu_vls_sprintf(&work, "%s", bu_vls_cstr(&s->line));
-	ac = bu_argv_from_string(argv, 16, bu_vls_addr(&work));
+	ac = bu_argv_from_string(argv, VTK_HEADER_MAX_ARGS, bu_vls_addr(&work));
 	if (!ac) {
 	    bu_vls_free(&work);
 	    continue;
@@ -1478,7 +1481,7 @@ vtk_do_structured_points(struct vtk_state *s)
     size_t total;
 
     while (vtk_getline(s)) {
-	char *argv[16];
+	char *argv[VTK_HEADER_MAX_ARGS + 1];
 	struct bu_vls work = BU_VLS_INIT_ZERO;
 	size_t ac;
 
@@ -1488,7 +1491,7 @@ vtk_do_structured_points(struct vtk_state *s)
 	}
 
 	bu_vls_sprintf(&work, "%s", bu_vls_cstr(&s->line));
-	ac = bu_argv_from_string(argv, 16, bu_vls_addr(&work));
+	ac = bu_argv_from_string(argv, VTK_HEADER_MAX_ARGS, bu_vls_addr(&work));
 	if (!ac) {
 	    bu_vls_free(&work);
 	    continue;
@@ -1697,7 +1700,7 @@ vtk_do_rectilinear(struct vtk_state *s)
 	sf = 1.0;
 
     while (vtk_getline(s)) {
-	char *argv[16];
+	char *argv[VTK_HEADER_MAX_ARGS + 1];
 	struct bu_vls work = BU_VLS_INIT_ZERO;
 	size_t ac;
 
@@ -1707,7 +1710,7 @@ vtk_do_rectilinear(struct vtk_state *s)
 	}
 
 	bu_vls_sprintf(&work, "%s", bu_vls_cstr(&s->line));
-	ac = bu_argv_from_string(argv, 16, bu_vls_addr(&work));
+	ac = bu_argv_from_string(argv, VTK_HEADER_MAX_ARGS, bu_vls_addr(&work));
 	if (!ac) {
 	    bu_vls_free(&work);
 	    continue;
@@ -1921,7 +1924,7 @@ vtk_do_structured_grid(struct vtk_state *s)
     size_t ncellx, ncelly, ncellz, ncell;
 
     while (vtk_getline(s)) {
-	char *argv[16];
+	char *argv[VTK_HEADER_MAX_ARGS + 1];
 	struct bu_vls work = BU_VLS_INIT_ZERO;
 	size_t ac;
 
@@ -1931,7 +1934,7 @@ vtk_do_structured_grid(struct vtk_state *s)
 	}
 
 	bu_vls_sprintf(&work, "%s", bu_vls_cstr(&s->line));
-	ac = bu_argv_from_string(argv, 16, bu_vls_addr(&work));
+	ac = bu_argv_from_string(argv, VTK_HEADER_MAX_ARGS, bu_vls_addr(&work));
 	if (!ac) {
 	    bu_vls_free(&work);
 	    continue;
@@ -2289,11 +2292,11 @@ vtk_read(struct gcv_context *context, const struct gcv_opts *gcv_options,
     if (!vtk_getline(&s))
 	goto fail;
     {
-	char *argv[8];
+	char *argv[VTK_HEADER_MAX_ARGS + 1];
 	struct bu_vls work = BU_VLS_INIT_ZERO;
 	size_t ac;
 	bu_vls_sprintf(&work, "%s", bu_vls_cstr(&s.line));
-	ac = bu_argv_from_string(argv, 8, bu_vls_addr(&work));
+	ac = bu_argv_from_string(argv, VTK_HEADER_MAX_ARGS, bu_vls_addr(&work));
 	if (ac < 2 || !BU_STR_EQUAL(argv[0], "DATASET")) {
 	    bu_log("vtk_read: expected 'DATASET <type>' on line 4\n");
 	    bu_vls_free(&work);
