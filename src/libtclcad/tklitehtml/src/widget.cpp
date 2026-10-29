@@ -163,6 +163,20 @@ std::filesystem::path path_from_utf8(std::string_view path)
     return std::filesystem::u8path(path.begin(), path.end());
 }
 
+std::filesystem::path path_from_file_url(std::string_view path)
+{
+    auto result = path_from_utf8(path);
+    if(!result.is_absolute() && !path.empty() && path.front() == '/')
+    {
+        auto without_root_slash = path_from_utf8(path.substr(1));
+        if(without_root_slash.is_absolute())
+        {
+            result = std::move(without_root_slash);
+        }
+    }
+    return result;
+}
+
 void replace_obj(Tcl_Obj*& destination, Tcl_Obj* value)
 {
     if(value != nullptr)
@@ -294,7 +308,19 @@ struct PaintText
 struct TextColor
 {
     XColor* color = nullptr;
-    GC      gc    = None;
+    GC      gc{};
+};
+
+struct TextStyle
+{
+    std::uint32_t color = 0;
+    const Font*   font  = nullptr;
+
+    bool operator<(const TextStyle& other) const
+    {
+        return color < other.color ||
+            (color == other.color && std::less<const Font*>{}(font, other.font));
+    }
 };
 
 struct Image
@@ -419,7 +445,7 @@ class HtmlWidget final : public litehtml::document_container
     void       clear_highlights();
     void       paint_highlights(const TextRun& run, int screen_x, int screen_y);
 
-    TextColor* text_color_for(const litehtml::web_color& color);
+    TextColor* text_color_for(const litehtml::web_color& color, const Font* font);
     void       clear_text_colors();
     void fill_rectangle(const litehtml::web_color& color, int x, int y, int width, int height);
     void fill_ellipse(const litehtml::web_color& color, int x, int y, int width, int height, bool outline);
@@ -524,7 +550,7 @@ class HtmlWidget final : public litehtml::document_container
     bool                    button_down_ = false;
     bool                    suppress_link_ = false;
 
-    std::map<std::uint32_t, TextColor> text_colors_;
+    std::map<TextStyle, TextColor> text_colors_;
     std::map<std::string, Image>     images_;
     unsigned int                    image_serial_ = 0;
 
@@ -539,7 +565,7 @@ class HtmlWidget final : public litehtml::document_container
     Tk_ImageMaster             frame_master_ = nullptr;
 
     std::vector<litehtml::position> clip_stack_;
-    Tk_Cursor                      cursor_ = None;
+    Tk_Cursor                      cursor_{};
 
     bool redraw_pending_ = false;
     bool layout_pending_ = false;
@@ -1270,6 +1296,7 @@ int HtmlWidget::load_document(int objc, Tcl_Obj* const objv[])
         return exception_result(interp_, "document load");
     }
     loading_ = false;
+    clear_text_colors();
     previous_document.reset();
     clear_images(previous_images);
     clear_highlights();
@@ -1450,7 +1477,7 @@ void HtmlWidget::paint_frame(Drawable drawable, int image_x, int image_y, int wi
     const int offset_y = drawable_y - image_y;
     for(const auto& text : paint_text_)
     {
-        TextColor* color = text_color_for(text.color);
+        TextColor* color = text_color_for(text.color, text.font);
         if(color == nullptr)
         {
             continue;
@@ -2439,10 +2466,11 @@ void HtmlWidget::clear_highlights()
     highlights_.clear();
 }
 
-TextColor* HtmlWidget::text_color_for(const litehtml::web_color& color)
+TextColor* HtmlWidget::text_color_for(const litehtml::web_color& color, const Font* font)
 {
-    const std::uint32_t key = (static_cast<std::uint32_t>(color.red) << 16U) |
-                              (static_cast<std::uint32_t>(color.green) << 8U) | color.blue;
+    const std::uint32_t color_key = (static_cast<std::uint32_t>(color.red) << 16U) |
+                                    (static_cast<std::uint32_t>(color.green) << 8U) | color.blue;
+    const TextStyle key{color_key, font};
     const auto existing = text_colors_.find(key);
     if(existing != text_colors_.end())
     {
@@ -2458,9 +2486,10 @@ TextColor* HtmlWidget::text_color_for(const litehtml::web_color& color)
     }
     XGCValues values{};
     values.foreground = allocated->pixel;
+    values.font       = Tk_FontId(font->tk_font);
     TextColor text_color;
     text_color.color = allocated;
-    text_color.gc    = Tk_GetGC(window_, GCForeground, &values);
+    text_color.gc    = Tk_GetGC(window_, GCForeground | GCFont, &values);
     auto [iterator, inserted] = text_colors_.emplace(key, text_color);
     return inserted ? &iterator->second : nullptr;
 }
@@ -2469,7 +2498,7 @@ void HtmlWidget::clear_text_colors()
 {
     for(const auto& [key, color] : text_colors_)
     {
-        if(color.gc != None)
+        if(color.gc)
         {
             Tk_FreeGC(display_, color.gc);
         }
@@ -2578,38 +2607,25 @@ std::string HtmlWidget::resolve_url(const char* source, const char* base) const
     {
         return url;
     }
+    const auto direct_path = path_from_utf8(url);
+    if(direct_path.is_absolute())
+    {
+        return direct_path.lexically_normal().u8string();
+    }
     const litehtml::url reference(url);
-#if defined(_WIN32)
-    const bool windows_drive_path = url.size() >= 3 && std::isalpha(static_cast<unsigned char>(url[0])) != 0 &&
-                                    url[1] == ':' && (url[2] == '/' || url[2] == '\\');
-#else
-    constexpr bool windows_drive_path = false;
-#endif
-    if(reference.has_scheme() && reference.scheme() != "file" && !windows_drive_path)
+    if(reference.has_scheme() && reference.scheme() != "file")
     {
         return url;
     }
     if(reference.scheme() == "file")
     {
         url = litehtml::url::decode(reference.path());
-#if defined(_WIN32)
-        if(url.size() >= 4 && url[0] == '/' && std::isalpha(static_cast<unsigned char>(url[1])) != 0 &&
-           url[2] == ':')
-        {
-            url.erase(0, 1);
-        }
-#endif
+        return path_from_file_url(url).lexically_normal().u8string();
     }
     std::string base_string = base != nullptr && *base != '\0' ? base : document_base_url_;
     const litehtml::url base_reference(base_string);
-#if defined(_WIN32)
-    const bool windows_drive_base = base_string.size() >= 3 &&
-                                    std::isalpha(static_cast<unsigned char>(base_string[0])) != 0 &&
-                                    base_string[1] == ':' && (base_string[2] == '/' || base_string[2] == '\\');
-#else
-    constexpr bool windows_drive_base = false;
-#endif
-    if(base_reference.has_scheme() && base_reference.scheme() != "file" && !windows_drive_base)
+    const auto direct_base_path = path_from_utf8(base_string);
+    if(base_reference.has_scheme() && base_reference.scheme() != "file" && !direct_base_path.is_absolute())
     {
         return litehtml::resolve(base_reference, reference).str();
     }
@@ -2623,7 +2639,7 @@ std::string HtmlWidget::resolve_url(const char* source, const char* base) const
         base_string.erase(0, std::strlen(kFileScheme));
         base_string = litehtml::url::decode(base_string);
     }
-    std::filesystem::path base_path = path_from_utf8(base_string);
+    std::filesystem::path base_path = path_from_file_url(base_string);
     std::error_code       filesystem_error;
     const bool            base_is_directory = std::filesystem::is_directory(base_path, filesystem_error);
     if(!base_string.empty() && base_string.back() != '/' && !base_is_directory)
@@ -3190,10 +3206,10 @@ void HtmlWidget::on_mouse_event(const litehtml::element::ptr&, litehtml::mouse_e
 
 void HtmlWidget::free_cursor()
 {
-    if(cursor_ != None)
+    if(cursor_)
     {
         Tk_FreeCursor(display_, cursor_);
-        cursor_ = None;
+        cursor_ = {};
     }
 }
 
@@ -3221,7 +3237,7 @@ void HtmlWidget::set_cursor(const char* cursor)
         return;
     }
     cursor_ = Tk_GetCursor(interp_, window_, Tk_GetUid(name.c_str()));
-    if(cursor_ != None)
+    if(cursor_)
     {
         Tk_DefineCursor(window_, cursor_);
     } else

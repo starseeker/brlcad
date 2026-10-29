@@ -30,6 +30,12 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
+if {![info exists ::tklitehtml_utf8_test_suite]} {
+    set ::tklitehtml_utf8_test_suite 1
+    source -encoding utf-8 [info script]
+    return
+}
+
 package require Tcl 8.6
 
 if {[catch {package require Tk 8.6} message]} {
@@ -1036,13 +1042,10 @@ test browser-find-1.3 {context menu preserves selection and exposes Copy and Fin
 } -body {
     $browser selection set 0 4
     update
-    event generate [$browser html] <Button-3> -x 10 -y 10
-    update
+    ::tklitehtml::_browser_prepare_menu $browser
     set selected [$browser selection get]
     set enabled [.browser.menu entrycget Copy -state]
     .browser.menu invoke Copy
-    .browser.menu unpost
-    grab release .browser.menu
     .browser.menu invoke "Find..."
     update
     set found [.browser.find.count cget -text]

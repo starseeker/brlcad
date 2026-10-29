@@ -31,6 +31,5 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-static const char tklitehtml_library_script[] = R"tklitehtml(
-@TKLITEHTML_LIBRARY_SCRIPT@
-)tklitehtml";
+static const char tklitehtml_library_script[] =
+@TKLITEHTML_LIBRARY_SCRIPT_LITERALS@;

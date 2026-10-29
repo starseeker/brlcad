@@ -505,7 +505,7 @@ proc ::tklitehtml::_browser_controls {path} {
         [list ::tklitehtml::_browser_find_changed $path]
 }
 
-proc ::tklitehtml::_browser_popup {path x y} {
+proc ::tklitehtml::_browser_prepare_menu {path} {
     variable browserState
 
     set copyState [expr {[$path.html selection range] eq "" ? "disabled" : "normal"}]
@@ -513,6 +513,10 @@ proc ::tklitehtml::_browser_popup {path x y} {
     $path.menu entryconfigure Copy -state $copyState
     $path.menu entryconfigure "Find Next" -state $findState
     $path.menu entryconfigure "Find Previous" -state $findState
+}
+
+proc ::tklitehtml::_browser_popup {path x y} {
+    _browser_prepare_menu $path
     tk_popup $path.menu $x $y
 }
 
@@ -713,13 +717,13 @@ proc ::tklitehtml::_browser_split_location {path location} {
             error "a fragment cannot be resolved before a document is loaded"
         }
         set filePath [local_path $current]
+    } elseif {[file pathtype $location] eq "absolute"} {
+        set filePath [file normalize [_uri_decode $location]]
     } elseif {[regexp {^[A-Za-z][A-Za-z0-9+.-]*:} $location]} {
         if {![string match -nocase file:* $location]} {
             return [list {} $fragment $location]
         }
         set filePath [local_path $location]
-    } elseif {[file pathtype $location] eq "absolute"} {
-        set filePath [file normalize [_uri_decode $location]]
     } else {
         set baseDirectory [pwd]
         if {$current ne ""} {
