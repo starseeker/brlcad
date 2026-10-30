@@ -1,21 +1,23 @@
 = brlinst
 
-A focused C++ generator for BRL-CAD Windows installers. One generated executable
-supports an interactive Win32 wizard and quiet installation. Windows builds also
-generate native MSI packages from the same JSON and staged files. Every version has
-its own directory, shortcuts, registration, and uninstaller.
+A focused C++ packaging tool for BRL-CAD. Its implemented backends generate an
+interactive Windows executable and a native MSI package from the same JSON and
+staged files. The product-description and document preparation layers are portable
+so native macOS backends can use the same metadata and canonical license source.
+Every Windows version has its own directory, shortcuts, registration, and
+uninstaller.
 
-This is a new implementation requiring Windows acceptance testing before release
-use. It has no NSIS, Inno Setup, Delphi, scripting interpreter, or downloadable
-prerequisites. Those projects served as implementation references; no source
-from either project is currently copied into this tree.
+This is a new implementation requiring native-platform acceptance testing before
+release use. Its Windows backends have no NSIS, Inno Setup, Delphi, scripting
+interpreter, or downloadable prerequisites. Those projects served as implementation
+references; no source from either project is currently copied into this tree.
 
 == Build
 
 This tool lives in `misc/tools/brlinst` and is configured as a separate CMake
 project. Run the following commands from that directory. Its sources are included
-in BRL-CAD source distributions; building BRL-CAD does not automatically build or
-install brlinst.
+in BRL-CAD source distributions. Supported BRL-CAD package builds compile it as an
+isolated host tool and do not install it.
 
 Windows 10/11 on x64 or ARM64 and a matching Visual Studio C++ toolchain with
 the Windows SDK. For example, an x64 build uses:
@@ -46,6 +48,48 @@ Windows builds enable `BRLINST_WITH_MSI` by default and additionally build
 Keep them together. The generator is a console application; the runtime is a
 native GUI application with no extra runtime redistribution requirement when
 built with MSVC's static runtime configuration.
+
+On non-Windows hosts, the portable generator and model tests build without the
+Windows runtimes or MSI serializer. This supports development and testing of shared
+metadata, document, transaction, and packaging logic. The currently implemented
+installer outputs still require Windows.
+
+== macOS backend preparation
+
+Both Apple package formats serve distinct modern purposes. A flat `.pkg` is the
+native Installer archive and defines the privileged installation into the selected
+prefix. A `.dmg` is the signed distribution container users commonly download; for
+BRL-CAD it should contain the `.pkg` rather than duplicate its payload.
+
+The macOS implementation is intentionally a native backend, not a private rewrite
+of Apple package formats. It will invoke `/usr/bin/pkgbuild`,
+`/usr/bin/productbuild`, and `/usr/bin/hdiutil` without a shell, and consequently
+must run on macOS. Optional signing, notarization, and stapling will use Apple tools
+and explicit release-time configuration; credentials do not belong in the product
+JSON.
+
+`prepare_product` is the platform-neutral input boundary. It validates common
+metadata and loads the general icon and canonical plain-text license. The shared
+`text_rtf` converter can generate native Installer license resources with a
+backend-selected font and size limit. `prepare_windows_input` adds Windows-only
+branding, PE payload restrictions, case-folded collision checks, and shortcut
+validation. A macOS backend must start from `prepare_product` and let `pkgbuild`
+consume the CPack staging tree so POSIX modes and symbolic links are preserved.
+
+The first native implementation should:
+
+* generate a component package with `pkgbuild --root` and an explicit install
+  location matching `CMAKE_INSTALL_PREFIX`;
+* generate Distribution XML and its welcome, readme, and license resources, then
+  produce the final package with `productbuild`;
+* stage that package with a background and pre-authored Finder layout, then create
+  and verify the DMG with `hdiutil` without interactive Finder or AppleScript;
+* publish outputs transactionally and add macOS-only structural tests using
+  `pkgutil` and read-only `hdiutil` operations.
+
+The legacy `sh/make_pkg.sh` and `sh/make_dmg.sh` remain the reference behavior until
+native outputs are implemented and tested on a supported macOS release. They should
+not be removed based only on cross-platform model tests.
 
 Generation reports elapsed time and progress. EXE payloads are compressed in
 parallel deterministic shards and assembled in manifest order. MSI payloads

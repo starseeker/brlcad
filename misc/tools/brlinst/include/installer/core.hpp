@@ -47,19 +47,29 @@ struct Package {
     std::vector<FileEntry> files;
     std::uint64_t payload_offset = 0;
 };
-// Validated input shared by both output formats. Internal runtime files are
-// supplied by each backend, never by the staged application.
-struct PackageInput {
+struct ProductInput {
+    Json product;
+    fs::path icon;
+};
+// Validated input shared by the Windows output formats. Internal runtime files
+// are supplied by each backend, never by the staged application.
+struct WindowsPackageInput : ProductInput {
     struct Branding {
         fs::path exe_header, exe_sidebar, msi_icon, msi_banner, msi_dialog, msi_license;
     } branding;
-    Json product;
-    fs::path icon;
     std::vector<std::pair<std::string, fs::path>> files;
 };
-PackageInput prepare_input(const fs::path &config, const fs::path &source, const fs::path &output);
+ProductInput prepare_product(const fs::path &config);
+WindowsPackageInput prepare_windows_input(const fs::path &config, const fs::path &source,
+                                          const fs::path &output);
 void make_bitmap_canvas(const fs::path &source, const fs::path &destination,
                         std::uint32_t width, std::uint32_t height);
+struct RtfOptions {
+    std::string font_family;
+    unsigned font_size_half_points;
+    std::size_t size_limit;
+};
+std::string text_rtf(const std::string &text, const RtfOptions &options);
 std::string license_notices();
 struct Fingerprint {
     std::uint64_t size;
@@ -106,6 +116,6 @@ std::vector<std::string> uninstall(const fs::path &root, Integration &integratio
                                    const Progress &progress = {}, bool defer_uninstaller = false);
 #ifdef _WIN32
 void update_resources(const fs::path &executable, const Json &product, const fs::path &icon,
-                      const PackageInput::Branding &branding);
+                      const WindowsPackageInput::Branding &branding);
 #endif
 } // namespace installer

@@ -105,24 +105,37 @@ void make_bitmap_canvas(const fs::path &source, const fs::path &destination,
 std::string license_notices() {
     return std::string(reinterpret_cast<const char *>(distribution_notices));
 }
-PackageInput prepare_input(const fs::path &config, const fs::path &source, const fs::path &output) {
-    PackageInput result;
+ProductInput prepare_product(const fs::path &config) {
+    ProductInput result;
     result.product = parse_json(read_text(config));
+    validate_product(result.product);
+    auto asset = [&](const std::string &name) {
+        auto path = path_from_utf8(name);
+        return path.is_absolute() ? path : config.parent_path() / path;
+    };
+    result.product["licenseText"] =
+        read_text(asset(result.product.at("license").get<std::string>()), 1024 * 1024);
+    result.product.erase("license");
+    if (result.product.contains("icon")) {
+        result.icon = asset(result.product["icon"].get<std::string>());
+        check_no_links(result.icon);
+        if (!fs::is_regular_file(result.icon))
+            throw Error("Missing product icon");
+        result.product.erase("icon");
+    }
+    return result;
+}
+WindowsPackageInput prepare_windows_input(const fs::path &config, const fs::path &source,
+                                          const fs::path &output) {
+    WindowsPackageInput result;
+    auto common = prepare_product(config);
+    result.product = std::move(common.product);
+    result.icon = std::move(common.icon);
     auto &product = result.product;
-    validate_product(product);
     auto asset = [&](const std::string &name) {
         auto p = path_from_utf8(name);
         return p.is_absolute() ? p : config.parent_path() / p;
     };
-    product["licenseText"] = read_text(asset(product.at("license").get<std::string>()), 1024 * 1024);
-    product.erase("license");
-    if (product.contains("icon")) {
-        result.icon = asset(product["icon"].get<std::string>());
-        check_no_links(result.icon);
-        if (!fs::is_regular_file(result.icon))
-            throw Error("Missing product icon");
-        product.erase("icon");
-    }
     if (product.contains("branding")) {
         auto &branding = product["branding"];
         auto branding_asset = [&](const char *backend, const char *name, fs::path &destination,

@@ -524,7 +524,7 @@ void verify(const fs::path &package, const Progress &progress) {
 void create(const fs::path &config, const fs::path &source, const fs::path &output, const fs::path &actions,
             const Progress &progress) {
     report(progress, "Validating staged payload");
-    auto input = prepare_input(config, source, output);
+    auto input = prepare_windows_input(config, source, output);
     check_no_links(actions);
     if (!fs::is_regular_file(actions))
         throw Error("Missing brlinst-msi-actions.dll beside the generator");

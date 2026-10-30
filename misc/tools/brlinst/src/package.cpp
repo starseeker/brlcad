@@ -325,7 +325,7 @@ void extract_file(const Package &p, const FileEntry &e, const fs::path &output, 
 }
 void create_package(const fs::path &config, const fs::path &source, const fs::path &stub,
                     const fs::path &uninstaller, const fs::path &output, const Progress &progress) {
-    auto input = prepare_input(config, source, output);
+    auto input = prepare_windows_input(config, source, output);
     auto &product = input.product;
     auto &icon = input.icon;
     if (product.contains("branding") && product["branding"].value("style", "") == "classic" &&

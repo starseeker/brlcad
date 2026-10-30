@@ -99,6 +99,7 @@ cmakefiles(
   brlinst/resources/runtime.manifest
   brlinst/resources/runtime.rc
   brlinst/src/core.cpp
+  brlinst/src/document.cpp
   brlinst/src/input.cpp
   brlinst/src/msi.cpp
   brlinst/src/msi_actions.cpp

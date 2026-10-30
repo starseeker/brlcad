@@ -147,7 +147,7 @@ int main() {
                                                 {"desktop", false},
                                                 {"workingDirectory", "."}}})}};
         write(root / "product.json", config.dump());
-        auto input = prepare_input(root / "product.json", root / "payload", root / "test.msi");
+        auto input = prepare_windows_input(root / "product.json", root / "payload", root / "test.msi");
         // A deterministic stand-in lets tests check the complete identity inputs
         // without requiring Windows CNG. Windows tests check real GUIDs as well.
         std::map<std::string, std::string> ids;
@@ -179,6 +179,12 @@ int main() {
         require(by_key(model, "LaunchCondition", "VersionNT64")[1] ==
                     "This package requires 64-bit Windows.",
                 "64-bit Windows launch condition missing");
+        const auto generated_license =
+            by_keys(model, "Control", "LicenseDlg", "License")[9].get<std::string>();
+        require(generated_license.find("\\'5bbrackets\\'5d") != std::string::npos,
+                "Generated MSI license did not escape formatted-field delimiters");
+        require(generated_license.find("\\u27169?") != std::string::npos,
+                "Generated MSI license did not preserve Unicode");
         require(by_key(model, "Dialog", "WelcomeDlg")[3] == 400 &&
                     by_key(model, "Dialog", "WelcomeDlg")[4] == 300,
                 "Unbranded dialog dimensions changed");

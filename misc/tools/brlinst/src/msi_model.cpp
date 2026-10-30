@@ -187,53 +187,7 @@ std::string file_name(const std::string &long_name, unsigned id) {
     name << 'F' << std::hex << id;
     return name.str() + "|" + long_name;
 }
-// RTF can carry Unicode independent of the MSI database's Western code page.
-std::string license_rtf(const std::string &text) {
-    (void)Json(text).dump(); // Reject malformed UTF-8 before decoding.
-    std::string r = "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Segoe UI;}}\\f0\\fs18 ";
-    // JSON validates UTF-8. Decode to Unicode and write UTF-16 RTF escapes.
-    auto emit = [&](unsigned u) {
-        if (u == '\n')
-            r += "\\par\n";
-        else if (u == '\r') {
-        } else if (u == '\t')
-            r += "\\tab ";
-        else if (u == '[')
-            r += "\\'5b";
-        else if (u == ']')
-            r += "\\'5d";
-        else if (u == '\\' || u == '{' || u == '}') {
-            r += '\\';
-            r += static_cast<char>(u);
-        } else if (u < 128)
-            r += static_cast<char>(u);
-        else
-            r += "\\u" + std::to_string(static_cast<std::int16_t>(u)) + "?";
-    };
-    for (std::size_t i = 0; i < text.size();) {
-        unsigned c = static_cast<unsigned char>(text[i++]);
-        if (c >= 128) {
-            unsigned n = c < 224 ? 1 : c < 240 ? 2 : 3;
-            c &= (1U << (6 - n)) - 1;
-            while (n--) {
-                if (i == text.size())
-                    throw Error("Invalid UTF-8 license");
-                c = (c << 6) | (static_cast<unsigned char>(text[i++]) & 63);
-            }
-        }
-        if (c > 0xffff) {
-            c -= 0x10000;
-            emit(0xd800 + (c >> 10));
-            emit(0xdc00 + (c & 1023));
-        } else
-            emit(c);
-    }
-    r += '}';
-    if (r.size() > 60000)
-        throw Error("MSI license text exceeds 60 KB after RTF encoding");
-    return r;
-}
-void wizard(Model &m, const PackageInput &input) {
+void wizard(Model &m, const WindowsPackageInput &input) {
     const auto &product = input.product;
     const bool classic = product.contains("branding") && product["branding"].value("style", "") == "classic";
     constexpr int classic_dialog_width = 370;
@@ -313,9 +267,12 @@ void wizard(Model &m, const PackageInput &input) {
             nullptr, classic ? 65539 : 3);
     buttons("WelcomeDlg", nullptr, "LicenseDlg");
     dialog("LicenseDlg", "Next", "License information");
+    constexpr std::size_t msi_rtf_limit = 60000;
+    constexpr unsigned msi_rtf_font_size = 18;
     const auto license = input.branding.msi_license.empty()
-                             ? license_rtf(product.at("licenseText").get<std::string>())
-                             : read_text(input.branding.msi_license, 60000);
+                             ? text_rtf(product.at("licenseText").get<std::string>(),
+                                        {"Segoe UI", msi_rtf_font_size, msi_rtf_limit})
+                             : read_text(input.branding.msi_license, msi_rtf_limit);
     control("LicenseDlg", "License", "ScrollableText", 20, classic ? 58 : 55, classic ? 330 : 360,
             classic ? 166 : 195, nullptr, license, "Next", 7);
     buttons("LicenseDlg", "WelcomeDlg", "ScopeDlg");
@@ -446,7 +403,7 @@ void wizard(Model &m, const PackageInput &input) {
 }
 } // namespace
 
-Model make_model(const PackageInput &input, const fs::path &notices, const fs::path &actions,
+Model make_model(const WindowsPackageInput &input, const fs::path &notices, const fs::path &actions,
                  const GuidFactory &guid) {
     const auto &p = input.product;
     version(p.at("version").get<std::string>());

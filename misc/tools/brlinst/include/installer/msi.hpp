@@ -29,7 +29,7 @@ struct Model {
     Table &table(const std::string &name);
 };
 using GuidFactory = std::function<std::string(const std::string &)>;
-Model make_model(const PackageInput &input, const fs::path &notices, const fs::path &actions,
+Model make_model(const WindowsPackageInput &input, const fs::path &notices, const fs::path &actions,
                  const GuidFactory &guid);
 std::string sql_create(const Table &table);
 std::string formatted_literal(const std::string &text);

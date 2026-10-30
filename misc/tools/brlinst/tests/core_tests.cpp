@@ -106,6 +106,14 @@ int main(int argc, char **argv) {
         validate_relative("bin/program.exe");
         validate_relative("share/模型.txt");
         fails([] { parse_json("{\"a\":1,\"a\":2}"); }, "duplicate JSON accepted");
+        const auto rtf = text_rtf("Text {value} [field] 模型\n", {"Test Font", 18, 4096});
+        require(rtf.rfind("{\\rtf1", 0) == 0, "RTF header missing");
+        require(rtf.find("\\{value\\}") != std::string::npos, "RTF braces not escaped");
+        require(rtf.find("\\'5bfield\\'5d") != std::string::npos, "RTF brackets not escaped");
+        require(rtf.find("\\u27169?") != std::string::npos, "RTF Unicode not encoded");
+        require(rtf.find("\\par\n") != std::string::npos, "RTF newline not encoded");
+        fails([] { text_rtf("Text", {"Test Font", 18, 4}); }, "oversized RTF accepted");
+        fails([] { text_rtf("Text", {"Bad;Font", 18, 4096}); }, "unsafe RTF font accepted");
         require(parse_options({"--quiet", "--scope", "machine", "--path", "on"}).machine, "scope parsing");
         fails([] { parse_options({"--quiet", "--quiet"}); }, "duplicate switch accepted");
         fails([] { parse_options({"--path", "yes"}); }, "invalid boolean accepted");
@@ -165,6 +173,17 @@ int main(int argc, char **argv) {
         unknown_branding["branding"]["style"] = "custom";
         fails([&] { validate_product(unknown_branding); }, "Unknown branding style accepted");
         write(root / "product.json", config.dump());
+        write(root / "product.icon", "test icon");
+        auto common_config = config;
+        common_config["icon"] = "product.icon";
+        write(root / "common-product.json", common_config.dump());
+        const auto product_input = prepare_product(root / "common-product.json");
+        require(product_input.product.at("licenseText") == "Test license\n",
+                "shared product preparation did not load the license");
+        require(!product_input.product.contains("license"),
+                "shared product preparation retained the license path");
+        require(product_input.icon == root / "product.icon",
+                "shared product preparation did not resolve the icon");
         create_package(root / "product.json", root / "payload", root / "stub.exe", root / "uninstall.exe",
                        root / "setup.exe");
         create_package(root / "product.json", root / "payload", root / "stub.exe", root / "uninstall.exe",

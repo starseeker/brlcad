@@ -57,7 +57,7 @@ void resource(HANDLE h, LPCWSTR type, WORD id, const void *data, DWORD bytes) {
 }
 } // namespace
 void update_resources(const fs::path &executable, const Json &product, const fs::path &icon,
-                      const PackageInput::Branding &branding) {
+                      const WindowsPackageInput::Branding &branding) {
     HANDLE update = BeginUpdateResourceW(executable.c_str(), FALSE);
     if (!update)
         throw Error("Cannot open executable resources");
