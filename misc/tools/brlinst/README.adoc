@@ -99,8 +99,7 @@ not by these checksums.
   "icon": "brlcad.ico",
   "branding": {
     "style": "classic",
-    "exe": {"header": "header.bmp", "sidebar": "side.bmp"},
-    "msi": {"icon": "product.ico", "license": "license.rtf"}
+    "exe": {"header": "header.bmp", "sidebar": "side.bmp"}
   },
   "shortcuts": [
     {"name": "MGED", "target": "bin/mged.exe", "workingDirectory": "@profile", "desktop": true},
@@ -130,6 +129,8 @@ The MSI-specific icon overrides the general installer icon for Add/Remove
 Programs. Branding paths follow the same resolution rules as `license` and
 `icon`. An MSI-specific `license` must be an RTF document; if omitted, brlinst
 converts the general plain-text license to RTF.
+BRL-CAD omits that override so both installers use the canonical top-level
+`COPYING` file.
 
 Each shortcut has a name and target. Optional properties are `icon`, `arguments`,
 `workingDirectory`, and `desktop` (default true). The working directory defaults

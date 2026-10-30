@@ -122,8 +122,6 @@ set(
   cpack/exe/uninstall.ico
   cpack/icons/archer.ico
   cpack/icons/brlcad.ico
-  cpack/msi/license.rtf
-  cpack/msi/product.ico
   profont/LICENSE
   profont/profont-IIx-charmap.png
   profont/profont_IIx_readme.pdf

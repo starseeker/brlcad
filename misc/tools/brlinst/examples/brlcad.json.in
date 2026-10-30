@@ -14,10 +14,6 @@
     "exe": {
       "header": "@CMAKE_SOURCE_DIR@/misc/cpack/exe/header.bmp",
       "sidebar": "@CMAKE_SOURCE_DIR@/misc/cpack/exe/sidebar.bmp"
-    },
-    "msi": {
-      "icon": "@CMAKE_SOURCE_DIR@/misc/cpack/msi/product.ico",
-      "license": "@CMAKE_SOURCE_DIR@/misc/cpack/msi/license.rtf"
     }
   },
   "shortcuts": [
