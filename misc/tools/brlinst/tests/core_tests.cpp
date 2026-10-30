@@ -8,6 +8,7 @@ using namespace installer;
 namespace {
 constexpr std::uint16_t pe_machine_x64 = 0x8664;
 constexpr std::uint16_t pe_machine_arm64 = 0xaa64;
+constexpr std::size_t bitmap_header_size = 54;
 void require(bool ok, const char *message) {
     if (!ok)
         throw std::runtime_error(message);
@@ -40,6 +41,21 @@ std::string stub(std::uint16_t machine = pe_machine_x64) {
     put(s, 88, 0x20b, 2);
     put(s, 88 + 108, 16, 4);
     return s;
+}
+std::string bitmap(std::uint32_t width, std::uint32_t height) {
+    const auto row_size = (static_cast<std::size_t>(width) * 3 + 3) & ~std::size_t{3};
+    std::string data(bitmap_header_size + row_size * height, '\0');
+    data[0] = 'B';
+    data[1] = 'M';
+    put(data, 2, data.size(), 4);
+    put(data, 10, bitmap_header_size, 4);
+    put(data, 14, 40, 4);
+    put(data, 18, width, 4);
+    put(data, 22, height, 4);
+    put(data, 26, 1, 2);
+    put(data, 28, 24, 2);
+    put(data, 34, row_size * height, 4);
+    return data;
 }
 struct Backend : Integration {
     bool fail = false, fail_remove = false;
@@ -74,6 +90,16 @@ int main(int argc, char **argv) {
     auto root = fs::temp_directory_path() / ("installer-test-" + std::to_string(std::random_device{}()));
     fs::create_directories(root / "payload" / "bin");
     try {
+        write(root / "small.bmp", bitmap(2, 3));
+        make_bitmap_canvas(root / "small.bmp", root / "canvas.bmp", 4, 2);
+        const auto canvas = read_text(root / "canvas.bmp");
+        require(canvas.size() == 78, "Derived bitmap has the wrong size");
+        require(static_cast<unsigned char>(canvas[18]) == 4 &&
+                    static_cast<unsigned char>(canvas[22]) == 2,
+                "Derived bitmap has the wrong dimensions");
+        require(canvas[bitmap_header_size] == '\0' &&
+                    static_cast<unsigned char>(canvas[bitmap_header_size + 6]) == 0xff,
+                "Derived bitmap did not preserve artwork on a white canvas");
         for (auto path : {"../x", "/tmp/x", "a/../b", "a\\b", "C:/x", "a:stream", "a//b", "NUL.txt", "a/b.",
                           ".brlinst/state.json"})
             fails([&] { validate_relative(path); }, "unsafe filename accepted");
@@ -116,6 +142,10 @@ int main(int argc, char **argv) {
               {"dialog", "dialog.bmp"},
               {"license", "license.rtf"}}}};
         validate_product(branded_config);
+        auto shared_branding = branded_config;
+        shared_branding["branding"]["msi"].erase("banner");
+        shared_branding["branding"]["msi"].erase("dialog");
+        validate_product(shared_branding);
         require(product_architecture(config) == Architecture::x64, "x64 architecture not parsed");
         auto arm_config = config;
         arm_config["architecture"] = "arm64";

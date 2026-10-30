@@ -247,12 +247,9 @@ void validate_product(const Json &p, bool packaged) {
                 text_field(assets, "sidebar");
             } else {
                 fields(assets, {"icon", "banner", "dialog", "license"});
-                if (assets.contains("icon"))
-                    text_field(assets, "icon");
-                text_field(assets, "banner");
-                text_field(assets, "dialog");
-                if (assets.contains("license"))
-                    text_field(assets, "license");
+                for (auto asset_name : {"icon", "banner", "dialog", "license"})
+                    if (assets.contains(asset_name))
+                        text_field(assets, asset_name);
             }
         }
     }

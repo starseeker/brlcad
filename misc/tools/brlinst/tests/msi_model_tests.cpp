@@ -242,9 +242,11 @@ int main() {
                     classic_next[6] == 17,
                 "Classic MSI navigation was not compacted");
         const auto &classic_welcome = by_keys(classic, "Control", "WelcomeDlg", "Body");
-        require(classic_welcome[3] == 125 && classic_welcome[4] == 72 &&
-                    classic_welcome[5] == 230 && classic_welcome[6] == 120,
-                "Classic MSI welcome text was not centered in the body area");
+        require(classic_welcome[3] == 138 && classic_welcome[4] == 45 &&
+                    classic_welcome[5] == 217 && classic_welcome[6] == 176,
+                "Classic MSI welcome text does not align with the EXE layout");
+        const auto &classic_title = by_keys(classic, "Control", "LicenseDlg", "Title");
+        require(classic_title[3] == 119, "Classic MSI title overlaps the shared header artwork");
         classic_input.branding.msi_icon.clear();
         auto fallback = make_model(classic_input, root / "NOTICE.txt", root / "actions.dll", guid);
         require(by_key(fallback, "Icon", "Product.ico")[1]["stream"] == utf8(root / "generic.ico"),

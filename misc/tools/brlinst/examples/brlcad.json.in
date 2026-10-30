@@ -17,8 +17,6 @@
     },
     "msi": {
       "icon": "@CMAKE_SOURCE_DIR@/misc/cpack/msi/product.ico",
-      "banner": "@CMAKE_SOURCE_DIR@/misc/cpack/msi/banner.bmp",
-      "dialog": "@CMAKE_SOURCE_DIR@/misc/cpack/msi/dialog.bmp",
       "license": "@CMAKE_SOURCE_DIR@/misc/cpack/msi/license.rtf"
     }
   },

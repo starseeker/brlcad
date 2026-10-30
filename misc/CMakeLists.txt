@@ -122,8 +122,6 @@ set(
   cpack/exe/uninstall.ico
   cpack/icons/archer.ico
   cpack/icons/brlcad.ico
-  cpack/msi/banner.bmp
-  cpack/msi/dialog.bmp
   cpack/msi/license.rtf
   cpack/msi/product.ico
   profont/LICENSE

@@ -58,6 +58,8 @@ struct PackageInput {
     std::vector<std::pair<std::string, fs::path>> files;
 };
 PackageInput prepare_input(const fs::path &config, const fs::path &source, const fs::path &output);
+void make_bitmap_canvas(const fs::path &source, const fs::path &destination,
+                        std::uint32_t width, std::uint32_t height);
 std::string license_notices();
 struct Fingerprint {
     std::uint64_t size;

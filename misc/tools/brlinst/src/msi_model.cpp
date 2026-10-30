@@ -240,6 +240,8 @@ void wizard(Model &m, const PackageInput &input) {
     constexpr int classic_dialog_height = 270;
     constexpr int classic_image_height = 234;
     constexpr int classic_banner_height = 44;
+    constexpr int classic_banner_title_left = 119;
+    constexpr int classic_sidebar_text_left = 138;
     auto row = [&](const char *t, Json r) { m.table(t).rows.push_back(std::move(r)); };
     auto control = [&](const char *d, const char *id, const char *type, int x, int y, int w, int h,
                        Json property, Json text, Json next = nullptr, int attributes = 3) {
@@ -269,13 +271,14 @@ void wizard(Model &m, const PackageInput &input) {
             if (!input.branding.msi_dialog.empty())
                 control(id, "DialogBitmap", "Bitmap", 0, 0, classic_dialog_width, classic_image_height,
                         nullptr, "WixUIDialogBmp", nullptr, 1);
-            control(id, "Title", "Text", 135, 20, 220, 40, nullptr,
+            control(id, "Title", "Text", classic_sidebar_text_left, 9, 217, 24, nullptr,
                     std::string("{\\TitleFont}") + title, nullptr, 65539);
         } else {
             if (!input.branding.msi_banner.empty())
                 control(id, "BannerBitmap", "Bitmap", 0, 0, classic_dialog_width, classic_banner_height,
                         nullptr, "WixUIBannerBmp", nullptr, 1);
-            control(id, "Title", "Text", 15, 6, 220, 15, nullptr,
+            control(id, "Title", "Text", classic_banner_title_left, 6,
+                    classic_dialog_width - classic_banner_title_left - 15, 15, nullptr,
                     std::string("{\\TitleFont}") + title, nullptr, 65539);
             control(id, "BannerLine", "Line", 0, classic_banner_height, classic_dialog_width, 0, nullptr,
                     nullptr);
@@ -303,8 +306,8 @@ void wizard(Model &m, const PackageInput &input) {
     row("TextStyle", {"TitleFont", "Segoe UI", 12, nullptr, 1});
     row("Property", {"DefaultUIFont", "BodyFont"});
     dialog("WelcomeDlg", "Next", "Welcome", 3, PageStyle::full_image);
-    control("WelcomeDlg", "Body", "Text", classic ? 125 : 20, classic ? 72 : 60,
-            classic ? 230 : 360, classic ? 120 : 160, nullptr,
+    control("WelcomeDlg", "Body", "Text", classic ? classic_sidebar_text_left : 20,
+            classic ? 45 : 60, classic ? 217 : 360, classic ? 176 : 160, nullptr,
             "This wizard installs [ProductName].\r\n\r\n" +
                 formatted_literal(product.value("welcome", "Install this version alongside other versions.")),
             nullptr, classic ? 65539 : 3);
@@ -402,8 +405,8 @@ void wizard(Model &m, const PackageInput &input) {
                               : std::string(name) == "CancelledDlg"
                                   ? "Setup was cancelled."
                                   : "Setup failed. See the Windows Installer log for details.";
-        control(name, "Message", "Text", classic ? 135 : 20, classic ? 70 : 30,
-                classic ? 220 : 360, classic ? 130 : 150, nullptr, message, nullptr,
+        control(name, "Message", "Text", classic ? classic_sidebar_text_left : 20,
+                classic ? 45 : 30, classic ? 217 : 360, classic ? 176 : 150, nullptr, message, nullptr,
                 classic ? 65539 : 3);
         control(name, "Finish", "PushButton", classic ? 236 : 315, classic ? 243 : 205,
                 classic ? 56 : 65, classic ? 17 : 18, nullptr, "Close", "Finish");

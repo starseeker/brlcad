@@ -3,6 +3,8 @@
 #include "notices.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <fstream>
 #include <set>
 #ifdef _WIN32
 #include <windows.h>
@@ -11,6 +13,10 @@ namespace installer {
 namespace {
 constexpr std::uint32_t bitmap_info_header_size = 40;
 constexpr std::uint16_t bitmap_bits_per_pixel = 24;
+constexpr std::size_t bitmap_file_header_size = 14;
+constexpr std::size_t bitmap_header_bytes = bitmap_file_header_size + bitmap_info_header_size;
+constexpr std::uint32_t max_bitmap_dimension = 16384;
+constexpr std::uint64_t max_bitmap_size = 16 * 1024 * 1024;
 std::uint16_t little16(const std::string &data, std::size_t offset) {
     return static_cast<unsigned char>(data[offset]) |
            (static_cast<std::uint16_t>(static_cast<unsigned char>(data[offset + 1])) << 8);
@@ -18,22 +24,83 @@ std::uint16_t little16(const std::string &data, std::size_t offset) {
 std::uint32_t little32(const std::string &data, std::size_t offset) {
     return little16(data, offset) | (static_cast<std::uint32_t>(little16(data, offset + 2)) << 16);
 }
-void validate_bitmap(const fs::path &path, std::uint32_t width, std::uint32_t height) {
-    constexpr std::size_t bitmap_header_bytes = 54;
-    const auto data = read_text(path, 16 * 1024 * 1024);
+struct Bitmap {
+    std::string data;
+    std::uint32_t width, height, pixel_offset;
+    std::uint64_t row_size;
+};
+Bitmap read_bitmap(const fs::path &path) {
+    auto data = read_text(path, max_bitmap_size);
     if (data.size() < bitmap_header_bytes || data[0] != 'B' || data[1] != 'M')
         throw Error("Invalid branding bitmap: " + utf8(path), ExitCode::arguments);
     const auto info_size = little32(data, 14);
     const auto pixel_offset = little32(data, 10);
+    const auto width = little32(data, 18);
+    const auto height = little32(data, 22);
+    if (!width || !height || width > max_bitmap_dimension || height > max_bitmap_dimension)
+        throw Error("Invalid branding bitmap dimensions: " + utf8(path), ExitCode::arguments);
     const std::uint64_t row_size = (static_cast<std::uint64_t>(width) * 3 + 3) & ~std::uint64_t{3};
     const std::uint64_t required_size = pixel_offset + row_size * height;
-    if (info_size < bitmap_info_header_size || pixel_offset < 14 + info_size ||
-        required_size > data.size() || little32(data, 18) != width ||
-        little32(data, 22) != height || little16(data, 26) != 1 ||
-        little16(data, 28) != bitmap_bits_per_pixel || little32(data, 30) != 0)
+    if (info_size < bitmap_info_header_size ||
+        pixel_offset < bitmap_file_header_size + info_size || required_size > data.size() ||
+        little16(data, 26) != 1 || little16(data, 28) != bitmap_bits_per_pixel ||
+        little32(data, 30) != 0)
+        throw Error("Branding bitmap must be an uncompressed 24-bit BMP: " + utf8(path),
+                    ExitCode::arguments);
+    return {std::move(data), width, height, pixel_offset, row_size};
+}
+void validate_bitmap(const fs::path &path, std::uint32_t width, std::uint32_t height) {
+    const auto bitmap = read_bitmap(path);
+    if (bitmap.width != width || bitmap.height != height)
         throw Error("Branding bitmap must be an uncompressed 24-bit " + std::to_string(width) + "x" +
                     std::to_string(height) + " BMP: " + utf8(path), ExitCode::arguments);
 }
+void put16(std::string &data, std::size_t offset, std::uint16_t value) {
+    data[offset] = static_cast<char>(value);
+    data[offset + 1] = static_cast<char>(value >> 8);
+}
+void put32(std::string &data, std::size_t offset, std::uint32_t value) {
+    put16(data, offset, static_cast<std::uint16_t>(value));
+    put16(data, offset + 2, static_cast<std::uint16_t>(value >> 16));
+}
+}
+void make_bitmap_canvas(const fs::path &source, const fs::path &destination,
+                        std::uint32_t width, std::uint32_t height) {
+    const auto bitmap = read_bitmap(source);
+    const std::uint64_t row_size = (static_cast<std::uint64_t>(width) * 3 + 3) & ~std::uint64_t{3};
+    const std::uint64_t file_size = bitmap_header_bytes + row_size * height;
+    if (!width || !height || width > max_bitmap_dimension || height > max_bitmap_dimension ||
+        file_size > max_bitmap_size)
+        throw Error("Invalid derived branding bitmap dimensions", ExitCode::arguments);
+    std::string output(static_cast<std::size_t>(file_size), '\0');
+    output[0] = 'B';
+    output[1] = 'M';
+    put32(output, 2, static_cast<std::uint32_t>(file_size));
+    put32(output, 10, static_cast<std::uint32_t>(bitmap_header_bytes));
+    put32(output, 14, bitmap_info_header_size);
+    put32(output, 18, width);
+    put32(output, 22, height);
+    put16(output, 26, 1);
+    put16(output, 28, bitmap_bits_per_pixel);
+    put32(output, 34, static_cast<std::uint32_t>(row_size * height));
+    put32(output, 38, little32(bitmap.data, 38));
+    put32(output, 42, little32(bitmap.data, 42));
+    const auto copy_width = std::min(bitmap.width, width);
+    const auto copy_height = std::min(bitmap.height, height);
+    for (std::uint32_t y = 0; y < height; ++y) {
+        auto *target = output.data() + bitmap_header_bytes + (height - y - 1) * row_size;
+        std::memset(target, 0xff, static_cast<std::size_t>(width) * 3);
+        if (y < copy_height) {
+            const auto *pixels = bitmap.data.data() + bitmap.pixel_offset +
+                                 (bitmap.height - y - 1) * bitmap.row_size;
+            std::memcpy(target, pixels, static_cast<std::size_t>(copy_width) * 3);
+        }
+    }
+    std::ofstream file(destination, std::ios::binary);
+    if (!file.write(output.data(), static_cast<std::streamsize>(output.size())))
+        throw Error("Cannot write derived branding bitmap: " + utf8(destination));
+    file.close();
+    flush_file(destination);
 }
 std::string license_notices() {
     return std::string(reinterpret_cast<const char *>(distribution_notices));

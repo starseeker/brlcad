@@ -19,6 +19,10 @@
 #include <sstream>
 namespace installer::msi {
 namespace {
+constexpr std::uint32_t banner_bitmap_width = 493;
+constexpr std::uint32_t banner_bitmap_height = 58;
+constexpr std::uint32_t dialog_bitmap_width = 493;
+constexpr std::uint32_t dialog_bitmap_height = 312;
 struct Handle {
     MSIHANDLE value = 0;
     Handle() = default;
@@ -521,10 +525,6 @@ void create(const fs::path &config, const fs::path &source, const fs::path &outp
             const Progress &progress) {
     report(progress, "Validating staged payload");
     auto input = prepare_input(config, source, output);
-    if (input.product.contains("branding") &&
-        input.product["branding"].value("style", "") == "classic" &&
-        (input.branding.msi_banner.empty() || input.branding.msi_dialog.empty()))
-        throw Error("Classic MSI branding requires banner and dialog bitmaps", ExitCode::arguments);
     check_no_links(actions);
     if (!fs::is_regular_file(actions))
         throw Error("Missing brlinst-msi-actions.dll beside the generator");
@@ -540,6 +540,26 @@ void create(const fs::path &config, const fs::path &source, const fs::path &outp
             fs::remove_all(p, ec);
         }
     } cleanup{work};
+    if (input.product.contains("branding") &&
+        input.product["branding"].value("style", "") == "classic") {
+        report(progress, "Preparing MSI branding");
+        if (input.branding.msi_banner.empty()) {
+            if (input.branding.exe_header.empty())
+                throw Error("Classic MSI branding requires an MSI banner or EXE header bitmap",
+                            ExitCode::arguments);
+            input.branding.msi_banner = work / "banner.bmp";
+            make_bitmap_canvas(input.branding.exe_header, input.branding.msi_banner,
+                               banner_bitmap_width, banner_bitmap_height);
+        }
+        if (input.branding.msi_dialog.empty()) {
+            if (input.branding.exe_sidebar.empty())
+                throw Error("Classic MSI branding requires an MSI dialog or EXE sidebar bitmap",
+                            ExitCode::arguments);
+            input.branding.msi_dialog = work / "dialog.bmp";
+            make_bitmap_canvas(input.branding.exe_sidebar, input.branding.msi_dialog,
+                               dialog_bitmap_width, dialog_bitmap_height);
+        }
+    }
     auto notices = work / "NOTICE.txt";
     write(notices, license_notices());
     report(progress, "Building MSI model", 0, input.files.size());

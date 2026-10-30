@@ -100,7 +100,7 @@ not by these checksums.
   "branding": {
     "style": "classic",
     "exe": {"header": "header.bmp", "sidebar": "side.bmp"},
-    "msi": {"icon": "product.ico", "banner": "banner.bmp", "dialog": "dialog.bmp", "license": "license.rtf"}
+    "msi": {"icon": "product.ico", "license": "license.rtf"}
   },
   "shortcuts": [
     {"name": "MGED", "target": "bin/mged.exe", "workingDirectory": "@profile", "desktop": true},
@@ -121,13 +121,15 @@ acceptance switch for quiet installation.
 
 The optional `classic` branding style uses the compact layouts expected by
 NSIS Modern UI and standard WiX dialogs. EXE header and sidebar images must be
-uncompressed 24-bit BMP files sized 150x57 and 164x314. MSI banner and dialog
-images must be uncompressed 24-bit BMP files sized 493x58 and 493x312. brlinst
-owns window dimensions and control placement; product JSON supplies assets,
-not raw GUI coordinates. The MSI-specific icon overrides the general installer
-icon for Add/Remove Programs. Branding paths follow the same resolution rules
-as `license` and `icon`. An MSI-specific `license` must be an RTF document; if
-omitted, brlinst converts the general plain-text license to RTF.
+uncompressed 24-bit BMP files sized 150x57 and 164x314. By default, brlinst
+places those images at the left edge of white 493x58 and 493x312 MSI canvases,
+giving both formats one artwork source. Optional MSI `banner` and `dialog`
+overrides must have those canvas dimensions. brlinst owns window dimensions
+and control placement; product JSON supplies assets, not raw GUI coordinates.
+The MSI-specific icon overrides the general installer icon for Add/Remove
+Programs. Branding paths follow the same resolution rules as `license` and
+`icon`. An MSI-specific `license` must be an RTF document; if omitted, brlinst
+converts the general plain-text license to RTF.
 
 Each shortcut has a name and target. Optional properties are `icon`, `arguments`,
 `workingDirectory`, and `desktop` (default true). The working directory defaults
