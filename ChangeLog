@@ -1,3 +1,40 @@
+commit ee97b29d2dfa86c9798de892ed54e536494d762b
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Thu Oct 29 14:50:11 2026 -0400
+
+    gcc pedantic fix
+
+commit f287e37a2a2f9d9e0e48665da07f1c9a9739a240
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Thu Oct 29 14:30:48 2026 -0400
+
+    Fix edit keypoint initialization and input validation
+    
+    Initialize default edit keypoints with a null selector and make
+    fallback behavior consistent across primitive types.
+    
+    Reject malformed, non-finite, fractional, and out-of-range edit
+    inputs before they can be truncated or partially mutate geometry.
+    
+    Use bu_opt parsers in command and primitive adjustment paths, and
+    add regression coverage for keypoint, lifecycle, and knob edge cases.
+
+commit 20f2708aef8ddcd7266c0917a0fce8d04db6b407
+Author: Clifford Yapp <238416+starseeker@users.noreply.github.com>
+Date:   Thu Oct 29 13:23:33 2026 -0400
+
+    Correct initializtion of keypoint selectors
+    
+    Some primitives interpreted "" as invalid rather than requesting the
+    default.
+    
+    Edit create, reinit, revert, reset, and object-edit apply now use NULL
+    for default selection in src/librt/edit.cpp:185 and
+    src/mged/edsol.c:1476.
+    
+    rt_get_solid_keypoint also normalizes empty selectors defensively in
+    src/librt/edit.cpp:514.
+
 commit 799f00615acafb1ab03865b68ce86545c95896dd
 Author: f4alt <christopherjmacgregor@gmail.com>
 Date:   Thu Oct 22 11:43:49 2026 -0400
