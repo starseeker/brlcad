@@ -81,6 +81,7 @@ unset(_geo_flags)
 find_package_eigen(REQUIRED)
 find_package_gte(REQUIRED)
 find_package_spsr(REQUIRED)
+brlcad_find_package(manifold REQUIRED)
 
 set(
   LIBBG_SOURCES
@@ -127,7 +128,7 @@ set(
 
 # Note - libbg_deps is defined by ${BRLCAD_SOURCE_DIR}/src/source_dirs.cmake
 set(BG_PUBLIC_LIBS ${libbg_deps})
-set(BG_PRIVATE_LIBS ${WINSOCK_LIB})
+set(BG_PRIVATE_LIBS manifold::manifold ${WINSOCK_LIB})
 if(UNIX)
   list(APPEND BG_PRIVATE_LIBS pthread dl)
 endif()
@@ -174,9 +175,42 @@ foreach(_bg_target libbg libbg-obj libbg-static libbg-brlcad-obj)
   endif()
 endforeach()
 set_target_properties(libbg PROPERTIES VERSION 20.0.1 SOVERSION 20)
-check_linker_flag("CXX" "-Wno-error=maybe-uninitialized" BG_LINKER_WNO_MAYBE_UNINITIALIZED)
-if(BG_LINKER_WNO_MAYBE_UNINITIALIZED)
-  target_link_options(libbg PRIVATE -Wno-maybe-uninitialized)
+
+# Detria's adaptive predicates rely on the floating-point expression tree in
+# detria.hpp.  Keep its single translation unit out of unity builds and forbid
+# contraction, reassociation, and unsafe finite-only assumptions.
+check_cxx_compiler_flag("/fp:strict" HAVE_DETRIA_FP_STRICT)
+if(HAVE_DETRIA_FP_STRICT)
+  set_source_files_properties(
+    polygon_triangulate.cpp
+    PROPERTIES COMPILE_OPTIONS "/fp:strict"
+  )
+else()
+  set(_detria_strict_options)
+  foreach(_detria_flag
+      -ffp-contract=off
+      -frounding-math
+      -fno-associative-math
+      -fno-finite-math-only
+      -fno-unsafe-math-optimizations)
+    string(MAKE_C_IDENTIFIER "${_detria_flag}" _detria_flag_id)
+    set(_detria_check_var "HAVE_${_detria_flag_id}")
+    check_cxx_compiler_flag("${_detria_flag}" ${_detria_check_var})
+    if(${_detria_check_var})
+      list(APPEND _detria_strict_options "${_detria_flag}")
+    endif()
+  endforeach()
+  set_source_files_properties(
+    polygon_triangulate.cpp
+    PROPERTIES COMPILE_OPTIONS "${_detria_strict_options}"
+  )
+endif()
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+  check_linker_flag("CXX" "-Wno-error=maybe-uninitialized" BG_LINKER_WNO_MAYBE_UNINITIALIZED)
+  if(BG_LINKER_WNO_MAYBE_UNINITIALIZED)
+    target_link_options(libbg PRIVATE -Wno-maybe-uninitialized)
+  endif()
 endif()
 
 # enable /bigobj for spsr.cpp if we can

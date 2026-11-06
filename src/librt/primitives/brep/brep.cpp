@@ -3345,6 +3345,10 @@ brep_indexed_face_valid(const int *faces,
 	    return 0;
     }
 
+    const int *face = &faces[face_idx * 3];
+    if (face[0] == face[1] || face[1] == face[2] || face[2] == face[0])
+	return 0;
+
     return 1;
 }
 
@@ -3388,6 +3392,51 @@ brep_indexed_face_arrays_free(int **faces, vect_t **normals, point_t **points)
 	bu_free(*points, "brep cdt points");
 	*points = NULL;
     }
+}
+
+
+static int
+brep_certified_indexed_face_arrays(int **faces, int *face_count,
+	                           point_t **points, int *point_count,
+	                           const ON_Brep *brep,
+	                           const struct bg_tess_tol *ttol)
+{
+    static const long max_face_time_ms = 5000;
+    fastf_t *vertices = NULL;
+
+    if (!faces || !face_count || !points || !point_count || !brep || !ttol)
+	return BRLCAD_ERROR;
+
+    struct ON_Brep_CDT_State *state = ON_Brep_CDT_Create((void *)brep, NULL);
+    if (!state)
+	return BRLCAD_ERROR;
+
+    ON_Brep_CDT_Tol_Set(state, ttol);
+    ON_Brep_CDT_Face_Time_Limit_Set(state, max_face_time_ms);
+    int tessellation_result = ON_Brep_CDT_Tessellate(state, 0, NULL);
+    if (tessellation_result != 0) {
+	struct brep_cdt_repair_settings settings =
+	    BREP_CDT_REPAIR_SETTINGS_INIT;
+	struct brep_cdt_repair_report report = BREP_CDT_REPAIR_REPORT_INIT;
+	if (ON_Brep_CDT_Repair(state, &settings, &report) < 0) {
+	    ON_Brep_CDT_Destroy(state);
+	    return BRLCAD_ERROR;
+	}
+    }
+
+    int mesh_result = ON_Brep_CDT_Mesh(faces, face_count, &vertices,
+	point_count, NULL, NULL, NULL, NULL, state, 0, NULL);
+    ON_Brep_CDT_Destroy(state);
+    if (mesh_result != 0 || !*faces || !vertices || *face_count <= 0 ||
+	*point_count <= 0) {
+	if (vertices)
+	    bu_free(vertices, "certified brep cdt points");
+	brep_indexed_face_arrays_free(faces, NULL, NULL);
+	return BRLCAD_ERROR;
+    }
+
+    *points = (point_t *)vertices;
+    return BRLCAD_OK;
 }
 
 
@@ -3502,11 +3551,19 @@ rt_brep_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
     if (!bi->brep)
 	return BRLCAD_OK;
 
-    ret = brep_cdt_fast(&faces, &face_count, &corner_normals, &points,
-	    &point_count, bi->brep, -1, ttol, tol);
-    if (ret != BRLCAD_OK) {
+    struct brep_cdt_fast_options fast_options;
+    struct brep_cdt_fast_report fast_report = {};
+    brep_cdt_fast_options_default(&fast_options);
+    fast_options.allow_partial = 0;
+    ret = brep_cdt_fast_ex(&faces, &face_count, &corner_normals, &points,
+	&point_count, bi->brep, -1, ttol, tol, &fast_options, &fast_report);
+    if (ret != BREP_CDT_FAST_OK || fast_report.failed_faces > 0 ||
+	fast_report.boundary_envelope_incomplete_faces > 0) {
 	brep_indexed_face_arrays_free(&faces, &corner_normals, &points);
-	return BRLCAD_ERROR;
+	ret = brep_certified_indexed_face_arrays(&faces, &face_count, &points,
+	    &point_count, bi->brep, ttol);
+	if (ret != BRLCAD_OK)
+	    return BRLCAD_ERROR;
     }
 
     if (!faces || !points || face_count <= 0 || point_count <= 0) {

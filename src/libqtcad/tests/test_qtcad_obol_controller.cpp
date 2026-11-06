@@ -786,9 +786,8 @@ main(int argc, char **argv)
     if (interruptedReadback != deadlineBaselineReadback)
 	FAIL("QgSW interrupted readback should preserve Qt image orientation");
 
-    /* The native LoD panel may animate over the immutable framebuffer.  Its
-     * repaint must neither enter Coin/OSMesa nor manufacture a semantic
-     * render request. */
+    /* Repainting the immutable framebuffer must neither enter Coin/OSMesa nor
+     * manufacture a semantic render request. */
     const uint64_t overlayOnlyCompletion =
 	controller->getRenderCompletionSerial();
     const uint64_t overlayOnlyRequest = controller->getRenderRequestSerial();
@@ -800,10 +799,8 @@ main(int argc, char **argv)
 	controller->getRenderRequestSerial() != overlayOnlyRequest ||
 	controller->isRenderRequested())
 	FAIL("QgSW LoD overlay repaint should not render the retained scene");
-    if (!same_pixels_below_lod_overlay(paintTarget, deadlineBaseline))
-	FAIL("QgSW LoD overlay repaint should preserve retained CAD pixels");
-    if (paintTarget == deadlineBaseline)
-	FAIL("QgSW active LoD overlay should decorate the retained CAD frame");
+    if (paintTarget != deadlineBaseline)
+	FAIL("QgSW retained repaint should preserve all CAD pixels");
 
     /* A completed frame from the old viewport is not a valid resize
      * fallback.  Force the first traversal at a distinct size to abort and

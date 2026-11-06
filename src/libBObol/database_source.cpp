@@ -4985,6 +4985,41 @@ indexed_faces_to_triangles(const int *indices,
     return faceCount > 0 && !triangles.empty();
 }
 
+static int
+compact_triangle_points(const point_t *points,
+		       size_t pointCount,
+		       std::vector<int32_t> &triangles,
+		       std::vector<fastf_t> &compactPoints,
+		       SbBox3f &bounds)
+{
+    if (!points || !pointCount || triangles.empty())
+	return 0;
+
+    std::vector<int32_t> remap(pointCount, -1);
+    compactPoints.clear();
+    compactPoints.reserve(std::min(pointCount, triangles.size()) * 3);
+    bounds.makeEmpty();
+    for (int32_t &index : triangles) {
+	if (index < 0 || static_cast<size_t>(index) >= pointCount)
+	    return 0;
+	int32_t &mapped = remap[static_cast<size_t>(index)];
+	if (mapped < 0) {
+	    const point_t &point = points[index];
+	    if (!std::isfinite(point[X]) || !std::isfinite(point[Y]) ||
+		    !std::isfinite(point[Z]))
+		return 0;
+	    mapped = static_cast<int32_t>(compactPoints.size() / 3);
+	    compactPoints.push_back(point[X]);
+	    compactPoints.push_back(point[Y]);
+	    compactPoints.push_back(point[Z]);
+	    bounds.extendBy(SbVec3f(static_cast<float>(point[X]),
+		static_cast<float>(point[Y]), static_cast<float>(point[Z])));
+	}
+	index = mapped;
+    }
+    return !compactPoints.empty() && !bounds.isEmpty();
+}
+
 
 static int
 cad_mesh_part_geometry_from_indexed_face_set(
@@ -5175,22 +5210,11 @@ cad_staged_mesh_from_primitive_face_set(
 
     std::shared_ptr<BObolOwnedStagedTriangleMesh> owned =
 	std::make_shared<BObolOwnedStagedTriangleMesh>();
-    owned->points.resize(faceSet.point_count * 3);
     SbBox3f bounds;
-    bounds.makeEmpty();
-    for (size_t i = 0; i < faceSet.point_count; ++i) {
-	for (size_t axis = 0; axis < 3; ++axis) {
-	    const fastf_t value = faceSet.points[i][axis];
-	    if (!std::isfinite(value)) {
-		primitive_indexed_face_set_free(&faceSet);
-		return std::shared_ptr<BObolStagedSourceMesh>();
-	    }
-	    owned->points[i * 3 + axis] = value;
-	}
-	bounds.extendBy(SbVec3f(
-	    static_cast<float>(faceSet.points[i][X]),
-	    static_cast<float>(faceSet.points[i][Y]),
-	    static_cast<float>(faceSet.points[i][Z])));
+    if (!compact_triangle_points(faceSet.points, faceSet.point_count, triangles,
+	    owned->points, bounds)) {
+	primitive_indexed_face_set_free(&faceSet);
+	return std::shared_ptr<BObolStagedSourceMesh>();
     }
     owned->faces.reserve(triangles.size());
     for (const int32_t index : triangles)

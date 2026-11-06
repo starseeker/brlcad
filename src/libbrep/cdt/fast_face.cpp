@@ -4811,15 +4811,17 @@ fast_reconstruct_winding_periodic_strip(const ON_Surface *surface,
 }
 
 void
-detria_CDT(struct bu_list *vhead,
+detria_CDT(struct bg_line_layer *layer,
 	     const ON_BrepFace &face,
 	     const struct bg_tess_tol *ttol,
 	     const struct bn_tol *tol,
-	     struct bu_list *vlfree,
 	     int plottype,
 	     int UNUSED(num_points),
 	     double model_diagonal)
 {
+    if (!layer)
+	return;
+
     fast_face_scratch scratch;
     fast_trim_index trim_index;
     ON_2dPointArray on_surf_points;
@@ -4934,7 +4936,6 @@ detria_CDT(struct bu_list *vhead,
             ON_3dPoint pnt[3] = {ON_3dPoint(), ON_3dPoint(), ON_3dPoint()};
             ON_3dVector norm[3] = {ON_3dVector(), ON_3dVector(), ON_3dVector()};
             point_t pt[3] = {VINIT_ZERO, VINIT_ZERO, VINIT_ZERO};
-            vect_t nv[3] = {VINIT_ZERO, VINIT_ZERO, VINIT_ZERO};
             tri.forEachTriangle([&](const detria::Triangle<int> triangle)
             {
                 int tris[3];
@@ -4947,22 +4948,13 @@ detria_CDT(struct bu_list *vhead,
                         if (ii != pointmap.end()) {
 			    pnt[j] = *((*ii).second);
 			}
-			if (face.m_bRev) {
-			    norm[j] = norm[j] * -1.0;
-			}
 			VMOVE(pt[j], pnt[j]);
-			VMOVE(nv[j], norm[j]);
                     }
                 }
-                //tri one
-                BV_ADD_VLIST(vlfree, vhead, nv[0], BV_VLIST_TRI_START);
-                BV_ADD_VLIST(vlfree, vhead, nv[0], BV_VLIST_TRI_VERTNORM);
-                BV_ADD_VLIST(vlfree, vhead, pt[0], BV_VLIST_TRI_MOVE);
-                BV_ADD_VLIST(vlfree, vhead, nv[1], BV_VLIST_TRI_VERTNORM);
-                BV_ADD_VLIST(vlfree, vhead, pt[1], BV_VLIST_TRI_DRAW);
-                BV_ADD_VLIST(vlfree, vhead, nv[2], BV_VLIST_TRI_VERTNORM);
-                BV_ADD_VLIST(vlfree, vhead, pt[2], BV_VLIST_TRI_DRAW);
-                BV_ADD_VLIST(vlfree, vhead, pt[0], BV_VLIST_TRI_END);
+		(void)bg_line_layer_add(layer, pt[0], BG_GEOMETRY_LINE_MOVE);
+		(void)bg_line_layer_add(layer, pt[1], BG_GEOMETRY_LINE_DRAW);
+		(void)bg_line_layer_add(layer, pt[2], BG_GEOMETRY_LINE_DRAW);
+		(void)bg_line_layer_add(layer, pt[0], BG_GEOMETRY_LINE_DRAW);
             }, true);
 	} else if (plottype == 1) { // tris 3d wire
 	    ON_3dPoint pnt[3] = {ON_3dPoint(), ON_3dPoint(), ON_3dPoint()};;
@@ -4987,10 +4979,10 @@ detria_CDT(struct bu_list *vhead,
                     }
                 }
 		//tri one
-		BV_ADD_VLIST(vlfree, vhead, pt[0], BV_VLIST_LINE_MOVE);
-		BV_ADD_VLIST(vlfree, vhead, pt[1], BV_VLIST_LINE_DRAW);
-		BV_ADD_VLIST(vlfree, vhead, pt[2], BV_VLIST_LINE_DRAW);
-		BV_ADD_VLIST(vlfree, vhead, pt[0], BV_VLIST_LINE_DRAW);
+		(void)bg_line_layer_add(layer, pt[0], BG_GEOMETRY_LINE_MOVE);
+		(void)bg_line_layer_add(layer, pt[1], BG_GEOMETRY_LINE_DRAW);
+		(void)bg_line_layer_add(layer, pt[2], BG_GEOMETRY_LINE_DRAW);
+		(void)bg_line_layer_add(layer, pt[0], BG_GEOMETRY_LINE_DRAW);
 	    }, true);
 	} else if (plottype == 2) { // tris 2d
 	    point_t pt1 = VINIT_ZERO;
@@ -5014,8 +5006,8 @@ detria_CDT(struct bu_list *vhead,
 		    pt2[0] = tpnts[tris[j]].x;
 		    pt2[1] = tpnts[tris[j]].y;
 		    pt2[2] = 0.0;
-		    BV_ADD_VLIST(vlfree, vhead, pt1, BV_VLIST_LINE_MOVE);
-		    BV_ADD_VLIST(vlfree, vhead, pt2, BV_VLIST_LINE_DRAW);
+		    (void)bg_line_layer_add(layer, pt1, BG_GEOMETRY_LINE_MOVE);
+		    (void)bg_line_layer_add(layer, pt2, BG_GEOMETRY_LINE_DRAW);
 		}
 	    }, true);
 	}
@@ -5041,8 +5033,8 @@ detria_CDT(struct bu_list *vhead,
 	        pt2[0] = tpnts[tris[j]].x;
 	        pt2[1] = tpnts[tris[j]].y;
 	        pt2[2] = 0.0;
-	        BV_ADD_VLIST(vlfree, vhead, pt1, BV_VLIST_LINE_MOVE);
-	        BV_ADD_VLIST(vlfree, vhead, pt2, BV_VLIST_LINE_DRAW);
+	        (void)bg_line_layer_add(layer, pt1, BG_GEOMETRY_LINE_MOVE);
+	        (void)bg_line_layer_add(layer, pt2, BG_GEOMETRY_LINE_DRAW);
 	    }
 	}, true);
     } else if (plottype == 4) {
@@ -5051,7 +5043,7 @@ detria_CDT(struct bu_list *vhead,
 	    pt[0] = tpnts[i].x;
 	    pt[1] = tpnts[i].y;
 	    pt[2] = 0.0;
-	    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_POINT_DRAW);
+	    (void)bg_line_layer_add(layer, pt, BG_GEOMETRY_POINT_DRAW);
 	}
     }
 
@@ -5061,17 +5053,14 @@ detria_CDT(struct bu_list *vhead,
 int
 brep_facecdt_plot(struct bu_vls *vls, const char *solid_name,
                       const struct bg_tess_tol *ttol, const struct bn_tol *tol,
-                      const ON_Brep *brep, struct bu_list *p_vhead,
-                      struct bv_vlblock *vbp, struct bu_list *vlfree,
+                      const ON_Brep *brep, struct bg_line_layer *layer,
 		      int index, int plottype, int num_points)
 {
     if (plottype == INT_MAX || num_points == INT_MAX)
 	return -1;
 
-    struct bu_list *vhead = p_vhead;
-    if (!vhead) {
-	vhead = bv_vlblock_find(vbp, YELLOW);
-    }
+    if (!layer)
+	return -1;
     ON_wString wstr;
     ON_TextLog tl(wstr);
 
@@ -5104,7 +5093,7 @@ brep_facecdt_plot(struct bu_vls *vls, const char *solid_name,
     if (index == -1) {
         for (index = 0; index < brep->m_F.Count(); index++) {
             const ON_BrepFace& face = brep->m_F[index];
-            detria_CDT(vhead, face, ttol, tol, vlfree, plottype,
+	    detria_CDT(layer, face, ttol, tol, plottype,
 		num_points, model_diagonal);
         }
     } else if (index < brep->m_F.Count()) {
@@ -5112,7 +5101,7 @@ brep_facecdt_plot(struct bu_vls *vls, const char *solid_name,
         if (index < faces.Count()) {
             const ON_BrepFace& face = faces[index];
             face.Dump(tl);
-            detria_CDT(vhead, face, ttol, tol, vlfree, plottype,
+	    detria_CDT(layer, face, ttol, tol, plottype,
 		num_points, model_diagonal);
         }
     }
