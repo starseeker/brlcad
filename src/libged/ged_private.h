@@ -104,7 +104,7 @@ class Ged_Internal {
     public:
 	~Ged_Internal();
 
-	struct ged *gedp;
+	struct ged *gedp = nullptr;
 	std::map<ged_func_ptr, std::pair<bu_clbk_t, void *>> cmd_prerun_clbk;
 	std::map<ged_func_ptr, std::pair<bu_clbk_t, void *>> cmd_during_clbk;
 	std::map<ged_func_ptr, std::pair<bu_clbk_t, void *>> cmd_postrun_clbk;
@@ -148,18 +148,24 @@ class Ged_Internal {
 	struct ged_edit_buf_entry {
 	    struct db_full_path dfp;
 	    struct rt_edit *s;
+	    std::vector<std::string> path_names;
+	    std::vector<int> path_instances;
 	    uint64_t id = 0;
 	    uint64_t generation = 1;
 	    uint64_t revision = 0;
 	    int last_cmd = 0;
 	    bool dirty = false;
 	    bool checkpoint_dirty = false;
+	    bool committing = false;
 	};
 	std::unordered_map<std::string, ged_edit_buf_entry> edit_buf;
 	struct ged_edit_pending_event {
 	    enum ged_edit_session_event_kind kind;
 	    ged_edit_session_ref session;
 	    std::string path;
+	    std::string replacement_path;
+	    enum ged_edit_session_invalidation_reason invalidation_reason =
+		GED_EDIT_INVALIDATION_NONE;
 	    uint64_t revision = 0;
 	    int command_id = 0;
 	};
@@ -170,6 +176,8 @@ class Ged_Internal {
 	std::map<ged_edit_observer_token,
 	    std::pair<ged_edit_observer_func_t, void *> > edit_observers;
 	std::vector<ged_edit_pending_event> edit_pending_events;
+	struct db_i *edit_dbip = nullptr;
+	bool edit_closing = false;
 };
 
 #else
@@ -602,6 +610,8 @@ GED_EXPORT extern void            ged_edit_buf_flush(struct ged *gedp);
 GED_EXPORT extern void            ged_edit_buf_notify_update(struct ged *gedp, const struct db_full_path *dfp, int command_id);
 GED_EXPORT extern void            ged_edit_buf_notify_checkpoint(struct ged *gedp, const struct db_full_path *dfp);
 GED_EXPORT extern void            ged_edit_buf_notify_revert(struct ged *gedp, const struct db_full_path *dfp);
+GED_EXPORT extern void            ged_edit_sessions_database_close_private(struct ged *gedp);
+GED_EXPORT extern void            ged_edit_sessions_close_private(struct ged *gedp);
 
 __END_DECLS
 

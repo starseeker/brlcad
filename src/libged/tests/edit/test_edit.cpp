@@ -75,6 +75,8 @@ struct edit_session_observer {
     std::vector<uint64_t> revisions;
     std::vector<int> commands;
     std::vector<std::string> paths;
+    std::vector<std::string> replacement_paths;
+    std::vector<enum ged_edit_session_invalidation_reason> invalidation_reasons;
     ged_edit_observer_token remove_token = 0;
     int remove_result = 0;
 };
@@ -91,6 +93,9 @@ edit_session_cb(struct ged *gedp,
     observer->revisions.push_back(event->revision);
     observer->commands.push_back(event->command_id);
     observer->paths.emplace_back(event->path ? event->path : "");
+    observer->replacement_paths.emplace_back(event->replacement_path ?
+	event->replacement_path : "");
+    observer->invalidation_reasons.push_back(event->invalidation_reason);
     if (observer->remove_token) {
 	observer->remove_result = ged_edit_observer_remove(gedp,
 	    observer->remove_token);
@@ -1044,6 +1049,80 @@ test_p1_edit_observer_self_remove(struct ged *gedp)
     CHECK(observer.kinds.size() == 1, __func__);
     CHECK(ged_edit_session_cancel(gedp, session) == GED_EDIT_OK, __func__);
     CHECK(observer.kinds.size() == 1, __func__);
+}
+
+static void
+test_p1_edit_session_invalidation(struct ged *gedp, const char *database_path)
+{
+    struct edit_session_observer observer;
+    ged_edit_observer_token token = ged_edit_observer_add(gedp,
+	edit_session_cb, std::addressof(observer));
+    CHECK(token != 0, __func__);
+
+    struct ged_edit_session_info info = {};
+    ged_edit_session_ref modified = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "tor.s", std::addressof(modified)) ==
+	GED_EDIT_OK, __func__);
+    const char *set_attribute[] = {
+	"attr", "set", "tor.s", "edit_session_test", "1", NULL
+    };
+    CHECK(ged_exec(gedp, 5, set_attribute) == BRLCAD_OK, __func__);
+    CHECK(observer.kinds.back() == GED_EDIT_SESSION_INVALIDATE, __func__);
+    CHECK(observer.invalidation_reasons.back() ==
+	GED_EDIT_INVALIDATION_SOURCE_CHANGED, __func__);
+    CHECK(ged_edit_session_info_get(gedp, modified, std::addressof(info)) ==
+	GED_EDIT_STALE, __func__);
+
+    ged_edit_session_ref renamed = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "sph.s", std::addressof(renamed)) ==
+	GED_EDIT_OK, __func__);
+    const char *rename_object[] = {"move", "sph.s", "sph_renamed.s", NULL};
+    CHECK(ged_exec(gedp, 3, rename_object) == BRLCAD_OK, __func__);
+    CHECK(observer.invalidation_reasons.back() ==
+	GED_EDIT_INVALIDATION_SOURCE_RENAMED, __func__);
+    CHECK(observer.replacement_paths.back() == "/sph_renamed.s", __func__);
+    CHECK(ged_edit_session_info_get(gedp, renamed, std::addressof(info)) ==
+	GED_EDIT_STALE, __func__);
+    const char *restore_name[] = {"move", "sph_renamed.s", "sph.s", NULL};
+    CHECK(ged_exec(gedp, 3, restore_name) == BRLCAD_OK, __func__);
+
+    ged_edit_session_ref nested = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "group.c/tor.s",
+	std::addressof(nested)) == GED_EDIT_OK, __func__);
+    const char *remove_occurrence[] = {"rm", "group.c/tor.s", NULL};
+    CHECK(ged_exec(gedp, 2, remove_occurrence) == BRLCAD_OK, __func__);
+    CHECK(observer.invalidation_reasons.back() ==
+	GED_EDIT_INVALIDATION_PATH_REMOVED, __func__);
+    CHECK(ged_edit_session_info_get(gedp, nested, std::addressof(info)) ==
+	GED_EDIT_STALE, __func__);
+
+    ged_edit_session_ref closing = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "sph.s", std::addressof(closing)) ==
+	GED_EDIT_OK, __func__);
+    const char *close_database[] = {"closedb", NULL};
+    CHECK(ged_exec(gedp, 1, close_database) == BRLCAD_OK, __func__);
+    CHECK(gedp->dbip == NULL, __func__);
+    CHECK(observer.invalidation_reasons.back() ==
+	GED_EDIT_INVALIDATION_DATABASE_CLOSED, __func__);
+    CHECK(ged_edit_session_info_get(gedp, closing, std::addressof(info)) ==
+	GED_EDIT_STALE, __func__);
+    const char *open_database[] = {"opendb", database_path, NULL};
+    CHECK(ged_exec(gedp, 2, open_database) == BRLCAD_OK, __func__);
+    ged_edit_session_ref reopened = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "sph.s", std::addressof(reopened)) ==
+	GED_EDIT_OK, __func__);
+    CHECK(ged_edit_session_cancel(gedp, reopened) == GED_EDIT_OK, __func__);
+
+    ged_edit_session_ref removed = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "sph.s", std::addressof(removed)) ==
+	GED_EDIT_OK, __func__);
+    const char *remove_object[] = {"kill", "sph.s", NULL};
+    CHECK(ged_exec(gedp, 2, remove_object) == BRLCAD_OK, __func__);
+    CHECK(observer.invalidation_reasons.back() ==
+	GED_EDIT_INVALIDATION_SOURCE_REMOVED, __func__);
+    CHECK(ged_edit_session_info_get(gedp, removed, std::addressof(info)) ==
+	GED_EDIT_STALE, __func__);
+    CHECK(ged_edit_observer_remove(gedp, token) == 1, __func__);
 }
 
 static void
@@ -4475,6 +4554,7 @@ main(int ac, char *av[])
         test_p1_buf_flush(gedp);
         test_p1_edit_session_api(gedp);
         test_p1_edit_observer_self_remove(gedp);
+        test_p1_edit_session_invalidation(gedp, bu_vls_cstr(&p1_path));
         test_p1_perturb_regression(gedp);
         ged_close(gedp);
     }

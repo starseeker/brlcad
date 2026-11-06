@@ -58,7 +58,18 @@ enum ged_edit_session_event_kind {
     GED_EDIT_SESSION_CHECKPOINT,
     GED_EDIT_SESSION_REVERT,
     GED_EDIT_SESSION_COMMIT,
-    GED_EDIT_SESSION_CANCEL
+    GED_EDIT_SESSION_CANCEL,
+    GED_EDIT_SESSION_INVALIDATE
+};
+
+/** Why GED invalidated an edit session. */
+enum ged_edit_session_invalidation_reason {
+    GED_EDIT_INVALIDATION_NONE = 0,
+    GED_EDIT_INVALIDATION_SOURCE_CHANGED,
+    GED_EDIT_INVALIDATION_SOURCE_RENAMED,
+    GED_EDIT_INVALIDATION_SOURCE_REMOVED,
+    GED_EDIT_INVALIDATION_PATH_REMOVED,
+    GED_EDIT_INVALIDATION_DATABASE_CLOSED
 };
 
 /** Callback-lifetime description of one edit-session transition. */
@@ -66,6 +77,8 @@ struct ged_edit_session_event {
     enum ged_edit_session_event_kind kind;
     ged_edit_session_ref session;
     const char *path;       /**< Borrowed canonical path. */
+    const char *replacement_path; /**< Borrowed renamed path, or NULL. */
+    enum ged_edit_session_invalidation_reason invalidation_reason;
     uint64_t revision;      /**< Monotonic within this session. */
     int command_id;         /**< Librt edit command, or zero if inapplicable. */
 };

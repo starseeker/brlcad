@@ -46,6 +46,8 @@
 #include "./ged_private.h"
 #include "./dbi.h"
 
+static void _edit_database_changed(struct db_i *, struct directory *, int,
+    void *);
 
 /* ------------------------------------------------------------------ *
  * Ged_Internal destructor — abandons all pending edits on close.
@@ -53,6 +55,8 @@
 
 Ged_Internal::~Ged_Internal()
 {
+    if (edit_dbip)
+	(void)db_rm_changed_clbk(edit_dbip, _edit_database_changed, this);
     for (auto &kv : edit_buf) {
 	rt_edit_destroy(kv.second.s);
 	db_free_full_path(&kv.second.dfp);
@@ -99,7 +103,10 @@ _edit_ref(Ged_Internal *internal,
 static void
 _edit_notify(struct ged *gedp, enum ged_edit_session_event_kind kind,
 	const std::string &path,
-	const Ged_Internal::ged_edit_buf_entry &entry)
+	const Ged_Internal::ged_edit_buf_entry &entry,
+	const std::string *replacement_path = nullptr,
+	enum ged_edit_session_invalidation_reason invalidation_reason =
+	    GED_EDIT_INVALIDATION_NONE)
 {
     if (!gedp || !gedp->i || !gedp->i->i)
 	return;
@@ -109,6 +116,9 @@ _edit_notify(struct ged *gedp, enum ged_edit_session_event_kind kind,
     pending.kind = kind;
     pending.session = _edit_ref(internal, entry);
     pending.path = path;
+    if (replacement_path)
+	pending.replacement_path = *replacement_path;
+    pending.invalidation_reason = invalidation_reason;
     pending.revision = entry.revision;
     pending.command_id = entry.last_cmd;
     internal->edit_pending_events.push_back(pending);
@@ -131,6 +141,9 @@ _edit_notify(struct ged *gedp, enum ged_edit_session_event_kind kind,
 	event.kind = current.kind;
 	event.session = current.session;
 	event.path = current.path.c_str();
+	event.replacement_path = current.replacement_path.empty() ? nullptr :
+	    current.replacement_path.c_str();
+	event.invalidation_reason = current.invalidation_reason;
 	event.revision = current.revision;
 	event.command_id = current.command_id;
 
@@ -161,6 +174,137 @@ _edit_find_ref(Ged_Internal *internal, ged_edit_session_ref ref)
 	    return entry;
     }
     return internal->edit_buf.end();
+}
+
+enum edit_database_change {
+    EDIT_DATABASE_MODIFIED = 0,
+    EDIT_DATABASE_ADDED = 1,
+    EDIT_DATABASE_REMOVED = 2
+};
+
+static std::string
+_edit_renamed_path(const Ged_Internal::ged_edit_buf_entry &entry,
+	size_t renamed_index, const char *new_name)
+{
+    std::string path;
+    for (size_t i = 0; i < entry.path_names.size(); ++i) {
+	path.push_back('/');
+	path.append(i == renamed_index ? new_name : entry.path_names[i]);
+	if (i < entry.path_instances.size() && entry.path_instances[i]) {
+	    path.push_back('@');
+	    path.append(std::to_string(entry.path_instances[i]));
+	}
+    }
+    return path;
+}
+
+static void
+_edit_release_key(struct ged *gedp, const std::string &key,
+	enum ged_edit_session_event_kind kind,
+	const std::string *replacement_path = nullptr,
+	enum ged_edit_session_invalidation_reason invalidation_reason =
+	    GED_EDIT_INVALIDATION_NONE)
+{
+    if (!gedp || !gedp->i || !gedp->i->i)
+	return;
+    Ged_Internal *internal = gedp->i->i;
+    auto entry = internal->edit_buf.find(key);
+    if (entry == internal->edit_buf.end())
+	return;
+
+    const Ged_Internal::ged_edit_buf_entry final_entry = entry->second;
+    rt_edit_destroy(entry->second.s);
+    db_free_full_path(&entry->second.dfp);
+    internal->edit_buf.erase(entry);
+    _edit_notify(gedp, kind, key, final_entry, replacement_path,
+	invalidation_reason);
+}
+
+struct edit_invalidation {
+    std::string key;
+    std::string replacement_path;
+    enum ged_edit_session_invalidation_reason reason =
+	GED_EDIT_INVALIDATION_NONE;
+};
+
+static void
+_edit_database_changed(struct db_i *dbip, struct directory *dp, int mode,
+	void *client_data)
+{
+    Ged_Internal *internal = static_cast<Ged_Internal *>(client_data);
+    if (!internal || !internal->gedp || internal->edit_dbip != dbip || !dp ||
+	mode == EDIT_DATABASE_ADDED || internal->edit_buf.empty())
+	return;
+
+    std::vector<edit_invalidation> invalidations;
+    for (const auto &session : internal->edit_buf) {
+	const Ged_Internal::ged_edit_buf_entry &entry = session.second;
+	if (entry.committing)
+	    continue;
+
+	size_t changed_index = entry.dfp.fp_len;
+	for (size_t i = 0; i < entry.dfp.fp_len; ++i) {
+	    if (entry.dfp.fp_names[i] == dp) {
+		changed_index = i;
+		break;
+	    }
+	}
+	if (changed_index == entry.dfp.fp_len)
+	    continue;
+
+	edit_invalidation invalidation;
+	invalidation.key = session.first;
+	const bool terminal = changed_index + 1 == entry.dfp.fp_len;
+	if (mode == EDIT_DATABASE_REMOVED) {
+	    invalidation.reason = terminal ?
+		GED_EDIT_INVALIDATION_SOURCE_REMOVED :
+		GED_EDIT_INVALIDATION_PATH_REMOVED;
+	} else if (changed_index < entry.path_names.size() && dp->d_namep &&
+	    entry.path_names[changed_index] != dp->d_namep) {
+	    invalidation.reason = GED_EDIT_INVALIDATION_SOURCE_RENAMED;
+	    invalidation.replacement_path = _edit_renamed_path(entry,
+		changed_index, dp->d_namep);
+	} else {
+	    int bool_op = 0;
+	    const bool path_exists = terminal || db_comb_has_instance(&bool_op,
+		dbip, dp, entry.dfp.fp_names[changed_index + 1],
+		entry.path_instances[changed_index + 1]);
+	    invalidation.reason = path_exists ?
+		GED_EDIT_INVALIDATION_SOURCE_CHANGED :
+		GED_EDIT_INVALIDATION_PATH_REMOVED;
+	}
+	invalidations.push_back(invalidation);
+    }
+
+    if (invalidations.empty())
+	return;
+    const bool was_closing = internal->edit_closing;
+    internal->edit_closing = true;
+    for (const edit_invalidation &invalidation : invalidations) {
+	const std::string *replacement = invalidation.replacement_path.empty() ?
+	    nullptr : &invalidation.replacement_path;
+	_edit_release_key(internal->gedp, invalidation.key,
+	    GED_EDIT_SESSION_INVALIDATE, replacement, invalidation.reason);
+    }
+    internal->edit_closing = was_closing;
+}
+
+static void
+_edit_database_observer_ensure(struct ged *gedp)
+{
+    if (!gedp || !gedp->dbip || !gedp->i || !gedp->i->i)
+	return;
+    Ged_Internal *internal = gedp->i->i;
+    internal->gedp = gedp;
+    if (internal->edit_dbip == gedp->dbip)
+	return;
+    if (internal->edit_dbip) {
+	(void)db_rm_changed_clbk(internal->edit_dbip,
+	    _edit_database_changed, internal);
+	internal->edit_dbip = nullptr;
+    }
+    if (db_add_changed_clbk(gedp->dbip, _edit_database_changed, internal) == 0)
+	internal->edit_dbip = gedp->dbip;
 }
 
 static bool
@@ -207,7 +351,7 @@ ged_edit_buf_set(struct ged *gedp, const struct db_full_path *dfp, struct rt_edi
 {
     if (!gedp || !dfp || !s || !gedp->i || !gedp->i->i)
 	return;
-
+    _edit_database_observer_ensure(gedp);
     Ged_Internal *gi = gedp->i->i;
     std::string key = _edit_buf_key(dfp);
 
@@ -223,6 +367,12 @@ ged_edit_buf_set(struct ged *gedp, const struct db_full_path *dfp, struct rt_edi
     db_full_path_init(&entry.dfp);
     db_dup_full_path(&entry.dfp, dfp);
     entry.s = s;
+    entry.path_names.reserve(dfp->fp_len);
+    entry.path_instances.reserve(dfp->fp_len);
+    for (size_t i = 0; i < dfp->fp_len; ++i) {
+	entry.path_names.emplace_back(dfp->fp_names[i]->d_namep);
+	entry.path_instances.push_back(dfp->fp_cinst ? dfp->fp_cinst[i] : 0);
+    }
     entry.id = gi->edit_next_id++;
     if (!entry.id)
 	entry.id = gi->edit_next_id++;
@@ -300,7 +450,9 @@ ged_edit_buf_promote(struct ged *gedp, const struct db_full_path *dfp)
     if (dp && gedp->dbip) {
 	/* rt_db_put_internal frees es_int internals and re-initializes it
 	 * via RT_DB_INTERNAL_INIT, so the subsequent rt_edit_destroy is safe. */
+	it->second.committing = true;
 	int put_ret = rt_db_put_internal(dp, gedp->dbip, &s->es_int);
+	it->second.committing = false;
 	ret = (put_ret < 0) ? BRLCAD_ERROR : BRLCAD_OK;
     }
 
@@ -333,11 +485,7 @@ ged_edit_buf_abandon(struct ged *gedp, const struct db_full_path *dfp)
     if (it == gi->edit_buf.end())
 	return;
 
-    const Ged_Internal::ged_edit_buf_entry final_entry = it->second;
-    rt_edit_destroy(it->second.s);
-    db_free_full_path(&it->second.dfp);
-    gi->edit_buf.erase(it);
-    _edit_notify(gedp, GED_EDIT_SESSION_CANCEL, key, final_entry);
+    _edit_release_key(gedp, key, GED_EDIT_SESSION_CANCEL);
 }
 
 
@@ -369,7 +517,9 @@ ged_edit_buf_flush(struct ged *gedp)
 
 	bool written = false;
 	if (dp && gedp->dbip) {
+	    it->second.committing = true;
 	    written = rt_db_put_internal(dp, gedp->dbip, &s->es_int) >= 0;
+	    it->second.committing = false;
 	    any_written = any_written || written;
 	}
 
@@ -384,6 +534,46 @@ ged_edit_buf_flush(struct ged *gedp)
 	DbiState *dbis = (DbiState *)gedp->dbi_state;
 	dbis->update();
     }
+}
+
+
+static void
+_edit_sessions_close(struct ged *gedp, bool permanent)
+{
+    if (!gedp || !gedp->i || !gedp->i->i)
+	return;
+    Ged_Internal *internal = gedp->i->i;
+    internal->edit_closing = true;
+    if (internal->edit_dbip) {
+	(void)db_rm_changed_clbk(internal->edit_dbip,
+	    _edit_database_changed, internal);
+	internal->edit_dbip = nullptr;
+    }
+
+    std::vector<std::string> keys;
+    keys.reserve(internal->edit_buf.size());
+    for (const auto &entry : internal->edit_buf)
+	keys.push_back(entry.first);
+    for (const std::string &key : keys)
+	_edit_release_key(gedp, key, GED_EDIT_SESSION_INVALIDATE, nullptr,
+	    GED_EDIT_INVALIDATION_DATABASE_CLOSED);
+
+    if (!permanent)
+	internal->edit_closing = false;
+}
+
+
+void
+ged_edit_sessions_database_close_private(struct ged *gedp)
+{
+    _edit_sessions_close(gedp, false);
+}
+
+
+void
+ged_edit_sessions_close_private(struct ged *gedp)
+{
+    _edit_sessions_close(gedp, true);
 }
 
 
@@ -425,6 +615,9 @@ ged_edit_session_begin(struct ged *gedp, const char *path,
     if (!gedp || !path || !path[0] || !session ||
 	!gedp->i || !gedp->i->i || !gedp->dbip)
 	return GED_EDIT_INVALID;
+
+    if (gedp->i->i->edit_closing)
+	return GED_EDIT_REJECTED;
 
     struct db_full_path full_path;
     db_full_path_init(&full_path);
