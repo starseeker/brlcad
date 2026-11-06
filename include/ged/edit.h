@@ -16,8 +16,10 @@
 #ifndef GED_EDIT_H
 #define GED_EDIT_H
 
+#include <stddef.h>
 #include <stdint.h>
 
+#include "vmath.h"
 #include "ged/defines.h"
 
 struct bu_vls;
@@ -91,6 +93,15 @@ struct ged_edit_session_info {
     int dirty;
 };
 
+/** Typed input for one librt descriptor command. */
+struct ged_edit_command_input {
+    int command_id;
+    const fastf_t *values; /**< Indexed as described by rt_edit_param_desc. */
+    size_t value_count;
+    const char *const *strings; /**< Indexed string parameters. */
+    size_t string_count;
+};
+
 typedef uint64_t ged_edit_observer_token;
 
 typedef void (*ged_edit_observer_func_t)(
@@ -135,6 +146,11 @@ GED_EXPORT extern enum ged_edit_status
 ged_edit_session_command_values_get(struct ged *gedp,
 	ged_edit_session_ref session, int command_id,
 	struct rt_edit_cmd_values *result);
+
+/** Apply one typed descriptor command to the intermediate session. */
+GED_EXPORT extern enum ged_edit_status
+ged_edit_session_apply(struct ged *gedp, ged_edit_session_ref session,
+	const struct ged_edit_command_input *input);
 
 /** Save a single-level restore point without closing the transaction. */
 GED_EXPORT extern enum ged_edit_status

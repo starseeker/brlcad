@@ -574,6 +574,44 @@ test_p0_hrt_descriptor_ops(struct ged *gedp)
 }
 
 static void
+test_p0_typed_apply_rejection(struct ged *gedp)
+{
+    const int hrt_x_direction_command = 43002;
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "hrt.s", &session) == GED_EDIT_OK,
+	"typed rejection test begins an HRT session");
+
+    struct ged_edit_session_info before_info = {};
+    struct rt_edit_cmd_values before_values;
+    CHECK(ged_edit_session_info_get(gedp, session, &before_info) == GED_EDIT_OK,
+	"typed rejection test reads initial session state");
+    CHECK(ged_edit_session_command_values_get(gedp, session,
+	hrt_x_direction_command, &before_values) == GED_EDIT_OK,
+	"typed rejection test reads the initial HRT direction");
+
+    fastf_t invalid_direction[] = {1.0, 1.0, 0.0};
+    struct ged_edit_command_input input = {};
+    input.command_id = hrt_x_direction_command;
+    input.values = invalid_direction;
+    input.value_count = 3;
+    CHECK(ged_edit_session_apply(gedp, session, &input) ==
+	GED_EDIT_REJECTED, "typed apply distinguishes semantic rejection");
+
+    struct ged_edit_session_info after_info = {};
+    struct rt_edit_cmd_values after_values;
+    CHECK(ged_edit_session_info_get(gedp, session, &after_info) == GED_EDIT_OK &&
+	after_info.revision == before_info.revision &&
+	after_info.dirty == before_info.dirty,
+	"rejected typed apply changes no session metadata");
+    CHECK(ged_edit_session_command_values_get(gedp, session,
+	hrt_x_direction_command, &after_values) == GED_EDIT_OK &&
+	VNEAR_EQUAL(before_values.values, after_values.values, NEAR_ENOUGH),
+	"rejected typed apply leaves intermediate geometry unchanged");
+    CHECK(ged_edit_session_cancel(gedp, session) == GED_EDIT_OK,
+	"typed rejection test cancels its session");
+}
+
+static void
 test_p0_conic_semiaxis_errors(struct ged *gedp)
 {
     const struct {
@@ -1003,6 +1041,27 @@ test_p1_edit_session_api(struct ged *gedp)
     CHECK(observer.revisions.back() == 1, __func__);
     CHECK(observer.commands.back() == tor_radius_command, __func__);
 
+    fastf_t typed_radius[] = {17.25};
+    struct ged_edit_command_input typed_input = {};
+    typed_input.command_id = tor_radius_command;
+    typed_input.values = typed_radius;
+    typed_input.value_count = 1;
+    CHECK(ged_edit_session_apply(gedp, session, &typed_input) == GED_EDIT_OK,
+	"typed session apply updates intermediate geometry");
+    CHECK(observer.kinds.back() == GED_EDIT_SESSION_UPDATE &&
+	observer.revisions.back() == 2, "typed apply reports one session update");
+    CHECK(ged_edit_session_command_values_get(gedp, session,
+	tor_radius_command, &values) == GED_EDIT_OK &&
+	NEAR_EQUAL(values.values[0], 17.25, NEAR_ENOUGH),
+	"typed apply is visible through typed readback");
+
+    struct ged_edit_command_input invalid_input = typed_input;
+    invalid_input.value_count = 0;
+    CHECK(ged_edit_session_apply(gedp, session, &invalid_input) ==
+	GED_EDIT_INVALID, "typed apply rejects an invalid parameter count");
+    CHECK(observer.revisions.back() == 2,
+	"invalid typed input publishes no update event");
+
     struct rt_db_internal preview;
     RT_DB_INTERNAL_INIT(&preview);
     CHECK(ged_edit_session_internal_copy(gedp, session, &preview) ==
@@ -1017,7 +1076,7 @@ test_p1_edit_session_api(struct ged *gedp)
     CHECK(observer.kinds[observer.kinds.size() - 2] ==
 	GED_EDIT_SESSION_CHECKPOINT, __func__);
     CHECK(observer.kinds.back() == GED_EDIT_SESSION_REVERT, __func__);
-    CHECK(observer.revisions.back() == 2, __func__);
+    CHECK(observer.revisions.back() == 3, __func__);
 
     CHECK(ged_edit_session_cancel(gedp, session) == GED_EDIT_OK &&
 	ged_edit_session_info_get(gedp, session, &info) == GED_EDIT_STALE,
@@ -1031,6 +1090,30 @@ test_p1_edit_session_api(struct ged *gedp)
 	ged_edit_session_info_get(gedp, committed, &info) == GED_EDIT_STALE,
 	"commit closes the session and invalidates its reference");
     CHECK(observer.kinds.back() == GED_EDIT_SESSION_COMMIT, __func__);
+
+    ged_edit_session_ref combination = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "group.c", &combination) == GED_EDIT_OK,
+	"string apply begins a combination session");
+    const char *shader_values[] = {"plastic"};
+    struct ged_edit_command_input string_input = {};
+    string_input.command_id = 12007;
+    string_input.strings = shader_values;
+    string_input.string_count = 1;
+    CHECK(ged_edit_session_apply(gedp, combination, &string_input) ==
+	GED_EDIT_OK, "typed apply accepts descriptor string input");
+    struct rt_edit_cmd_values string_values;
+    CHECK(ged_edit_session_command_values_get(gedp, combination, 12007,
+	&string_values) == GED_EDIT_OK && string_values.string_valid[0] &&
+	BU_STR_EQUAL(string_values.strings[0], "plastic"),
+	"typed string input is visible through session readback");
+    const char *extra_shader_values[] = {"plastic", "unused"};
+    struct ged_edit_command_input extra_string_input = string_input;
+    extra_string_input.strings = extra_shader_values;
+    extra_string_input.string_count = 2;
+    CHECK(ged_edit_session_apply(gedp, combination, &extra_string_input) ==
+	GED_EDIT_INVALID, "typed apply rejects extra string slots");
+    CHECK(ged_edit_session_cancel(gedp, combination) == GED_EDIT_OK,
+	"typed string session cancels without changing the database");
     CHECK(ged_edit_observer_remove(gedp, observer_token) == 1, __func__);
 }
 
@@ -4513,6 +4596,7 @@ main(int ac, char *av[])
         test_p0_obj_nosubcmd(gedp);
         test_p0_perturb(gedp);
         test_p0_hrt_descriptor_ops(gedp);
+        test_p0_typed_apply_rejection(gedp);
         test_p0_conic_semiaxis_errors(gedp);
         test_p0_obj_help_descriptor_ops(gedp);
         test_p0_desc_coverage();

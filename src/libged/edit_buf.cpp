@@ -31,7 +31,10 @@
 
 #include "common.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -744,6 +747,180 @@ ged_edit_session_command_values_get(struct ged *gedp,
     if (status == RT_EDIT_VALUE_ERROR)
 	return GED_EDIT_ERROR;
     return status == RT_EDIT_VALUE_OK ? GED_EDIT_OK : GED_EDIT_UNSUPPORTED;
+}
+
+
+static const struct rt_edit_cmd_desc *
+_edit_command(const struct rt_edit_prim_desc *descriptor, int command_id)
+{
+    if (!descriptor)
+	return NULL;
+    for (int i = 0; i < descriptor->ncmd; ++i) {
+	if (descriptor->cmds[i].cmd_id == command_id)
+	    return &descriptor->cmds[i];
+    }
+    return NULL;
+}
+
+
+static size_t
+_edit_parameter_width(const struct rt_edit_param_desc *parameter)
+{
+    if (!parameter)
+	return 0;
+    switch (parameter->type) {
+	case RT_EDIT_PARAM_SCALAR:
+	case RT_EDIT_PARAM_INTEGER:
+	case RT_EDIT_PARAM_BOOLEAN:
+	case RT_EDIT_PARAM_ENUM:
+	    return 1;
+	case RT_EDIT_PARAM_POINT:
+	case RT_EDIT_PARAM_VECTOR:
+	case RT_EDIT_PARAM_COLOR:
+	    return 3;
+	case RT_EDIT_PARAM_MATRIX:
+	    return 16;
+	default:
+	    return 0;
+    }
+}
+
+
+static bool
+_edit_integer_parameter(int type)
+{
+    return type == RT_EDIT_PARAM_INTEGER || type == RT_EDIT_PARAM_BOOLEAN ||
+	type == RT_EDIT_PARAM_ENUM;
+}
+
+
+static bool
+_edit_enum_value_valid(const struct rt_edit_param_desc *parameter,
+	fastf_t value)
+{
+    if (!parameter || parameter->type != RT_EDIT_PARAM_ENUM ||
+	parameter->nenum <= 0 || !parameter->enum_ids)
+	return true;
+    const int enum_value = (int)nearbyint(value);
+    for (int i = 0; i < parameter->nenum; ++i) {
+	if (parameter->enum_ids[i] == enum_value)
+	    return true;
+    }
+    return false;
+}
+
+
+static bool
+_edit_command_input_valid(const struct rt_edit_cmd_desc *command,
+	const struct ged_edit_command_input *input)
+{
+    if (!command || !input || command->nparam < 0 ||
+	(command->nparam && !command->params) ||
+	input->value_count > RT_EDIT_MAXPARA ||
+	input->string_count > RT_EDIT_MAXSTR)
+	return false;
+
+    size_t required_values = 0;
+    size_t required_strings = 0;
+    for (int i = 0; i < command->nparam; ++i) {
+	const struct rt_edit_param_desc *parameter = &command->params[i];
+	if (parameter->index < 0)
+	    return false;
+	if (parameter->type == RT_EDIT_PARAM_STRING) {
+	    const size_t index = (size_t)parameter->index;
+	    required_strings = std::max(required_strings, index + 1);
+	    if (!input->strings || index >= input->string_count ||
+		!input->strings[index] ||
+		strlen(input->strings[index]) >= RT_EDIT_MAXSTR_LEN)
+		return false;
+	    continue;
+	}
+
+	const size_t width = _edit_parameter_width(parameter);
+	const size_t index = (size_t)parameter->index;
+	if (!width || index + width > RT_EDIT_MAXPARA)
+	    return false;
+	required_values = std::max(required_values, index + width);
+	if (!input->values || index + width > input->value_count)
+	    return false;
+
+	const bool has_minimum = parameter->range_min > RT_EDIT_PARAM_NO_LIMIT;
+	const bool has_maximum = parameter->range_max > RT_EDIT_PARAM_NO_LIMIT;
+	for (size_t value_index = index; value_index < index + width;
+	    ++value_index) {
+	    const fastf_t value = input->values[value_index];
+	    if (!std::isfinite(value) ||
+		(has_minimum && value < parameter->range_min) ||
+		(has_maximum && value > parameter->range_max) ||
+		(_edit_integer_parameter(parameter->type) &&
+		 fabs(value - nearbyint(value)) > SMALL_FASTF) ||
+		(parameter->type == RT_EDIT_PARAM_BOOLEAN &&
+		 (value < 0.0 || value > 1.0)) ||
+		!_edit_enum_value_valid(parameter, value))
+		return false;
+	}
+    }
+    return input->value_count == required_values &&
+	input->string_count == required_strings;
+}
+
+
+enum ged_edit_status
+ged_edit_session_apply(struct ged *gedp, ged_edit_session_ref session,
+	const struct ged_edit_command_input *input)
+{
+    if (!gedp || !input || !gedp->i || !gedp->i->i)
+	return GED_EDIT_INVALID;
+    Ged_Internal *internal = gedp->i->i;
+    auto entry = _edit_find_ref(internal, session);
+    if (entry == internal->edit_buf.end())
+	return session.owner == _edit_owner(internal) ? GED_EDIT_STALE :
+	    GED_EDIT_INVALID;
+
+    struct rt_edit *state = entry->second.s;
+    const int type = state ? state->es_int.idb_type : -1;
+    if (type < 0 || EDOBJ[type].magic != RT_FUNCTAB_MAGIC ||
+	!EDOBJ[type].ft_edit_desc)
+	return GED_EDIT_UNSUPPORTED;
+    const struct rt_edit_prim_desc *descriptor = EDOBJ[type].ft_edit_desc();
+    const struct rt_edit_cmd_desc *command = _edit_command(descriptor,
+	input->command_id);
+    if (!command)
+	return GED_EDIT_UNSUPPORTED;
+    if (!_edit_command_input_valid(command, input))
+	return GED_EDIT_INVALID;
+
+    memset(state->e_para, 0, sizeof(state->e_para));
+    memset(state->e_str, 0, sizeof(state->e_str));
+    state->e_inpara = (int)input->value_count;
+    state->e_nstr = 0;
+    if (input->value_count)
+	memcpy(state->e_para, input->values,
+	    input->value_count * sizeof(fastf_t));
+    for (int i = 0; i < command->nparam; ++i) {
+	const struct rt_edit_param_desc *parameter = &command->params[i];
+	if (parameter->type == RT_EDIT_PARAM_STRING)
+	    rt_edit_set_str(state, parameter->index,
+		input->strings[parameter->index]);
+    }
+
+    rt_edit_set_edflag(state, command->cmd_id);
+    const int process_result = rt_edit_process(state);
+    state->e_nstr = 0;
+    memset(state->e_str, 0, sizeof(state->e_str));
+    if (process_result != BRLCAD_OK) {
+	if (state->log_str && bu_vls_strlen(state->log_str) &&
+	    gedp->ged_result_str)
+	    bu_vls_printf(gedp->ged_result_str, "%s",
+		bu_vls_cstr(state->log_str));
+	if (state->log_str)
+	    bu_vls_trunc(state->log_str, 0);
+	return GED_EDIT_REJECTED;
+    }
+
+    ged_edit_buf_notify_update(gedp, &entry->second.dfp,
+	command->cmd_id);
+    return GED_EDIT_OK;
 }
 
 
