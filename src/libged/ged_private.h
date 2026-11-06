@@ -50,6 +50,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "ged/edit.h"
 #include "rt/edit.h"
 #include "rt/db_fullpath.h"
 
@@ -155,8 +156,20 @@ class Ged_Internal {
 	    bool checkpoint_dirty = false;
 	};
 	std::unordered_map<std::string, ged_edit_buf_entry> edit_buf;
+	struct ged_edit_pending_event {
+	    enum ged_edit_session_event_kind kind;
+	    ged_edit_session_ref session;
+	    std::string path;
+	    uint64_t revision = 0;
+	    int command_id = 0;
+	};
 	uint64_t edit_owner = 0;
 	uint64_t edit_next_id = 1;
+	uint64_t edit_next_observer = 1;
+	int edit_dispatch_depth = 0;
+	std::map<ged_edit_observer_token,
+	    std::pair<ged_edit_observer_func_t, void *> > edit_observers;
+	std::vector<ged_edit_pending_event> edit_pending_events;
 };
 
 #else

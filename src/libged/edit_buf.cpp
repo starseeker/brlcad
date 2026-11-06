@@ -96,6 +96,55 @@ _edit_ref(Ged_Internal *internal,
     return ref;
 }
 
+static void
+_edit_notify(struct ged *gedp, enum ged_edit_session_event_kind kind,
+	const std::string &path,
+	const Ged_Internal::ged_edit_buf_entry &entry)
+{
+    if (!gedp || !gedp->i || !gedp->i->i)
+	return;
+
+    Ged_Internal *internal = gedp->i->i;
+    Ged_Internal::ged_edit_pending_event pending;
+    pending.kind = kind;
+    pending.session = _edit_ref(internal, entry);
+    pending.path = path;
+    pending.revision = entry.revision;
+    pending.command_id = entry.last_cmd;
+    internal->edit_pending_events.push_back(pending);
+
+    if (internal->edit_dispatch_depth)
+	return;
+
+    internal->edit_dispatch_depth++;
+    while (!internal->edit_pending_events.empty()) {
+	Ged_Internal::ged_edit_pending_event current =
+	    internal->edit_pending_events.front();
+	internal->edit_pending_events.erase(internal->edit_pending_events.begin());
+
+	std::vector<ged_edit_observer_token> observers;
+	observers.reserve(internal->edit_observers.size());
+	for (const auto &observer : internal->edit_observers)
+	    observers.push_back(observer.first);
+
+	struct ged_edit_session_event event;
+	event.kind = current.kind;
+	event.session = current.session;
+	event.path = current.path.c_str();
+	event.revision = current.revision;
+	event.command_id = current.command_id;
+
+	for (ged_edit_observer_token token : observers) {
+	    auto observer = internal->edit_observers.find(token);
+	    if (observer == internal->edit_observers.end() ||
+		!observer->second.first)
+		continue;
+	    observer->second.first(gedp, &event, observer->second.second);
+	}
+    }
+    internal->edit_dispatch_depth--;
+}
+
 static std::unordered_map<std::string,
     Ged_Internal::ged_edit_buf_entry>::iterator
 _edit_find_ref(Ged_Internal *internal, ged_edit_session_ref ref)
@@ -194,6 +243,7 @@ ged_edit_buf_notify_update(struct ged *gedp, const struct db_full_path *dfp,
     entry->second.revision++;
     entry->second.last_cmd = command_id;
     entry->second.dirty = true;
+    _edit_notify(gedp, GED_EDIT_SESSION_UPDATE, entry->first, entry->second);
 }
 
 
@@ -205,8 +255,11 @@ ged_edit_buf_notify_checkpoint(struct ged *gedp,
 	return;
     Ged_Internal *internal = gedp->i->i;
     auto entry = internal->edit_buf.find(_edit_buf_key(dfp));
-    if (entry != internal->edit_buf.end())
+    if (entry != internal->edit_buf.end()) {
 	entry->second.checkpoint_dirty = entry->second.dirty;
+	_edit_notify(gedp, GED_EDIT_SESSION_CHECKPOINT, entry->first,
+	    entry->second);
+    }
 }
 
 
@@ -223,6 +276,7 @@ ged_edit_buf_notify_revert(struct ged *gedp,
     entry->second.revision++;
     entry->second.last_cmd = 0;
     entry->second.dirty = entry->second.checkpoint_dirty;
+    _edit_notify(gedp, GED_EDIT_SESSION_REVERT, entry->first, entry->second);
 }
 
 
@@ -238,6 +292,7 @@ ged_edit_buf_promote(struct ged *gedp, const struct db_full_path *dfp)
     if (it == gi->edit_buf.end())
 	return BRLCAD_ERROR;
 
+    const Ged_Internal::ged_edit_buf_entry final_entry = it->second;
     struct rt_edit *s = it->second.s;
     struct directory *dp = DB_FULL_PATH_CUR_DIR(&it->second.dfp);
 
@@ -252,6 +307,9 @@ ged_edit_buf_promote(struct ged *gedp, const struct db_full_path *dfp)
     rt_edit_destroy(s);
     db_free_full_path(&it->second.dfp);
     gi->edit_buf.erase(it);
+
+    if (ret == BRLCAD_OK)
+	_edit_notify(gedp, GED_EDIT_SESSION_COMMIT, key, final_entry);
 
     /* Notify DbiState of the change */
     if (ret == BRLCAD_OK && gedp->dbi_state) {
@@ -275,9 +333,11 @@ ged_edit_buf_abandon(struct ged *gedp, const struct db_full_path *dfp)
     if (it == gi->edit_buf.end())
 	return;
 
+    const Ged_Internal::ged_edit_buf_entry final_entry = it->second;
     rt_edit_destroy(it->second.s);
     db_free_full_path(&it->second.dfp);
     gi->edit_buf.erase(it);
+    _edit_notify(gedp, GED_EDIT_SESSION_CANCEL, key, final_entry);
 }
 
 
@@ -303,17 +363,21 @@ ged_edit_buf_flush(struct ged *gedp)
 	if (it == gi->edit_buf.end())
 	    continue;
 
+	const Ged_Internal::ged_edit_buf_entry final_entry = it->second;
 	struct rt_edit *s = it->second.s;
 	struct directory *dp = DB_FULL_PATH_CUR_DIR(&it->second.dfp);
 
+	bool written = false;
 	if (dp && gedp->dbip) {
-	    rt_db_put_internal(dp, gedp->dbip, &s->es_int);
-	    any_written = true;
+	    written = rt_db_put_internal(dp, gedp->dbip, &s->es_int) >= 0;
+	    any_written = any_written || written;
 	}
 
 	rt_edit_destroy(s);
 	db_free_full_path(&it->second.dfp);
 	gi->edit_buf.erase(it);
+	if (written)
+	    _edit_notify(gedp, GED_EDIT_SESSION_COMMIT, key, final_entry);
     }
 
     if (any_written && gedp->dbi_state) {
@@ -398,6 +462,11 @@ ged_edit_session_begin(struct ged *gedp, const char *path,
 	return GED_EDIT_ERROR;
     }
     *session = _edit_ref(internal, added->second);
+    _edit_notify(gedp, GED_EDIT_SESSION_BEGIN, key, added->second);
+    if (internal->edit_buf.find(key) == internal->edit_buf.end()) {
+	db_free_full_path(&full_path);
+	return GED_EDIT_ERROR;
+    }
     db_free_full_path(&full_path);
     return GED_EDIT_OK;
 }
@@ -530,11 +599,12 @@ ged_edit_session_commit(struct ged *gedp, ged_edit_session_ref session)
 	return session.owner == _edit_owner(internal) ? GED_EDIT_STALE :
 	    GED_EDIT_INVALID;
     if (!entry->second.dirty) {
-	struct db_full_path path;
-	db_full_path_init(&path);
-	db_dup_full_path(&path, &entry->second.dfp);
-	ged_edit_buf_abandon(gedp, &path);
-	db_free_full_path(&path);
+	const std::string key = entry->first;
+	const Ged_Internal::ged_edit_buf_entry final_entry = entry->second;
+	rt_edit_destroy(entry->second.s);
+	db_free_full_path(&entry->second.dfp);
+	internal->edit_buf.erase(entry);
+	_edit_notify(gedp, GED_EDIT_SESSION_COMMIT, key, final_entry);
 	return GED_EDIT_OK;
     }
     struct db_full_path path;
@@ -590,6 +660,30 @@ ged_edit_session_internal_copy(struct ged *gedp,
 	entry->second.s->dbip);
     bu_free_external(&external);
     return result < 0 ? GED_EDIT_ERROR : GED_EDIT_OK;
+}
+
+
+ged_edit_observer_token
+ged_edit_observer_add(struct ged *gedp, ged_edit_observer_func_t callback,
+	void *client_data)
+{
+    if (!gedp || !callback || !gedp->i || !gedp->i->i)
+	return 0;
+    Ged_Internal *internal = gedp->i->i;
+    ged_edit_observer_token token = internal->edit_next_observer++;
+    if (!token)
+	token = internal->edit_next_observer++;
+    internal->edit_observers[token] = std::make_pair(callback, client_data);
+    return token;
+}
+
+
+int
+ged_edit_observer_remove(struct ged *gedp, ged_edit_observer_token token)
+{
+    if (!gedp || !token || !gedp->i || !gedp->i->i)
+	return 0;
+    return gedp->i->i->edit_observers.erase(token) ? 1 : 0;
 }
 
 

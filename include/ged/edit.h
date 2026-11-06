@@ -51,6 +51,25 @@ enum ged_edit_status {
     GED_EDIT_ERROR
 };
 
+/** Semantic transition reported to edit-session observers. */
+enum ged_edit_session_event_kind {
+    GED_EDIT_SESSION_BEGIN = 0,
+    GED_EDIT_SESSION_UPDATE,
+    GED_EDIT_SESSION_CHECKPOINT,
+    GED_EDIT_SESSION_REVERT,
+    GED_EDIT_SESSION_COMMIT,
+    GED_EDIT_SESSION_CANCEL
+};
+
+/** Callback-lifetime description of one edit-session transition. */
+struct ged_edit_session_event {
+    enum ged_edit_session_event_kind kind;
+    ged_edit_session_ref session;
+    const char *path;       /**< Borrowed canonical path. */
+    uint64_t revision;      /**< Monotonic within this session. */
+    int command_id;         /**< Librt edit command, or zero if inapplicable. */
+};
+
 struct ged_edit_session_info {
     ged_edit_session_ref session;
     uint64_t revision;
@@ -58,6 +77,13 @@ struct ged_edit_session_info {
     int primitive_type;
     int dirty;
 };
+
+typedef uint64_t ged_edit_observer_token;
+
+typedef void (*ged_edit_observer_func_t)(
+    struct ged *gedp,
+    const struct ged_edit_session_event *event,
+    void *client_data);
 
 __BEGIN_DECLS
 
@@ -117,6 +143,15 @@ ged_edit_session_cancel(struct ged *gedp, ged_edit_session_ref session);
 GED_EXPORT extern enum ged_edit_status
 ged_edit_session_internal_copy(struct ged *gedp,
 	ged_edit_session_ref session, struct rt_db_internal *intern);
+
+/** Register a synchronous edit-session observer. */
+GED_EXPORT extern ged_edit_observer_token
+ged_edit_observer_add(struct ged *gedp, ged_edit_observer_func_t callback,
+	void *client_data);
+
+/** Remove an observer; removal from inside its callback is supported. */
+GED_EXPORT extern int
+ged_edit_observer_remove(struct ged *gedp, ged_edit_observer_token token);
 
 __END_DECLS
 

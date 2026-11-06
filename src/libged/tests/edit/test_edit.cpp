@@ -28,6 +28,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -68,6 +69,34 @@ static int failed_tests = 0;
             bu_log("PASS: %s\n", msg);                               \
         }                                                            \
     } while (0)
+
+struct edit_session_observer {
+    std::vector<enum ged_edit_session_event_kind> kinds;
+    std::vector<uint64_t> revisions;
+    std::vector<int> commands;
+    std::vector<std::string> paths;
+    ged_edit_observer_token remove_token = 0;
+    int remove_result = 0;
+};
+
+static void
+edit_session_cb(struct ged *gedp,
+	const struct ged_edit_session_event *event, void *client_data)
+{
+    struct edit_session_observer *observer =
+	(struct edit_session_observer *)client_data;
+    if (!observer || !event)
+	return;
+    observer->kinds.push_back(event->kind);
+    observer->revisions.push_back(event->revision);
+    observer->commands.push_back(event->command_id);
+    observer->paths.emplace_back(event->path ? event->path : "");
+    if (observer->remove_token) {
+	observer->remove_result = ged_edit_observer_remove(gedp,
+	    observer->remove_token);
+	observer->remove_token = 0;
+    }
+}
 
 
 /* ------------------------------------------------------------------ *
@@ -922,6 +951,10 @@ static void
 test_p1_edit_session_api(struct ged *gedp)
 {
     const int tor_radius_command = 1021;
+    struct edit_session_observer observer;
+    ged_edit_observer_token observer_token = ged_edit_observer_add(gedp,
+	edit_session_cb, std::addressof(observer));
+    CHECK(observer_token != 0, __func__);
     ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
     ged_edit_session_ref joined = GED_EDIT_SESSION_REF_NULL;
     CHECK(ged_edit_session_begin(gedp, "tor.s", &session) == GED_EDIT_OK &&
@@ -931,6 +964,11 @@ test_p1_edit_session_api(struct ged *gedp)
 	joined.owner == session.owner && joined.id == session.id &&
 	joined.generation == session.generation,
 	"beginning the same path joins its active session");
+
+    CHECK(observer.kinds.size() == 1, __func__);
+    CHECK(observer.kinds[0] == GED_EDIT_SESSION_BEGIN, __func__);
+    CHECK(observer.revisions[0] == 0, __func__);
+    CHECK(observer.paths[0] == std::string(1, '/') + "tor.s", __func__);
 
     struct ged_edit_session_info info = {};
     CHECK(ged_edit_session_info_get(gedp, session, &info) == GED_EDIT_OK &&
@@ -954,6 +992,12 @@ test_p1_edit_session_api(struct ged *gedp)
 	values.value_count == 1 && values.value_valid[0],
 	"session value query exposes typed current values");
 
+    const char *update[] = {"edit", "-i", "tor.s", "r1", "12.5", NULL};
+    CHECK(ged_exec(gedp, 5, update) == BRLCAD_OK, __func__);
+    CHECK(observer.kinds.back() == GED_EDIT_SESSION_UPDATE, __func__);
+    CHECK(observer.revisions.back() == 1, __func__);
+    CHECK(observer.commands.back() == tor_radius_command, __func__);
+
     struct rt_db_internal preview;
     RT_DB_INTERNAL_INIT(&preview);
     CHECK(ged_edit_session_internal_copy(gedp, session, &preview) ==
@@ -964,15 +1008,42 @@ test_p1_edit_session_api(struct ged *gedp)
     CHECK(ged_edit_session_checkpoint(gedp, session) == GED_EDIT_OK &&
 	ged_edit_session_revert(gedp, session) == GED_EDIT_OK,
 	"session checkpoint and revert preserve an active transaction");
+    CHECK(observer.kinds.size() >= 2, __func__);
+    CHECK(observer.kinds[observer.kinds.size() - 2] ==
+	GED_EDIT_SESSION_CHECKPOINT, __func__);
+    CHECK(observer.kinds.back() == GED_EDIT_SESSION_REVERT, __func__);
+    CHECK(observer.revisions.back() == 2, __func__);
+
     CHECK(ged_edit_session_cancel(gedp, session) == GED_EDIT_OK &&
 	ged_edit_session_info_get(gedp, session, &info) == GED_EDIT_STALE,
 	"cancel closes the session and invalidates its reference");
+
+    CHECK(observer.kinds.back() == GED_EDIT_SESSION_CANCEL, __func__);
 
     ged_edit_session_ref committed = GED_EDIT_SESSION_REF_NULL;
     CHECK(ged_edit_session_begin(gedp, "sph.s", &committed) == GED_EDIT_OK &&
 	ged_edit_session_commit(gedp, committed) == GED_EDIT_OK &&
 	ged_edit_session_info_get(gedp, committed, &info) == GED_EDIT_STALE,
 	"commit closes the session and invalidates its reference");
+    CHECK(observer.kinds.back() == GED_EDIT_SESSION_COMMIT, __func__);
+    CHECK(ged_edit_observer_remove(gedp, observer_token) == 1, __func__);
+}
+
+static void
+test_p1_edit_observer_self_remove(struct ged *gedp)
+{
+    struct edit_session_observer observer;
+    observer.remove_token = ged_edit_observer_add(gedp, edit_session_cb,
+	std::addressof(observer));
+    CHECK(observer.remove_token != 0, __func__);
+
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "sph.s", std::addressof(session)) ==
+	GED_EDIT_OK, __func__);
+    CHECK(observer.remove_result == 1, __func__);
+    CHECK(observer.kinds.size() == 1, __func__);
+    CHECK(ged_edit_session_cancel(gedp, session) == GED_EDIT_OK, __func__);
+    CHECK(observer.kinds.size() == 1, __func__);
 }
 
 static void
@@ -4403,6 +4474,7 @@ main(int ac, char *av[])
         test_p1_buf_abandon(gedp);
         test_p1_buf_flush(gedp);
         test_p1_edit_session_api(gedp);
+        test_p1_edit_observer_self_remove(gedp);
         test_p1_perturb_regression(gedp);
         ged_close(gedp);
     }
