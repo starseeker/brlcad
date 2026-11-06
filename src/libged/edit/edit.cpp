@@ -290,6 +290,7 @@ _edit_xform_apply(struct ged_edit_ctx *ctx,
 	/* Transfer ownership to the buffer */
 	ged_edit_buf_set(gedp, &dfp, s);
     }
+    ged_edit_buf_notify_update(gedp, &dfp, s->edit_flag);
     /* s is now in the buffer */
 
     int result;
@@ -1376,6 +1377,8 @@ cmd_checkpoint::exec(struct ged *gedp, void *u_data, int argc, const char **argv
     }
 
     int ret = rt_edit_checkpoint(s);
+    if (ret == BRLCAD_OK)
+	ged_edit_buf_notify_checkpoint(gedp, &dfp);
     db_free_full_path(&dfp);
     return ret;
 }
@@ -1415,6 +1418,8 @@ cmd_revert::exec(struct ged *gedp, void *u_data, int argc, const char **argv)
     }
 
     int ret = rt_edit_revert(s);
+    if (ret == BRLCAD_OK)
+	ged_edit_buf_notify_revert(gedp, &dfp);
     if (ret == BRLCAD_OK && !ctx->flag_i)
 	ret = ged_edit_buf_promote(gedp, &dfp);
 

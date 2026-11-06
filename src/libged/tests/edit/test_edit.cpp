@@ -41,6 +41,7 @@
 #include "rt/primitives/pipe.h"
 #include "wdb.h"
 #include "ged.h"
+#include "ged/edit.h"
 #include "brep/util.h"
 
 #include "../../dbi.h"
@@ -915,6 +916,63 @@ test_p1_buf_flush(struct ged *gedp)
 
     db_free_full_path(&dfp1);
     db_free_full_path(&dfp2);
+}
+
+static void
+test_p1_edit_session_api(struct ged *gedp)
+{
+    const int tor_radius_command = 1021;
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    ged_edit_session_ref joined = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "tor.s", &session) == GED_EDIT_OK &&
+	!ged_edit_session_ref_is_null(session),
+	"edit session begin returns an opaque reference");
+    CHECK(ged_edit_session_begin(gedp, "tor.s", &joined) == GED_EDIT_OK &&
+	joined.owner == session.owner && joined.id == session.id &&
+	joined.generation == session.generation,
+	"beginning the same path joins its active session");
+
+    struct ged_edit_session_info info = {};
+    CHECK(ged_edit_session_info_get(gedp, session, &info) == GED_EDIT_OK &&
+	info.primitive_type == ID_TOR && info.revision == 0 && !info.dirty,
+	"session info reports the current primitive and clean revision");
+
+    struct bu_vls path = BU_VLS_INIT_ZERO;
+    CHECK(ged_edit_session_path_get(gedp, session, &path) == GED_EDIT_OK &&
+	BU_STR_EQUAL(bu_vls_cstr(&path), "/tor.s"),
+	"session path query returns the canonical path");
+    bu_vls_free(&path);
+
+    const struct rt_edit_prim_desc *descriptor = NULL;
+    CHECK(ged_edit_session_descriptor_get(gedp, session, &descriptor) ==
+	GED_EDIT_OK && descriptor && BU_STR_EQUAL(descriptor->prim_type, "tor"),
+	"session descriptor query exposes primitive edit metadata");
+
+    struct rt_edit_cmd_values values;
+    CHECK(ged_edit_session_command_values_get(gedp, session,
+	tor_radius_command, &values) == GED_EDIT_OK &&
+	values.value_count == 1 && values.value_valid[0],
+	"session value query exposes typed current values");
+
+    struct rt_db_internal preview;
+    RT_DB_INTERNAL_INIT(&preview);
+    CHECK(ged_edit_session_internal_copy(gedp, session, &preview) ==
+	GED_EDIT_OK && preview.idb_type == ID_TOR,
+	"session preview copy returns independent intermediate geometry");
+    rt_db_free_internal(&preview);
+
+    CHECK(ged_edit_session_checkpoint(gedp, session) == GED_EDIT_OK &&
+	ged_edit_session_revert(gedp, session) == GED_EDIT_OK,
+	"session checkpoint and revert preserve an active transaction");
+    CHECK(ged_edit_session_cancel(gedp, session) == GED_EDIT_OK &&
+	ged_edit_session_info_get(gedp, session, &info) == GED_EDIT_STALE,
+	"cancel closes the session and invalidates its reference");
+
+    ged_edit_session_ref committed = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "sph.s", &committed) == GED_EDIT_OK &&
+	ged_edit_session_commit(gedp, committed) == GED_EDIT_OK &&
+	ged_edit_session_info_get(gedp, committed, &info) == GED_EDIT_STALE,
+	"commit closes the session and invalidates its reference");
 }
 
 static void
@@ -4344,6 +4402,7 @@ main(int ac, char *av[])
         test_p1_buf_set_get(gedp);
         test_p1_buf_abandon(gedp);
         test_p1_buf_flush(gedp);
+        test_p1_edit_session_api(gedp);
         test_p1_perturb_regression(gedp);
         ged_close(gedp);
     }

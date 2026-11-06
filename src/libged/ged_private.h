@@ -147,8 +147,16 @@ class Ged_Internal {
 	struct ged_edit_buf_entry {
 	    struct db_full_path dfp;
 	    struct rt_edit *s;
+	    uint64_t id = 0;
+	    uint64_t generation = 1;
+	    uint64_t revision = 0;
+	    int last_cmd = 0;
+	    bool dirty = false;
+	    bool checkpoint_dirty = false;
 	};
 	std::unordered_map<std::string, ged_edit_buf_entry> edit_buf;
+	uint64_t edit_owner = 0;
+	uint64_t edit_next_id = 1;
 };
 
 #else
@@ -578,6 +586,9 @@ GED_EXPORT extern void            ged_edit_buf_set(struct ged *gedp, const struc
 GED_EXPORT extern int             ged_edit_buf_promote(struct ged *gedp, const struct db_full_path *dfp);
 GED_EXPORT extern void            ged_edit_buf_abandon(struct ged *gedp, const struct db_full_path *dfp);
 GED_EXPORT extern void            ged_edit_buf_flush(struct ged *gedp);
+GED_EXPORT extern void            ged_edit_buf_notify_update(struct ged *gedp, const struct db_full_path *dfp, int command_id);
+GED_EXPORT extern void            ged_edit_buf_notify_checkpoint(struct ged *gedp, const struct db_full_path *dfp);
+GED_EXPORT extern void            ged_edit_buf_notify_revert(struct ged *gedp, const struct db_full_path *dfp);
 
 __END_DECLS
 
