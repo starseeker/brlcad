@@ -725,6 +725,24 @@ create_p1_fixture(const char *path)
     point_t sp = {10, 0, 0};
     if (mk_sph(wdbp, "sph.s", sp, 2.0) != 0) { wdb_close(wdbp); return BRLCAD_ERROR; }
 
+    fastf_t bot_vertices[] = {
+	0.0, 0.0, 0.0,
+	1.0, 0.0, 0.0,
+	0.0, 1.0, 0.0,
+	0.0, 0.0, 1.0
+    };
+    int bot_faces[] = {
+	0, 1, 2,
+	0, 1, 3,
+	0, 2, 3,
+	1, 2, 3
+    };
+    if (mk_bot(wdbp, "bot.s", RT_BOT_SOLID, RT_BOT_CCW, 0, 4, 4,
+	    bot_vertices, bot_faces, NULL, NULL) != 0) {
+	wdb_close(wdbp);
+	return BRLCAD_ERROR;
+    }
+
     struct wmember wm;
     BU_LIST_INIT(&wm.l);
     mk_addmember("tor.s", &wm.l, NULL, WMOP_UNION);
@@ -1061,6 +1079,21 @@ test_p1_edit_session_api(struct ged *gedp)
 	GED_EDIT_INVALID, "typed apply rejects an invalid parameter count");
     CHECK(observer.revisions.back() == 2,
 	"invalid typed input publishes no update event");
+
+    ged_edit_session_ref bot_session = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "bot.s", &bot_session) == GED_EDIT_OK,
+	"BOT session begins for dynamic bounds validation");
+    const int bot_pick_vertex_command = 30061;
+    fastf_t invalid_vertex[] = {4.0};
+    struct ged_edit_command_input invalid_vertex_input = {};
+    invalid_vertex_input.command_id = bot_pick_vertex_command;
+    invalid_vertex_input.values = invalid_vertex;
+    invalid_vertex_input.value_count = 1;
+    CHECK(ged_edit_session_apply(gedp, bot_session, &invalid_vertex_input) ==
+	GED_EDIT_INVALID,
+	"typed apply rejects a vertex outside current BOT topology");
+    CHECK(ged_edit_session_cancel(gedp, bot_session) == GED_EDIT_OK,
+	"BOT bounds validation session cancels cleanly");
 
     struct rt_db_internal preview;
     RT_DB_INTERNAL_INIT(&preview);

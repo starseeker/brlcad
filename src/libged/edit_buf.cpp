@@ -811,10 +811,11 @@ _edit_enum_value_valid(const struct rt_edit_param_desc *parameter,
 
 
 static bool
-_edit_command_input_valid(const struct rt_edit_cmd_desc *command,
+_edit_command_input_valid(const struct rt_edit *state,
+	const struct rt_edit_cmd_desc *command,
 	const struct ged_edit_command_input *input)
 {
-    if (!command || !input || command->nparam < 0 ||
+    if (!state || !command || !input || command->nparam < 0 ||
 	(command->nparam && !command->params) ||
 	input->value_count > RT_EDIT_MAXPARA ||
 	input->string_count > RT_EDIT_MAXSTR)
@@ -844,14 +845,16 @@ _edit_command_input_valid(const struct rt_edit_cmd_desc *command,
 	if (!input->values || index + width > input->value_count)
 	    return false;
 
-	const bool has_minimum = parameter->range_min > RT_EDIT_PARAM_NO_LIMIT;
-	const bool has_maximum = parameter->range_max > RT_EDIT_PARAM_NO_LIMIT;
+	struct rt_edit_param_bounds bounds = {};
+	if (rt_edit_param_bounds_get(state, command->cmd_id, i, &bounds) !=
+		BRLCAD_OK)
+	    return false;
 	for (size_t value_index = index; value_index < index + width;
 	    ++value_index) {
 	    const fastf_t value = input->values[value_index];
 	    if (!std::isfinite(value) ||
-		(has_minimum && value < parameter->range_min) ||
-		(has_maximum && value > parameter->range_max) ||
+		(bounds.has_minimum && value < bounds.minimum) ||
+		(bounds.has_maximum && value > bounds.maximum) ||
 		(_edit_integer_parameter(parameter->type) &&
 		 fabs(value - nearbyint(value)) > SMALL_FASTF) ||
 		(parameter->type == RT_EDIT_PARAM_BOOLEAN &&
@@ -887,7 +890,7 @@ ged_edit_session_apply(struct ged *gedp, ged_edit_session_ref session,
 	input->command_id);
     if (!command)
 	return GED_EDIT_UNSUPPORTED;
-    if (!_edit_command_input_valid(command, input))
+    if (!_edit_command_input_valid(state, command, input))
 	return GED_EDIT_INVALID;
 
     memset(state->e_para, 0, sizeof(state->e_para));
