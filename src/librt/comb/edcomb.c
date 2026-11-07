@@ -1151,7 +1151,8 @@ static const struct rt_edit_prim_desc comb_prim_desc = {
     0,                    /* nopt         */
     NULL,                 /* opts         */
     RT_EDIT_CONTROL_GENERATED,
-    comb_command_controls
+    comb_command_controls,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
