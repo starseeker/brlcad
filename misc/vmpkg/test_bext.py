@@ -52,6 +52,7 @@ import unittest
 from unittest.mock import patch
 
 import bext
+import serial
 import vmpkg
 
 spec = importlib.util.spec_from_file_location('guest_build', vmpkg.HERE / 'guest-build.py')
@@ -138,7 +139,8 @@ class ArtifactTest(unittest.TestCase):
         (cls.work / 'logs').mkdir()
         cls.scripts = cls.root / 'scripts'
         cls.scripts.mkdir()
-        shutil.copyfile(vmpkg.HERE / 'bext.py', cls.scripts / 'bext.py')
+        for name in ('bext.py', 'serial.py'):
+            shutil.copyfile(vmpkg.HERE / name, cls.scripts / name)
         (cls.scripts / 'environment-lock.json').write_text('{"fixture": true}\n')
         cls.builder = {'role': 'builder', 'lock_sha256': vmpkg.digest(cls.scripts / 'environment-lock.json')}
         cls.environment = bext.environment_identity(cls.builder)
@@ -225,6 +227,32 @@ class ArtifactTest(unittest.TestCase):
                 self.source, self.work, self.environment, 'bundled', self.store, 2,
                 lambda *args: self.fail('A completed dependency build ran again'))
         self.assertEqual((artifact, prefix, receipt), (self.artifact, self.prefix, self.receipt))
+
+    def test_serial_compat_builds_without_release_helpers(self):
+        work = self.root / 'legacy-producer'
+        (work / 'logs').mkdir(parents=True)
+        support = self.source / 'CMake/BextReleaseBuild.cmake'
+        support.unlink()
+        project = self.source / 'CMakeLists.txt'
+        original = project.read_text()
+        project.write_text(original.replace('${CMAKE_INSTALL_PREFIX}/bext-content-stamp',
+                                            '${CMAKE_BINARY_DIR}/bext-content-stamp'))
+        try:
+            with patch.object(bext, 'HERE', self.scripts), \
+                    serial.build_tools(self.root / 'legacy-tools'):
+                artifact, prefix, receipt = bext.build(
+                    self.source, work, self.environment, 'bundled', self.store, 1,
+                    guest_build.logged, serial_compat=True)
+            self.assertEqual(subprocess.check_output([prefix / 'noinstall/bin/helper']), b'7')
+            self.assertIn('serial_driver_sha256', receipt['recipe'])
+            self.assertNotIn('-DBEXT_DISCARD_WORK=ON', receipt['recipe']['cmake_options'])
+            self.assertTrue((work / 'bext-build/CMakeCache.txt').is_file())
+            self.assertEqual((prefix / 'bext-content-stamp').read_bytes(),
+                             (work / 'bext-build/bext-content-stamp').read_bytes())
+            self.assertEqual(bext.restore(artifact, self.environment, 'bundled', self.store)[1], receipt)
+        finally:
+            support.write_text('')
+            project.write_text(original)
 
     def test_dirty_source_changes_recipe(self):
         before = bext.source_identity(self.source)
@@ -318,14 +346,14 @@ class ArtifactTest(unittest.TestCase):
             archive.add(self.source, arcname='brlcad')
         args = argparse.Namespace(stage='brlcad', sources=source_archive,
                                   work=self.root / 'dispatch', jobs=1, profile='bundled',
-                                  bext_artifact=self.artifact, bext_store=self.store)
+                                  bext_artifact=self.artifact, bext_store=self.store, serial_compat=False)
         with patch.object(guest_build, 'builder_receipt', return_value=self.builder), \
                 patch.object(guest_build, 'HERE', self.scripts), \
                 patch.object(bext, 'build', side_effect=AssertionError('Dependencies rebuilt')), \
                 patch.object(guest_build, 'build_brlcad') as consumer, \
                 patch.object(guest_build, 'package_build') as packages:
             guest_build.build(args)
-        consumer.assert_called_once_with(args.work, 1, self.prefix)
+        consumer.assert_called_once_with(args.work, 1, self.prefix, serial_compat=False)
         packages.assert_called_once()
         provenance = json.loads((args.work / 'output/provenance.json').read_text())
         self.assertEqual(provenance['bext_artifact']['recipe_sha256'], self.receipt['recipe_sha256'])
@@ -334,6 +362,29 @@ class ArtifactTest(unittest.TestCase):
 @unittest.skipUnless(os.name == 'posix' and shutil.which('cmake'),
                      'POSIX permissions and CMake are required')
 class StagingTest(unittest.TestCase):
+    def test_legacy_staging_reseals_after_configure_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = root / 'sdk'
+            header = prefix / 'install/include/answer.h'
+            header.parent.mkdir(parents=True)
+            header.write_text('original\n')
+            bext.seal(prefix)
+            original = bext.inventory(prefix)
+            try:
+                with self.assertRaisesRegex(RuntimeError, 'configure failed'):
+                    with bext.writable_staging(prefix):
+                        staged = root / 'staged'
+                        subprocess.run(['cmake', '-E', 'copy_directory', prefix / 'install', staged],
+                                       check=True)
+                        (staged / 'include/answer.h').write_text('private copy\n')
+                        raise RuntimeError('configure failed')
+                self.assertEqual(bext.inventory(prefix), original)
+                self.assertFalse(header.stat().st_mode & stat.S_IWUSR)
+                self.assertFalse(header.parent.stat().st_mode & stat.S_IWUSR)
+            finally:
+                remove_tree(prefix)
+
     def test_read_only_sdk_stages_writable_private_copies(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

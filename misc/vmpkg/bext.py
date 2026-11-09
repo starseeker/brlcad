@@ -38,6 +38,7 @@
 """Build, publish, and verify independently reusable dependency artifacts."""
 
 import hashlib
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -128,22 +129,26 @@ def environment_identity(receipt):
             'environment': {name: os.environ.get(name, '') for name in BUILD_ENVIRONMENT}}
 
 
-def cmake_options(profile):
+def cmake_options(profile, serial_compat=False):
     options = ['-DCMAKE_BUILD_TYPE=Release', '-DENABLE_ALL=ON',
                '-DGIT_SHALLOW_CLONE=ON', '-DEXT_BUILD_ALWAYS=OFF',
-               '-DBEXT_DISCARD_WORK=ON', '-DBEXT_LINK_JOBS=1',
                '-DPython3_EXECUTABLE=/usr/bin/python3.11']
+    if not serial_compat:
+        options += ['-DBEXT_DISCARD_WORK=ON', '-DBEXT_LINK_JOBS=1']
     if profile == 'everything':
         options += ['-DUSE_APPLESEED=ON', '-DUSE_OSPRAY=ON']
     return options
 
 
-def recipe(source, environment, profile, store):
-    return {'schema': ARTIFACT_SCHEMA, 'source_sha256': source_identity(source),
+def recipe(source, environment, profile, store, serial_compat=False):
+    inputs = {'schema': ARTIFACT_SCHEMA, 'source_sha256': source_identity(source),
             'environment': environment, 'profile': profile,
-            'cmake_options': cmake_options(profile),
+            'cmake_options': cmake_options(profile, serial_compat),
             'driver_sha256': digest(HERE / 'bext.py'),
             'prefix_root': str(store.resolve())}
+    if serial_compat:
+        inputs['serial_driver_sha256'] = digest(HERE / 'serial.py')
+    return inputs
 
 
 def seal(prefix):
@@ -154,6 +159,22 @@ def seal(prefix):
             if not path.is_symlink():
                 path.chmod(stat.S_IMODE(path.stat().st_mode) & ~0o222)
     prefix.chmod(stat.S_IMODE(prefix.stat().st_mode) & ~0o222)
+
+
+@contextmanager
+def writable_staging(prefix):
+    # Older consumers preserve source modes when staging files for rewriting.
+    # Serialize this temporary permission change and always reseal the SDK.
+    install = prefix / 'install'
+    with guest_lock(prefix.parent):
+        try:
+            for directory, _, files in os.walk(install):
+                for path in [Path(directory)] + [Path(directory) / name for name in files]:
+                    if not path.is_symlink():
+                        path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
+            yield
+        finally:
+            seal(install)
 
 
 def validate_prefix(prefix, records):
@@ -246,9 +267,9 @@ def restore(artifact, environment, profile, store):
     return prefix, receipt
 
 
-def build(source, root, environment, profile, store, jobs, logged):
+def build(source, root, environment, profile, store, jobs, logged, serial_compat=False):
     store = store.resolve()
-    inputs = recipe(source, environment, profile, store)
+    inputs = recipe(source, environment, profile, store, serial_compat)
     build_id = identity(inputs)
     artifact = root / 'bext-artifact'
     if artifact.exists():
@@ -269,8 +290,9 @@ def build(source, root, environment, profile, store, jobs, logged):
             raise ValueError('Dependency prefix already exists; select its published artifact')
         else:
             write_json(owner, inputs)
-        if not (source / 'CMake/BextReleaseBuild.cmake').is_file():
-            raise ValueError('Source snapshot needs bext release-build support')
+        if not serial_compat and not (source / 'CMake/BextReleaseBuild.cmake').is_file():
+            raise ValueError('Source snapshot needs bext release-build support; '
+                             'use --serial-compat for older releases')
         # Capture sources before configuration populates submodules or generates files.
         source_archive = root / SOURCES_FILE
         if not source_archive.exists():
@@ -278,12 +300,15 @@ def build(source, root, environment, profile, store, jobs, logged):
                 archive.add(source, arcname='bext')
             source_archive.with_suffix('.tmp').replace(source_archive)
         build_dir = root / 'bext-build'
+        parallel_options = [] if serial_compat else ['-DBEXT_BUILD_JOBS=' + str(jobs)]
         logged(['cmake', '-S', source, '-B', build_dir, '-G', 'Ninja',
-                '-DCMAKE_INSTALL_PREFIX=' + str(prefix),
-                '-DBEXT_BUILD_JOBS=' + str(jobs)] + inputs['cmake_options'],
+                '-DCMAKE_INSTALL_PREFIX=' + str(prefix)] + parallel_options + inputs['cmake_options'],
                'bext-configure', root / 'logs')
         logged(['cmake', '--build', build_dir, '--parallel', '1'],
                'bext-build', root / 'logs')
+        content_stamp = prefix / 'bext-content-stamp'
+        if serial_compat and not content_stamp.exists():
+            shutil.copyfile(build_dir / content_stamp.name, content_stamp)
         records = inventory(prefix)
         validate_prefix(prefix, records)
         with tempfile.TemporaryDirectory(prefix='.publish-', dir=root) as temporary:

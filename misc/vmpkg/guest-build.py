@@ -38,6 +38,7 @@
 """Build a source snapshot and retain packages, provenance, and failure logs."""
 
 import argparse
+from contextlib import nullcontext
 import importlib.util
 import json
 import os
@@ -46,6 +47,7 @@ import shutil
 import subprocess
 
 import bext
+import serial
 from vmpkg import HERE, digest, extract_archive, virtual_display, write_checksums
 
 
@@ -71,8 +73,11 @@ def package_build(root, logs):
         for generator, suffix in generators:
             name = label + '-' + generator.lower()
             staging = root / name
+            options = []
+            if config == 'CPackConfig.cmake' and generator != 'RPM':
+                options = ['-D', 'CPACK_PRE_BUILD_SCRIPTS=' + str(HERE / 'package-relocate.cmake')]
             logged(['cpack', '--config', brlcad_build / config,
-                    '-G', generator, '-B', staging], name, logs)
+                    '-G', generator, '-B', staging] + options, name, logs)
             packages = list(staging.glob('*' + suffix))
             if not packages:
                 raise ValueError('CPack produced no ' + name + ' package')
@@ -104,6 +109,8 @@ def prepare_work(args, receipt, environment, dependencies):
               'environment': environment,
               'bext_store': str(store),
               'bext_artifact': dependencies}
+    if args.serial_compat:
+        recipe['serial_compat'] = True
     identity = root / 'recipe.json'
     if identity.exists():
         if json.loads(identity.read_text()) != recipe:
@@ -121,6 +128,8 @@ def prepare_work(args, receipt, environment, dependencies):
     shutil.copyfile(HERE / 'environment-lock.json', output / 'environment-lock.json')
     provenance = {'sources_sha256': fingerprint, 'environment': receipt,
                   'build_jobs': args.jobs, 'profile': args.profile, 'stage': args.stage}
+    if args.serial_compat:
+        provenance['serial_compat'] = True
     for name in ('brlcad', 'bext'):
         if (sources / name).is_dir():
             provenance[name + '_ref'] = subprocess.check_output(
@@ -128,16 +137,24 @@ def prepare_work(args, receipt, environment, dependencies):
     return root, provenance
 
 
-def build_brlcad(root, jobs, bext_output):
+def build_brlcad(root, jobs, bext_output, serial_compat=False):
     sources, logs = root / 'sources', root / 'logs'
     if not (sources / 'brlcad/CMakeLists.txt').is_file():
         raise ValueError('BRL-CAD build needs a BRL-CAD source snapshot')
     brlcad_build = root / 'brlcad-build'
     os.environ['CTEST_PARALLEL_LEVEL'] = str(jobs)
-    logged(['cmake', '-S', sources / 'brlcad', '-B', brlcad_build, '-G', 'Ninja',
-            '-DCMAKE_BUILD_TYPE=Release', '-DBRLCAD_EXT_DIR=' + str(bext_output),
-            '-DBRLCAD_ENABLE_QT=ON', '-DBRLCAD_X11_PROVIDER=SYSTEM',
-            '-DPython3_EXECUTABLE=/usr/bin/python3.11'], 'brlcad-configure', logs)
+    test_options = []
+    if serial_compat:
+        ctest = shutil.which('ctest')
+        if not ctest:
+            raise ValueError('Serial compatibility requires CTest')
+        test_options.append('-DCMAKE_CTEST_COMMAND=' + ctest)
+    staging = bext.writable_staging(bext_output) if serial_compat else nullcontext()
+    with staging:
+        logged(['cmake', '-S', sources / 'brlcad', '-B', brlcad_build, '-G', 'Ninja',
+                '-DCMAKE_BUILD_TYPE=Release', '-DBRLCAD_EXT_DIR=' + str(bext_output),
+                '-DBRLCAD_ENABLE_QT=ON', '-DBRLCAD_X11_PROVIDER=SYSTEM',
+                '-DPython3_EXECUTABLE=/usr/bin/python3.11'] + test_options, 'brlcad-configure', logs)
     logged(['cmake', '--build', brlcad_build, '--parallel', str(jobs)], 'brlcad-build', logs)
     logged(['cmake', '--build', brlcad_build, '--target', 'regress-repository',
             'regress-licenses', '--parallel', str(jobs)], 'repository-checks', logs)
@@ -163,7 +180,7 @@ def build(args):
     if args.bext_artifact is None:
         artifact, bext_output, dependency_receipt = bext.build(
             root / 'sources/bext', root, environment, args.profile,
-            args.bext_store.resolve(), args.jobs, logged)
+            args.bext_store.resolve(), args.jobs, logged, serial_compat=args.serial_compat)
         print('Dependency artifact: ' + str(artifact))
     output = root / 'output'
     shutil.copyfile(artifact / bext.RECEIPT_FILE, output / bext.RECEIPT_FILE)
@@ -175,7 +192,7 @@ def build(args):
         'bext_ref': dependency_receipt['bext_ref']}
     bext.write_json(output / 'provenance.json', provenance)
     if args.stage != 'bext':
-        build_brlcad(root, args.jobs, bext_output)
+        build_brlcad(root, args.jobs, bext_output, serial_compat=args.serial_compat)
     bext.validate_prefix(bext_output, dependency_receipt['files'])
     if args.stage != 'bext':
         package_build(root, root / 'logs')
@@ -190,6 +207,8 @@ def main():
     parser.add_argument('--sources', type=Path, required=True)
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--jobs', type=int, default=4)
+    parser.add_argument('--serial-compat', action='store_true',
+                        help='Build older bext releases serially, retaining dependency work trees')
     parser.add_argument('--profile', choices=['bundled', 'everything'], default='bundled')
     parser.add_argument('--bext-artifact', type=Path,
                         help='Published bext artifact directory; never rebuild dependencies')
@@ -198,12 +217,19 @@ def main():
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error('--jobs must be positive')
+    if args.serial_compat:
+        args.jobs = 1
     if args.stage == 'brlcad' and args.bext_artifact is None:
         parser.error('brlcad requires --bext-artifact')
     if args.stage == 'bext' and args.bext_artifact is not None:
         parser.error('bext produces an artifact; use brlcad or all to consume one')
     try:
-        build(args)
+        tools = nullcontext()
+        if args.serial_compat:
+            work = args.work.resolve()
+            tools = serial.build_tools(work.with_name(work.name + '-serial-tools'))
+        with tools:
+            build(args)
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         parser.exit(1, str(error) + '\nSee the work directory logs for command output.\n')
 

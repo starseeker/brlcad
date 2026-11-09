@@ -46,10 +46,14 @@ cmakefiles(
   guest-env.py
   inputs.json
   kickstart.cfg.in
+  package-relocate.cmake
   rocky.repo
   runtime-packages.txt
+  serial.py
   smoke.py
   test_bext.py
+  test_package.py
+  test_serial.py
   test_vmpkg.py
   vmpkg.py
 )

@@ -225,9 +225,36 @@ outputs, and logs remain. Changing sources, options, or environment requires a
 new work directory; rerunning with the same inputs resumes a failed build.
 The job limit can change without invalidating the build recipe.
 
+For older bext releases without `CMake/BextReleaseBuild.cmake`, add
+`--serial-compat`:
+
+```sh
+sh /opt/vmpkg/build.sh --sources "$PWD/sources.tar.gz" \
+    --work "$PWD/release-build" --serial-compat --profile bundled
+```
+
+This explicit fallback forces one job for dependency builds, BRL-CAD, and tests,
+including Make, Ninja, and CTest commands with hardcoded parallel flags. It uses
+external build-tool wrappers, including Make selected by GCC's link-time
+optimizer, and leaves release sources unchanged. It omits bext's newer
+concurrency and cleanup options, retaining dependency working trees, so allow
+more disk space. During BRL-CAD configuration it temporarily permits owner writes
+to the dependency install tree so older consumers stage writable private copies,
+then reseals the tree even if configuration fails. The store lock serializes
+this step; dependency contents are verified again before packaging.
+It also copies a legacy finalization stamp from the build directory into the
+artifact prefix when bext does not publish that stamp there itself.
+The fallback still requires bext's install manifest and content
+stamp support. Its driver identity is recorded in the dependency recipe; use a
+new work directory when switching modes. The default remains the bext-aware
+workflow, including when using `--jobs 1`. Artifact consumers may also use
+`--serial-compat` to enforce serial BRL-CAD builds.
+
 It then builds BRL-CAD with Qt and system X11, runs repository/license targets
 and the `check` target under Xvfb with software GL, and packages binary RPM,
-TGZ, and TBZ2 files plus source TGZ, TBZ2, and ZIP archives separately. These
+TGZ, and TBZ2 files plus source TGZ, TBZ2, and ZIP archives separately. Binary
+tar packages resolve staged SDK paths relative to their CMake and pkg-config
+files so the development metadata follows the extracted installation. These
 use the same CPack configurations as the `package` and `package_source`
 targets. The `check` target selects BRL-CAD's production validation
 tests; unfiltered CTest also includes intentionally failing and resource-heavy

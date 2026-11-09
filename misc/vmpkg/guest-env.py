@@ -98,6 +98,7 @@ def lock(args):
     # upgrades required by packages already installed in the base image.
     run(['dnf', '-y', '--setopt=reposdir=' + str(repos), '--disablerepo=*',
          '--enablerepo=vmpkg-*', '--setopt=install_weak_deps=False',
+         '--setopt=keepcache=True',
          '--exclude=' + RPM_MULTILIB_EXCLUDE, 'install', '--downloadonly',
          '--destdir=' + str(rpms)] + roots)
     packages = sorted(rpms.glob('*.rpm'))
@@ -185,7 +186,9 @@ def install(args):
         raise ValueError('Base RPM inventory differs from the resolver guest; use the same base image')
     packages = sorted((bundle / 'rpms').glob('*.rpm'))
     run(['rpmkeys', '--checksig'] + packages)
+    # DNF cleanup must not remove the locked RPM inputs after the transaction.
     run(['dnf', '-y', '--disablerepo=*', '--setopt=install_weak_deps=False',
+         '--setopt=keepcache=True',
          '--setopt=localpkg_gpgcheck=1', 'install'] + packages)
     receipt = {'role': manifest['role'], 'lock_sha256': lock_hash, 'installed_rpms': inventory()}
     if manifest['role'] == 'builder':
