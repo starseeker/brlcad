@@ -2562,6 +2562,24 @@ include/ged/edit.h: GED_EXPORT extern enum ged_edit_status
 include/ged/edit.h: GED_EXPORT extern enum ged_edit_status
 include/ged/edit.h: GED_EXPORT extern ged_edit_observer_token
 include/ged/edit.h: GED_EXPORT extern int
+include/ged/event.h: GED_EXPORT extern void ged_event_init(struct ged_event *event);
+include/ged/event.h: GED_EXPORT extern struct ged_event_result *ged_event_result_create(void);
+include/ged/event.h: GED_EXPORT extern void ged_event_result_clear(struct ged_event_result *result);
+include/ged/event.h: GED_EXPORT extern void ged_event_result_destroy(struct ged_event_result *result);
+include/ged/event.h: GED_EXPORT extern enum ged_event_status
+include/ged/event.h: GED_EXPORT extern size_t
+include/ged/event.h: GED_EXPORT extern size_t
+include/ged/event.h: GED_EXPORT extern size_t
+include/ged/event.h: GED_EXPORT extern const char *
+include/ged/event.h: GED_EXPORT extern size_t
+include/ged/event.h: GED_EXPORT extern const char *
+include/ged/event.h: GED_EXPORT extern const char *
+include/ged/event.h: GED_EXPORT extern enum ged_event_status
+include/ged/event.h: GED_EXPORT extern enum ged_event_status ged_event_batch_begin(struct ged *gedp);
+include/ged/event.h: GED_EXPORT extern enum ged_event_status
+include/ged/event.h: GED_EXPORT extern enum ged_event_status
+include/ged/event.h: GED_EXPORT extern ged_event_observer_token
+include/ged/event.h: GED_EXPORT extern int
 include/ged/objects.h: #define	GED_CHECK_COMB(_gedp, _dp, _flags) ;#define GED_CHECK_EXISTS(_gedp, _name, _noisy, _flags) ;#define	GED_CHECK_READ_ONLY(_gedp, _flags) ;#define	GED_CHECK_REGION(_gedp, _dp, _flags) ;#define GED_DB_DIRADD(_gedp, _dp, _name, _laddr, _len, _dirflags, _ptr, _flags) ;#define GED_DB_LOOKUP(_gedp, _dp, _name, _noisy, _flags) ;#define GED_DB_GET_INTERNAL(_gedp, _intern, _dp, _mat, _resource, _flags) ;#define GED_DB_PUT_INTERNAL(_gedp, _dp, _intern, _resource, _flags) ;#define GED_DB_GET_INTERN(_gedp, _intern, _dp, _mat, _flags) ;#define GED_DB_PUT_INTERN(_gedp, _dp, _intern, _flags) \
 include/ged/version.h: GED_EXPORT extern const char *ged_version(void);
 include/ged/view.h: #define GED_CHECK_DRAWABLE(_gedp, _flags) ;#define GED_CHECK_VIEW(_gedp, _flags) ;GED_EXPORT void dl_set_iflag(struct bu_list *hdlp, int iflag);
