@@ -836,6 +836,27 @@ DbiState::clear_cache(unsigned long long hash)
     rgb.erase(hash);
 }
 
+void
+DbiState::clear_lod_cache(const std::string &name)
+{
+    if (!gedp || !gedp->ged_lod || name.empty())
+	return;
+
+    unsigned long long key = bv_mesh_lod_key_get(gedp->ged_lod,
+	name.c_str());
+    if (key)
+	bv_mesh_lod_clear_cache(gedp->ged_lod, key);
+}
+
+unsigned long long
+DbiState::invalidate_caches(const std::string &name)
+{
+    unsigned long long hash = bu_data_hash(name.c_str(), name.size());
+    clear_cache(hash);
+    clear_lod_cache(name);
+    return hash;
+}
+
 unsigned long long
 DbiState::update_dp(struct directory *dp, int reset)
 {
@@ -1560,21 +1581,17 @@ DbiState::reconcile(const DbiStateChange &change)
     changed_hashes.clear();
     old_names.clear();
     for (const std::string &name : change.removed) {
-	unsigned long long hash = bu_data_hash(name.c_str(), name.size());
-	clear_cache(hash);
+	unsigned long long hash = invalidate_caches(name);
 	removed.insert(hash);
 	old_names[hash] = name;
     }
     for (const auto &rename : change.renamed) {
-	unsigned long long hash = bu_data_hash(rename.first.c_str(),
-	    rename.first.size());
-	clear_cache(hash);
+	unsigned long long hash = invalidate_caches(rename.first);
 	removed.insert(hash);
 	old_names[hash] = rename.first;
     }
     for (const std::string &name : change.modified) {
-	unsigned long long hash = bu_data_hash(name.c_str(), name.size());
-	clear_cache(hash);
+	unsigned long long hash = invalidate_caches(name);
 	changed_hashes.insert(hash);
     }
 
@@ -1617,8 +1634,7 @@ DbiState::reconcile(const DbiStateChange &change)
     for (const auto &rename : change.renamed)
 	added_names.insert(rename.second);
     for (const std::string &name : added_names) {
-	unsigned long long name_hash = bu_data_hash(name.c_str(), name.size());
-	clear_cache(name_hash);
+	invalidate_caches(name);
 	struct directory *dp = db_lookup(dbip, name.c_str(), LOOKUP_QUIET);
 	if (dp == RT_DIR_NULL)
 	    continue;

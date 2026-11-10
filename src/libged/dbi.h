@@ -445,6 +445,8 @@ class GED_EXPORT DbiState {
 
 	void populate_maps(struct directory *dp, unsigned long long phash, int reset);
 	void clear_cache(unsigned long long);
+	void clear_lod_cache(const std::string &);
+	unsigned long long invalidate_caches(const std::string &);
 	unsigned long long update_dp(struct directory *dp, int reset);
 	unsigned int color_int(struct bu_color *);
 	int int_color(struct bu_color *c, unsigned int);
