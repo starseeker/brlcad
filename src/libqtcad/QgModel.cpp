@@ -47,9 +47,7 @@
 #include <QFileInfo>
 
 #include "bu/env.h"
-#include "bu/hash.h"
 #include "bu/sort.h"
-#include "bv/lod.h"
 #include "raytrace.h"
 #define ALPHANUM_IMPL
 #include "../libged/alphanum.h"
@@ -240,66 +238,12 @@ QgItem::path_hash()
 }
 
 extern "C" void
-qgmodel_update_nref_callback(struct db_i *UNUSED(dbip), struct directory *parent_dp, struct directory *child_dp, const char *child_name, db_op_t op, matp_t m, void *u_data)
+qgmodel_event_callback(struct ged *UNUSED(gedp),
+	const struct ged_event *UNUSED(events), size_t UNUSED(event_count),
+	const struct ged_event_result *UNUSED(result), void *client_data)
 {
-    // If all the input parameters other than dbip/op are NULL and op is set to
-    // subtraction, the update_nref logic has completed its work and is making
-    // its final callback call.  Because in this use case we need a fully
-    // updated data state before doing our processing (as opposed to, for
-    // example, triggering events during the update treewalk) we only process
-    // when the termination conditions are fully set.
-    if (!parent_dp && !child_dp && !child_name && m == NULL && op == DB_OP_SUBTRACT) {
-
-	std::cout << "update nref callback\n";
-
-	// Cycle complete, nref count is current.  Start analyzing.
-	QgModel *ctx = (QgModel *)u_data;
-
-	// If anybody was requesting an nref update, the fact that we're here
-	// means we've done it.
-	ctx->need_update_nref = false;
-    }
-}
-
-extern "C" void
-qgmodel_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data)
-{
-    unsigned long long hash;
-    QgModel *mdl = (QgModel *)u_data;
-    DbiState *ctx = (DbiState *)mdl->gedp->dbi_state;
-    mdl->need_update_nref = true;
+    QgModel *mdl = static_cast<QgModel *>(client_data);
     mdl->changed_db_flag = 1;
-
-    // Clear cached GED drawing data and update
-    ctx->clear_cache(dp);
-
-    // Need to invalidate any LoD caches associated with this dp
-    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT && ctx->gedp) {
-	unsigned long long key = bv_mesh_lod_key_get(ctx->gedp->ged_lod, dp->d_namep);
-	if (key) {
-	    bv_mesh_lod_clear_cache(ctx->gedp->ged_lod, key);
-	    bv_mesh_lod_key_put(ctx->gedp->ged_lod, dp->d_namep, 0);
-	}
-    }
-
-    switch(mode) {
-	case 0:
-	    ctx->changed.insert(dp);
-	    break;
-	case 1:
-	    ctx->added.insert(dp);
-	    break;
-	case 2:
-	    // When this callback is made, dp is still valid, but in subsequent
-	    // processing it will not be.  We need to capture everything we
-	    // will need from this dp now, for later use when updating state
-	    hash = bu_data_hash(dp->d_namep, strlen(dp->d_namep)*sizeof(char));
-	    ctx->removed.insert(hash);
-	    ctx->old_names[hash] = std::string(dp->d_namep);
-	    break;
-	default:
-	    bu_log("changed callback mode error: %d\n", mode);
-    }
 }
 
 
@@ -312,6 +256,8 @@ QgModel::QgModel(QObject *p, const char *npath)
     // libged "open" command to open a .g file.
     m_session = new QgSession(this);
     gedp = m_session->ged();
+    event_observer = ged_event_observer_add(gedp,
+	GED_EVENT_OBSERVER_POST_RECONCILE, qgmodel_event_callback, this);
     bu_setenv("DM_SWRAST", "1", 1);
 
     // Set up the root item
@@ -340,6 +286,8 @@ QgModel::QgModel(QObject *p, const char *npath)
 
 QgModel::~QgModel()
 {
+    if (event_observer)
+	ged_event_observer_remove(gedp, event_observer);
     delete items;
     delete rootItem;
 }
@@ -428,18 +376,6 @@ QgModel::item_rebuild(QgItem *item)
 void
 QgModel::g_update(struct db_i *n_dbip)
 {
-
-    // In case we have opened a completely new .g file, set the callbacks
-    if (n_dbip && !BU_PTBL_LEN(&n_dbip->i->dbi_changed_clbks)) {
-	// Primary driver of model updates is when individual objects are changed
-	db_add_changed_clbk(n_dbip, &qgmodel_changed_callback, (void *)this);
-
-	// If the tops list changes, we need to update that vector as well.  Unlike
-	// local dp changes, we can only (re)build the tops list after an
-	// update_nref pass is complete.
-	db_add_update_nref_clbk(n_dbip, &qgmodel_update_nref_callback, (void *)this);
-    }
-
     if (!n_dbip) {
 	// if we have no dbip, clear out everything
 	beginResetModel();
@@ -458,13 +394,16 @@ QgModel::g_update(struct db_i *n_dbip)
 	emit mdl_changed_db((void *)gedp);
 	m_session->notifyDbChanged(nullptr);
 	emit view_change(QG_VIEW_DRAWN);
-	emit layoutChanged();
 	changed_db_flag = 0;
 	endResetModel();
 	return;
     }
 
     DbiState *dbis = (DbiState *)gedp->dbi_state;
+    std::vector<DbiStateChange> changes = dbis->change_snapshots();
+    uint64_t change_revision = changes.empty() ? 0 : changes.back().revision;
+    if (!changes.empty())
+	changed_db_flag = 1;
 
     // If we have a dbip and the changed flag is set, figure out what's different
     if (changed_db_flag) {
@@ -472,7 +411,7 @@ QgModel::g_update(struct db_i *n_dbip)
 
 	// Step 1 - make sure our instances are current - i.e. they match the
 	// .g database state
-	dbis->update();
+    dbis->reconcile_changes();
 
 	// Clear out any QgItems with invalid info.  We need to be fairly
 	// aggressive here - first we find all the existing invalid ones, and
@@ -573,9 +512,11 @@ QgModel::g_update(struct db_i *n_dbip)
     if (changed_db_flag) {
 	emit mdl_changed_db((void *)gedp);
 	m_session->notifyDbChanged(n_dbip);
-	emit layoutChanged();
 	emit check_highlights();
     }
+
+    if (change_revision)
+	dbis->acknowledge_changes(change_revision);
 
     // Reset flag - we're in sync now
     changed_db_flag = 0;
@@ -853,14 +794,6 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
     // command can be run - no need to do the remainder of the logic below.
     if (ret & GED_MORE)
 	return ret;
-
-    // If we have the need_update_nref flag set, we need to do db_update_nref
-    // ourselves - the backend logic made a dp add/remove but didn't trigger
-    // the nref updates (can that happen?).
-    if (gedp->dbip && need_update_nref) {
-	// bu_log("missing callback in librt?\n");
-	db_update_nref(gedp->dbip);
-    }
 
     // If we have a new .g file, set the changed flag
     if (model_dbip != gedp->dbip)

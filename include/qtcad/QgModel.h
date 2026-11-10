@@ -67,6 +67,7 @@
 #ifndef QGMODEL_H
 #define QGMODEL_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -284,12 +285,6 @@ class QTCAD_EXPORT QgModel : public QAbstractItemModel
 	// interface will know to take certain steps when updating views.
 	int changed_db_flag = 0;
 
-	// It's unclear if we need this, but allow callbacks to insist on a
-	// post-command running of update_nref - in principle this should be
-	// already handled by command and/or librt logic, but not sure if we
-	// can count on that...
-	bool need_update_nref = false;
-
 	/* Used by callers to identify which objects need to be redrawn when
 	 * scene views are updated. */
 	std::unordered_set<struct directory *> changed_dp;
@@ -349,6 +344,7 @@ class QTCAD_EXPORT QgModel : public QAbstractItemModel
 	QgItem *rootItem;
 	QgSession *m_session = NULL;
 	struct db_i *model_dbip = NULL;
+	uintptr_t event_observer = 0;
 };
 
 #endif //QGMODEL_H
