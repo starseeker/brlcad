@@ -198,6 +198,7 @@ struct ged_impl {
     struct ged_drawable *ged_gdp;
     struct ged_db_index *ged_db_indexp;
     struct ged_event_service *ged_event_servicep;
+    struct ged_selection_state *ged_selection_statep;
 };
 
 __BEGIN_DECLS
@@ -206,6 +207,11 @@ struct ged_db_index *ged_db_index_create(struct ged *gedp);
 void ged_db_index_destroy(struct ged_db_index *index);
 struct ged_event_service *ged_event_service_create(struct ged *gedp);
 void ged_event_service_destroy(struct ged_event_service *service);
+struct ged_selection_state *ged_selection_state_create(struct ged *gedp);
+void ged_selection_state_destroy(struct ged_selection_state *state);
+typedef int (*ged_selection_present_func_t)(struct ged *, void *);
+void ged_selection_presenter_set_private(struct ged *gedp,
+	ged_selection_present_func_t present, void *client_data);
 void ged_event_database_set_private(struct ged *gedp, struct db_i *dbip);
 
 #ifndef FALSE
