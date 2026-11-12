@@ -105,11 +105,11 @@ class QgSession;
 // representing them.  A QgItem always has a unique parent, even if its
 // instance is associated with multiple active QgItems elsewhere in the tree.
 // The children array is initially empty even though the comb it corresponds to
-// may have many children.  It is only when the QgItem is opened that the
-// DbiState is queried for its children and new QgItems based on the children
-// are created.  Because we don't want to collapse all opened/closed state in a
-// subtree if we close a parent QgItem, the children QgItems remain populated
-// through a close to persist that state.
+// may have many children.  It is only when the QgItem is opened that the GED
+// database index is queried and new QgItems are created for its children.
+// Because we don't want to collapse all opened/closed state in a subtree if we
+// close a parent QgItem, the children QgItems remain populated through a close
+// to persist that state.
 
 class QTCAD_EXPORT QgModel;
 
