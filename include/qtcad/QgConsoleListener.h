@@ -46,14 +46,16 @@
 class QTCAD_EXPORT QConsoleListener : public QObject
 {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(QConsoleListener)
 
     public:
 	QConsoleListener(int fd = -1,
 		struct ged_subprocess *p = NULL,
 		bu_process_io_t t = BU_PROCESS_STDIN,
 		ged_io_func_t c = NULL,
-		void *d = NULL);
-	~QConsoleListener();
+		void *d = NULL,
+		QObject *parent = nullptr);
+	~QConsoleListener() override;
 	void disconnectNotifier();
 
 	// Called by client code when it is done with the process

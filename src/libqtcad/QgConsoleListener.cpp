@@ -33,7 +33,9 @@
 
 void noMessageOutput(QtMsgType, const QMessageLogContext&, const QString&) {}
 
-QConsoleListener::QConsoleListener(int fd, struct ged_subprocess *p, bu_process_io_t t, ged_io_func_t c, void *d)
+QConsoleListener::QConsoleListener(int fd, struct ged_subprocess *p,
+    bu_process_io_t t, ged_io_func_t c, void *d, QObject *parent)
+    : QObject(parent)
 {
     this->process = p;
     this->callback = c;
