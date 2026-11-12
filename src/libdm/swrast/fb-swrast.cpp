@@ -466,6 +466,8 @@ int
 swrast_close_existing(struct fb *ifp)
 {
     struct swrastinfo *qi = SWRAST(ifp);
+    if (!qi)
+	return 0;
     qi->alive = 0;
     return 0;
 }

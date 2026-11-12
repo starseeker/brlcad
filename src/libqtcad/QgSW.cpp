@@ -77,11 +77,14 @@ QgSW::QgSW(QWidget *parent, struct fb *fbp)
 
 QgSW::~QgSW()
 {
+    if (ifp && !fb_get_standalone(ifp)) {
+	if (m_fb_opened)
+	    fb_close_existing(ifp);
+	else
+	    fb_put(ifp);
+    }
     if (dmp)
 	dm_close(dmp);
-    if (ifp && !fb_get_standalone(ifp)) {
-	fb_close_existing(ifp);
-    }
     BU_PUT(local_v, struct bv);
 }
 
@@ -126,6 +129,7 @@ void QgSW::paintEvent(QPaintEvent *e)
 		fbps->data = (void *)dmp;
 		fb_setup_existing(ifp, dm_get_width(dmp), dm_get_height(dmp), fbps);
 		fb_put_platform_specific(fbps);
+		m_fb_opened = true;
 	    }
 	}
 
