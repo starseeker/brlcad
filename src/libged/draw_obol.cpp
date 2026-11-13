@@ -3692,7 +3692,7 @@ ged_obol_notify_source_inputs_changed(struct ged *gedp,
     struct notification_context {
 	BObolViewController *shared;
 	BObolViewController *excluded;
-    } context = {shared_controller, excluded_controller};
+    } notification = {shared_controller, excluded_controller};
     const auto notify_source_inputs = [](struct ged_view_context *,
 	BObolViewController *controller, void *userdata) -> int {
 	notification_context *context =
@@ -3703,7 +3703,7 @@ ged_obol_notify_source_inputs_changed(struct ged *gedp,
 	return 1;
     };
     ged_bobol_view_controllers_foreach(gedp, notify_source_inputs,
-	&context);
+	&notification);
 }
 
 extern "C" int
@@ -10182,9 +10182,6 @@ ged_obol_progressive_advance_provider(
 	static_cast<ged_obol_progressive_provider_data *>(user_data);
     if (!controller || !data || !data->gedp)
 	return -1;
-
-    struct ged_view_context *view_ctx = data->view_ctx;
-    (void)options;
 
     ged_obol_progressive_autoview_prune_targets(data);
     /* There is one production progression: compact per-leaf boxes followed by
