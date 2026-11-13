@@ -15,7 +15,6 @@ set(
   bot_face_sort.c
   bot_flip.c
   bot_flood_exterior.cpp
-  bot_fuse.c
   bot_merge.c
   bot_openvdb.cpp
   bot_smooth.c
@@ -40,6 +39,7 @@ set(
   smooth.cpp
   subdivide.cpp
 )
+set_source_files_properties(bot_fuse.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 # The OpenVDB LeafManager sentinel can trigger a false positive under LTO.
 check_cxx_flag(fno-lto VARS BOT_OPENVDB_NO_LTO_FLAG)
@@ -67,7 +67,6 @@ ged_plugin_library(ged-bot
 cmakefiles(
   CMakeLists.txt
   bot_openvdb.h
-  concurrentqueue.h
   dump/ged_bot_dump.h
   ged_bot.h
 )

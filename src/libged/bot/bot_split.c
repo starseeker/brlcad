@@ -24,6 +24,7 @@
 
 #include "bu/malloc.h"
 #include "bu/path.h"
+#include "ged/event.h"
 #include "rt/geom.h"
 #include "rt/primitives/bot.h"
 #include "wdb.h"
@@ -209,6 +210,14 @@ _ged_bot_split_object(struct ged *gedp, const char *object_name,
 	rt_db_free_internal(&source_internal);
 	return -1;
     }
+
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
+    for (size_t i = 0; i < component_count; ++i)
+	(void)ged_event_notify_object_added(gedp, bu_vls_cstr(&names[i]), NULL);
+    if (group_name)
+	(void)ged_event_notify_object_added(gedp, group_name, NULL);
+    if (event_batch_opened)
+	ged_event_batch_end(gedp, NULL);
 
     for (size_t i = 0; i < component_count; ++i)
 	bu_vls_printf(output_names, "%s%s", i ? " " : "",

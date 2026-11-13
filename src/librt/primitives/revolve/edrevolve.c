@@ -280,59 +280,49 @@ rt_edit_revolve_edit_desc(void)
 }
 
 
-static int
-revolve_current_numbers(struct rt_edit *s, int cmd_id, fastf_t *vals)
-{
-    if (!s || !vals) return 0;
-
-    struct rt_revolve_internal *rip =
-	(struct rt_revolve_internal *)s->es_int.idb_ptr;
-
-    switch (cmd_id) {
-	case ECMD_REVOLVE_SET_V:
-	    vals[0] = rip->v3d[0] * s->base2local;
-	    vals[1] = rip->v3d[1] * s->base2local;
-	    vals[2] = rip->v3d[2] * s->base2local;
-	    return 3;
-
-	case ECMD_REVOLVE_SET_AXIS:
-	    vals[0] = rip->axis3d[0] * s->base2local;
-	    vals[1] = rip->axis3d[1] * s->base2local;
-	    vals[2] = rip->axis3d[2] * s->base2local;
-	    return 3;
-
-	case ECMD_REVOLVE_SET_R:
-	    vals[0] = rip->r[0] * s->base2local;
-	    vals[1] = rip->r[1] * s->base2local;
-	    vals[2] = rip->r[2] * s->base2local;
-	    return 3;
-
-	case ECMD_REVOLVE_SET_ANG:
-	    vals[0] = rip->ang * RAD2DEG;
-	    return 1;
-
-	default:
-	    return 0;
-    }
-}
-
-
 C_DECL int
 rt_edit_revolve_get_values(struct rt_edit *s, int cmd_id,
 	struct rt_edit_cmd_values *result)
 {
     if (!s || !result)
 	return RT_EDIT_VALUE_ERROR;
-    if (cmd_id == ECMD_REVOLVE_SET_SKT) {
-	struct rt_revolve_internal *revolve =
-	    (struct rt_revolve_internal *)s->es_int.idb_ptr;
-	return rt_edit_cmd_values_set_string(result, 0,
-	    bu_vls_cstr(&revolve->sketch_name)) == BRLCAD_OK ?
-	    RT_EDIT_VALUE_OK : RT_EDIT_VALUE_ERROR;
+
+    struct rt_revolve_internal *rip =
+	(struct rt_revolve_internal *)s->es_int.idb_ptr;
+
+    switch (cmd_id) {
+	case ECMD_REVOLVE_SET_V:
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    rip->v3d[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+
+	case ECMD_REVOLVE_SET_AXIS:
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    rip->axis3d[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+
+	case ECMD_REVOLVE_SET_R:
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    rip->r[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+
+	case ECMD_REVOLVE_SET_ANG:
+	    rt_edit_cmd_values_set_value(result, 0, rip->ang * RAD2DEG);
+	    return RT_EDIT_VALUE_OK;
+
+	case ECMD_REVOLVE_SET_SKT:
+	    rt_edit_cmd_values_set_string(result, 0,
+		bu_vls_cstr(&rip->sketch_name));
+	    return RT_EDIT_VALUE_OK;
+
+	default:
+	    return RT_EDIT_VALUE_UNAVAILABLE;
     }
-    return edit_current_values_from_numbers(s, cmd_id, result,
-	revolve_current_numbers);
 }
+
 
 /*
  * Local Variables:

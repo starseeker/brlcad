@@ -63,7 +63,7 @@
 #include "vmath.h"
 #include "bu/malloc.h"
 #include "bn.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 #include "tclcad.h"
 
@@ -158,8 +158,8 @@ FileMatchPIX(Tcl_Channel UNUSED(chan), const char *fileName, Tcl_Obj *format, in
 	strstr(formatString, "PIX") == NULL)
 	return 0;
 
-    if (fb_common_name_size(&width, &height, formatString) <= 0) {
-	if (fb_common_file_size(&width, &height, fileName, 3) <= 0) {
+    if (imgstream_image_name_size(&width, &height, formatString) <= 0) {
+	if (imgstream_image_file_size(&width, &height, fileName, 3) <= 0) {
 	    return 0;
 	}
     }
@@ -215,8 +215,8 @@ FileReadPIX(Tcl_Interp *interp, Tcl_Channel chan, const char *fileName, Tcl_Obj 
 
     formatString = Tcl_GetStringFromObj(format, &len);
 
-    if (fb_common_name_size(&fileWidth, &fileHeight, formatString) <= 0)
-	if (fb_common_file_size(&fileWidth, &fileHeight, fileName, 3) <= 0) {
+    if (imgstream_image_name_size(&fileWidth, &fileHeight, formatString) <= 0)
+	if (imgstream_image_file_size(&fileWidth, &fileHeight, fileName, 3) <= 0) {
 	    Tcl_AppendResult(interp, "cannot determine dimensions of \"",
 			     fileName, "\": please use -format pix-w#-n#",
 			     NULL);

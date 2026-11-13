@@ -39,6 +39,7 @@
 #include <cinttypes>
 #include <cstddef>
 #include <ctime>
+#include <atomic>
 #include <vector>
 
 #ifdef HAVE_SYS_TYPES_H
@@ -598,8 +599,9 @@ pkg_addr_is_ipc_listener(const char *addr)
 int
 pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
 {
-    static std::atomic<unsigned long> counter{0};
+    static std::atomic<unsigned long> counter(0);
     const char *hint = (name_hint && name_hint[0]) ? name_hint : "brlcad-pkg";
+    const unsigned long sequence = counter.fetch_add(1, std::memory_order_relaxed);
 #ifndef _WIN32
     const char *tmpdir = getenv("TMPDIR");
     time_t now = time(NULL);
@@ -611,11 +613,15 @@ pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
     if (!tmpdir || tmpdir[0] == '\0')
 	tmpdir = "/tmp";
 
+    need = snprintf(addr, len, "fifo:%s/%s-%ld-%lld-%lu",
+		    tmpdir, hint, (long)getpid(), (long long)now, sequence);
+    if (need >= 0 && (size_t)need < len)
+	return 0;
+
 #  if defined(HAVE_SYS_UN_H)
 #  if defined(__linux__)
     need = snprintf(addr, len, "unix-abstract:%s-%ld-%lld-%lu",
-		    hint, (long)getpid(), (long long)now,
-		    counter.fetch_add(1, std::memory_order_relaxed));
+		    hint, (long)getpid(), (long long)now, sequence);
     if (need >= 0 && (size_t)need < len &&
 	    strlen(addr + 14) < sizeof(((struct sockaddr_un *)0)->sun_path) - 1)
 	return 0;
@@ -632,8 +638,7 @@ pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
     if (strlen(addr + 5) >= sizeof(((struct sockaddr_un *)0)->sun_path)) {
 	if (strcmp(tmpdir, "/tmp") != 0) {
 	    need = snprintf(addr, len, "unix:/tmp/%s-%ld-%lld-%lu.sock",
-			    hint, (long)getpid(), (long long)now,
-			    counter.fetch_add(1, std::memory_order_relaxed));
+			    hint, (long)getpid(), (long long)now, sequence);
 	    if (need < 0 || (size_t)need >= len ||
 		    strlen(addr + 5) >= sizeof(((struct sockaddr_un *)0)->sun_path)) {
 		addr[0] = '\0';
@@ -671,8 +676,7 @@ pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
 
     need = snprintf(addr, len, "npipe:\\\\.\\pipe\\%s-%lu-%lld-%lu",
 		    safe_hint, (unsigned long)GetCurrentProcessId(),
-		    (long long)now,
-		    counter.fetch_add(1, std::memory_order_relaxed));
+		    (long long)now, sequence);
     if (need < 0 || (size_t)need >= len) {
 	addr[0] = '\0';
 	return -1;
@@ -813,6 +817,82 @@ pkg_connect_addr(const char *addr, const struct pkg_switch *switchp, pkg_errlog 
         }
         return PKC_ERROR;
     }
+
+#ifndef _WIN32
+    if (strncmp(addr, "fifo:", 5) == 0) {
+	static std::atomic<unsigned long> counter(0);
+	const char *base = addr + 5;
+	time_t now = time(NULL);
+	const unsigned long sequence = counter.fetch_add(1, std::memory_order_relaxed);
+	char c2s[MAXPATHLEN] = {0};
+	char s2c[MAXPATHLEN] = {0};
+	char msg[MAXPATHLEN * 2 + 8] = {0};
+	int cfd = -1;
+	int rfd = -1;
+	int wfd = -1;
+	int need;
+
+	if (base[0] == '\0')
+	    return PKC_ERROR;
+
+	need = snprintf(c2s, sizeof(c2s), "%s.%ld.%lld.%lu.c2s",
+			base, (long)getpid(), (long long)now, sequence);
+	if (need < 0 || (size_t)need >= sizeof(c2s))
+	    return PKC_ERROR;
+	need = snprintf(s2c, sizeof(s2c), "%s.%ld.%lld.%lu.s2c",
+			base, (long)getpid(), (long long)now, sequence);
+	if (need < 0 || (size_t)need >= sizeof(s2c))
+	    return PKC_ERROR;
+
+	if (mkfifo(c2s, 0600) < 0)
+	    return PKC_ERROR;
+	if (mkfifo(s2c, 0600) < 0) {
+	    (void)unlink(c2s);
+	    return PKC_ERROR;
+	}
+
+	cfd = open(base, O_WRONLY);
+	if (cfd < 0) {
+	    (void)unlink(c2s);
+	    (void)unlink(s2c);
+	    return PKC_ERROR;
+	}
+
+	need = snprintf(msg, sizeof(msg), "%s\n%s\n", c2s, s2c);
+	if (need < 0 || (size_t)need >= sizeof(msg) ||
+		write(cfd, msg, strlen(msg)) != (ssize_t)strlen(msg)) {
+	    close(cfd);
+	    (void)unlink(c2s);
+	    (void)unlink(s2c);
+	    return PKC_ERROR;
+	}
+	close(cfd);
+
+	wfd = open(c2s, O_WRONLY);
+	if (wfd < 0) {
+	    (void)unlink(c2s);
+	    (void)unlink(s2c);
+	    return PKC_ERROR;
+	}
+	rfd = open(s2c, O_RDONLY);
+	if (rfd < 0) {
+	    close(wfd);
+	    (void)unlink(c2s);
+	    (void)unlink(s2c);
+	    return PKC_ERROR;
+	}
+
+	(void)unlink(c2s);
+	(void)unlink(s2c);
+
+	struct pkg_conn *pc = pkg_adopt_fds(rfd, wfd, switchp, errlog);
+	if (pc != PKC_ERROR && pc != PKC_NULL) {
+	    snprintf(pc->pkc_addr, sizeof(pc->pkc_addr), "%s", addr);
+	    _pkg_build_addr_env(pc);
+	}
+	return pc;
+    }
+#endif
 
 #if defined(HAVE_SYS_UN_H) && !defined(_WIN32)
     if (strncmp(addr, "unix-abstract:", 14) == 0) {
@@ -1417,29 +1497,98 @@ pkg_mux_wait(pkg_mux_t *m, int timeout_ms)
 {
     if (!m) return -1;
     m->ready.clear();
-    if (m->entries.empty()) return 0;
+
+    HANDLE   wait_handles[MAXIMUM_WAIT_OBJECTS];
+    int      entry_idx[MAXIMUM_WAIT_OBJECTS];
+    WSAEVENT wsa_evs[MAXIMUM_WAIT_OBJECTS];
+    int      sock_hidx[MAXIMUM_WAIT_OBJECTS];
+    int      n_handles = 0, n_wsa = 0;
+
+    for (int i = 0; i < (int)m->entries.size() && n_handles < MAXIMUM_WAIT_OBJECTS; ++i) {
+        auto &e = m->entries[i];
+        if (e.is_socket) {
+            WSAEVENT ev = WSACreateEvent();
+            if (ev == WSA_INVALID_EVENT) continue;
+            WSAEventSelect((SOCKET)(uintptr_t)e.fd, ev, FD_READ | FD_ACCEPT | FD_CLOSE);
+            wait_handles[n_handles]  = ev;
+            entry_idx[n_handles]     = i;
+            sock_hidx[n_wsa]         = n_handles;
+            wsa_evs[n_wsa]           = ev;
+            ++n_handles; ++n_wsa;
+	} else if (e.pipe_h != INVALID_HANDLE_VALUE &&
+		   GetFileType(e.pipe_h) != FILE_TYPE_PIPE) {
+	    /* Console and other genuinely waitable handles may use the native
+	     * wait set.  Anonymous pipes are polled with PeekNamedPipe below:
+	     * their handles do not provide a reliable readability signal to
+	     * WaitForMultipleObjects. */
+	    wait_handles[n_handles] = e.pipe_h;
+	    entry_idx[n_handles] = i;
+	    ++n_handles;
+        }
+    }
+
+    int n_ready = 0;
+    int wait_error = 0;
     const ULONGLONG start = GetTickCount64();
     for (;;) {
-        for (const auto &entry : m->entries) {
-            int status = _pkg_fd_poll(entry.fd, entry.is_socket);
-            if (status < 0)
-                return -1;
-            if (status > 0)
-                m->ready.push_back(entry.fd);
-        }
-        if (!m->ready.empty() || timeout_ms == 0)
-            return (int)m->ready.size();
+	/* Anonymous pipes must be tested for bytes, not waited on as kernel
+	 * objects.  Treat a broken pipe as readable so the caller can consume
+	 * EOF and retire the connection. */
+	for (int i = 0; i < (int)m->entries.size(); ++i) {
+	    auto &e = m->entries[i];
+	    if (e.is_socket || e.pipe_h == INVALID_HANDLE_VALUE ||
+		GetFileType(e.pipe_h) != FILE_TYPE_PIPE)
+		continue;
+	    DWORD available = 0;
+	    const BOOL peek_ok = PeekNamedPipe(e.pipe_h, NULL, 0, NULL,
+		&available, NULL);
+	    if ((peek_ok && available > 0) ||
+		(!peek_ok && GetLastError() == ERROR_BROKEN_PIPE)) {
+		m->ready.push_back(e.fd);
+		++n_ready;
+	    }
+	}
+	if (n_ready > 0)
+	    break;
 
-        DWORD delay = 10;
-        if (timeout_ms > 0) {
-            ULONGLONG elapsed = GetTickCount64() - start;
-            if (elapsed >= (ULONGLONG)timeout_ms)
-                return 0;
-            ULONGLONG remaining = (ULONGLONG)timeout_ms - elapsed;
-            if (remaining < delay)
-                delay = (DWORD)remaining;
-        }
-        Sleep(delay);
+	DWORD slice = 10;
+	if (timeout_ms > 0) {
+	    const ULONGLONG elapsed = GetTickCount64() - start;
+	    if (elapsed >= (ULONGLONG)timeout_ms)
+		break;
+	    const ULONGLONG remaining = (ULONGLONG)timeout_ms - elapsed;
+	    if (remaining < slice)
+		slice = (DWORD)remaining;
+	} else if (timeout_ms == 0) {
+	    /* Perform one nonblocking wait for sockets as well as pipes. */
+	    slice = 0;
+	}
+
+	if (n_handles > 0) {
+	    DWORD ret = WaitForMultipleObjects((DWORD)n_handles, wait_handles,
+		FALSE, slice);
+	    if (ret == WAIT_FAILED) {
+		wait_error = 1;
+		break;
+	    }
+	    if (ret >= WAIT_OBJECT_0 &&
+		ret < WAIT_OBJECT_0 + (DWORD)n_handles) {
+		for (int i = 0; i < n_handles; ++i) {
+		    if (WaitForSingleObject(wait_handles[i], 0) ==
+			WAIT_OBJECT_0) {
+			m->ready.push_back(m->entries[entry_idx[i]].fd);
+			++n_ready;
+		    }
+		}
+		if (n_ready > 0)
+		    break;
+	    }
+	} else if (slice > 0) {
+	    Sleep(slice);
+	}
+
+	if (timeout_ms == 0)
+	    break;
     }
 }
 

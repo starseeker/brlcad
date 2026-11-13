@@ -1,0 +1,133 @@
+name: BObol C++ Conformance
+
+on:
+  push:
+    paths:
+      - 'src/libBObol/**'
+      - 'include/BObol/**'
+      - 'include/BObol.h'
+      - 'src/libged/CMakeLists.txt'
+      - 'src/libged/tests/draw/**'
+      - 'src/libqtcad/tests/**'
+      - 'doc/notes/tla/**'
+      - 'misc/CMake/ValidateBObolConformance.cmake'
+      - 'misc/tools/obol_draw_perf.sh'
+      - 'src/gtools/CMakeLists.txt'
+      - '.github/workflows/bobol-conformance.yml'
+  pull_request:
+    paths:
+      - 'src/libBObol/**'
+      - 'include/BObol/**'
+      - 'include/BObol.h'
+      - 'src/libged/CMakeLists.txt'
+      - 'src/libged/tests/draw/**'
+      - 'src/libqtcad/tests/**'
+      - 'doc/notes/tla/**'
+      - 'misc/CMake/ValidateBObolConformance.cmake'
+      - 'misc/tools/obol_draw_perf.sh'
+      - 'src/gtools/CMakeLists.txt'
+      - '.github/workflows/bobol-conformance.yml'
+  schedule:
+    - cron: '15 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  catalog:
+    name: Model/C++ mapping
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate state and action mappings
+        run: cmake -P misc/CMake/ValidateBObolConformance.cmake
+
+  sanitizers:
+    name: ASan, UBSan, and nightly TSan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    needs: catalog
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install ninja-build re2c xsltproc libxml2-utils \
+            xserver-xorg-dev libx11-dev libxi-dev libxext-dev \
+            libglu1-mesa-dev libfontconfig-dev zlib1g-dev libpng-dev \
+            libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev \
+            libassimp-dev libopencv-dev tcl-dev tk-dev
+
+      - uses: actions/checkout@v6
+        with:
+          path: brlcad
+
+      - name: Clone bext
+        run: git clone https://github.com/BRL-CAD/bext.git
+
+      - name: Compute bext cache key
+        id: bext
+        shell: bash
+        run: |
+          revision=$(git -C bext rev-parse HEAD)
+          compiler=$(gcc -dumpfullversion)
+          echo "key=${revision}-${compiler}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore bext
+        id: cache-bext
+        uses: actions/cache@v4
+        with:
+          path: bext_output
+          key: ${{ runner.os }}-bobol-bext-${{ steps.bext.outputs.key }}
+
+      - name: Build bext
+        if: steps.cache-bext.outputs.cache-hit != 'true'
+        run: |
+          cmake -S bext -B bext_build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/bext_output"
+          cmake --build bext_build -j2
+
+      - name: Configure ASan and UBSan
+        run: |
+          cmake -S brlcad -B build_asan_ubsan -G Ninja \
+            -DBRLCAD_EXT_DIR="$GITHUB_WORKSPACE/bext_output" \
+            -DBRLCAD_ENABLE_QT=OFF \
+            -DBRLCAD_OPTIMIZED=OFF \
+            -DBRLCAD_DEBUGGING=ON \
+            -DBRLCAD_ENABLE_ADDRESS_SANITIZER=ON \
+            -DBRLCAD_ENABLE_UNDEFINED_SANITIZER=ON
+
+      - name: Build ASan and UBSan contracts
+        run: cmake --build build_asan_ubsan --target bobol_sanitizer_tests -j2
+
+      - name: Run ASan and UBSan contracts
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --test-dir build_asan_ubsan -L bobol_sanitizer --output-on-failure
+
+      - name: Configure TSan
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          cmake -S brlcad -B build_tsan -G Ninja \
+            -DBRLCAD_EXT_DIR="$GITHUB_WORKSPACE/bext_output" \
+            -DBRLCAD_ENABLE_QT=OFF \
+            -DBRLCAD_OPTIMIZED=OFF \
+            -DBRLCAD_DEBUGGING=ON \
+            -DBRLCAD_ENABLE_THREAD_SANITIZER=ON
+
+      - name: Build TSan contracts
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: cmake --build build_tsan --target bobol_sanitizer_tests -j2
+
+      - name: Run TSan contracts
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: ctest --test-dir build_tsan -L bobol_sanitizer --output-on-failure

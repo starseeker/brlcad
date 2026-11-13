@@ -17,15 +17,34 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
+/** @file QgEdCategories.h
+ *
+ * qged-owned category name constants for Qt plugin composition.
+ *
+ * These strings identify the plugin groups that qged owns:
+ *
+ *   QGED_CATEGORY_VIEW   - view-control tools (the "View Controls" dock).
+ *   QGED_CATEGORY_OBJECT - object-editing tools (the "Object Editing" dock).
+ *   QGED_CATEGORY_PANEL  - dockable non-tool panels owned by qged.
+ *   QGED_CATEGORY_DIALOG - top-level dialogs launched from qged menus.
+ *   QGED_CATEGORY_COMMAND - qged-specific console commands.
+ *
+ * They are used in:
+ *   - QgPaletteController construction in QgEdMainWindow
+ *   - QgPluginDescriptor::category metadata in converted qged plugins
+ *   - InteractionMode / ActivePaletteCategory logic in QgEdMainWindow
+ *   - qged-owned panel/dialog/command composition code
+ *
+ * Keep these namespaced ("qged.*") so that other libqtcad-based hosts
+ * can have their own categories without colliding with qged.
+ */
 
 #ifndef QGEDCATEGORIES_H
 #define QGEDCATEGORIES_H
 
-/* qged owns these composition categories.  Other libqtcad hosts may use
- * different names without coupling their plugins to qged. */
-#define QGED_CATEGORY_VIEW "qged.view"
+#define QGED_CATEGORY_VIEW   "qged.view"
 #define QGED_CATEGORY_OBJECT "qged.object"
-#define QGED_CATEGORY_PANEL "qged.panel"
+#define QGED_CATEGORY_PANEL  "qged.panel"
 #define QGED_CATEGORY_DIALOG "qged.dialog"
 #define QGED_CATEGORY_COMMAND "qged.command"
 

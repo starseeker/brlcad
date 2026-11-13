@@ -28,7 +28,7 @@
 #include "vmath.h"
 
 #include "raytrace.h"
-#include "bv/plot3.h"
+#include "bg/plot3.h"
 #include "librt_private.h"
 
 

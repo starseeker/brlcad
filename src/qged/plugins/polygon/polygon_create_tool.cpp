@@ -23,112 +23,89 @@
 #include <QSizePolicy>
 
 #include "qtcad/QgPluginContext.h"
-#include "qtcad/QgPluginInterfaces.h"
-#include "qtcad/QgToolBase.h"
 #include "qtcad/QgToolPalette.h"
 #include "qtcad/QgView.h"
 #include "QgEdCategories.h"
-#include "QPolyCreate.h"
+#include "PolygonCreateFactory.h"
 
-class PolygonCreateTool : public QgToolBase, public IQgViewEventFilter
+PolygonCreateTool::PolygonCreateTool(QgPluginContext *ctx, QObject *parent)
+    : QgToolBase(ctx, parent)
 {
-    Q_OBJECT
-    Q_INTERFACES(IQgViewEventFilter)
+}
 
-    public:
-	explicit PolygonCreateTool(QgPluginContext *context,
-		QObject *parent = nullptr)
-	    : QgToolBase(context, parent)
-	{
-	}
-
-	QgToolPaletteElement *paletteElement() override
-	{
-	    QgToolPaletteElement *element = QgToolBase::paletteElement();
-	    if (m_create && element && !m_wired) {
-		connect(m_create, &QPolyCreate::settings_changed,
-			element, &QgToolPaletteElement::element_view_changed);
-		connect(m_create, &QPolyCreate::view_updated,
-			element, &QgToolPaletteElement::element_view_changed);
-		m_wired = true;
-	    }
-	    return element;
-	}
-
-	QWidget *createWidget() override
-	{
-	    m_create = new QPolyCreate();
-	    m_create->setContext(context());
-	    m_create->setSizePolicy(QSizePolicy::Minimum,
-		    QSizePolicy::Minimum);
-	    return m_create;
-	}
-
-	QIcon *createIcon() override
-	{
-	    return new QIcon(QPixmap(":poly_create.svg"));
-	}
-
-	QObject *viewEventFilter() override { return this; }
-
-	void attachToView(QgView *view) override
-	{
-	    if (m_create && view)
-		view->add_event_filter(m_create);
-	}
-
-	void detachFromView(QgView *view) override
-	{
-	    if (m_create && view)
-		view->clear_event_filter(m_create);
-	}
-
-    public slots:
-	void refresh() override
-	{
-	    if (m_create)
-		m_create->checkbox_refresh(0);
-	}
-
-	void onViewChanged() override { refresh(); }
-
-    private:
-	QPolyCreate *m_create = nullptr;
-	bool m_wired = false;
-};
-
-class PolygonCreateFactory : public QObject, public IQgToolFactory
+QgToolPaletteElement *
+PolygonCreateTool::paletteElement()
 {
-    Q_OBJECT
-    Q_INTERFACES(IQgToolFactory)
-    Q_PLUGIN_METADATA(IID QGTCAD_IID("IQgToolFactory")
-	    FILE "polygon_create.json")
+    QgToolPaletteElement *el = QgToolBase::paletteElement();
+    if (m_create && el && !m_extra_wired) {
+	QObject::connect(m_create, &QPolyCreate::settings_changed,
+			 el, &QgToolPaletteElement::element_view_changed);
+	QObject::connect(m_create, &QPolyCreate::view_updated,
+			 el, &QgToolPaletteElement::element_view_changed);
+	m_extra_wired = true;
+    }
+    return el;
+}
 
-    public:
-	QgPluginDescriptor descriptor() const override
-	{
-	    QgPluginDescriptor plugin;
-	    plugin.id = QStringLiteral("org.brlcad.qged.polygon.create");
-	    plugin.displayName = QStringLiteral("Polygon Create");
-	    plugin.category = QStringLiteral(QGED_CATEGORY_VIEW);
-	    plugin.iconName = QStringLiteral(":poly_create.svg");
-	    plugin.sortKey = 100;
-	    plugin.requiresView = true;
-	    plugin.description = QStringLiteral(
-		    "Creates view polygons or imports sketch geometry.");
-	    plugin.vendor = QStringLiteral("BRL-CAD");
-	    plugin.version = QStringLiteral("1.0");
-	    return plugin;
-	}
+QWidget *
+PolygonCreateTool::createWidget()
+{
+    m_create = new QPolyCreate();
+    m_create->setContext(m_ctx);
+    m_create->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
+    return m_create;
+}
 
-	QgToolBase *create(QgPluginContext *context,
-		QObject *parent = nullptr) override
-	{
-	    return new PolygonCreateTool(context, parent);
-	}
-};
+QIcon *
+PolygonCreateTool::createIcon()
+{
+    return new QIcon(QPixmap(":poly_create.svg"));
+}
 
-#include "polygon_create_tool.moc"
+void
+PolygonCreateTool::refresh()
+{
+    if (m_create)
+	m_create->checkbox_refresh(0);
+}
+
+void
+PolygonCreateTool::attachToView(QgView *view)
+{
+    if (m_create && view)
+	view->add_event_filter(m_create);
+}
+
+void
+PolygonCreateTool::detachFromView(QgView *view)
+{
+    if (m_create)
+	m_create->cancel();
+    if (m_create && view)
+	view->clear_event_filter(m_create);
+}
+
+QgPluginDescriptor
+PolygonCreateFactory::descriptor() const
+{
+    QgPluginDescriptor d;
+    d.id = "org.brlcad.qged.polygon.create";
+    d.displayName = "Polygon Create";
+    d.category = QStringLiteral(QGED_CATEGORY_VIEW);
+    d.iconName = ":poly_create.svg";
+    d.sortKey = 100;
+    d.requiresView = true;
+    d.description = "Create view polygons, copy view polygons, or import sketch geometry as polygons.";
+    d.vendor = "BRL-CAD";
+    d.version = "1.0";
+    return d;
+}
+
+QgToolBase *
+PolygonCreateFactory::create(QgPluginContext *ctx, QObject *parent)
+{
+    return new PolygonCreateTool(ctx, parent);
+}
 
 /*
  * Local Variables:

@@ -51,7 +51,7 @@ set mged_help_data(arot)        $helplib_data(vo_arot)
 set mged_help_data(art) $helplib_data(dgo_art)
 set mged_help_data(attach)	{{[-d display_string] [-i init_script] [-n name]
     [-t is_toplevel] [-W width] [-N height]
-    [-S square_size] win_type}	{attach to a display manager}}
+    [-S square_size] host_type}	{attach an Obol endpoint host}}
 set mged_help_data(attr)        $helplib_data(wdb_attr)
 set mged_help_data(autoview)	{{}	{set view size and center so that all displayed solids are in view}}
 set mged_help_data(B)		$helplib_data(dgo_blast)
@@ -149,7 +149,7 @@ set mged_help_data(debugnmg)	{{[hex code]}	{show/set debugging bit vector for NM
 set mged_help_data(decompose)	{{nmg_solid [prefix]}	{decompose nmg_solid into maximally connectedshells}} 
 set mged_help_data(delay)	{{sec usec}	{delay for the specified amount of time}}
 set mged_help_data(dir2ae)	{{[-i] dx dy dz}	{return azimuth and elevation using inputted direction vector}}	
-set mged_help_data(dm)		{{[type|valid|set] [dmtype|var [val]]}	{print/check the display-manager type or list/set specific variables}}
+set mged_help_data(dm)		{{[bg|close|diagnostics|get|host|list|open|renderer|set|size|status] [args]}	{manage the active Obol display endpoint}}
 set mged_help_data(draw)	$helplib_data(dgo_draw)
 set mged_help_data(dsp)         {{obj [command]} {work with DSP primitives}}
 set mged_help_data(dump)	$helplib_data(wdb_dump)
@@ -187,7 +187,7 @@ set mged_help_data(get)		$helplib_data(wdb_get)
 set mged_help_data(gqa)       {{[options] object}    {check and analyze geometry, including bounding box dimensions, weight, volume, overlaps, centroid, and air checking}}
 set mged_help_data(graph)       {{}    {query and manipulate properties of the graph that corresponds to the currently opened .g database}}
 set mged_help_data(gui)	{{[-config b|c|g] [-d display_string]
-    [-gd graphics_display_string] [-dt graphics_type]
+    [-gd graphics_display_string] [-host host_type]
     [-id name] [-c -h -j -s]}	{create display/command window pair}}
 set mged_help_data(help)	{{[command(s)]}	{give usage message for given command(s)}}
 set mged_help_data(helpdevel)	{{[command(s)]}	{give usage message for given developer command(s)}}
@@ -296,7 +296,6 @@ set mged_help_data(rcodes)	{{filename}	{read region ident codes from filename}}
 set mged_help_data(reair)	{{comb aircode}	{assign same aircode to all regions under a given combination}}
 set mged_help_data(red)		{{object}	{edit a group or region using a text editor}}
 set mged_help_data(refresh)	{{}	{send new control list}}
-set mged_help_data(regdebug)	{{[number]}	{toggle display manager debugging or set debug level}}
 set mged_help_data(regdef)	{{regionID [airID [los% [materialID]]]}	{change next region default codes}}
 set mged_help_data(regions)	{{file object(s)}	{make ascii summary of regions}}
 set mged_help_data(reid)	{{[-n num] comb regionID}	{sequentially assign idents to all regions under a specified combination starting from regionID in increments of 'num'}}

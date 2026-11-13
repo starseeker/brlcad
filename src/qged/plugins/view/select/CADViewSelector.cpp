@@ -25,56 +25,32 @@
 
 #include "common.h"
 
-#include <QApplication>
-#include <QButtonGroup>
-#include <QGroupBox>
+#include "BObol/BDisplayEndpoint.h"
 #include <QVBoxLayout>
 #include <string>
 #include <vector>
+#include "qtcad/QgPluginContext.h"
+#include "qtcad/QgSignalFlags.h"
 
 #include "bu/vls.h"
+#include "bg/aabb_ray.h"
+#include "bg/plane.h"
 #include "ged.h"
 #include "ged/scene.h"
 #include "ged/selection.h"
 
-#include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSelectFilter.h"
 #include "qtcad/QgView.h"
-#include "CADViewSelector.h"
+#include "./CADViewSelector.h"
 
-static QByteArray
-cad_selection_set_name(const QgPluginContext *context)
+static struct ged_view_context *
+qged_selector_view(const QgPluginContext *ctx)
 {
-    return context ? context->selectionSetName().toLocal8Bit() : QByteArray();
-}
-
-
-static std::vector<std::string>
-cad_selected_paths(struct ged *gedp, const char *set_name)
-{
-    std::vector<std::string> paths;
-    struct bu_vls selected = BU_VLS_INIT_ZERO;
-    (void)ged_selection_list_paths(gedp, set_name, &selected);
-
-    const char *selected_str = bu_vls_cstr(&selected);
-    const char *start = selected_str;
-    for (const char *current = selected_str; ; current++) {
-	if (*current == '\n' || *current == '\r' || *current == '\0') {
-	    if (current > start)
-		paths.push_back(std::string(start,
-			(size_t)(current - start)));
-	    if (*current == '\0')
-		break;
-	    start = current + 1;
-	}
-    }
-
-    bu_vls_free(&selected);
-    return paths;
+    return ctx ? ged_view_context_from_bv(ctx->activeViewContext()) : nullptr;
 }
 
 static enum ged_scene_status
-cad_scene_draw_paths(struct ged *gedp, ged_view_context *view,
+qged_scene_draw_paths(struct ged *gedp, struct ged_view_context *view,
 	const std::vector<std::string> &paths, int *changed)
 {
     if (changed)
@@ -105,7 +81,7 @@ cad_scene_draw_paths(struct ged *gedp, ged_view_context *view,
 }
 
 static enum ged_scene_status
-cad_scene_erase_paths(struct ged *gedp, ged_view_context *view,
+qged_scene_erase_paths(struct ged *gedp, struct ged_view_context *view,
 	const std::vector<std::string> &paths, int *changed)
 {
     if (changed)
@@ -135,30 +111,89 @@ cad_scene_erase_paths(struct ged *gedp, ged_view_context *view,
     return status;
 }
 
-CADViewSelector::CADViewSelector(QWidget *parent)
-    : QWidget(parent)
+const BObolInputActionLayer *
+CADViewSelector::inputActionLayer()
 {
+    static const unsigned int modifier_mask = BOBOL_INPUT_MOD_SHIFT |
+	BOBOL_INPUT_MOD_CONTROL | BOBOL_INPUT_MOD_ALT |
+	BOBOL_INPUT_MOD_META;
+    static const BObolInputBinding bindings[] = {
+	{BOBOL_INPUT_POINTER_PRESS, BOBOL_INPUT_ANY, 0, 0, modifier_mask,
+	 10, QG_SELECT_INPUT_BEGIN},
+	{BOBOL_INPUT_POINTER_MOTION, BOBOL_INPUT_ANY, 0, 0, modifier_mask,
+	 10, QG_SELECT_INPUT_UPDATE},
+	{BOBOL_INPUT_POINTER_RELEASE, BOBOL_INPUT_ANY, 0, 0, modifier_mask,
+	 10, QG_SELECT_INPUT_COMMIT}
+    };
+    static const BObolInputActionLayer layer = {
+	"qged-selection", bindings, sizeof(bindings) / sizeof(bindings[0]),
+	CADViewSelector::inputActionDispatch
+    };
+    return &layer;
+}
+
+static std::vector<std::string>
+qged_selection_paths(struct ged *gedp)
+{
+    std::vector<std::string> ret;
+    if (!ged_selection_state_available(gedp))
+	return ret;
+
+    struct bu_vls paths = BU_VLS_INIT_ZERO;
+    if (!ged_selection_list_paths(gedp, nullptr, &paths)) {
+	bu_vls_free(&paths);
+	return ret;
+    }
+
+    const char *pstr = bu_vls_cstr(&paths);
+    const char *start = pstr;
+    for (const char *c = pstr; c && *c; c++) {
+	if (*c != '\n')
+	    continue;
+	if (c > start)
+	    ret.push_back(std::string(start, (size_t)(c - start)));
+	start = c + 1;
+    }
+    if (start && *start)
+	ret.push_back(std::string(start));
+    bu_vls_free(&paths);
+
+    return ret;
+}
+
+CADViewSelector::CADViewSelector(QWidget *)
+{
+    const QString testPrefix = QStringLiteral("org.brlcad.qged.view.select");
+    this->setProperty("qgTestId", testPrefix + QStringLiteral(".controls"));
     QVBoxLayout *wl = new QVBoxLayout;
     wl->setAlignment(Qt::AlignTop);
 
     QGroupBox *sstyle_box = new QGroupBox("Selection Style");
-    QButtonGroup *sstyle_grp = new QButtonGroup(this);
+    QButtonGroup *sstyle_grp = new QButtonGroup();
     QVBoxLayout *sstyle_gl = new QVBoxLayout;
     sstyle_gl->setAlignment(Qt::AlignTop);
 
     use_pnt_select_button = new QRadioButton("Select Under Point");
+    use_pnt_select_button->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".point"));
     use_pnt_select_button->setChecked(true);
     sstyle_grp->addButton(use_pnt_select_button);
     sstyle_gl->addWidget(use_pnt_select_button);
 
     use_rect_select_button = new QRadioButton("Select Under Rectangle");
+    use_rect_select_button->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".rectangle"));
     sstyle_grp->addButton(use_rect_select_button);
     sstyle_gl->addWidget(use_rect_select_button);
 
     sstyle_box->setLayout(sstyle_gl);
 
     select_all_depth_ckbx = new QCheckBox("Use All Intersections");
+    select_all_depth_ckbx->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".all-intersections"));
     use_ray_test_ckbx = new QCheckBox("Test with Raytracing");
+    use_ray_test_ckbx->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".raytrace"));
 
     QObject::connect(use_pnt_select_button, &QRadioButton::clicked, this, &CADViewSelector::enable_raytrace_opt);
     QObject::connect(use_pnt_select_button, &QRadioButton::clicked, this, &CADViewSelector::enable_useall_opt);
@@ -169,17 +204,23 @@ CADViewSelector::CADViewSelector(QWidget *parent)
     QVBoxLayout *smode_gl = new QVBoxLayout;
     smode_gl->setAlignment(Qt::AlignTop);
 
-    QButtonGroup *smode_grp = new QButtonGroup(this);
+    QButtonGroup *smode_grp = new QButtonGroup();
     erase_from_scene_button = new QRadioButton("Erase from Scene");
+    erase_from_scene_button->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".erase"));
     erase_from_scene_button->setChecked(true);
     smode_grp->addButton(erase_from_scene_button);
     smode_gl->addWidget(erase_from_scene_button);
 
     add_to_group_button = new QRadioButton("Add to Current Set");
+    add_to_group_button->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".add"));
     smode_grp->addButton(add_to_group_button);
     smode_gl->addWidget(add_to_group_button);
 
     rm_from_group_button = new QRadioButton("Remove from Current Set");
+    rm_from_group_button->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".remove"));
     smode_grp->addButton(rm_from_group_button);
     smode_gl->addWidget(rm_from_group_button);
 
@@ -189,15 +230,33 @@ CADViewSelector::CADViewSelector(QWidget *parent)
 
 
     draw_selections = new QPushButton("Draw selected");
+    draw_selections->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".draw-selected"));
     sgrp_gl->addWidget(draw_selections);
     QObject::connect(draw_selections, &QPushButton::clicked, this, &CADViewSelector::do_draw_selections);
 
     erase_selections = new QPushButton("Erase selected");
+    erase_selections->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".erase-selected"));
     sgrp_gl->addWidget(erase_selections);
     QObject::connect(erase_selections, &QPushButton::clicked, this, &CADViewSelector::do_erase_selections);
 
 
+    QWidget *sgrp = new QWidget();
+    QHBoxLayout *groups_gl = new QHBoxLayout;
+    groups_gl->setAlignment(Qt::AlignLeft);
+    //current_group = new QComboBox();
+    //groups_gl->addWidget(current_group);
+    //add_new_group = new QPushButton("+");
+    //groups_gl->addWidget(add_new_group);
+    //rm_group = new QPushButton("-");
+    //groups_gl->addWidget(rm_group);
+    sgrp->setLayout(groups_gl);
+    sgrp_gl->addWidget(sgrp);
+
     group_contents = new QListWidget();
+    group_contents->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".selection-list"));
     sgrp_gl->addWidget(group_contents);
 
     disable_groups(false);
@@ -222,42 +281,75 @@ CADViewSelector::CADViewSelector(QWidget *parent)
     bf = new QgSelectBoxFilter();
     rf = new QgSelectRayFilter();
     cf = pf;
+
+    QObject::connect(pf, &QgViewFilter::view_updated, this,
+	&CADViewSelector::view_changed);
+    QObject::connect(bf, &QgViewFilter::view_updated, this,
+	&CADViewSelector::view_changed);
+    QObject::connect(rf, &QgViewFilter::view_updated, this,
+	&CADViewSelector::view_changed);
 }
 
 CADViewSelector::~CADViewSelector()
 {
-    detachFromView();
-    bu_ptbl_free(&pf->selected_set);
-    bu_ptbl_free(&bf->selected_set);
-    bu_ptbl_free(&rf->selected_set);
-    delete pf;
-    delete bf;
-    delete rf;
+	detachFromView(nullptr);
+	delete pf;
+	delete bf;
+	delete rf;
 }
 
 void
 CADViewSelector::attachToView(QgView *view)
 {
-    if (!view || m_view == view)
+    if (!view)
 	return;
-    detachFromView();
-    m_view = view;
-    m_view->add_event_filter(this);
+    if (m_input_endpoint && m_input_view != view)
+	detachFromView(m_input_view);
+
+    struct bobol_display_endpoint *endpoint = view->displayEndpoint();
+    if (!endpoint || !bobol_display_endpoint_input_action_layer_set(
+	endpoint, CADViewSelector::inputActionLayer(), this, this))
+	return;
+    m_input_view = view;
+    m_input_endpoint = endpoint;
+    QObject::connect(view, &QObject::destroyed, this, [this, view]() {
+	if (m_input_view != view)
+	    return;
+	m_input_view = nullptr;
+	m_input_endpoint = nullptr;
+	if (pf)
+	    pf->set_view_widget(nullptr);
+	if (bf)
+	    bf->set_view_widget(nullptr);
+	if (rf)
+	    rf->set_view_widget(nullptr);
+    });
 }
 
 void
 CADViewSelector::detachFromView(QgView *view)
 {
-    if (!m_view || (view && m_view != view))
+    if (!m_input_endpoint || (view && view != m_input_view))
 	return;
-    m_view->clear_event_filter(this);
-    m_view = nullptr;
+    (void)bobol_display_endpoint_input_action_layer_clear_if(
+	m_input_endpoint, this);
+    if (pf)
+	pf->set_view_widget(nullptr);
+    if (bf)
+	bf->set_view_widget(nullptr);
+    if (rf)
+	rf->set_view_widget(nullptr);
+    m_input_view = nullptr;
+    m_input_endpoint = nullptr;
 }
 
 void
 CADViewSelector::enable_groups(bool)
 {
+    //current_group->setEnabled(true);
     group_contents->setEnabled(true);
+    //add_new_group->setEnabled(true);
+    //rm_group->setEnabled(true);
     draw_selections->setEnabled(true);
     erase_selections->setEnabled(true);
 }
@@ -265,7 +357,10 @@ CADViewSelector::enable_groups(bool)
 void
 CADViewSelector::disable_groups(bool)
 {
+    //current_group->setEnabled(false);
     group_contents->setEnabled(false);
+    //add_new_group->setEnabled(false);
+    //rm_group->setEnabled(false);
     draw_selections->setEnabled(false);
     erase_selections->setEnabled(false);
 }
@@ -297,183 +392,185 @@ CADViewSelector::disable_useall_opt(bool)
 void
 CADViewSelector::do_view_update(QgViewUpdateFlags flags)
 {
-    struct ged *gedp = m_context ? m_context->getGed() : NULL;
-    if (!gedp)
+    struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
+    if (!ged_selection_state_available(gedp))
 	return;
 
-    const QByteArray set_name = cad_selection_set_name(m_context);
-    const char *set_key = set_name.isEmpty() ? NULL : set_name.constData();
-    unsigned long long chash = ged_selection_state_hash(gedp, set_key);
+    unsigned long long chash = ged_selection_state_hash(gedp, nullptr);
     if ((flags & QG_VIEW_SELECT) || chash != ohash) {
+	group_contents->setUpdatesEnabled(false);
 	group_contents->clear();
 	ohash = chash;
 
-	std::vector<std::string> paths = cad_selected_paths(gedp, set_key);
+	std::vector<std::string> paths = qged_selection_paths(gedp);
+	QStringList items;
+	items.reserve(static_cast<int>(paths.size()));
 	for (const std::string &path : paths)
-	    group_contents->addItem(QString::fromLocal8Bit(path.c_str()));
+	    items.push_back(QString::fromStdString(path));
+	group_contents->addItems(items);
+	group_contents->setUpdatesEnabled(true);
     }
 }
 
 void
 CADViewSelector::select_objs()
 {
-    struct ged *gedp = m_context ? m_context->getGed() : NULL;
-    if (!gedp || !cf)
+    struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
+    if (!ged_selection_state_available(gedp))
 	return;
-    const QByteArray set_name = cad_selection_set_name(m_context);
-    const char *set_key = set_name.isEmpty() ? NULL : set_name.constData();
-    (void)ged_selection_batch_begin(gedp);
-    for (size_t i = 0; i < BU_PTBL_LEN(&cf->selected_set); i++) {
-	struct bv_scene_obj *s = (struct bv_scene_obj *)BU_PTBL_GET(&cf->selected_set, i);
-	if (!s || !ged_selection_select_path(gedp, set_key,
-		bu_vls_cstr(&s->s_name), 0)) {
-	    (void)ged_selection_batch_end(gedp);
-	    return;
-	}
-    }
-    (void)ged_selection_recompute(gedp, set_key);
-    (void)ged_selection_batch_end(gedp);
+
+    const std::vector<std::string> &paths = cf->selected_paths();
+    if (paths.empty())
+	return;
+
+    std::vector<const char *> path_values;
+    path_values.reserve(paths.size());
+    for (const std::string &path : paths)
+	path_values.push_back(path.c_str());
+    (void)ged_selection_select_paths(gedp, nullptr, path_values.data(),
+	path_values.size(), 0);
 }
 
 void
 CADViewSelector::deselect_objs()
 {
-    struct ged *gedp = m_context ? m_context->getGed() : NULL;
-    if (!gedp || !cf)
+    struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
+    if (!ged_selection_state_available(gedp))
 	return;
-    const QByteArray set_name = cad_selection_set_name(m_context);
-    const char *set_key = set_name.isEmpty() ? NULL : set_name.constData();
-    (void)ged_selection_batch_begin(gedp);
-    for (size_t i = 0; i < BU_PTBL_LEN(&cf->selected_set); i++) {
-	struct bv_scene_obj *s = (struct bv_scene_obj *)BU_PTBL_GET(&cf->selected_set, i);
-	if (!s || !ged_selection_deselect_path(gedp, set_key,
-		bu_vls_cstr(&s->s_name), 0)) {
-	    (void)ged_selection_batch_end(gedp);
-	    return;
-	}
-    }
-    (void)ged_selection_recompute(gedp, set_key);
-    (void)ged_selection_batch_end(gedp);
+
+    const std::vector<std::string> &paths = cf->selected_paths();
+    if (paths.empty())
+	return;
+
+    std::vector<const char *> path_values;
+    path_values.reserve(paths.size());
+    for (const std::string &path : paths)
+	path_values.push_back(path.c_str());
+    (void)ged_selection_deselect_paths(gedp, nullptr, path_values.data(),
+	path_values.size(), 0);
 }
 
 
 int
 CADViewSelector::erase_objs()
 {
-    struct ged *gedp = m_context ? m_context->getGed() : NULL;
-    ged_view_context *view = m_context ? m_context->activeViewContext() : NULL;
-    if (!gedp || !view || !cf)
+    struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
+    struct ged_view_context *view = qged_selector_view(m_ctx);
+    if (!gedp || !view)
 	return 0;
 
-    std::vector<std::string> paths;
-    paths.reserve(BU_PTBL_LEN(&cf->selected_set));
-    for (size_t i = 0; i < BU_PTBL_LEN(&cf->selected_set); i++) {
-	struct bv_scene_obj *s = (struct bv_scene_obj *)BU_PTBL_GET(&cf->selected_set, i);
-	if (!s)
-	    continue;
-	paths.push_back(bu_vls_cstr(&s->s_name));
-    }
+    const std::vector<std::string> &paths = cf->selected_paths();
+    if (paths.empty())
+	return 0;
 
     int changed = 0;
-    return cad_scene_erase_paths(gedp, view, paths, &changed) ==
+    return qged_scene_erase_paths(gedp, view, paths, &changed) ==
 	GED_SCENE_OK && changed;
 }
 
 void
 CADViewSelector::do_draw_selections()
 {
-    struct ged *gedp = m_context ? m_context->getGed() : NULL;
-    ged_view_context *view = m_context ? m_context->activeViewContext() : NULL;
+    struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
+    struct ged_view_context *view = qged_selector_view(m_ctx);
     if (!gedp || !view)
 	return;
 
-    const QByteArray set_name = cad_selection_set_name(m_context);
-    const char *set_key = set_name.isEmpty() ? NULL : set_name.constData();
-    std::vector<std::string> paths = cad_selected_paths(gedp, set_key);
+    std::vector<std::string> paths = qged_selection_paths(gedp);
     if (paths.empty())
 	return;
 
     int changed = 0;
-    if (cad_scene_draw_paths(gedp, view, paths, &changed) ==
-	GED_SCENE_OK && changed)
+    if (qged_scene_draw_paths(gedp, view, paths, &changed) == GED_SCENE_OK &&
+	changed)
 	emit view_changed(QG_VIEW_DRAWN|QG_VIEW_SELECT);
 }
 
 void
 CADViewSelector::do_erase_selections()
 {
-    struct ged *gedp = m_context ? m_context->getGed() : NULL;
-    ged_view_context *view = m_context ? m_context->activeViewContext() : NULL;
+    struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
+    struct ged_view_context *view = qged_selector_view(m_ctx);
     if (!gedp || !view)
 	return;
 
-    const QByteArray set_name = cad_selection_set_name(m_context);
-    const char *set_key = set_name.isEmpty() ? NULL : set_name.constData();
-    std::vector<std::string> paths = cad_selected_paths(gedp, set_key);
+    std::vector<std::string> paths = qged_selection_paths(gedp);
     if (paths.empty())
 	return;
 
     int changed = 0;
-    if (cad_scene_erase_paths(gedp, view, paths, &changed) ==
+    if (qged_scene_erase_paths(gedp, view, paths, &changed) ==
 	GED_SCENE_OK && changed)
 	emit view_changed(QG_VIEW_DRAWN|QG_VIEW_SELECT);
 }
 
-bool
-CADViewSelector::eventFilter(QObject *o, QEvent *e)
+int
+CADViewSelector::inputActionDispatch(void *user_data,
+	BObolInputAction action, const BObolInputEvent *event)
 {
-    if (QApplication::keyboardModifiers() != Qt::NoModifier)
-	return false;
+    CADViewSelector *selector = static_cast<CADViewSelector *>(user_data);
+    return selector ? selector->applyInputAction(action, event) :
+	BOBOL_INPUT_RESULT_ERROR;
+}
 
-    struct ged *gedp = m_context ? m_context->getGed() : NULL;
-    struct bview *v = m_context ? m_context->activeViewContext() : NULL;
-    if (!gedp || !v)
-	return false;
+int
+CADViewSelector::applyInputAction(BObolInputAction action,
+	const BObolInputEvent *event)
+{
+    if (!event || !m_input_view ||
+	(action != QG_SELECT_INPUT_BEGIN &&
+	 action != QG_SELECT_INPUT_UPDATE &&
+	 action != QG_SELECT_INPUT_COMMIT &&
+	 action != QG_SELECT_INPUT_CANCEL))
+	return BOBOL_INPUT_RESULT_UNHANDLED;
 
-    // Set the libqtcad filter based on current options
+    struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
+    if (!gedp || !m_input_view->viewContext())
+	return BOBOL_INPUT_RESULT_UNHANDLED;
+
     cf = pf;
     if (use_rect_select_button->isChecked())
 	cf = bf;
-    if (use_pnt_select_button->isChecked() &&
-	use_ray_test_ckbx->isChecked()) {
+    if (use_ray_test_ckbx->isChecked()) {
 	rf->dbip = gedp->dbip;
 	cf = rf;
     }
-
-    // Inform the filter of the current settings and view
-    cf->v = v;
+    /* A rectangle is a set-selection gesture: with its depth option disabled,
+     * it must collect all paths in the box rather than silently degrade to
+     * the single nearest hit.  Point/ray selection retains the explicit
+     * all-intersections choice. */
     cf->first_only = use_rect_select_button->isChecked() ? false :
-	!select_all_depth_ckbx->isChecked();
+	(select_all_depth_ckbx->isChecked() ? false : true);
+    cf->set_view_widget(m_input_view);
+    if (!cf->semanticInput(action, event))
+	return BOBOL_INPUT_RESULT_UNHANDLED;
 
-    // TODO - create and/or connect the signals and slots so cf can
-    // properly trigger updating and drawing
-    bool ret = cf->eventFilter(o, e);
-    if (!ret)
-	return false;
+    /* Gesture updates only draw the selection affordance.  Applying an
+     * operation before commit can act on a stale result from an earlier
+     * gesture. */
+    if (action != QG_SELECT_INPUT_COMMIT)
+	return action == QG_SELECT_INPUT_CANCEL ?
+	    BOBOL_INPUT_RESULT_CANCELLED : BOBOL_INPUT_RESULT_HANDLED;
 
     if (erase_from_scene_button->isChecked()) {
 	if (erase_objs())
 	    emit view_changed(QG_VIEW_DRAWN);
-	bu_ptbl_reset(&cf->selected_set);
-	return true;
+	return BOBOL_INPUT_RESULT_HANDLED;
     }
 
     if (add_to_group_button->isChecked()) {
 	select_objs();
 	emit view_changed(QG_VIEW_DRAWN|QG_VIEW_SELECT);
-	bu_ptbl_reset(&cf->selected_set);
-	return true;
+	return BOBOL_INPUT_RESULT_HANDLED;
     }
 
     if (rm_from_group_button->isChecked()) {
 	deselect_objs();
 	emit view_changed(QG_VIEW_DRAWN|QG_VIEW_SELECT);
-	bu_ptbl_reset(&cf->selected_set);
-	return true;
+	return BOBOL_INPUT_RESULT_HANDLED;
     }
 
-    // Shouldn't get here...
-    return true;
+    return BOBOL_INPUT_RESULT_HANDLED;
 }
 
 // Local Variables:

@@ -82,7 +82,6 @@ if(NOT DEFINED BRLCAD_BUILDTEST_EXTERNALS)
     BRLCAD::brep
     BRLCAD::bg
     BRLCAD::nmg
-    BRLCAD::bv
     BRLCAD::bn
     BRLCAD::bu
     )
@@ -95,7 +94,6 @@ if(NOT DEFINED BRLCAD_BUILDTEST_EXTERNALS)
     libbn
     libbrep
     libbu
-    libbv
     libnmg
     librt
     libwdb
@@ -574,7 +572,6 @@ else(NOT DEFINED BRLCAD_BUILDTEST_EXTERNALS)
     libbrep
     libbg
     libnmg
-    libbv
     libbn
     libbu
     REGEX::REGEX

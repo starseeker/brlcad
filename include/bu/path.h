@@ -141,9 +141,9 @@ BU_EXPORT extern char *bu_path_basename(const char *path, char *basename);
  * without filesystem (or database object) validation.
  *
  * @return
- * A STATIC buffer is returned.  It is the caller's responsibility to
- * call bu_strdup() or make other provisions to save the returned
- * string, before calling again.
+ * A thread-local STATIC buffer is returned.  It is the caller's
+ * responsibility to call bu_strdup() or make other provisions to save the
+ * returned string before calling again from the same thread.
  */
 BU_EXPORT extern const char *bu_path_normalize(const char *path);
 

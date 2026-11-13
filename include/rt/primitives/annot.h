@@ -31,7 +31,28 @@
 #include "bn/tol.h"
 #include "rt/defines.h"
 
+/** Nominal display density for stored screen-plane annotation coordinates.
+ * Explicit authoring DPI is already reflected in stored text dimensions. */
+#define RT_ANNOT_SCREEN_DPI 96.0
+#define RT_ANNOT_DISPLAY_PIXELS_PER_MM (RT_ANNOT_SCREEN_DPI / 25.4)
+
 __BEGIN_DECLS
+
+/** Primitive ranges emitted for one annotation segment.  Line and triangle
+ * indices refer to their independent output streams, after fill backgrounds
+ * have been ordered ahead of strokes.  The style pointer remains owned by
+ * the annotation and is valid only for the duration of the call. */
+struct rt_annot_plot_range {
+    size_t segment;
+    size_t first_line;
+    size_t line_count;
+    size_t first_triangle;
+    size_t triangle_count;
+    const struct rt_annot_seg_style *style;
+};
+
+typedef void (*rt_annot_plot_range_callback)(
+    const struct rt_annot_plot_range *range, void *data);
 
 RT_EXPORT extern struct rt_annot_internal *rt_copy_annot(const struct rt_annot_internal *annot_ip);
 
@@ -39,6 +60,13 @@ RT_EXPORT extern struct rt_annot_internal *rt_copy_annot(const struct rt_annot_i
  * presentation data.  Returns zero when valid. */
 RT_EXPORT extern int rt_annot_validate(const struct rt_annot_internal *annot_ip,
 	struct bu_vls *messages);
+
+/** Plot an annotation and report the source style for each emitted primitive
+ * range.  This leaves the generic vlist ABI unchanged while retained
+ * consumers preserve segment provenance. */
+RT_EXPORT extern int rt_annot_plot_with_styles(struct bu_list *vhead,
+	struct rt_db_internal *ip, const struct bg_tess_tol *ttol,
+	rt_annot_plot_range_callback callback, void *data);
 
 __END_DECLS
 

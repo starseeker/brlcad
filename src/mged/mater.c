@@ -37,9 +37,10 @@
 #include "vmath.h"
 #include "rt/db4.h"
 #include "raytrace.h"
+#include "ged/draw.h"
 
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 
 /*
@@ -49,9 +50,9 @@
 void
 mged_color_soltab(struct mged_state *s)
 {
-    dl_color_soltab((struct bu_list *)ged_dl(s->gedp), s->gedp->dbip);
-    s->update_views = 1;		/* re-write control list with new colors */
-    dm_set_dirty(DMP, 1);
+    (void)ged_scene_materials_changed(s->gedp, NULL);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);		/* re-write control list with new colors */
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 }
 
 

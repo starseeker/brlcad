@@ -25,6 +25,8 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <fstream>
+#include <memory>
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
@@ -53,6 +55,17 @@ struct icv_anim {
     uint32_t height;
     int fps;
     std::vector<icv_anim_frame> frames;
+};
+
+struct icv_anim_writer {
+    std::ofstream output;
+    std::unique_ptr<apngmini::Writer> writer;
+    uint32_t canvas_width = 0;
+    uint32_t canvas_height = 0;
+    uint32_t expected_frames = 0;
+    uint32_t written_frames = 0;
+    uint32_t default_delay_usec = 100000;
+    bool failed = false;
 };
 
 
@@ -155,6 +168,128 @@ extern "C" {
 	}
 	return f;
     }
+
+extern "C" {
+
+    icv_anim_writer_t *
+    icv_anim_writer_create(const char *filename, uint32_t width,
+	uint32_t height, size_t frame_count, int fps)
+    {
+	if (!filename || !filename[0] || !width || !height || !frame_count ||
+		frame_count > UINT32_MAX || fps <= 0)
+	    return NULL;
+
+	std::unique_ptr<icv_anim_writer_t> stream(new icv_anim_writer_t);
+	stream->output.open(filename, std::ios::binary | std::ios::trunc);
+	if (!stream->output.is_open())
+	    return NULL;
+	stream->canvas_width = width;
+	stream->canvas_height = height;
+	stream->expected_frames = static_cast<uint32_t>(frame_count);
+	stream->default_delay_usec = std::max<uint32_t>(1,
+	    1000000u / static_cast<uint32_t>(fps));
+	try {
+	    icv_anim_writer_t *target = stream.get();
+	    stream->writer.reset(new apngmini::Writer(width, height,
+		stream->expected_frames, 0,
+		[target](const uint8_t *data, size_t size) {
+		    if (!target || target->failed)
+			return;
+		    if (size > static_cast<size_t>(
+			    std::numeric_limits<std::streamsize>::max())) {
+			target->failed = true;
+			return;
+		    }
+		    target->output.write(reinterpret_cast<const char *>(data),
+			static_cast<std::streamsize>(size));
+		    if (!target->output)
+			target->failed = true;
+		}, 9));
+	} catch (...) {
+	    return NULL;
+	}
+	return stream.release();
+    }
+
+    int
+    icv_anim_writer_add_rgba8(icv_anim_writer_t *stream,
+	const unsigned char *rgba, uint32_t width, uint32_t height,
+	uint32_t delay_usec, uint32_t x_offset, uint32_t y_offset)
+    {
+	if (!stream || !stream->writer || stream->failed || !rgba ||
+		!width || !height ||
+		static_cast<uint64_t>(x_offset) + width >
+		    stream->canvas_width ||
+		static_cast<uint64_t>(y_offset) + height >
+		    stream->canvas_height ||
+		stream->written_frames >= stream->expected_frames)
+	    return -1;
+	try {
+	    const uint32_t usec = delay_usec ? delay_usec :
+		stream->default_delay_usec;
+	    apngmini::Delay delay;
+	    delay.numerator = static_cast<uint16_t>(std::max<uint32_t>(1,
+		std::min<uint32_t>(UINT16_MAX, usec / 1000)));
+	    delay.denominator = 1000;
+	    stream->writer->add_frame(rgba, width, height, delay,
+		x_offset, y_offset, apngmini::DisposeOp::None,
+		apngmini::BlendOp::Source);
+	    if (stream->writer->error() || stream->failed)
+		return -1;
+	    ++stream->written_frames;
+	} catch (...) {
+	    stream->failed = true;
+	    return -1;
+	}
+	return 0;
+    }
+
+    int
+    icv_anim_writer_add_frame(icv_anim_writer_t *stream,
+	const icv_image_t *img, uint32_t delay_usec,
+	uint32_t x_offset, uint32_t y_offset)
+    {
+	if (!img || !img->data || !img->width || !img->height ||
+		img->width > UINT32_MAX || img->height > UINT32_MAX)
+	    return -1;
+	try {
+	    apngmini::Frame frame = icv_to_apng(img,
+		delay_usec ? delay_usec :
+		    (stream ? stream->default_delay_usec : 1));
+	    return icv_anim_writer_add_rgba8(stream, frame.pixels.data(),
+		frame.width, frame.height, delay_usec, x_offset, y_offset);
+	} catch (...) {
+	    if (stream)
+		stream->failed = true;
+	    return -1;
+	}
+    }
+
+    int
+    icv_anim_writer_close(icv_anim_writer_t *stream)
+    {
+	if (!stream)
+	    return -1;
+	int status = stream->failed || !stream->writer ||
+	    stream->written_frames != stream->expected_frames ? -1 : 0;
+	try {
+	    if (stream->writer) {
+		(void)stream->writer->finish();
+		if (stream->writer->error())
+		    status = -1;
+	    }
+	} catch (...) {
+	    status = -1;
+	}
+	stream->output.flush();
+	if (!stream->output)
+	    status = -1;
+	stream->output.close();
+	delete stream;
+	return status;
+    }
+
+}
 
 extern "C" {
     static icv_anim_format_t

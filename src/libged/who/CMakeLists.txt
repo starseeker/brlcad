@@ -1,10 +1,12 @@
 set(PLUGIN_LIBS libged libbu)
 
 set(WHO_SRCS
-  who.c
+  who.cpp
   who2.cpp
   who_solids.cpp
 )
+set_source_files_properties(who.cpp TARGET_DIRECTORY libged
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 ged_plugin_library(ged-who
   ${WHO_SRCS}

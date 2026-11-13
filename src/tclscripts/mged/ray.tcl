@@ -26,7 +26,7 @@ proc mouse_shoot_ray { x y } {
     global perspective_mode
 
     # get zclip setting
-    set zclip [dm set zclip]
+    set zclip [dm get view.zclip]
 
     if {[catch {.inmem rt_gettrees ray -i -u {*}[::brlcad::mged who]} msg]} {
 	error $msg

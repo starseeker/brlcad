@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -41,12 +43,16 @@ ged_rotate_about_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     /* get "rotate about" point */
     if (argc == 1) {
-	bu_vls_printf(gedp->ged_result_str, "%c", gedp->ged_gvp->gv_rotate_about);
+	bu_vls_printf(gedp->ged_result_str, "%c",
+		bv_rotate_about_get(view));
 	return BRLCAD_OK;
     }
 
@@ -57,7 +63,7 @@ ged_rotate_about_core(struct ged *gedp, int argc, const char *argv[])
 	    case 'k':
 	    case 'm':
 	    case 'v':
-		gedp->ged_gvp->gv_rotate_about = argv[1][0];
+		bv_rotate_about_set(view, argv[1][0]);
 		return BRLCAD_OK;
 	}
     }

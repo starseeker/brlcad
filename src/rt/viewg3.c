@@ -50,7 +50,7 @@
 #include "bu/parallel.h"
 #include "vmath.h"
 #include "raytrace.h"
-#include "bv/plot3.h"
+#include "bg/plot3.h"
 
 #include "./rtuif.h"
 #include "./ext.h"

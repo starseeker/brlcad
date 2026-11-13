@@ -28,9 +28,10 @@
 #include "vmath.h"
 #include "raytrace.h"
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./sedit.h"
 #include "./menu.h"
+#include "./hud.h"
 
 #include "ged.h"
 #include "ged/view.h"
@@ -261,13 +262,12 @@ mged_mmenu_set(int UNUSED(ac), const char **UNUSED(av), void *d, void *ms)
     Tcl_DStringFree(&ds_menu);
     bu_vls_free(&menu_string);
 
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *dlp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (menu_state == dlp->dm_menu_state &&
-	    dlp->dm_mged_variables->mv_faceplate &&
-	    dlp->dm_mged_variables->mv_orig_gui) {
-	    dlp->dm_dirty = 1;
-	    dm_set_dirty(dlp->dm_dmp, 1);
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *dlp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (menu_state == dlp->display_menu_state &&
+	    dlp->display_variables->mv_faceplate &&
+	    dlp->display_variables->mv_orig_gui) {
+	    mged_refresh_request_view(s, dlp->display_view_state, GED_VIEW_REFRESH_VIEW);
 	}
     }
 
@@ -292,13 +292,12 @@ mmenu_set(struct mged_state *s, int index, struct rt_edit_menu_item *value)
     Tcl_DStringFree(&ds_menu);
     bu_vls_free(&menu_string);
 
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *dlp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (menu_state == dlp->dm_menu_state &&
-	    dlp->dm_mged_variables->mv_faceplate &&
-	    dlp->dm_mged_variables->mv_orig_gui) {
-	    dlp->dm_dirty = 1;
-	    dm_set_dirty(dlp->dm_dmp, 1);
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *dlp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (menu_state == dlp->display_menu_state &&
+	    dlp->display_variables->mv_faceplate &&
+	    dlp->display_variables->mv_orig_gui) {
+	    mged_refresh_request_view(s, dlp->display_view_state, GED_VIEW_REFRESH_VIEW);
 	}
     }
 }
@@ -308,37 +307,48 @@ void
 mmenu_set_all(struct mged_state *s, int index, struct rt_edit_menu_item *value)
 {
     struct cmd_list *save_cmd_list;
-    struct mged_dm *save_dm_list;
+    struct mged_display *save_display;
 
     save_cmd_list = curr_cmd_list;
-    save_dm_list = s->mged_curr_dm;
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (p->dm_tie)
-	    curr_cmd_list = p->dm_tie;
+    save_display = s->mged_curr_display;
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (p->display_tie)
+	    curr_cmd_list = p->display_tie;
 
-	set_curr_dm(s, p);
+	mged_current_display_set(s, p);
 	mmenu_set(s, index, value);
     }
 
     curr_cmd_list = save_cmd_list;
-    set_curr_dm(s, save_dm_list);
+    mged_current_display_set(s, save_display);
 }
 
 
-/* The edit library owns menu contents and actions.  Flatten the active
- * lists only at the display boundary, retaining their original indices
- * when invoking editing callbacks. */
-static struct rt_edit_menu_item *
-faceplate_menu_item(struct mged_state *s, size_t row, int *menu, int *item)
+void
+mged_highlight_menu_item(struct mged_state *s,
+	struct mged_hud_builder *hud, struct rt_edit_menu_item *mptr, int y)
 {
-    for (*menu = 0; *menu < NMENU; (*menu)++) {
-        struct rt_edit_menu_item *items = menu_state->ms_menus[*menu];
-        if (!items) continue;
-        for (*item = 0; items[*item].menu_string[0]; (*item)++) {
-            if (!row) return &items[*item];
-            row--;
-        }
+    switch (mptr->menu_arg) {
+	case BV_RATE_TOGGLE:
+	    if (mged_variables->mv_rateknobs) {
+		mged_hud_color_set(hud, color_scheme->cs_menu_text1);
+		(void)mged_hud_label_add(hud, "Rate",
+			GED2PM1(MENUX), GED2PM1(y-15), 0.0, 0);
+		mged_hud_color_set(hud, color_scheme->cs_menu_text2);
+		(void)mged_hud_label_add(hud, "/Abs",
+			GED2PM1(MENUX+4*40), GED2PM1(y-15), 0.0, 0);
+	    } else {
+		mged_hud_color_set(hud, color_scheme->cs_menu_text2);
+		(void)mged_hud_label_add(hud, "Rate/",
+			GED2PM1(MENUX), GED2PM1(y-15), 0.0, 0);
+		mged_hud_color_set(hud, color_scheme->cs_menu_text1);
+		(void)mged_hud_label_add(hud, "Abs",
+			GED2PM1(MENUX+5*40), GED2PM1(y-15), 0.0, 0);
+	    }
+	    break;
+	default:
+	    break;
     }
     return NULL;
 }
@@ -410,12 +420,56 @@ faceplate_menu_controls(struct mged_state *s, struct dm_faceplate_controls *cont
 }
 
 void
-mmenu_display(struct mged_state *s, int y_top)
+mmenu_display(struct mged_state *s, struct mged_hud_builder *hud, int y_top)
 {
-    struct dm_faceplate_controls controls;
-    menu_state->ms_top = y_top - MENU_DY / 2;
-    faceplate_menu_controls(s, &controls);
-    dm_faceplate_controls_draw(DMP, &controls);
+    static int menu, item;
+    struct rt_edit_menu_item **m;
+    struct rt_edit_menu_item *mptr;
+    int y = y_top;
+
+    menu_state->ms_top = y - MENU_DY / 2;
+    mged_hud_line_style_set(hud, mged_variables->mv_linewidth, 0);
+    mged_hud_color_set(hud, color_scheme->cs_menu_line);
+    (void)mged_hud_line_add(hud,
+	    GED2PM1(MENUXLIM), GED2PM1(menu_state->ms_top),
+	    GED2PM1(-2048), GED2PM1(menu_state->ms_top));
+
+    for (menu=0, m = menu_state->ms_menus; m - menu_state->ms_menus < NMENU; m++, menu++) {
+	if (*m == NULL) continue;
+	for (item=0, mptr = *m; mptr->menu_string[0] != '\0' && y > TITLE_YBASE; mptr++, y += MENU_DY, item++) {
+	    if ((*m == (struct rt_edit_menu_item *)second_menu
+		 && (mptr->menu_arg == BV_RATE_TOGGLE
+		     || mptr->menu_arg == BV_EDIT_TOGGLE
+		     || mptr->menu_arg == BV_EYEROT_TOGGLE)))
+		mged_highlight_menu_item(s, hud, mptr, y);
+	    else {
+		if (mptr == *m)
+		    mged_hud_color_set(hud, color_scheme->cs_menu_title);
+		else
+		    mged_hud_color_set(hud, color_scheme->cs_menu_text2);
+		(void)mged_hud_label_add(hud, mptr->menu_string,
+			GED2PM1(MENUX), GED2PM1(y-15), 0.0, 0);
+	    }
+	    mged_hud_color_set(hud, color_scheme->cs_menu_line);
+	    (void)mged_hud_line_add(hud,
+		    GED2PM1(MENUXLIM), GED2PM1(y+(MENU_DY/2)),
+		    GED2PM1(-2048), GED2PM1(y+(MENU_DY/2)));
+	    if (menu_state->ms_cur_item == item && menu_state->ms_cur_menu == menu && menu_state->ms_flag) {
+		/* prefix item selected with "==>" */
+		mged_hud_color_set(hud, color_scheme->cs_menu_arrow);
+		(void)mged_hud_label_add(hud, "==>",
+			GED2PM1(-2048), GED2PM1(y-15), 0.0, 0);
+	    }
+	}
+    }
+
+    if (y == y_top)
+	return;	/* no active menus */
+
+    mged_hud_color_set(hud, color_scheme->cs_menu_line);
+    (void)mged_hud_line_add(hud,
+	    GED2PM1(MENUXLIM), GED2PM1(menu_state->ms_top-1),
+	    GED2PM1(MENUXLIM), GED2PM1(y-(MENU_DY/2)));
 }
 
 int

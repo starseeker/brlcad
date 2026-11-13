@@ -31,31 +31,21 @@
 #include "bu/cmd.h"
 #include "bu/str.h"
 #include "bu/getopt.h"
-#include "ged/event.h"
 #include "rt/geom.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
-
-static void
-move_all_event_batch_end(struct ged *gedp, int *event_batch)
-{
-    if (!event_batch || !*event_batch)
-	return;
-    (void)ged_event_batch_end(gedp, NULL);
-    *event_batch = 0;
-}
 
 static int
 move_all_func(struct ged *gedp, int nflag, const char *old_name, const char *new_name)
 {
-    struct display_list *gdlp;
     struct directory *dp;
     struct rt_db_internal intern;
     struct rt_comb_internal *comb;
     struct bu_ptbl stack;
-    int event_batch = 0;
-    int object_renamed = 0;
     size_t moved = 0;
+    int batch_open = 0;
+    int object_renamed = 0;
 
     /* check the old_name source and new_name target */
 
@@ -75,8 +65,9 @@ move_all_func(struct ged *gedp, int nflag, const char *old_name, const char *new
 	return BRLCAD_ERROR;
     }
 
-    if (!nflag)
-	event_batch = ged_event_batch_begin(gedp) == GED_EVENT_OK;
+    if (!nflag) {
+	batch_open = ged_event_batch_begin(gedp) == GED_EVENT_OK;
+    }
 
     /* if this was a sketch, we need to look for all the extrude
      * objects that might use it.
@@ -133,25 +124,28 @@ move_all_func(struct ged *gedp, int nflag, const char *old_name, const char *new
     if (!nflag && dp) {
 	/* Change object name in the directory. */
 	if (db_rename(gedp->dbip, dp, new_name) < 0) {
-	    move_all_event_batch_end(gedp, &event_batch);
 	    bu_vls_printf(gedp->ged_result_str, "error in rename to %s, aborting", new_name);
+	    if (batch_open)
+		ged_event_batch_end(gedp, NULL);
 	    return BRLCAD_ERROR;
 	}
-	object_renamed = 1;
 
 	/* Change object name on disk */
 	if (rt_db_get_internal(&intern, dp, gedp->dbip, (fastf_t *)NULL) < 0) {
-	    move_all_event_batch_end(gedp, &event_batch);
 	    bu_vls_printf(gedp->ged_result_str, "Database read error, aborting");
+	    if (batch_open)
+		ged_event_batch_end(gedp, NULL);
 	    return BRLCAD_ERROR;
 	}
 
 	if (rt_db_put_internal(dp, gedp->dbip, &intern) < 0) {
-	    move_all_event_batch_end(gedp, &event_batch);
 	    bu_vls_printf(gedp->ged_result_str, "Database write error, aborting");
+	    if (batch_open)
+		ged_event_batch_end(gedp, NULL);
 	    return BRLCAD_ERROR;
 	}
 	moved++;
+	object_renamed = 1;
     }
 
     bu_ptbl_init(&stack, 64, "combination stack for wdb_mvall_cmd");
@@ -199,8 +193,9 @@ move_all_func(struct ged *gedp, int nflag, const char *old_name, const char *new
 		    continue;
 		if (comb_mvall_status == 2) {
 		    bu_ptbl_free(&stack);
-		    move_all_event_batch_end(gedp, &event_batch);
 		    bu_vls_printf(gedp->ged_result_str, "Database write error, aborting");
+		    if (batch_open)
+			ged_event_batch_end(gedp, NULL);
 		    return BRLCAD_ERROR;
 		}
 	    }
@@ -209,61 +204,16 @@ move_all_func(struct ged *gedp, int nflag, const char *old_name, const char *new
 
     bu_ptbl_free(&stack);
 
-    if (!nflag) {
-	/* Change object name anywhere in the display list path. */
-	for (BU_LIST_FOR(gdlp, display_list, gedp->i->ged_gdp->gd_headDisplay)) {
-	    int first = 1;
-	    int found = 0;
-	    struct bu_vls new_path = BU_VLS_INIT_ZERO;
-	    char *dupstr = bu_strdup(bu_vls_addr(&gdlp->dl_path));
-	    char *tok = strtok(dupstr, "/");
+    if (object_renamed)
+	ged_event_notify_object_renamed(gedp, old_name, new_name, NULL);
 
-	    while (tok) {
-		if (BU_STR_EQUAL(tok, old_name)) {
-		    found = 1;
-
-		    if (first) {
-			first = 0;
-			bu_vls_printf(&new_path, "%s", new_name);
-		    } else
-			bu_vls_printf(&new_path, "/%s", new_name);
-		} else {
-		    if (first) {
-			first = 0;
-			bu_vls_printf(&new_path, "%s", tok);
-		    } else
-			bu_vls_printf(&new_path, "/%s", tok);
-		}
-
-		tok = strtok((char *)NULL, "/");
-	    }
-
-	    if (found) {
-		bu_vls_free(&gdlp->dl_path);
-		bu_vls_printf(&gdlp->dl_path, "%s", bu_vls_addr(&new_path));
-	    }
-
-	    free((void *)dupstr);
-	    bu_vls_free(&new_path);
-	}
-	_ged_dl_path_invalidate(gedp);
-    }
+    if (batch_open)
+	ged_event_batch_end(gedp, NULL);
 
     if (!moved) {
-	move_all_event_batch_end(gedp, &event_batch);
 	bu_log("ERROR: move %s to %s: no such object or reference\n", old_name, new_name);
 	return BRLCAD_ERROR;
     }
-
-    if (object_renamed) {
-	struct ged_event event;
-	ged_event_init(&event);
-	event.kind = GED_EVENT_OBJECT_RENAMED;
-	event.name = old_name;
-	event.new_name = new_name;
-	(void)ged_event_publish(gedp, &event, 1, NULL);
-    }
-    move_all_event_batch_end(gedp, &event_batch);
 
     return BRLCAD_OK;
 }
@@ -274,7 +224,7 @@ move_all_file(struct ged *gedp, int nflag, const char *file)
 {
     FILE *fp = NULL;
     char line[512];
-    int event_batch = 0;
+    int event_depth = 0;
     int status = BRLCAD_OK;
 
     fp = fopen(file, "r");
@@ -284,7 +234,7 @@ move_all_file(struct ged *gedp, int nflag, const char *file)
     }
 
     if (!nflag)
-	event_batch = ged_event_batch_begin(gedp) == GED_EVENT_OK;
+	event_depth = ged_event_batch_begin(gedp) == GED_EVENT_OK;
 
     while (bu_fgets(line, sizeof(line), fp) != NULL) {
 	char *cp = NULL;
@@ -304,7 +254,8 @@ move_all_file(struct ged *gedp, int nflag, const char *file)
 
     fclose(fp);
 
-    move_all_event_batch_end(gedp, &event_batch);
+    if (event_depth > 0)
+	ged_event_batch_end(gedp, NULL);
 
     return status;
 }

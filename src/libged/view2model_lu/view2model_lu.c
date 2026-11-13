@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -36,15 +38,20 @@ int
 ged_view2model_lu_core(struct ged *gedp, int argc, const char *argv[])
 {
     fastf_t sf;
+    fastf_t view_scale;
+    mat_t view2model;
     point_t view_pt;
     point_t model_pt;
     double scan[3];
+    const struct bv *view = NULL;
     static const char *usage = "x y z";
     double b2lval = (gedp->dbip) ? gedp->dbip->dbi_base2local : 1.0;
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
+
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -59,9 +66,12 @@ ged_view2model_lu_core(struct ged *gedp, int argc, const char *argv[])
     /* convert from double to fastf_t */
     VMOVE(view_pt, scan);
 
-    sf = 1.0 / (gedp->ged_gvp->gv_scale * b2lval);
+    view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_view2model_get(view2model, view);
+    view_scale = bv_scale_get(view);
+    sf = 1.0 / (view_scale * b2lval);
     VSCALE(view_pt, view_pt, sf);
-    MAT4X3PNT(model_pt, gedp->ged_gvp->gv_view2model, view_pt);
+    MAT4X3PNT(model_pt, view2model, view_pt);
     VSCALE(model_pt, model_pt, gedp->dbip->dbi_base2local);
 
     bn_encode_vect(gedp->ged_result_str, model_pt, 1);

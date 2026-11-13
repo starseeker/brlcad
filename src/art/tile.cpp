@@ -51,12 +51,15 @@
 #  pragma clang diagnostic pop
 #endif
 
-#include "dm.h"
+#include <vector>
+
+#include "bu/parallel.h"
+#include "imgstream/fb_compat.h"
 
 
 using namespace foundation;
 
-extern struct fb *fbp;	/* Framebuffer handle */
+extern imgstream_fb_t *fbp;	/* Framebuffer handle */
 
 
 void
@@ -64,18 +67,28 @@ ArtTileCallback::on_tile_end(const renderer::Frame* frame, const size_t tile_x, 
 {
     foundation::Tile& t = frame->image().tile(tile_x, tile_y);
     const foundation::Tile rgb(t, PixelFormatUInt8);
-    // fb_write(fbp, tile_x, tile_y, rgb.get_storage(), rgb.get_size());
-    // printf("yay!\n");
-    // printf("%lu %lu \n", tile_x, tile_y);
-    // printf("%lu %lu \n", rgb.get_width(), rgb.get_height());
+    const foundation::CanvasProperties& props = frame->image().properties();
+    const size_t x_coord = tile_x * props.m_tile_width;
+    const size_t top = tile_y * props.m_tile_height;
+    const size_t y_coord = props.m_canvas_height - top - rgb.get_height();
+    std::vector<unsigned char> pixels(rgb.get_width() * rgb.get_height() * 3);
+
     for (size_t y = 0; y < rgb.get_height(); y++) {
+	const size_t src_y = rgb.get_height() - 1 - y;
 	for (size_t x = 0; x < rgb.get_width(); x++) {
-	    size_t x_coord = tile_x * rgb.get_width() + x;
-	    size_t y_coord = tile_y * rgb.get_height() + y;
-	    size_t img_h = frame->image().properties().m_canvas_height;
-	    fb_write(fbp, (int)x_coord, (int)(img_h - y_coord), rgb.get_storage()+((y * rgb.get_width() * 4) + (x * 4)), 1);
+	    const unsigned char *src = rgb.get_storage() +
+		(src_y * rgb.get_width() + x) * 4;
+	    unsigned char *dst = pixels.data() + (y * rgb.get_width() + x) * 3;
+	    dst[0] = src[0];
+	    dst[1] = src[1];
+	    dst[2] = src[2];
 	}
     }
+
+    bu_semaphore_acquire(BU_SEM_SYSCALL);
+    (void)imgstream_fb_writerect(fbp, (int)x_coord, (int)y_coord,
+	    (int)rgb.get_width(), (int)rgb.get_height(), pixels.data());
+    bu_semaphore_release(BU_SEM_SYSCALL);
 }
 
 
