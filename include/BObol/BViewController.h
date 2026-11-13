@@ -821,6 +821,9 @@ struct BOBOL_EXPORT BObolLodControlTraceState {
     size_t submissionDeltaEntryCount;
     size_t structuralRepairFrontierCount;
     size_t structuralRepairCoverageCostReservation;
+    size_t structuralProjectionVisibleCount;
+    size_t structuralUnresolvedOccurrenceCount;
+    uint64_t structuralSuccessorBlockerMask;
     size_t submissionPassMissingMeshBudgetBlockedCount;
     unsigned int lastSubmissionVisitedMeshCount;
     unsigned int lastSubmissionSubmittedTaskCount;
@@ -831,6 +834,15 @@ struct BOBOL_EXPORT BObolLodControlTraceState {
     SbBool interactionActive;
     SbBool structuralRepairTerminalProxy;
     SbBool structuralRepairPointRelaxation;
+    SbBool structuralOccurrenceCoverageExact;
+    SbBool structuralProjectionExact;
+    SbBool structuralPopulationSettled;
+    SbBool structuralCompleteVisibleCountValid;
+    SbBool structuralMeshFirstSceneSafe;
+    SbBool structuralPointAggregationOwner;
+    SbBool structuralPointPolicyExhausted;
+    SbBool structuralExternalProducersSettled;
+    SbBool structuralSuccessorBaseReady;
     SbBool submissionPassAdmittedWork;
     SbBool submissionPassCutAdvanced;
     SbBool submissionPassRefinementPending;
