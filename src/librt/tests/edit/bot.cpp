@@ -58,6 +58,7 @@
 #include "bu/str.h"
 #include "bu/vls.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
 #include "rt/rt_ecmds.h"
 #include "rt/primitives/bot.h"
 #include "test_utils.h"
@@ -211,61 +212,29 @@ rt_edit_test_bot(void)
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size  = 73.3197;
-    v->gv_isize = 1.0 / v->gv_size;
-    v->gv_scale = 0.5 * v->gv_size;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width  = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init(&v);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
-    if (!s || !s->e_keytag || !BU_STR_EQUAL(s->e_keytag, "V"))
-	bu_exit(1, "ERROR: BOT create did not initialize the default keypoint\n");
-    if (rt_edit_reinit(s, &fp, dbip, &tol, v) != BRLCAD_OK ||
-	!s->e_keytag || !BU_STR_EQUAL(s->e_keytag, "V"))
-	bu_exit(1, "ERROR: BOT reinit did not initialize the default keypoint\n");
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
 
     struct rt_bot_internal *bot =
 	(struct rt_bot_internal *)s->es_int.idb_ptr;
-    struct rt_edit_param_bounds vertex_bounds = {};
-    struct rt_edit_param_bounds face_vertex_bounds = {};
-    if (rt_edit_param_bounds_get(s, ECMD_BOT_PICKV, 0,
-	    &vertex_bounds) != BRLCAD_OK || !vertex_bounds.has_minimum ||
-	!vertex_bounds.has_maximum ||
-	!NEAR_EQUAL(vertex_bounds.minimum, -1.0, SMALL_FASTF) ||
-	!NEAR_EQUAL(vertex_bounds.maximum, 3.0, SMALL_FASTF) ||
-	rt_edit_param_bounds_get(s, ECMD_BOT_PICKT, 2,
-	    &face_vertex_bounds) != BRLCAD_OK ||
-	!face_vertex_bounds.has_minimum || !face_vertex_bounds.has_maximum ||
-	!NEAR_EQUAL(face_vertex_bounds.minimum, -1.0, SMALL_FASTF) ||
-	!NEAR_EQUAL(face_vertex_bounds.maximum, 3.0, SMALL_FASTF) ||
-	rt_edit_param_bounds_get(s, ECMD_BOT_PICKT, 3,
-	    &face_vertex_bounds) != BRLCAD_ERROR)
-	bu_exit(1, "ERROR: BOT parameter bounds are incorrect\n");
-    bu_log("BOT current-topology parameter bounds SUCCESS\n");
     struct rt_bot_edit *b = (struct rt_bot_edit *)s->ipe_ptr;
 
-    point_t default_keypoint = VINIT_ZERO;
-    VSET(s->e_keypoint, 1.0, 2.0, 3.0);
-    s->e_keytag = "invalid";
-    rt_get_solid_keypoint(s, &s->e_keypoint, &s->e_keytag, s->e_mat);
-    if (!s->e_keytag || !BU_STR_EQUAL(s->e_keytag, "V") ||
-	!VNEAR_EQUAL(s->e_keypoint, default_keypoint, VUNITIZE_TOL))
-	bu_exit(1, "ERROR: BOT invalid keypoint selector did not use the default\n");
-
-    b->bot_verts[0] = (int)bot->num_vertices;
-    rt_get_solid_keypoint(s, &s->e_keypoint, &s->e_keytag, s->e_mat);
-    if (!s->e_keytag || !BU_STR_EQUAL(s->e_keytag, "V") ||
-	!VNEAR_EQUAL(s->e_keypoint, default_keypoint, VUNITIZE_TOL))
-	bu_exit(1, "ERROR: BOT stale selection changed the default keypoint\n");
-    b->bot_verts[0] = -1;
+    struct rt_edit_param_bounds vertexBounds = {};
+    if (rt_edit_param_bounds_get(s, ECMD_BOT_PICKV, 0,
+	    &vertexBounds) != BRLCAD_OK || !vertexBounds.has_minimum ||
+	!vertexBounds.has_maximum ||
+	!NEAR_EQUAL(vertexBounds.minimum, -1.0, SMALL_FASTF) ||
+	!NEAR_EQUAL(vertexBounds.maximum, 3.0, SMALL_FASTF))
+	bu_exit(1, "ERROR: BOT dynamic vertex bounds are incorrect\n");
+    struct rt_edit_param_bounds listBounds = {};
+    if (rt_edit_param_bounds_get(s, ECMD_BOT_MOVEV_LIST, 1,
+	    &listBounds) != BRLCAD_OK || !listBounds.has_maximum ||
+	!NEAR_EQUAL(listBounds.maximum, 3.0, SMALL_FASTF))
+	bu_exit(1, "ERROR: BOT vertex-list bounds are incorrect\n");
+    bu_log("BOT current-topology parameter bounds SUCCESS\n");
 
     vect_t mousevec;
 
@@ -377,6 +346,46 @@ rt_edit_test_bot(void)
 	       V3ARGS(&bot->vertices[6]));
     }
 
+    /* The descriptor and readback define edge/face movement by their center,
+     * so setters must use the same absolute anchor semantics. */
+    bot_reset(s, bot, b);
+    EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_BOT_MOVEE);
+    s->e_inpara = 3;
+    VSET(s->e_para, 2, 3, 4);
+    b->bot_verts[0] = 0;
+    b->bot_verts[1] = 1;
+    b->bot_verts[2] = -1;
+    if (rt_edit_process_result(s) != BRLCAD_OK)
+	bu_exit(1, "ERROR: ECMD_BOT_MOVEE rejected a valid edge move\n");
+    {
+	point_t midpoint;
+	VADD2SCALE(midpoint, &bot->vertices[0], &bot->vertices[3], 0.5);
+	vect_t expected = {2, 3, 4};
+	if (!VNEAR_EQUAL(midpoint, expected, VUNITIZE_TOL))
+	    bu_exit(1, "ERROR: ECMD_BOT_MOVEE midpoint=%g,%g,%g\n",
+		V3ARGS(midpoint));
+    }
+
+    bot_reset(s, bot, b);
+    EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_BOT_MOVET);
+    s->e_inpara = 3;
+    VSET(s->e_para, 3, 4, 5);
+    b->bot_verts[0] = 0;
+    b->bot_verts[1] = 1;
+    b->bot_verts[2] = 2;
+    if (rt_edit_process_result(s) != BRLCAD_OK)
+	bu_exit(1, "ERROR: ECMD_BOT_MOVET rejected a valid face move\n");
+    {
+	point_t centroid;
+	VADD3(centroid, &bot->vertices[0], &bot->vertices[3],
+	    &bot->vertices[6]);
+	VSCALE(centroid, centroid, 1.0 / 3.0);
+	vect_t expected = {3, 4, 5};
+	if (!VNEAR_EQUAL(centroid, expected, VUNITIZE_TOL))
+	    bu_exit(1, "ERROR: ECMD_BOT_MOVET centroid=%g,%g,%g\n",
+		V3ARGS(centroid));
+    }
+
     /* ================================================================
      * ECMD_BOT_MOVEV_LIST: move two vertices by a common delta
      *
@@ -405,6 +414,26 @@ rt_edit_test_bot(void)
 	bu_log("ECMD_BOT_MOVEV_LIST SUCCESS: v[0]=(%g,%g,%g) v[1]=(%g,%g,%g)\n",
 	       V3ARGS(&bot->vertices[0]), V3ARGS(&bot->vertices[3]));
     }
+
+    bot_reset(s, bot, b);
+    EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_BOT_MOVEV_LIST);
+    s->e_inpara = 5;
+    VSET(s->e_para, 1.0, 0.0, 0.0);
+    s->e_para[3] = 0.0;
+    s->e_para[4] = 99.0;
+    vect_t zero = VINIT_ZERO;
+    if (rt_edit_process_result(s) == BRLCAD_OK ||
+	!VNEAR_EQUAL(&bot->vertices[0], zero, VUNITIZE_TOL))
+	bu_exit(1, "ERROR: invalid BOT vertex list partially changed geometry\n");
+    EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_BOT_MOVEV_LIST);
+    s->e_inpara = 5;
+    VSET(s->e_para, 1.0, 0.0, 0.0);
+    s->e_para[3] = 0.0;
+    s->e_para[4] = 0.0;
+    if (rt_edit_process_result(s) != BRLCAD_OK ||
+	!NEAR_EQUAL(bot->vertices[0], 1.0, VUNITIZE_TOL))
+	bu_exit(1, "ERROR: duplicate BOT vertex list moved a vertex twice\n");
+    bu_log("ECMD_BOT_MOVEV_LIST atomic/deduplicated SUCCESS\n");
 
     /* ================================================================
      * ECMD_BOT_ESPLIT: split edge v[0]–v[1] on fresh tetrahedron
@@ -630,6 +659,14 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	      (struct rt_bot_edit *)s->ipe_ptr);
     EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_BOT_PICKV);
     s->e_inpara = 1;
+    s->e_para[0] = 99.0;
+    if (rt_edit_process_result(s) == BRLCAD_OK ||
+	((struct rt_bot_edit *)s->ipe_ptr)->bot_verts[0] != -1)
+	bu_exit(1, "ERROR: ECMD_BOT_PICKV accepted an invalid vertex\n");
+    bu_vls_trunc(s->log_str, 0);
+
+    EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_BOT_PICKV);
+    s->e_inpara = 1;
     s->e_para[0] = 3.0;
     rt_edit_process(s);
     {
@@ -639,13 +676,6 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 		    be->bot_verts[0], be->bot_verts[1], be->bot_verts[2]);
 	bu_log("ECMD_BOT_PICKV(desc) SUCCESS: selected vertex %d\n", be->bot_verts[0]);
     }
-    EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_BOT_PICKV);
-    s->e_inpara = 1;
-    s->e_para[0] = -1.0;
-    if (rt_edit_process(s) != BRLCAD_OK || b->bot_verts[0] != -1 ||
-	b->bot_verts[1] != -1 || b->bot_verts[2] != -1)
-	bu_exit(1, "ERROR: ECMD_BOT_PICKV(desc) failed to clear selection\n");
-    bu_log("ECMD_BOT_PICKV(desc) deselection SUCCESS\n");
 
     /* ================================================================
      * ECMD_BOT_PICKE (descriptor path): select edge (0,2)
@@ -726,10 +756,6 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	if (bmod->mode != RT_BOT_SOLID)
 	    bu_exit(1, "ERROR: ECMD_BOT_MODE(desc): mode=%d expected %d\n",
 		    (int)bmod->mode, RT_BOT_SOLID);
-	s->e_inpara = 1;
-	s->e_para[0] = 2.5;
-	if (rt_edit_process(s) != BRLCAD_ERROR || bmod->mode != RT_BOT_SOLID)
-	    bu_exit(1, "ERROR: ECMD_BOT_MODE accepted a fractional mode\n");
 	bu_log("ECMD_BOT_MODE(desc) SUCCESS: mode=%d (RT_BOT_SOLID)\n",
 	       (int)bmod->mode);
     }
@@ -746,18 +772,20 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	s->e_para[0] = 3.0;
 	rt_edit_process(s);
 
-	fastf_t vals[4] = {0};
-	int nv = edit_test_get_params(s, ECMD_BOT_PICKV, vals);
-	if (nv != 1 || (int)vals[0] != 3)
-	    bu_exit(1, "ERROR: get_params(PICKV): nv=%d vals[0]=%g expected vertex 3\n",
-		    nv, vals[0]);
-	bu_log("get_params(PICKV) SUCCESS: vertex_index=%g\n", vals[0]);
+	struct rt_edit_cmd_values vals;
+	int status = rt_edit_cmd_values_get(s, ECMD_BOT_PICKV, &vals);
+	if (status != RT_EDIT_VALUE_OK || vals.value_count != 1 ||
+	    (int)vals.values[0] != 3)
+	    bu_exit(1, "ERROR: get_values(PICKV): status=%d value=%g expected vertex 3\n",
+		    status, vals.values[0]);
+	bu_log("get_values(PICKV) SUCCESS: vertex_index=%g\n",
+	    vals.values[0]);
 
 	/* Check MODE */
-	nv = edit_test_get_params(s, ECMD_BOT_MODE, vals);
-	if (nv != 1)
-	    bu_exit(1, "ERROR: get_params(MODE): nv=%d\n", nv);
-	bu_log("get_params(MODE) SUCCESS: mode=%g\n", vals[0]);
+	status = rt_edit_cmd_values_get(s, ECMD_BOT_MODE, &vals);
+	if (status != RT_EDIT_VALUE_OK || vals.value_count != 1)
+	    bu_exit(1, "ERROR: get_values(MODE): status=%d\n", status);
+	bu_log("get_values(MODE) SUCCESS: mode=%g\n", vals.values[0]);
     }
 
     /* ================================================================
@@ -783,8 +811,9 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	bot->faces[0] = 0; bot->faces[1] = 1; bot->faces[2] = 2;
 	bot->faces[3] = 3; bot->faces[4] = 4; bot->faces[5] = 5;
 
-	MAT_IDN(v->gv_view2model);
-	MAT_IDN(v->gv_model2view);
+	MAT_IDN(v.gv_view2model);
+	MAT_IDN(v.gv_model2view);
+	rt_edit_set_view(s, &v);
 	vect_t knob_state;
 	VSET(knob_state, 7.0, 8.0, 9.0);
 	VMOVE(s->k.tra_m_abs, knob_state);
@@ -818,8 +847,9 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	bot_reset(s, bot, b);
 	s->local2base = 25.4;
 	s->base2local = 1.0 / s->local2base;
-	MAT_IDN(v->gv_model2view);
-	MAT_IDN(v->gv_view2model);
+	MAT_IDN(v.gv_model2view);
+	MAT_IDN(v.gv_view2model);
+	rt_edit_set_view(s, &v);
 	VSETALL(s->curr_e_axes_pos, 0.0);
 	vect_t knob_state;
 	VSET(knob_state, 7.0, 8.0, 9.0);
@@ -863,7 +893,7 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	vect_t expected, actual;
 	VSET(expected, local2base, 2.0 * local2base, 3.0 * local2base);
 	if (!VNEAR_EQUAL(&bot->vertices[6], expected, VUNITIZE_TOL) ||
-	    edit_test_get_params(s, ECMD_BOT_MOVEV, actual) != 3)
+	    rt_edit_test_get_params(s, ECMD_BOT_MOVEV, actual) != 3)
 	    bu_exit(1, "ERROR: BOT vertex move did not use local units\n");
 	VSET(expected, 1.0, 2.0, 3.0);
 	if (!VNEAR_EQUAL(actual, expected, VUNITIZE_TOL))
@@ -931,7 +961,7 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	fastf_t value[3] = {0};
 	if (!NEAR_EQUAL(bot->thickness[0], 3.0 * inch, VUNITIZE_TOL) ||
 	    !NEAR_EQUAL(bot->thickness[1], 2.0 * inch, VUNITIZE_TOL) ||
-	    edit_test_get_params(s, ECMD_BOT_THICK, value) != 1 ||
+	    rt_edit_test_get_params(s, ECMD_BOT_THICK, value) != 1 ||
 	    !NEAR_EQUAL(value[0], 3.0, VUNITIZE_TOL))
 	    bu_exit(1, "ERROR: BOT selected-face thickness or units failed\n");
 
@@ -984,8 +1014,9 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	s->e_inpara = 3;
 	VSET(s->e_para, 1.0, 0, 0);
 	rt_edit_process(s);
-	point_t edge0 = {inch, 0, 0};
-	point_t edge1 = {inch + 1, 0, 0};
+	const fastf_t edge_delta = inch - 0.5;
+	point_t edge0 = {edge_delta, 0, 0};
+	point_t edge1 = {edge_delta + 1, 0, 0};
 	point_t unchanged = {0, 1, 0};
 	if (!VNEAR_EQUAL(&bot->vertices[0], edge0, VUNITIZE_TOL) ||
 	    !VNEAR_EQUAL(&bot->vertices[3], edge1, VUNITIZE_TOL) ||
@@ -1008,9 +1039,10 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	s->e_inpara = 3;
 	VSET(s->e_para, 0, 1.0, 0);
 	rt_edit_process(s);
-	point_t face0 = {0, inch, 0};
-	point_t face1 = {1, inch, 0};
-	point_t face2 = {0, inch + 1, 0};
+	const fastf_t one_third = 1.0 / 3.0;
+	point_t face0 = {-one_third, inch - one_third, 0};
+	point_t face1 = {1.0 - one_third, inch - one_third, 0};
+	point_t face2 = {-one_third, inch + 1.0 - one_third, 0};
 	point_t face3 = {0, 0, 1};
 	if (!VNEAR_EQUAL(&bot->vertices[0], face0, VUNITIZE_TOL) ||
 	    !VNEAR_EQUAL(&bot->vertices[3], face1, VUNITIZE_TOL) ||

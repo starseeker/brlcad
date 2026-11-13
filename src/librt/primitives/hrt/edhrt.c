@@ -122,6 +122,9 @@ rt_edit_hrt_edit(struct rt_edit *s)
 {
     struct rt_hrt_internal *h = (struct rt_hrt_internal *)s->es_int.idb_ptr;
     RT_HRT_CK_MAGIC(h);
+    /* Handler rejection is transactional.  Validate a proposed value in a
+     * stack copy, then publish it in one assignment.  rt_edit_process_result
+     * intentionally does not clone the whole primitive on every mouse event. */
     struct rt_hrt_internal candidate = *h;
 
     switch (s->edit_flag) {
@@ -227,39 +230,41 @@ rt_edit_hrt_edit_desc(void)
     return &hrt_prim_desc;
 }
 
-static int
-hrt_current_numbers(struct rt_edit *s, int cmd_id, fastf_t *vals)
+C_DECL int
+rt_edit_hrt_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
 {
-    if (!s || !vals)
-	return 0;
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
     struct rt_hrt_internal *h = (struct rt_hrt_internal *)s->es_int.idb_ptr;
     RT_HRT_CK_MAGIC(h);
 
     switch (cmd_id) {
 	case ECMD_HRT_SET_CENTER:
-	    VSCALE(vals, h->v, s->base2local);
-	    return 3;
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    h->v[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_HRT_SET_XDIR:
-	    VSCALE(vals, h->xdir, s->base2local);
-	    return 3;
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    h->xdir[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_HRT_SET_YDIR:
-	    VSCALE(vals, h->ydir, s->base2local);
-	    return 3;
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    h->ydir[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_HRT_SET_ZDIR:
-	    VSCALE(vals, h->zdir, s->base2local);
-	    return 3;
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    h->zdir[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_HRT_SET_D:
-	    vals[0] = h->d * s->base2local;
-	    return 1;
+	    rt_edit_cmd_values_set_value(result, 0,
+		h->d * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	default:
-	    return 0;
+	    return RT_EDIT_VALUE_UNAVAILABLE;
     }
-}
-
-C_DECL int
-rt_edit_hrt_get_values(struct rt_edit *s, int cmd_id,
-	struct rt_edit_cmd_values *result)
-{
-    return edit_current_values_from_numbers(s, cmd_id, result,
-	hrt_current_numbers);
 }

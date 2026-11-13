@@ -61,12 +61,14 @@
 #  include <QSocketNotifier>
 #endif
 
+#include <QSocketNotifier>
+
 /* bu/ipc.h removed - transport handled by libpkg */
 #include "bu/str.h"
 #include "bu/env.h"
 #include "bu/app.h"
-#include "dm/fbserv.h"
-#include "dm.h"    /* MSG_FBCLOSE, NET_LONG_LEN */
+#include "bu/snooze.h"
+#include "imgstream/fbserv.h"
 #include "pkg.h"
 
 /* Portable low-level fd write (used when we only have the raw fd). */

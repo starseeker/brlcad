@@ -40,8 +40,7 @@
 #include "bu/log.h"
 #include "bu/malloc.h"
 #include "vmath.h"
-#include "dm.h"
-#include "pkg.h"
+#include "imgstream/fb_compat.h"
 
 
 static png_color_16 def_backgrd={ 0, 0, 0, 0, 0 };
@@ -190,7 +189,7 @@ int
 main(int argc, char **argv)
 {
     int y;
-    struct fb *fbp;
+    imgstream_fb_t *fbp;
     int i;
     int xout, yout, m, xstart;
     int block_writes;
@@ -304,12 +303,12 @@ main(int argc, char **argv)
 
     /* allocate memory for image */
     image = (unsigned char *)bu_calloc(1,
-	file_width*file_height*sizeof(RGBpixel), "image");
+	file_width*file_height*3, "image");
 
     /* create rows array */
     scanline = (unsigned char **)bu_calloc(file_height, sizeof(unsigned char *), "scanline");
     for (i=0; i<file_height; i++)
-	scanline[i] = image+((file_height-i-1)*file_width*sizeof(RGBpixel));
+	scanline[i] = image+((file_height-i-1)*file_width*3);
 
     png_read_image(png_p, scanline);
 
@@ -334,12 +333,13 @@ main(int argc, char **argv)
     if (scr_height == 0)
 	scr_height = file_height;
 
-    if ((fbp = fb_open(framebuffer, scr_width, scr_height)) == NULL)
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)scr_width,
+	    (size_t)scr_height)) == NULL)
 	bu_exit(12, NULL);
 
     /* Get the screen size we were given */
-    scr_width = fb_getwidth(fbp);
-    scr_height = fb_getheight(fbp);
+    scr_width = (int)imgstream_fb_width(fbp);
+    scr_height = (int)imgstream_fb_height(fbp);
 
     /* compute number of pixels to be output to screen */
     if (scr_xoff < 0) {
@@ -369,7 +369,7 @@ main(int argc, char **argv)
 	file_width <= scr_width;
 
     if (clear) {
-	fb_clear(fbp, PIXEL_NULL);
+	imgstream_fb_clear(fbp, NULL);
     }
     if (zoom) {
 	/* Zoom in, and center the display.  Use square zoom. */
@@ -378,11 +378,11 @@ main(int argc, char **argv)
 	V_MIN(newzoom, scr_height/yout);
 
 	if (inverse) {
-	    fb_view(fbp,
+	    imgstream_fb_view(fbp,
 		    scr_xoff+xout/2, scr_height-1-(scr_yoff+yout/2),
 		    newzoom, newzoom);
 	} else {
-	    fb_view(fbp,
+	    imgstream_fb_view(fbp,
 		    scr_xoff+xout/2, scr_yoff+yout/2,
 		    newzoom, newzoom);
 	}
@@ -390,14 +390,14 @@ main(int argc, char **argv)
 
     if (block_writes) {
 	/* Bottom to top with multi-line writes */
-	unsigned char *rows = image+(file_yoff*file_width*sizeof(RGBpixel));
+	unsigned char *rows = image+(file_yoff*file_width*3);
 	for (y = scr_yoff; y < scr_yoff + yout; y += multiple_lines) {
 	    int height = multiple_lines;
 	    /* Don't over-write */
 	    if (y + height > scr_yoff + yout)
 		height = scr_yoff + yout - y;
 	    if (height <= 0) break;
-	    m = fb_writerect(fbp, scr_xoff, y,
+	    m = imgstream_fb_writerect(fbp, scr_xoff, y,
 			     file_width, height,
 			     rows);
 	    if (m != file_width*height) {
@@ -406,13 +406,14 @@ main(int argc, char **argv)
 			scr_xoff, y,
 			file_width, height, m, file_width*height);
 	    }
-	    rows += height*file_width*sizeof(RGBpixel);
+	    rows += height*file_width*3;
 	}
     } else if (!inverse) {
 	/* Normal way -- bottom to top */
 	int line=file_height-file_yoff-1;
 	for (y = scr_yoff; y < scr_yoff + yout; y++) {
-	    m = fb_write(fbp, xstart, y, scanline[line--]+(3*file_xoff), xout);
+	    m = (int)imgstream_fb_write(fbp, xstart, y,
+		scanline[line--]+(3*file_xoff), (size_t)xout);
 	    if (m != xout) {
 		fprintf(stderr,
 			"png-fb: fb_write(x=%d, y=%d, npix=%d) ret=%d, s/b=%d\n",
@@ -424,7 +425,8 @@ main(int argc, char **argv)
 	/* Inverse -- top to bottom */
 	int line=file_height-file_yoff-1;
 	for (y = scr_height-1-scr_yoff; y >= scr_height-scr_yoff-yout; y--) {
-	    m = fb_write(fbp, xstart, y, scanline[line--]+(3*file_xoff), xout);
+	    m = (int)imgstream_fb_write(fbp, xstart, y,
+		scanline[line--]+(3*file_xoff), (size_t)xout);
 	    if (m != xout) {
 		fprintf(stderr,
 			"png-fb: fb_write(x=%d, y=%d, npix=%d) ret=%d, s/b=%d\n",
@@ -433,9 +435,7 @@ main(int argc, char **argv)
 	    }
 	}
     }
-    if (fb_close(fbp) < 0) {
-	fprintf(stderr, "png-fb: Warning: fb_close() error\n");
-    }
+    imgstream_fb_close(fbp);
 
     return 0;
 }

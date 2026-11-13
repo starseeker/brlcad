@@ -84,7 +84,7 @@
 #include "bu/process.h"
 #include "bu/snooze.h"
 #include "bu/vls.h"
-#include "dm/fbserv.h"
+#include "imgstream/fbserv.h"
 #include "tclcad/misc.h"  /* tclcad_listen_ipc() */
 #include "pkg.h"
 

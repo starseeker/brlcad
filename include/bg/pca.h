@@ -61,10 +61,61 @@
 #define BG_PCA_H
 
 #include "common.h"
+#include <stdint.h>
 #include "vmath.h"
 #include "bg/defines.h"
 
 __BEGIN_DECLS
+
+/**
+ * Principal-component frame for a point set.
+ *
+ * singular_values are descending and describe the spread along xaxis, yaxis,
+ * and zaxis.  They let callers reject geometries whose PCA frame is not
+ * unique enough to use as a transform-invariant identifier.
+ */
+struct bg_pca_frame {
+    point_t center;
+    vect_t xaxis;
+    vect_t yaxis;
+    vect_t zaxis;
+    fastf_t singular_values[3];
+};
+
+/**
+ * Allocation-free, mergeable PCA source moments.
+ *
+ * This is the numerically stable parallel form of Welford's accumulator.
+ * scatter stores the symmetric centered sum in xx, xy, xz, yy, yz, zz
+ * order.  Producers may update it while streaming points and merge bounded
+ * worker results without retaining the source array.
+ */
+struct bg_pca_accumulator {
+    uint64_t point_count;
+    double mean[3];
+    double scatter[6];
+};
+
+#define BG_PCA_ACCUMULATOR_INIT {0, {0.0, 0.0, 0.0}, \
+    {0.0, 0.0, 0.0, 0.0, 0.0, 0.0}}
+
+/** Initialize an empty PCA accumulator. */
+BG_EXPORT extern void bg_pca_accumulator_init(
+	struct bg_pca_accumulator *accumulator);
+
+/** Add one finite point to a PCA accumulator. */
+BG_EXPORT extern int bg_pca_accumulator_add(
+	struct bg_pca_accumulator *accumulator, const point_t point);
+
+/** Merge source moments into target without retaining either point stream. */
+BG_EXPORT extern int bg_pca_accumulator_merge(
+	struct bg_pca_accumulator *target,
+	const struct bg_pca_accumulator *source);
+
+/** Solve a principal-component frame from accumulated source moments. */
+BG_EXPORT extern int bg_pca_accumulator_frame(
+	struct bg_pca_frame *frame,
+	const struct bg_pca_accumulator *accumulator);
 
 
 /**
@@ -85,6 +136,43 @@ __BEGIN_DECLS
  *
  */
 BG_EXPORT extern int bg_pca(point_t *c, vect_t *xaxis, vect_t *yaxis, vect_t *zaxis, size_t npnts, const point_t *pnts);
+
+/**
+ * Calculate a PCA frame and its singular values.
+ *
+ * Unlike bg_pca, this API exposes the information needed to decide whether
+ * the frame is sufficiently distinct for use as a geometry cache key.
+ */
+BG_EXPORT extern int bg_pca_get_frame(struct bg_pca_frame *frame,
+	size_t npnts, const point_t *pnts);
+
+/**
+ * Calculate a deterministic right-handed PCA frame for asymmetric geometry.
+ *
+ * min_relative_axis_gap is the minimum fractional separation required between
+ * neighboring nonzero singular values.  Values less than or equal to zero use
+ * a conservative default.  The routine returns BRLCAD_ERROR for line-like or
+ * axis-symmetric point sets, where PCA cannot provide a stable orientation.
+ */
+BG_EXPORT extern int bg_pca_canonical_frame(struct bg_pca_frame *frame,
+	size_t npnts, const point_t *pnts, fastf_t min_relative_axis_gap);
+
+/**
+ * Construct the matrix mapping source points into a PCA frame's canonical
+ * coordinates.  The output follows MAT4X3PNT conventions.
+ */
+BG_EXPORT extern int bg_pca_frame_to_matrix(mat_t matrix,
+	const struct bg_pca_frame *frame);
+
+/**
+ * Construct the rigid transform mapping a point in sourceFrame's source
+ * coordinates into targetFrame's source coordinates.  Both frames must
+ * describe the same canonical geometry.  This is suitable for instancing a
+ * representative mesh under a transformed occurrence.
+ */
+BG_EXPORT extern int bg_pca_frame_relative_matrix(mat_t matrix,
+	const struct bg_pca_frame *sourceFrame,
+	const struct bg_pca_frame *targetFrame);
 
 __END_DECLS
 

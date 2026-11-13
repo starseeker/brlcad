@@ -38,4 +38,10 @@ CMakeLists.txt.user
 .clang-format
 *__pycache__*
 
+# Convenience Obol link
+/obol
 
+# TLC model-checker state and fingerprint output
+/doc/notes/states/
+/doc/notes/tla/**/states/
+/states/

@@ -127,8 +127,7 @@ static const struct rt_edit_param_desc part_hrad_params[] = {
 
 static const struct rt_edit_cmd_desc part_cmds[] = {
     {
-	ECMD_PART_H,          /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_PART_H),          /* name       */
+	ECMD_PART_H, RT_EDIT_CMD_NAME(ECMD_PART_H),          /* cmd_id       */
 	"Set H",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -138,8 +137,7 @@ static const struct rt_edit_cmd_desc part_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_PART_VRAD,       /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_PART_VRAD),       /* name       */
+	ECMD_PART_VRAD, RT_EDIT_CMD_NAME(ECMD_PART_VRAD),       /* cmd_id       */
 	"Set v radius",       /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -149,8 +147,7 @@ static const struct rt_edit_cmd_desc part_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_PART_HRAD,       /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_PART_HRAD),       /* name       */
+	ECMD_PART_HRAD, RT_EDIT_CMD_NAME(ECMD_PART_HRAD),       /* cmd_id       */
 	"Set h radius",       /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -179,7 +176,6 @@ rt_edit_part_edit_desc(void)
 {
     return &part_prim_desc;
 }
-
 
 C_DECL int
 rt_edit_part_get_values(struct rt_edit *s, int cmd_id,

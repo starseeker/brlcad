@@ -294,7 +294,6 @@ Plotter Tools
 asc-plot3
 plot3-X
 plot3-asc
-plot3-dm
 plot3-hpgl
 plot3-plot3
 plot3-ps

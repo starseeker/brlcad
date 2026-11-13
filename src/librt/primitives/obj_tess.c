@@ -28,7 +28,6 @@
 int
 rt_obj_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol)
 {
-    int id;
     const struct rt_functab *ft;
 
     if (!r || !ip)
@@ -40,11 +39,15 @@ rt_obj_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, co
     if (ttol) BG_CK_TESS_TOL(ttol);
     if (tol) BN_CK_TOL(tol);
 
-    id = ip->idb_minor_type;
-    if (id < 0)
+    if (ip->idb_minor_type < 0)
 	return -2;
 
-    ft = &OBJ[id];
+    /* idb_minor_type is a primitive ID only for BRL-CAD geometry.  Binary
+     * uniform objects retain their storage subtype there, and those numeric
+     * values overlap ordinary primitive IDs.  The importer-provided method
+     * table is the authoritative runtime type and prevents dispatching a
+     * binunif payload to an unrelated geometry tessellator. */
+    ft = ip->idb_meth;
     if (!ft)
 	return -3;
     if (!ft->ft_tessellate)

@@ -6,7 +6,7 @@
     "sortKey": 100,
     "requiresOpenDb": false,
     "requiresView": true,
-    "description": "Creates view polygons or imports sketch geometry.",
+    "description": "Create view polygons, copy view polygons, or import sketch geometry as polygons.",
     "vendor": "BRL-CAD",
     "version": "1.0",
     "apiVersion": 1

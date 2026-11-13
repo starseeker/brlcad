@@ -63,7 +63,7 @@
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "raytrace.h"
-#include "test_utils.h"
+#include "edit_test_view.h"
 #include "rt/rt_ecmds.h"
 
 
@@ -125,20 +125,10 @@ rt_edit_test_sph(void)
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size  = 73.3197;
-    v->gv_isize = 1.0 / v->gv_size;
-    v->gv_scale = 0.5 * v->gv_size;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width  = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init(&v);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
 
     /* SPH is stored as ELL internally */
@@ -158,18 +148,18 @@ rt_edit_test_sph(void)
         s->local2base = inch;
         s->base2local = 1.0 / inch;
         fastf_t values[3] = {0.0, 0.0, 0.0};
-        if (edit_test_get_params(s, desc->cmds[0].cmd_id,
+        if (rt_edit_test_get_params(s, desc->cmds[0].cmd_id,
                                              values) != 3 ||
             !NEAR_EQUAL(values[0], 1.0, VUNITIZE_TOL) ||
             !NEAR_EQUAL(values[1], 2.0, VUNITIZE_TOL) ||
             !NEAR_EQUAL(values[2], 3.0, VUNITIZE_TOL))
             bu_exit(1, "SPH center getter did not return local units\n");
-        if (edit_test_get_params(s, desc->cmds[1].cmd_id,
+        if (rt_edit_test_get_params(s, desc->cmds[1].cmd_id,
                                              values) != 1 ||
             !NEAR_EQUAL(values[0], 1.0, VUNITIZE_TOL))
             bu_exit(1, "SPH radius getter did not return local units\n");
-        if (edit_test_get_params(s, -1, values) != 0 ||
-	    edit_test_get_params(s, desc->cmds[0].cmd_id,
+        if (rt_edit_test_get_params(s, -1, values) != 0 ||
+            rt_edit_test_get_params(s, desc->cmds[0].cmd_id,
                                              NULL) >= 0)
             bu_exit(1, "SPH getter accepted invalid arguments\n");
         sph_reset(s, ell);
@@ -272,8 +262,8 @@ rt_edit_test_sph(void)
     s->edit_mode = RT_PARAMS_EDIT_SCALE;
     {
 	int xpos = 1372, ypos = 1383;
-	mousevec[X] = xpos * INV_BV;
-	mousevec[Y] = ypos * INV_BV;
+	mousevec[X] = xpos * RT_INV_VIEW;
+	mousevec[Y] = ypos * RT_INV_VIEW;
 	mousevec[Z] = 0;
     }
     bu_vls_trunc(s->log_str, 0);

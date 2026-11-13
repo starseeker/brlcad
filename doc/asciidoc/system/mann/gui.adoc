@@ -10,7 +10,7 @@ gui - Creates an instance of MGED's default Tcl/Tk graphical user interface (GUI
 
 [source]
 ----
-gui [{-config} | [b] | [c] | [g]] [{-d} | {display_string}] [{-gd} | {graphics_display_string}] [{-dt} | {graphics_type}] [{id} | {name}] [{-c} | {-h} | {-j} | {-s}]
+gui [{-config} | [b] | [c] | [g]] [{-d} | {display_string}] [{-gd} | {graphics_display_string}] [{-host} | {host_type}] [{id} | {name}] [{-c} | {-h} | {-j} | {-s}]
 ----
 
 
@@ -32,8 +32,8 @@ __-gd display_string__::
 Displays/draws the graphics window on the screen indicated by the display_string. Note that this string format is the same as the X DISPLAY environment variable.
 
 
-__-dt graphics_type__::
-Indicates the type of graphics windows to use. The possible choices are X and ogl (for machines that support OpenGL). Defaults to ogl, if supported; otherwise X.
+__-host host_type__::
+Selects the Obol host used for the GUI graphics panes. `tkobol` is the supported host.
 
 
 _-id name_::

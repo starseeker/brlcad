@@ -72,8 +72,14 @@
 #include "bu/opt.h"
 #include "bu/exit.h"
 #include "bu/malloc.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
+
+typedef unsigned char rgb_pixel[3];
+#define COPY_RGB(to, from) do { \
+    (to)[RED] = (from)[RED]; (to)[GRN] = (from)[GRN]; \
+    (to)[BLU] = (from)[BLU]; \
+} while (0)
 
 static char *framebuffer = NULL;
 
@@ -102,7 +108,7 @@ static int scr_height = 0;
 #define COMP(x)		\
     (unsigned char)(((x) * 255.0) / (1.0 - SETUP/100.0))	/* setup compensation */
 
-static RGBpixel fcc_all[8] = {
+static rgb_pixel fcc_all[8] = {
     /* 100% white */{255, 255, 255},
     /* yellow */	{191, 191, 0},
     /* cyan */	{0, 191, 191},
@@ -117,7 +123,7 @@ static RGBpixel fcc_all[8] = {
 /*
  * SMPTE bars can be useful for aligning color demodulators
  */
-static RGBpixel smpte_middle[7] = {
+static rgb_pixel smpte_middle[7] = {
     /* All bars at 75%, no blue, reversed side-to-side from eia_top */
     /* blue */	{0, 0, 191},
     /* black(red)*/	{0, 0, 0},
@@ -129,7 +135,7 @@ static RGBpixel smpte_middle[7] = {
 };
 
 
-static RGBpixel eia_top[7] = {
+static rgb_pixel eia_top[7] = {
     /* All bars at 75% */
     /* grey */ 	{191, 191, 191},
     /* yel */	{191, 191, 0},
@@ -141,7 +147,7 @@ static RGBpixel eia_top[7] = {
 };
 
 
-static RGBpixel botpart[5] = {
+static rgb_pixel botpart[5] = {
 #ifndef Floating_Initializers
     /* Most systems can't handle floating-point formulas as initializers */
     { 0,		68,		114 },		/* 40 IRE -I */
@@ -227,7 +233,7 @@ int
 main(int argc, char **argv)
 {
     int x, y;
-    struct fb *fbp;
+    imgstream_fb_t *fbp;
     unsigned char *scanline;
 
     bu_setprogname(argv[0]);
@@ -237,14 +243,15 @@ main(int argc, char **argv)
     if (!get_args(argc, argv))
 	printusage();
 
-    if ((fbp = fb_open(framebuffer, scr_width, scr_height)) == NULL)
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)scr_width,
+	    (size_t)scr_height)) == NULL)
 	bu_exit(12, NULL);
 
     /* Get the screen size we were actually given */
-    scr_width = fb_getwidth(fbp);
-    scr_height = fb_getheight(fbp);
+    scr_width = (int)imgstream_fb_width(fbp);
+    scr_height = (int)imgstream_fb_height(fbp);
     scanline = (unsigned char *)bu_calloc((size_t)scr_width,
-	sizeof(RGBpixel), "scanline");
+	sizeof(rgb_pixel), "scanline");
 
     /*
      * Operation is bottom-to-top.
@@ -252,10 +259,10 @@ main(int argc, char **argv)
     switch (mode) {
 	case M_FCC:
 	    for (x=0; x<scr_width; x++) {
-		COPYRGB(&scanline[3*x], fcc_all[x*8/scr_width]);
+		COPY_RGB(&scanline[3*x], fcc_all[x*8/scr_width]);
 	    }
 	    for (y=0; y<scr_height; y++)
-		fb_write(fbp, 0, y, scanline, scr_width);
+		imgstream_fb_write(fbp, 0, y, scanline, (size_t)scr_width);
 	    break;
 
 	case M_EIA:
@@ -264,16 +271,16 @@ main(int argc, char **argv)
 	     * then build the top line, and fill the rest of the screen.
 	     */
 	    for (x=0; x<scr_width; x++) {
-		COPYRGB(&scanline[3*x], botpart[x*5/scr_width]);
+		COPY_RGB(&scanline[3*x], botpart[x*5/scr_width]);
 	    }
 	    for (y=0; y<(scr_height/4); y++)
-		fb_write(fbp, 0, y, scanline, scr_width);
+		imgstream_fb_write(fbp, 0, y, scanline, (size_t)scr_width);
 
 	    for (x=0; x<scr_width; x++) {
-		COPYRGB(&scanline[3*x], eia_top[x*7/scr_width]);
+		COPY_RGB(&scanline[3*x], eia_top[x*7/scr_width]);
 	    }
 	    for (; y<scr_height; y++)
-		fb_write(fbp, 0, y, scanline, scr_width);
+		imgstream_fb_write(fbp, 0, y, scanline, (size_t)scr_width);
 	    break;
 
 	case M_SMPTE:
@@ -284,25 +291,25 @@ main(int argc, char **argv)
 	     * (Convert upper 1/4 of EIA -I white Q black to smpte)
 	     */
 	    for (x=0; x<scr_width; x++) {
-		COPYRGB(&scanline[3*x], botpart[x*5/scr_width]);
+		COPY_RGB(&scanline[3*x], botpart[x*5/scr_width]);
 	    }
 	    for (y=0; y<(scr_height*3/16); y++)
-		fb_write(fbp, 0, y, scanline, scr_width);
+		imgstream_fb_write(fbp, 0, y, scanline, (size_t)scr_width);
 
 	    for (x=0; x<scr_width; x++) {
-		COPYRGB(&scanline[3*x], smpte_middle[x*7/scr_width]);
+		COPY_RGB(&scanline[3*x], smpte_middle[x*7/scr_width]);
 	    }
 	    for (; y<(scr_height*4/16); y++)
-		fb_write(fbp, 0, y, scanline, scr_width);
+		imgstream_fb_write(fbp, 0, y, scanline, (size_t)scr_width);
 
 	    for (x=0; x<scr_width; x++) {
-		COPYRGB(&scanline[3*x], eia_top[x*7/scr_width]);
+		COPY_RGB(&scanline[3*x], eia_top[x*7/scr_width]);
 	    }
 	    for (; y<scr_height; y++)
-		fb_write(fbp, 0, y, scanline, scr_width);
+		imgstream_fb_write(fbp, 0, y, scanline, (size_t)scr_width);
 	    break;
     }
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
     bu_free(scanline, "scanline");
     return 0;
 }

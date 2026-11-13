@@ -154,7 +154,7 @@ typedef struct bu_structparse bu_structparse_t;
 
 #define BU_STRUCTPARSE_FUNC_NULL ((void(*)(const struct bu_structparse *, const char *, void *, const char *, void *))0)
 
-/* There are situations (such as the usage pattern in libdm)
+/* There are situations (such as a callback-only configuration surface)
  * where applications may want to associate structparse
  * functions with variables but not set up a full structparse
  * table. */

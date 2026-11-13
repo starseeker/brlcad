@@ -29,16 +29,7 @@
 
 #include "common.h"
 
-// Mac has deprecated OpenGL since 10.14
-#define GL_SILENCE_DEPRECATION 1
-
 #include <QMainWindow>
-#include <QtGlobal>
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-#include <QtWidgets/QOpenGLWidget>
-#else
-#include <QOpenGLWidget>
-#endif
 #include <QDockWidget>
 #include <QMenu>
 #include <QMenuBar>
@@ -56,7 +47,7 @@ class ISST_MainWindow : public QMainWindow
 
 	void readSettings();
 
-	isstGL *canvas;
+	isstView *canvas;
 
     private slots:
 	void open_file();
@@ -83,4 +74,3 @@ class ISST_MainWindow : public QMainWindow
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-

@@ -359,8 +359,8 @@ proc grouper { args } {
     rset vars fb 0
     rset r draw 1
 
-    bind $mged_gui($id,active_dm) <ButtonRelease-2> " winset $mged_gui($id,active_dm); dm idle; ::Grouper::do_grouper $GroupName $Boolean $ListLimit"
-    bind $mged_gui($id,active_dm) <Control-ButtonRelease-2> " winset $mged_gui($id,active_dm); dm idle; done_grouper"
+    bind $mged_gui($id,active_pane) <ButtonRelease-2> " winset $mged_gui($id,active_pane); dm idle; ::Grouper::do_grouper $GroupName $Boolean $ListLimit"
+    bind $mged_gui($id,active_pane) <Control-ButtonRelease-2> " winset $mged_gui($id,active_pane); dm idle; done_grouper"
 
     # highlight in yellow current group
     if {[exists $GroupName]} {
@@ -392,8 +392,8 @@ proc done_grouper {} {
     set mged_gui($id,mouse_behavior) d
     set_mouse_behavior $id
 
-    bind $mged_gui($id,active_dm) <Control-ButtonRelease-2> ""
-    bind $mged_gui($id,active_dm) <ButtonRelease-2> ""
+    bind $mged_gui($id,active_pane) <Control-ButtonRelease-2> ""
+    bind $mged_gui($id,active_pane) <ButtonRelease-2> ""
 
     # remove yellow highlights from the display
     if {[exists $::Grouper::GroupNameGlobal]} {

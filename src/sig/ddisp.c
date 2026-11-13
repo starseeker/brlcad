@@ -35,10 +35,11 @@
 #include "bu/app.h"
 #include "bu/malloc.h"
 #include "bu/color.h"
+#include "bu/getopt.h"
 #include "bu/str.h"
 #include "bu/exit.h"
 #include "bu/snooze.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 #define VERT 1
@@ -63,13 +64,13 @@ parse_width(const char *arg)
 
 
 static void
-lineout(struct fb *fbp, double *dat, int n)
+lineout(imgstream_fb_t *fbp, double *dat, int n)
 {
     static int y = 0;
     int i, value;
-    RGBpixel lbuf[1024*4];
+    unsigned char lbuf[1024*4][3];
 
-    if (n > fb_getwidth(fbp)) n = fb_getwidth(fbp);
+    if (n > (int)imgstream_fb_width(fbp)) n = (int)imgstream_fb_width(fbp);
 
     for (i = 0; i < n; i++) {
 	/* Magnitude version */
@@ -78,10 +79,10 @@ lineout(struct fb *fbp, double *dat, int n)
 	else if (value > 255) value = 255;
 	lbuf[i][RED] = lbuf[i][GRN] = lbuf[i][BLU] = value;
     }
-    fb_write(fbp, 0, y, (unsigned char *)lbuf, n);
+    imgstream_fb_write(fbp, 0, y, (unsigned char *)lbuf, (size_t)n);
 
     /* Next screen position */
-    y = (y + 1) % fb_getheight(fbp);
+    y = (y + 1) % (int)imgstream_fb_height(fbp);
 }
 
 
@@ -90,24 +91,24 @@ lineout(struct fb *fbp, double *dat, int n)
  * +/- 1.0 in, becomes +/- 128 from center Y.
  */
 static void
-disp_inten(struct fb *fbp, double *buf, int size)
+disp_inten(imgstream_fb_t *fbp, double *buf, int size)
 {
     int x, y;
-    RGBpixel color;
+    unsigned char color[3];
 
 /* color.red = color.green = color.blue = 255;*/
 
-    if (size > fb_getwidth(fbp)) size = fb_getwidth(fbp);
+    if (size > (int)imgstream_fb_width(fbp)) size = (int)imgstream_fb_width(fbp);
 
     for (x = 0; x < size; x++) {
 	y = buf[x] * 128;
 #ifdef OVERLAY
-	fb_read(fbp, x, y+255, color, 1);
+	imgstream_fb_read(fbp, x, y+255, color, 1);
 #else
 	color[RED] = color[BLU] = 0;
 #endif
 	color[GRN] = 255;
-	fb_write(fbp, x, y+255, color, 1);
+	imgstream_fb_write(fbp, x, y+255, color, 1);
     }
 }
 
@@ -117,14 +118,14 @@ disp_inten(struct fb *fbp, double *buf, int size)
  * +/- 1.0 in, becomes +/- 128 from center Y.
  */
 static void
-disp_bars(struct fb *fbp, double *buf, int size)
+disp_bars(imgstream_fb_t *fbp, double *buf, int size)
 {
     int x, y;
-    RGBpixel color;
+    unsigned char color[3];
 
 /* color.red = color.green = color.blue = 255;*/
 
-    if (size > fb_getwidth(fbp)) size = fb_getwidth(fbp);
+    if (size > (int)imgstream_fb_width(fbp)) size = (int)imgstream_fb_width(fbp);
 
     for (x = 0; x < size; x++) {
 	if (buf[x] > 1.0) {
@@ -135,19 +136,19 @@ disp_bars(struct fb *fbp, double *buf, int size)
 	    y = buf[x] * 128;
 	}
 #ifdef OVERLAY
-	fb_read(fbp, x, y+255, color, 1);
+	imgstream_fb_read(fbp, x, y+255, color, 1);
 #else
 	color[RED] = color[BLU] = 0;
 #endif
 	color[GRN] = 255;
 	if (y > 0) {
 	    while (y >= 0) {
-		fb_write(fbp, x, y+255, color, 1);
+		imgstream_fb_write(fbp, x, y+255, color, 1);
 		y--;
 	    }
 	} else {
 	    while (y <= 0) {
-		fb_write(fbp, x, y+255, color, 1);
+		imgstream_fb_write(fbp, x, y+255, color, 1);
 		y++;
 	    }
 	}
@@ -158,9 +159,9 @@ disp_bars(struct fb *fbp, double *buf, int size)
 int
 main(int argc, char **argv)
 {
-    static const char usage[] = "Usage: ddisp [-v -b -p -c -H] [width (512)] < inputfile\n";
+    static const char usage[] = "Usage: ddisp [-F framebuffer] [-v -b -p -c] [width] < inputfile\n";
 
-    struct fb *fbp = NULL;
+    imgstream_fb_t *fbp = NULL;
     double buf[BU_PAGE_SIZE];
 
     int n, L;
@@ -168,6 +169,8 @@ main(int argc, char **argv)
     int pause_time = 0;
     int mode = 0;
     int fbsize = DEFAULT_WIDTH;
+    const char *framebuffer = NULL;
+    int c;
 
     bu_setprogname(argv[0]);
 
@@ -175,43 +178,45 @@ main(int argc, char **argv)
 	bu_exit(1, "%s", usage);
     }
 
-    while (argc > 1 && argv[1][0] == '-') {
-	if (BU_STR_EQUAL(argv[1], "-v")) {
+
+    while ((c = bu_getopt(argc, argv, "F:vbpcHh?")) != -1) {
+	if (c == 'F') {
+	    framebuffer = bu_optarg;
+	} else if (c == 'v') {
 	    mode = VERT;
 	    pause_time = 0;
 	    Clear = 0;
-	} else if (BU_STR_EQUAL(argv[1], "-b")) {
+	} else if (c == 'b') {
 	    mode = BARS;
-	} else if (BU_STR_EQUAL(argv[1], "-p")) {
+	} else if (c == 'p') {
 	    pause_time = 3;
-	} else if (BU_STR_EQUAL(argv[1], "-c")) {
+	} else if (c == 'c') {
 	    Clear++;
-	} else if (BU_STR_EQUAL(argv[1], "-H")) {
-	    bu_exit(1, "%s", usage);
 	} else {
-	    if (! BU_STR_EQUAL(argv[1], "-h") && ! BU_STR_EQUAL(argv[1], "-?"))
-		fprintf(stderr, "Illegal option -- %s\n", argv[1]);
 	    bu_exit(1, "%s", usage);
 	}
-	argc--;
-	argv++;
     }
 
-    if (argc > 2)
+    if (bu_optind < argc) {
+	L = parse_width(argv[bu_optind++]);
+    } else {
+	L = DEFAULT_WIDTH;
+    }
+    if (bu_optind < argc)
 	bu_exit(1, "%s", usage);
-    L = argc > 1 ? parse_width(argv[1]) : DEFAULT_WIDTH;
 
-    if ((fbp = fb_open(NULL, fbsize, fbsize)) == FB_NULL) {
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)fbsize,
+				 (size_t)fbsize)) == NULL) {
 	bu_exit(2, "Unable to open framebuffer\n");
     }
 
     while ((n = fread(buf, sizeof(*buf), L, stdin)) > 0) {
 	/* XXX - width hack */
-	if (n > fb_getwidth(fbp))
-	    n = fb_getwidth(fbp);
+	if (n > (int)imgstream_fb_width(fbp))
+	    n = (int)imgstream_fb_width(fbp);
 
 	if (Clear)
-	    fb_clear(fbp, PIXEL_NULL);
+	    imgstream_fb_clear(fbp, NULL);
 	if (mode == VERT)
 	    disp_inten(fbp, buf, n);
 	else if (mode == BARS)
@@ -221,7 +226,7 @@ main(int argc, char **argv)
 	if (pause_time)
 	    bu_snooze(BU_SEC2USEC(pause_time));
     }
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
 
     return 0;
 }

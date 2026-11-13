@@ -26,23 +26,357 @@
 #include "common.h"
 
 #include <stdio.h>
+#include <string.h>
 #include <bu.h>
-#include <bv.h>
+#include "bg/plot3.h"
 #include <ged.h>
+#include <ged/draw.h>
+#include <ged/display.h>
+#include "wdb.h"
 
-static struct bv_scene_obj *
-find_overlap_plot(struct ged *gedp)
+struct gqa_segment_writer {
+    FILE *fp;
+    size_t count;
+};
+
+static int
+write_gqa_segment(const point_t a, const point_t b, void *data)
 {
-    const char *overlap_plot = "OVERLAPSffff00";
-    struct display_list *gdlp;
+    struct gqa_segment_writer *writer = (struct gqa_segment_writer *)data;
+    if (writer->fp)
+	pdv_3line(writer->fp, a, b);
+    writer->count++;
+    return 1;
+}
 
-    for (BU_LIST_FOR(gdlp, display_list, (struct bu_list *)ged_dl(gedp))) {
-	if (BU_STR_EQUAL(bu_vls_cstr(&gdlp->dl_path), overlap_plot))
-	    return BU_LIST_NEXT(bv_scene_obj, &gdlp->dl_head_scene_obj);
+static void
+require_command_result_metadata(struct ged_view_context *view_ctx, const char *feature_name,
+	const char *key, const char *value)
+{
+    size_t count = ged_view_feature_metadata_count(view_ctx,
+	    feature_name);
+    size_t i;
+    for (i = 0; i < count; i++) {
+	struct bu_vls found_key = BU_VLS_INIT_ZERO;
+	struct bu_vls found_value = BU_VLS_INIT_ZERO;
+	int copied = ged_view_feature_metadata_copy(view_ctx,
+		feature_name, i, &found_key, &found_value);
+	int matched = copied &&
+	    BU_STR_EQUAL(bu_vls_cstr(&found_key), key) &&
+	    BU_STR_EQUAL(bu_vls_cstr(&found_value), value);
+	bu_vls_free(&found_key);
+	bu_vls_free(&found_value);
+	if (matched)
+	    return;
+    }
+    bu_exit(EXIT_FAILURE, "%s metadata %s=%s was not published.\n",
+	    feature_name, key, value);
+}
+
+static void
+require_command_result_primitive_metadata(struct ged_view_context *view_ctx,
+	const char *feature_name,
+	int primitive,
+	const char *key,
+	const char *value)
+{
+    size_t count = ged_view_feature_primitive_metadata_count(
+	view_ctx, feature_name, primitive);
+    size_t i;
+    for (i = 0; i < count; i++) {
+	struct bu_vls found_key = BU_VLS_INIT_ZERO;
+	struct bu_vls found_value = BU_VLS_INIT_ZERO;
+	int copied = ged_view_feature_primitive_metadata_copy(
+	    view_ctx, feature_name, primitive, i, &found_key, &found_value);
+	int matched = copied &&
+	    BU_STR_EQUAL(bu_vls_cstr(&found_key), key) &&
+	    BU_STR_EQUAL(bu_vls_cstr(&found_value), value);
+	bu_vls_free(&found_key);
+	bu_vls_free(&found_value);
+	if (matched)
+	    return;
+    }
+    bu_exit(EXIT_FAILURE,
+	"%s primitive %d metadata %s=%s was not published.\n",
+	feature_name, primitive, key, value);
+}
+
+static void
+require_command_result_label(struct ged_view_context *view_ctx, const char *feature_name,
+	const char *text_fragment)
+{
+    struct ged_view_feature_summary feature_summary =
+	ged_view_feature_summary_default();
+    if (!ged_view_feature_get_summary(view_ctx, feature_name,
+	    &feature_summary) ||
+	    !feature_summary.exists ||
+	    !feature_summary.is_overlay ||
+	    !feature_summary.is_label ||
+	    !feature_summary.is_command_result ||
+	    !feature_summary.metadata_count)
+	bu_exit(EXIT_FAILURE,
+		"%s was not published as a command-result label.\n",
+		feature_name);
+
+    if (ged_view_feature_label_count(view_ctx, feature_name) != 1)
+	bu_exit(EXIT_FAILURE,
+		"%s did not publish exactly one label.\n",
+		feature_name);
+
+    struct bu_vls text = BU_VLS_INIT_ZERO;
+    point_t point = VINIT_ZERO;
+    unsigned char rgb[3] = {0, 0, 0};
+    if (!ged_view_feature_label_copy(view_ctx, feature_name, 0,
+	    &text, point, rgb)) {
+	bu_vls_free(&text);
+	bu_exit(EXIT_FAILURE,
+		"%s label could not be read back.\n",
+		feature_name);
+    }
+    if (!strstr(bu_vls_cstr(&text), text_fragment) ||
+	    rgb[0] != 255 || rgb[1] != 255 || rgb[2] != 0) {
+	bu_vls_free(&text);
+	bu_exit(EXIT_FAILURE,
+		"%s label content was not preserved.\n",
+		feature_name);
+    }
+    bu_vls_free(&text);
+}
+
+static void
+require_command_result_feature(struct ged_view_context *view_ctx, const char *feature_name)
+{
+    struct ged_view_feature_summary feature_summary =
+	ged_view_feature_summary_default();
+    if (!ged_view_feature_get_summary(view_ctx, feature_name,
+	    &feature_summary) ||
+	    !feature_summary.exists ||
+	    !feature_summary.is_overlay ||
+	    !feature_summary.is_command_result ||
+	    !feature_summary.metadata_count)
+	bu_exit(EXIT_FAILURE,
+		"%s was not published as command-result scene content.\n",
+		feature_name);
+}
+
+static size_t
+count_gqa_feature_segments(struct ged_view_context *view_ctx, const char *feature_name,
+	const char *plot_fname, const int rgb[3], int write_plot)
+{
+    struct gqa_segment_writer writer = {NULL, 0};
+    point_t *points = NULL;
+    size_t point_count = 0;
+    if (!ged_view_feature_points_copy(view_ctx, feature_name, &points,
+	    &point_count))
+	return 0;
+    if (write_plot && point_count) {
+	writer.fp = fopen(plot_fname, "wb");
+	if (!writer.fp) {
+	    bu_free(points, "GQA feature points");
+	    bu_exit(EXIT_FAILURE, "Could not open %s for writing\n",
+		    plot_fname);
+	}
+	pl_color(writer.fp, rgb ? rgb[0] : 255, rgb ? rgb[1] : 255,
+		rgb ? rgb[2] : 255);
+    }
+    point_t previous = VINIT_ZERO;
+    int have_previous = 0;
+    for (size_t i = 0; i < point_count; i++) {
+	int command = GED_DRAW_VIEW_LINE_MOVE;
+	if (!ged_view_feature_line_command_at(view_ctx, feature_name, i,
+		&command))
+	    continue;
+	if (command == GED_DRAW_VIEW_LINE_DRAW && have_previous)
+	    (void)write_gqa_segment(previous, points[i], &writer);
+	VMOVE(previous, points[i]);
+	have_previous = 1;
+    }
+    bu_free(points, "GQA feature points");
+    if (writer.fp)
+	fclose(writer.fp);
+    return writer.count;
+}
+
+static int
+make_gqa_comb(struct rt_wdb *wdbp, const char *name, const char **members,
+	const int *ops, size_t member_count, int region, int air, int material)
+{
+    struct wmember wm;
+    size_t i;
+
+    BU_LIST_INIT(&wm.l);
+    for (i = 0; i < member_count; i++) {
+	if (!mk_addmember(members[i], &wm.l, NULL, ops[i]))
+	    return 0;
+    }
+    return mk_comb(wdbp, name, &wm.l, region, NULL, NULL, NULL,
+	    0, air, material, 0, 0, 0, 0) == 0;
+}
+
+static struct ged *
+open_gqa_result_fixture(void)
+{
+    char tmppath[MAXPATHLEN] = {0};
+    FILE *fp = bu_temp_file(tmppath, MAXPATHLEN);
+    if (!fp)
+	return NULL;
+    fclose(fp);
+
+    struct rt_wdb *wdbp = wdb_fopen(tmppath);
+    if (!wdbp)
+	return NULL;
+
+    point_t box1_min = {0.0, 0.0, 0.0};
+    point_t box1_max = {1000.0, 1000.0, 1000.0};
+    point_t box2_min = {100.0, 100.0, 100.0};
+    point_t box2_max = {900.0, 900.0, 900.0};
+    point_t box3_min = {100.0, 100.0, 100.0};
+    point_t box3_max = {1000.0, 900.0, 900.0};
+    point_t box4_min = {50.0, 50.0, 50.0};
+    point_t box4_max = {950.0, 500.0, 950.0};
+
+    int ok = mk_rpp(wdbp, "box1.s", box1_min, box1_max) == 0 &&
+	mk_rpp(wdbp, "box2.s", box2_min, box2_max) == 0 &&
+	mk_rpp(wdbp, "box3.s", box3_min, box3_max) == 0 &&
+	mk_rpp(wdbp, "box4.s", box4_min, box4_max) == 0;
+
+    if (ok) {
+	const char *members[] = {"box1.s", "box2.s"};
+	const int ops[] = {WMOP_UNION, WMOP_SUBTRACT};
+	ok = make_gqa_comb(wdbp, "closed_box.r", members, ops, 2, 1, 0,
+		5);
+    }
+    if (ok) {
+	const char *members[] = {"box1.s", "box3.s"};
+	const int ops[] = {WMOP_UNION, WMOP_SUBTRACT};
+	ok = make_gqa_comb(wdbp, "open_box.r", members, ops, 2, 1, 0,
+		5);
+    }
+    if (ok) {
+	const char *members[] = {"box3.s"};
+	const int ops[] = {WMOP_UNION};
+	ok = make_gqa_comb(wdbp, "exposed_air.r", members, ops, 1, 1, 2,
+		2);
+    }
+    if (ok) {
+	const char *members[] = {"exposed_air.r", "open_box.r"};
+	const int ops[] = {WMOP_UNION, WMOP_UNION};
+	ok = make_gqa_comb(wdbp, "exposed_air.g", members, ops, 2, 0, 0,
+		0);
+    }
+    if (ok) {
+	const char *members[] = {"box2.s", "box4.s"};
+	const int ops[] = {WMOP_UNION, WMOP_UNION};
+	ok = make_gqa_comb(wdbp, "adj_air1.r", members, ops, 2, 1, 3, 2);
+    }
+    if (ok) {
+	const char *members[] = {"box2.s", "box4.s"};
+	const int ops[] = {WMOP_UNION, WMOP_SUBTRACT};
+	ok = make_gqa_comb(wdbp, "adj_air2.r", members, ops, 2, 1, 4, 2);
+    }
+    if (ok) {
+	const char *members[] = {"closed_box.r", "adj_air1.r",
+	    "adj_air2.r"};
+	const int ops[] = {WMOP_UNION, WMOP_UNION, WMOP_UNION};
+	ok = make_gqa_comb(wdbp, "adj_air.g", members, ops, 3, 0, 0, 0);
+    }
+    if (ok) {
+	const char *members[] = {"closed_box.r", "adj_air2.r"};
+	const int ops[] = {WMOP_UNION, WMOP_UNION};
+	ok = make_gqa_comb(wdbp, "gap.g", members, ops, 2, 0, 0, 0);
     }
 
-    return NULL;
+    wdb_close(wdbp);
+    if (!ok) {
+	bu_file_delete(tmppath);
+	return NULL;
+    }
+
+    return ged_open("db", tmppath, 1);
 }
+
+static void
+run_gqa_result_case(struct ged *gedp, const char *analysis_flag,
+	const char *object_name, const char *feature_name,
+	const char *result_kind, const char *schema, const char *severity)
+{
+    char grid_arg[] = "250mm-50mm";
+    const char *gqa[] = {
+	"gqa", "-P", "1", analysis_flag, "-g", grid_arg,
+	object_name, NULL
+    };
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    if (ged_exec_gqa(gedp, 7, gqa) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "GQA %s failed: %s\n", feature_name,
+		bu_vls_cstr(gedp->ged_result_str));
+
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	bu_exit(EXIT_FAILURE, "No active GED view context available.\n");
+    require_command_result_feature(view_ctx, feature_name);
+    require_command_result_metadata(view_ctx, feature_name, "result.owner",
+	    "gqa");
+    require_command_result_metadata(view_ctx, feature_name, "result.kind",
+	    result_kind);
+    require_command_result_metadata(view_ctx, feature_name, "result.schema",
+	    schema);
+    require_command_result_metadata(view_ctx, feature_name,
+	    "result.severity", severity);
+    if (!count_gqa_feature_segments(view_ctx, feature_name, NULL, NULL, 0))
+	bu_exit(EXIT_FAILURE, "No GQA segments exported for %s.\n",
+		feature_name);
+    require_command_result_primitive_metadata(view_ctx, feature_name, 0,
+	"result.schema", schema);
+    require_command_result_primitive_metadata(view_ctx, feature_name, 0,
+	"result.severity", severity);
+}
+
+static void
+run_gqa_volume_result_case(struct ged *gedp)
+{
+    char grid_arg[] = "250mm-50mm";
+    char prefix[MAXPATHLEN] = {0};
+    FILE *fp = bu_temp_file(prefix, MAXPATHLEN);
+    if (!fp)
+	bu_exit(EXIT_FAILURE, "Could not create GQA volume plot prefix.\n");
+    fclose(fp);
+    bu_file_delete(prefix);
+
+    const char *gqa[] = {
+	"gqa", "-P", "1", "-Av", "-g", grid_arg, "-p", prefix,
+	"closed_box.r", NULL
+    };
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    if (ged_exec_gqa(gedp, 9, gqa) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "GQA volume samples failed: %s\n",
+		bu_vls_cstr(gedp->ged_result_str));
+
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	bu_exit(EXIT_FAILURE, "No active GED view context available.\n");
+
+    require_command_result_feature(view_ctx, "gqa::volume-samples");
+    require_command_result_metadata(view_ctx, "gqa::volume-samples",
+	    "result.owner", "gqa");
+    require_command_result_metadata(view_ctx, "gqa::volume-samples",
+	    "result.kind", "volume-sample");
+    require_command_result_metadata(view_ctx, "gqa::volume-samples",
+	    "result.schema", "brlcad.gqa.volume-sample.v1");
+    require_command_result_metadata(view_ctx, "gqa::volume-samples",
+	    "result.severity", "info");
+    if (!count_gqa_feature_segments(view_ctx, "gqa::volume-samples", NULL,
+	    NULL, 0))
+	bu_exit(EXIT_FAILURE,
+		"No GQA volume sample segments exported.\n");
+    require_command_result_primitive_metadata(view_ctx,
+	"gqa::volume-samples", 0, "result.severity", "info");
+
+    struct bu_vls plot_file = BU_VLS_INIT_ZERO;
+    bu_vls_printf(&plot_file, "%svolume.plot3", prefix);
+    bu_file_delete(bu_vls_cstr(&plot_file));
+    bu_vls_free(&plot_file);
+}
+
 
 int
 main(int ac, char *av[]) {
@@ -50,6 +384,11 @@ main(int ac, char *av[]) {
     const char *gqa_plot_fname = "gqa_ovlps.plot3";
     const char *gqa[6] = {"gqa", "-Aop", "-g", "800", "ovlp", NULL};
     const char *gqa_clear[6] = {"gqa", "-Aop", "-g", "800", "r1", NULL};
+    char check_grid_arg[] = "250mm-50mm";
+    const char *check[8] = {
+	"check", "overlaps", "-P", "1", "-o", "-g", check_grid_arg, "ovlp"
+    };
+    const int overlap_rgb[3] = {255, 255, 0};
 
     bu_setprogname(av[0]);
 
@@ -63,36 +402,86 @@ main(int ac, char *av[]) {
     }
 
     gedp = ged_open("db", av[1], 1);
+    if (!ged_scene_available(gedp))
+	bu_exit(EXIT_FAILURE, "Could not initialize draw state for GQA test.\n");
     if (ged_exec_gqa(gedp, 5, gqa) != BRLCAD_OK)
 	bu_exit(EXIT_FAILURE, "GQA overlap analysis failed: %s\n", bu_vls_cstr(gedp->ged_result_str));
     printf("%s\n", bu_vls_cstr(gedp->ged_result_str));
 
-    // Example of programmatically extracting the resulting plot data (assuming
-    // we're only after ffff00 colored data)
-    //
-    // (TODO - this will need to be redone if/when the new drawing setup takes
-    // over - there (at least for now) we would do a bv_find_obj on the view
-    // with the gqa overlap view object's name (gqa:overlaps) to find the
-    // bv_scene_obj, and then iterate over that object's child objects to get
-    // the different colored vlists...)
-    struct bv_scene_obj *vdata = find_overlap_plot(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	bu_exit(EXIT_FAILURE, "No active GED view context available.\n");
 
-    if (vdata) {
-	FILE *fp;
-	fp = fopen(gqa_plot_fname, "wb");
-	if (!fp)
-	    bu_exit(EXIT_FAILURE, "Could not open %s for writing\n", gqa_plot_fname);
+    require_command_result_feature(view_ctx, "gqa::overlaps");
+    require_command_result_metadata(view_ctx, "gqa::overlaps",
+	    "result.owner", "gqa");
+    require_command_result_metadata(view_ctx, "gqa::overlaps",
+	    "result.kind", "overlap");
+    require_command_result_metadata(view_ctx, "gqa::overlaps",
+	    "result.schema", "brlcad.gqa.overlap.v1");
+    require_command_result_metadata(view_ctx, "gqa::overlaps",
+	    "result.severity", "error");
+    require_command_result_label(view_ctx, "gqa::overlaps::summary",
+	    "gqa overlaps:");
+    require_command_result_metadata(view_ctx, "gqa::overlaps::summary",
+	    "result.kind", "overlap-summary");
+    size_t overlap_count = count_gqa_feature_segments(view_ctx,
+	    "gqa::overlaps", gqa_plot_fname, overlap_rgb, 1);
+
+    if (overlap_count) {
 	printf("Writing plot data to %s for inspection with overlay command\n", gqa_plot_fname);
-	bv_vlist_to_uplot(fp, &vdata->s_vlist);
-	fclose(fp);
     } else {
 	bu_exit(EXIT_FAILURE, "No GQA plotting data found.\n");
     }
+    require_command_result_primitive_metadata(view_ctx, "gqa::overlaps", 0,
+	"result.severity", "error");
+
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    if (ged_exec(gedp, 8, check) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "check overlaps failed: %s\n",
+		bu_vls_cstr(gedp->ged_result_str));
+    require_command_result_feature(view_ctx, "check::overlaps");
+    require_command_result_metadata(view_ctx, "check::overlaps",
+	    "result.owner", "check");
+    require_command_result_metadata(view_ctx, "check::overlaps",
+	    "result.kind", "overlap");
+    require_command_result_metadata(view_ctx, "check::overlaps",
+	    "result.schema", "brlcad.check.overlap.v1");
+    require_command_result_metadata(view_ctx, "check::overlaps",
+	    "result.severity", "error");
+    require_command_result_label(view_ctx, "check::overlaps::summary",
+	    "check overlaps:");
+    require_command_result_metadata(view_ctx, "check::overlaps::summary",
+	    "result.kind", "overlap-summary");
+    if (!count_gqa_feature_segments(view_ctx, "check::overlaps", NULL,
+	    NULL, 0))
+	bu_exit(EXIT_FAILURE, "No check overlap segments exported.\n");
+    require_command_result_primitive_metadata(view_ctx, "check::overlaps", 0,
+	"result.schema", "brlcad.check.overlap.v1");
+    require_command_result_primitive_metadata(view_ctx, "check::overlaps", 0,
+	"result.severity", "error");
 
     if (ged_exec_gqa(gedp, 5, gqa_clear) != BRLCAD_OK)
 	bu_exit(EXIT_FAILURE, "GQA no-overlap analysis failed: %s\n", bu_vls_cstr(gedp->ged_result_str));
-    if (find_overlap_plot(gedp))
-	bu_exit(EXIT_FAILURE, "GQA left stale overlap plotting data in the display list.\n");
+    if (count_gqa_feature_segments(view_ctx, "gqa::overlaps", NULL, NULL, 0))
+	bu_exit(EXIT_FAILURE, "GQA left stale overlap segments in the retained scene.\n");
+
+    ged_close(gedp);
+
+    gedp = open_gqa_result_fixture();
+    if (!gedp)
+	bu_exit(EXIT_FAILURE, "Could not create GQA result fixture database.\n");
+    if (!ged_scene_available(gedp))
+	bu_exit(EXIT_FAILURE, "Could not initialize draw state for the GQA result fixture.\n");
+
+    run_gqa_result_case(gedp, "-Ag", "gap.g", "gqa::gaps", "gap",
+	"brlcad.gqa.gap.v1", "warning");
+    run_gqa_result_case(gedp, "-Aa", "adj_air.g", "gqa::adjacent-air",
+	    "adjacent-air", "brlcad.gqa.adjacent-air.v1", "warning");
+    run_gqa_result_case(gedp, "-Ae", "exposed_air.g", "gqa::exposed-air",
+	    "exposed-air", "brlcad.gqa.exposed-air.v1", "warning");
+    run_gqa_volume_result_case(gedp);
+
 
     ged_close(gedp);
 

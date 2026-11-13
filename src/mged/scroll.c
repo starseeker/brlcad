@@ -31,9 +31,11 @@
 
 #include "vmath.h"
 #include "ged.h"
-#include "dm/faceplate.h"
+#include "ged/view.h"
+#include "rt/view.h"
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
+#include "./hud.h"
 
 #include "./sedit.h"
 
@@ -99,13 +101,17 @@ struct scroll_item sl_adc_menu[] = {
 void
 set_scroll(struct mged_state *s)
 {
+    struct bv_adc_state adc = {0};
+
+    (void)mged_display_adc_state_get(s->mged_curr_display, &adc);
+
     if (mged_variables->mv_sliders) {
 	if (mged_variables->mv_rateknobs)
 	    scroll_array[0] = sl_menu;
 	else
 	    scroll_array[0] = sl_abs_menu;
 
-	if (adc_state->adc_draw)
+	if (adc.draw)
 	    scroll_array[1] = sl_adc_menu;
 	else
 	    scroll_array[1] = NULL;
@@ -184,6 +190,7 @@ sl_atol(struct scroll_item *mptr, double val)
 {
     struct mged_state *s = MGED_STATE;
     struct bu_vls vls = BU_VLS_INIT_ZERO;
+    fastf_t view_scale;
 
     if (s->dbip == DBI_NULL)
 	return;
@@ -196,7 +203,9 @@ sl_atol(struct scroll_item *mptr, double val)
 	val = 0.0;
     }
 
-    bu_vls_printf(&vls, "knob %s %f", mptr->scroll_cmd, val*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local);
+    struct bv *view = mged_view_context_view(view_state->vs_gvp);
+    view_scale = bv_scale_get(view);
+    bu_vls_printf(&vls, "knob %s %f", mptr->scroll_cmd, val * view_scale * s->dbip->dbi_base2local);
     Tcl_Eval(s->interp, bu_vls_addr(&vls));
     bu_vls_free(&vls);
 }
@@ -276,7 +285,7 @@ sl_itol(struct scroll_item *mptr, double val)
 	val = 0.0;
     }
 
-    bu_vls_printf(&vls, "knob %s %f", mptr->scroll_cmd, val*BV_MAX);
+    bu_vls_printf(&vls, "knob %s %f", mptr->scroll_cmd, val*RT_VIEW_MAX);
     Tcl_Eval(s->interp, bu_vls_addr(&vls));
     bu_vls_free(&vls);
 }
@@ -290,23 +299,28 @@ sl_itol(struct scroll_item *mptr, double val)
 
 /* Handle second (ADC) menu display. */
 static void
-second_menu_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
+second_menu_scroll_display(fastf_t *f, struct scroll_item *mptr,
+	struct mged_state *s, struct mged_hud_builder *hud)
 {
+    struct bv_adc_state adc = {0};
+
+    (void)mged_display_adc_state_get(s->mged_curr_display, &adc);
+
     switch (mptr->scroll_val) {
 	case 0:
-	    *f = (double)adc_state->adc_dv_x * INV_BV;
+	    *f = (double)adc.dv_x * RT_INV_VIEW;
 	    break;
 	case 1:
-	    *f = (double)adc_state->adc_dv_y * INV_BV;
+	    *f = (double)adc.dv_y * RT_INV_VIEW;
 	    break;
 	case 2:
-	    *f = (double)adc_state->adc_dv_a1 * INV_BV;
+	    *f = (double)adc.dv_a1 * RT_INV_VIEW;
 	    break;
 	case 3:
-	    *f = (double)adc_state->adc_dv_a2 * INV_BV;
+	    *f = (double)adc.dv_a2 * RT_INV_VIEW;
 	    break;
 	case 4:
-	    *f = (double)adc_state->adc_dv_dist * INV_BV;
+	    *f = (double)adc.dv_dist * RT_INV_VIEW;
 	    break;
 	default:
 	    Tcl_AppendResult(s->interp,
@@ -314,13 +328,15 @@ second_menu_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_sta
 	    return;
     }
 
+    mged_hud_color_set(hud, color_scheme->cs_slider_text2);
 }
 
 /* Handle edit mode values for a given scroll item.
  * Returns 1 if handled (an edit mode applicable), 0 otherwise.
  */
 static int
-edit_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
+edit_scroll_display(fastf_t *f, struct scroll_item *mptr,
+	struct mged_state *s, struct mged_hud_builder *hud)
 {
     /* Determine which edit transform (if any) is active for this scroll_val */
     switch (mptr->scroll_val) {
@@ -389,12 +405,14 @@ edit_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
 	    return 0;
     }
 
+    mged_hud_color_set(hud, color_scheme->cs_slider_text1);
     return 1;
 }
 
 /* Handle non-edit (view) values (first menu only). */
 static void
-view_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
+view_scroll_display(fastf_t *f, struct scroll_item *mptr,
+	struct mged_state *s, struct mged_hud_builder *hud)
 {
     switch (mptr->scroll_val) {
 	case 0: /* X translation */
@@ -402,22 +420,22 @@ view_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
 	case 2: /* Z translation */
 	    if (mged_variables->mv_rateknobs) {
 		if (mged_variables->mv_coords == 'm')
-		    *f = view_state->k.tra_m[mptr->scroll_val];
+		    *f = view_state->k.trans_model[mptr->scroll_val];
 		else
-		    *f = view_state->k.tra_v[mptr->scroll_val];
+		    *f = view_state->k.trans_view[mptr->scroll_val];
 	    } else {
 		if (mged_variables->mv_coords == 'm')
-		    *f = view_state->k.tra_m_abs[mptr->scroll_val];
+		    *f = view_state->k.abs_trans_model[mptr->scroll_val];
 		else
-		    *f = view_state->k.tra_v_abs[mptr->scroll_val];
+		    *f = view_state->k.abs_trans_view[mptr->scroll_val];
 	    }
 	    break;
 
 	case 3: /* scale */
 	    if (mged_variables->mv_rateknobs)
-		*f = view_state->k.sca;
+		*f = view_state->k.scale_rate;
 	    else
-		*f = view_state->k.sca_abs;
+		*f = view_state->k.abs_scale;
 	    break;
 
 	case 4: /* X rotation */
@@ -425,14 +443,14 @@ view_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
 	case 6: /* Z rotation */
 	    if (mged_variables->mv_rateknobs) {
 		if (mged_variables->mv_coords == 'm')
-		    *f = view_state->k.rot_m[mptr->scroll_val - 4] / RATE_ROT_FACTOR;
+		    *f = view_state->k.rot_model[mptr->scroll_val - 4] / RATE_ROT_FACTOR;
 		else
-		    *f = view_state->k.rot_v[mptr->scroll_val - 4] / RATE_ROT_FACTOR;
+		    *f = view_state->k.rot_view[mptr->scroll_val - 4] / RATE_ROT_FACTOR;
 	    } else {
 		if (mged_variables->mv_coords == 'm')
-		    *f = view_state->k.rot_m_abs[mptr->scroll_val - 4] / ABS_ROT_FACTOR;
+		    *f = view_state->k.abs_rot_model[mptr->scroll_val - 4] / ABS_ROT_FACTOR;
 		else
-		    *f = view_state->k.rot_v_abs[mptr->scroll_val - 4] / ABS_ROT_FACTOR;
+		    *f = view_state->k.abs_rot_view[mptr->scroll_val - 4] / ABS_ROT_FACTOR;
 	    }
 	    break;
 
@@ -442,6 +460,7 @@ view_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
 	    return;
     }
 
+    mged_hud_color_set(hud, color_scheme->cs_slider_text2);
 }
 
 /************************************************************************
@@ -507,22 +526,114 @@ faceplate_slider_controls(struct mged_state *s, struct dm_faceplate_controls *co
 }
 
 int
-scroll_display(struct mged_state *s, int y_top)
+scroll_display(struct mged_state *s, struct mged_hud_builder *hud, int y_top)
 {
     struct dm_faceplate_controls controls;
     scroll_top = y_top;
-    faceplate_slider_controls(s, &controls);
-    return (int)lrint(dm_faceplate_controls_draw(DMP, &controls) / INV_BV);
+    y = y_top;
+
+    mged_hud_line_style_set(hud, mged_variables->mv_linewidth, 0);
+
+    /* Precompute if any edit mode could be active */
+    int edit_flag = 0;
+    if (EDIT_ROTATE && mged_variables->mv_transform == 'e') edit_flag = 1;
+    else if (EDIT_TRAN && mged_variables->mv_transform == 'e') edit_flag = 1;
+    else if (EDIT_SCALE && mged_variables->mv_transform == 'e') edit_flag = 1;
+
+    for (m = &scroll_array[0]; *m != NULL; m++) {
+	++second_menu;
+	for (mptr = *m; mptr->scroll_string[0] != '\0'; mptr++) {
+	    y += SCROLL_DY;		/* y is now bottom line pos */
+
+	    f = 0.0;
+	    int did_op = 0;
+
+	    if (second_menu) {
+		/* ADC menu has priority when present */
+		second_menu_scroll_display(&f, mptr, s, hud);
+		did_op = 1;
+	    } else if (edit_flag) {
+		/* Try edit logic first */
+		did_op = edit_scroll_display(&f, mptr, s, hud);
+	    }
+
+	    if (!did_op && !second_menu) {
+		/* Fallback to view (non-edit) logic */
+		view_scroll_display(&f, mptr, s, hud);
+	    }
+
+	    if (f > 0)
+		xpos = (f + SL_TOL) * RT_VIEW_MAX;
+	    else if (f < 0)
+		xpos = (f - SL_TOL) * -MENUXLIM;
+	    else
+		xpos = 0;
+
+	    (void)mged_hud_label_add(hud, mptr->scroll_string,
+		    GED2PM1(xpos), GED2PM1(y-SCROLL_DY/2), 0.0, 0);
+	    mged_hud_color_set(hud, color_scheme->cs_slider_line);
+	    (void)mged_hud_line_add(hud,
+		    GED2PM1((int)RT_VIEW_MAX), GED2PM1(y),
+		    GED2PM1(MENUXLIM), GED2PM1(y));
+	}
+    }
+
+    if (y != y_top) {
+	/* Sliders were drawn, so make left vert edge */
+	mged_hud_color_set(hud, color_scheme->cs_slider_line);
+	(void)mged_hud_line_add(hud,
+		GED2PM1(MENUXLIM), GED2PM1(scroll_top-1),
+		GED2PM1(MENUXLIM), GED2PM1(y));
+    }
+    return y;
 }
 
 int
 scroll_select(struct mged_state *s, int pen_x, int pen_y, int do_func)
 {
-    struct dm_faceplate_controls controls;
-    if (!mged_variables->mv_sliders) return 0;
-    if (pen_y > scroll_top) return -1;
-    faceplate_slider_controls(s, &controls);
-    return dm_faceplate_controls_select(&controls, GED2PM1(pen_x), GED2PM1(pen_y), do_func);
+    int yy;
+    struct scroll_item **m;
+    struct scroll_item *mptr;
+
+    if (!mged_variables->mv_sliders) return 0;	/* not enabled */
+
+    if (pen_y > scroll_top)
+	return -1;	/* pen above menu area */
+
+    /*
+     * Start at the top of the list and see if the pen is
+     * above here.
+     */
+    yy = scroll_top;
+    for (m = &scroll_array[0]; *m != NULL; m++) {
+	for (mptr = *m; mptr->scroll_string[0] != '\0'; mptr++) {
+	    fastf_t val;
+	    yy += SCROLL_DY;	/* bottom line pos */
+	    if (pen_y < yy)
+		continue;	/* pen below this item */
+
+	    /*
+	     * Record the location of scroll marker.
+	     * Note that the left side has less width than
+	     * the right side, due to the presence of the
+	     * menu text area on the left.
+	     */
+	    if (pen_x >= 0) {
+		val = pen_x * RT_INV_VIEW;
+	    } else {
+		val = pen_x/(double)(-MENUXLIM);
+	    }
+
+	    /* See if hooked function has been specified */
+	    if (!mptr->scroll_func) continue;
+
+	    if (do_func)
+		(*(mptr->scroll_func))(mptr, val);
+
+	    return 1;		/* scroll claims pen value */
+	}
+    }
+    return 0;		/* pen below scroll area */
 }
 
 

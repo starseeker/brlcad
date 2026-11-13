@@ -74,6 +74,10 @@ set(
   RPath_Setup.cmake
   ResetCache.cmake
   TrackFiles.cmake
+  BObol_pivot_guard.cmake
+  BObol_pivot_guard_rules.cmake
+  RunTLA.cmake
+  ValidateBObolConformance.cmake
   static_link_test_main.cpp
   compat/README
   compat/README.compat
@@ -116,6 +120,8 @@ set(
   scripts/timestamp.cmake
   package_name_test.cmake
   package_bundle_test.cmake
+
+  scripts/xvfb_test.sh
 )
 cmakefiles(${cmake_ignore_files})
 

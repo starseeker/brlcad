@@ -6,7 +6,7 @@
     "sortKey": 2,
     "requiresOpenDb": true,
     "requiresView": true,
-    "description": "Selects, draws, or erases geometry using view gestures.",
+    "description": "Select objects in the scene by point, rectangle, or ray test; add to or remove from selection sets; draw or erase selected geometry.",
     "vendor": "BRL-CAD",
     "version": "1.0",
     "apiVersion": 1

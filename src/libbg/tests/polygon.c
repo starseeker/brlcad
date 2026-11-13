@@ -41,7 +41,7 @@ test_view_bbox(void)
 	{4, hole, 0}
     };
     int holes[] = {0, 1};
-    struct bg_polygon polygon = BG_POLYGON_NULL;
+    struct bg_polygon polygon = BG_POLYGON_INIT_ZERO;
     mat_t model2view;
     point2d_t bmin, bmax;
 

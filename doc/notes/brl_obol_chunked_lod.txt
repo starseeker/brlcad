@@ -1,0 +1,168 @@
+HISTORICAL DESIGN NOTE -- NOT A CURRENT CONTRACT
+===============================================
+
+This document records the chunked-PoP design iteration that led to the current
+implementation.  It may explain cache and regression choices, but some policy
+details (notably resident-demand behavior) predate the allocated-residency
+contract.  Use `libbobol_architecture.md` and `libbobol_lod_state_contract.md`
+for current design authority, and `libbobol_active_debt.md` for remaining work.
+
+BRL-CAD/Obol spatially resident PoP mesh contract
+=================================================
+
+Status
+------
+
+This is the implemented contract for large single-leaf meshes.  The old
+``8 x 8 x 8`` cluster table was not a sub-mesh system: it described ranges in
+one globally resident PoP stream and could not reduce loading or retained CPU
+and GPU memory.  The cache and realization paths now use independently
+readable deterministic pages.  Obol still presents those pages as private
+ranges of one logical part, never as scene or CAD objects.
+
+Identity and ownership
+----------------------
+
+* A database leaf has exactly one CAD part identity, one occurrence identity,
+  transform, material/style, selection state, picking identity, and hierarchy
+  path regardless of how many spatial chunks its display mesh uses.
+* A chunk is an immutable private render subresource.  It is never exposed as
+  a GED object, Coin path, CAD part, or selectable entity.
+* Chunk identifiers are deterministic within the immutable cache asset.  They
+  have no meaning after the asset key or provider version changes.
+
+Quality and visibility
+----------------------
+
+* The producer publishes one anisotropic PoP cut schedule and quantization
+  domain for the logical leaf.  Every visible chunk of an occurrence is drawn
+  at the same logical cut.  This is the crack-safety rule: adjacent chunks are
+  never independently quantized at different cuts in one occurrence.
+* Chunk bounds conservatively contain every triangle in that chunk at every
+  cut.  A chunk is required when its transformed bound intersects the render
+  frustum.  Orthographic visibility does not use depth as a quality signal.
+* The view request carries the deterministic set of required chunk IDs.  The
+  requested PoP cut continues to express pixel error; chunk membership
+  expresses spatial residency.  These are independent axes.
+* Render-cost allocation uses the sum of required-chunk cut populations, not
+  the whole leaf population.  A fully contained leaf may use a precomputed
+  whole-leaf sum; a clipped leaf uses its required chunks.
+
+Publication and continuity
+--------------------------
+
+* A new visible set becomes eligible only after every required chunk has a
+  drawable prefix at the admitted cut.  A worker builds the immutable renderer
+  generation and the owner thread adopts that allocation without copying its
+  mesh arrays.
+* The preceding coherent mesh remains drawable until the replacement is
+  complete.  On a cold leaf the structural leaf box remains until every
+  required chunk has a minimum useful prefix.  No transition may publish an
+  empty or partially covered representation.
+* Camera motion may retain the preceding cut.  Pan/rotation changes only the
+  required chunk set; orthographic zoom changes both the set and pixel-error
+  cut.  Existing resident chunks are reused in either direction.
+* Resident preparation and presentation are separate controls.  During active
+  zoom, residency follows at least the ordinary one-pixel physical demand,
+  independently of the coarser motion-time presentation error.  Missing
+  suffixes may span several PoP populations in one worker request when their
+  complete preparation fits the bounded working-set quantum.  The scene
+  allocator and renderer ceiling still choose what the next frame can afford;
+  loading a richer immutable prefix never grants permission to draw it.
+* A scale-quality frame which completes inside the hard responsiveness
+  deadline establishes a presentation floor for that interaction epoch.  A
+  later camera sample may lower it only after a real deadline miss, not merely
+  because the ordinary motion-FPS heuristic prefers a coarser cut.  The floor
+  is renderer-only and does not prevent stable memory compaction.
+* When exactly one visible occurrence competes for the scene allowance, its
+  first provider request receives the complete bounded bootstrap allowance in
+  the same render-cost currency as later scene allocation and opens directly
+  to the richest fitting cut.  Walking one nominal PoP ordinal per frame
+  provides no fairness in that case and only magnifies blocky intermediate
+  states.  Multi-occurrence scenes keep their conservative coverage quantum
+  and marginal-transition fairness so one asset cannot starve its peers.
+
+Residency and reclamation
+-------------------------
+
+* Cache records are independently readable per chunk.  Loading one chunk may
+  not materialize the vertex or index arrays of another chunk.
+* The resident state is a per-chunk cut frontier.  The demand of a shared mesh
+  asset is the union of every active view/occurrence requirement, taking the
+  richest requested cut for each chunk.  Stable compaction accepts that exact
+  page/cut vector; it does not promote every retained page to one global
+  maximum cut.
+* Active and immediately preceding coherent working sets are protected from
+  eviction.  When resident memory is healthy, an already loaded off-screen
+  chunk remains a latency cache at its last useful cut: ordinary zoom-out and
+  rotation reuse that data instead of restarting coarse convergence.  After a
+  stable grace interval under actual resident-memory pressure, off-screen
+  chunks are trimmed to a bounded whole-surface coverage floor and demanded
+  chunks to their requested cut.  Assets with no consumer may be evicted.
+  Persistent cache data remains reloadable in every case.
+* Transient build memory is bounded.  Cache generation and cache-to-renderer
+  realization process chunks in bounded batches and participate in the global
+  LoD working-set governor.
+
+Partition and cache format
+--------------------------
+
+* Large meshes are partitioned deterministically by spatial cell, with dense
+  cells split into bounded face-count pages.  The target is a bound on latency
+  and working memory, not a visible grid.  Small meshes remain one chunk.
+* Each chunk owns local vertex and triangle arrays ordered by activation cut,
+  cumulative fixed-width counts for every cut, tight bounds, one fixed-width
+  source-vertex ID per local vertex, and optional authored corner normals.
+  The source IDs are presentation topology: they join a logical vertex across
+  private page boundaries without retaining or loading the whole source mesh.
+  Serialized integers are fixed-width and all IDs, offsets, and counts are
+  validated before array access.
+* `authored` preserves cached corner normals.  `flat` deliberately publishes
+  no normal array and lets Obol derive the exact source-face normal.  `smooth`
+  is built on the realization worker for the complete admitted page set: one
+  compact incident record per active corner is sorted by source-vertex ID,
+  crease-filtered normals include neighboring faces in other pages, and only
+  one bounded page is canonicalized into renderer arrays at a time.  The GUI
+  thread only adopts immutable handles.  A resident hierarchy trim preserves
+  any still-drawable view presentation; it never chooses a normal policy or
+  silently substitutes an authored-normal layer.
+* The provider/cache version changes with this format.  Existing PoP caches
+  are invalidated; backward compatibility is intentionally not required.
+
+Required verification
+---------------------
+
+1. Cache round-trip and corrupt-record rejection, including fixed-width
+   overflow and out-of-range index cases.
+2. Every source face occurs in exactly one chunk and terminal chunks reproduce
+   the source surface; all indices address the chunk-local vertex prefix.
+3. Mixed visibility never draws adjacent chunks at different logical cuts.
+4. Close Lucy loads/refines only intersecting rich chunks and visibly gains
+   detail.  Healthy memory retains previously loaded off-screen prefixes for
+   zoom continuity; a constrained resident-memory run proves that the same
+   prefixes compact after the stable grace period and reload on demand.
+5. Zoom-out and rotation reuse resident chunks and never revert the whole leaf
+   to boxes; a missing newly visible set uses one coherent atomic fallback.
+6. Wire and shaded modes use the same chunk/cut residency and preserve one
+   selection/picking identity.
+7. Authored, flat, and smooth shading survive page boundaries, cut changes,
+   and resident compaction; smooth continuity is checked at shared source IDs.
+8. Cold/warm System GL and OSMesa runs, hierarchy erase/redraw, resizing, and
+   the 50k/150k many-leaf tests remain stable and responsive.
+
+Implementation map
+------------------
+
+* ``BMeshLodCache`` owns deterministic partitioning, fixed-width cache
+  metadata, corrupt-record validation, and independent page reads.
+* ``BObolLodProgressiveMesh`` owns the immutable page set, per-page population
+  frontier, suffix-stable packed renderer stream, dense stable compaction, and
+  shaded/wire renderer metadata.
+* ``BObolLodService`` unions page/cut demand across consumers and performs
+  revision-guarded worker compaction.  It never grows a page during
+  compaction; missing/richer pages are provider work.
+* ``SoCADAssembly`` and ``CadRendererGL`` cull private page bounds per
+  occurrence, select active page ranges at the occurrence cut, preserve the
+  parent PartId for selection/picking, and use multi-draw where the active GL
+  path supports it.  Compatibility and software paths use the same range
+  semantics with bounded loops for interruption.

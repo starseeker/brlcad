@@ -196,7 +196,7 @@ proc anchor_reset {id} {
     global mged_gui
     variable grid_control_anchor
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
     set grid_control_anchor($id) [rset grid anchor]
 }
 
@@ -220,7 +220,7 @@ proc do_grid_anchor { id } {
     }
 
     # Initialize variables
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
     set grid_control_anchor($id) [::brlcad::mged rset grid anchor]
 
     toplevel $top -screen $mged_gui($id,screen)
@@ -604,7 +604,7 @@ proc grid_control_reset { id } {
 	return
     }
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
 
     set grid_control($id,draw) [rset grid draw]
     set grid_control($id,snap) [rset grid snap]
@@ -720,7 +720,7 @@ proc grid_spacing_autosize { id } {
 	return
     }
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
     set val [grid_autosize $id]
     if {$val eq ""} {
 	return
@@ -739,7 +739,7 @@ proc grid_control_autosize { id } {
     global mged_gui
     variable grid_control
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
     set val [grid_autosize $id]
     if {$val eq ""} {
 	return
@@ -791,7 +791,7 @@ proc grid_spacing_reset { id spacing_type } {
     global mged_gui
     variable grid_control_spacing
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
 
     if {$spacing_type eq "v"} {
 	set grid_control_spacing($id,tick) [format %.5f [rset grid rv]]

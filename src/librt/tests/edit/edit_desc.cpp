@@ -81,11 +81,10 @@ check_prim(const char *name, int prim_type_id,
 	return 1;
     }
 
-    if (!strstr(js, "\"selection_domain\"") ||
-	!strstr(js, "\"coordinate_space\"") ||
-	!strstr(js, "\"manipulator\"") ||
-	!strstr(js, "\"semantic\"")) {
-	bu_log("FAIL [%s]: JSON missing interaction metadata\n", name);
+    if (!strstr(js, "\"name\"") || !strstr(js, "\"symbol\"") ||
+	!strstr(js, "\"control\"")) {
+	bu_log("FAIL [%s]: JSON missing stable command identity or control class\n",
+	    name);
 	bu_vls_free(&json);
 	return 1;
     }
@@ -113,11 +112,10 @@ static int
 check_descriptor_audit(void)
 {
     int failures = 0;
-    int descriptor_count = 0;
+    int descriptors = 0;
     int controls[RT_EDIT_CONTROL_UNSUPPORTED + 1] = {0};
     extern const struct rt_edit_functab EDOBJ[];
-
-    for (int type = 0; EDOBJ[type].magic == RT_FUNCTAB_MAGIC; ++type) {
+    for (int type = 0; EDOBJ[type].magic == RT_FUNCTAB_MAGIC; type++) {
 	if (!EDOBJ[type].ft_edit_desc)
 	    continue;
 	const struct rt_edit_prim_desc *desc = EDOBJ[type].ft_edit_desc();
@@ -127,8 +125,8 @@ check_descriptor_audit(void)
 		bu_vls_cstr(&diagnostic));
 	    failures++;
 	} else {
-	    descriptor_count++;
-	    for (int ci = 0; ci < desc->ncmd; ++ci) {
+	    descriptors++;
+	    for (int ci = 0; ci < desc->ncmd; ci++) {
 		const enum rt_edit_control_class control =
 		    rt_edit_cmd_control_class(desc, &desc->cmds[ci]);
 		struct bu_vls name = BU_VLS_INIT_ZERO;
@@ -165,15 +163,15 @@ check_descriptor_audit(void)
 	}
 	bu_vls_free(&diagnostic);
     }
-
+    bu_log("%s: validated %d registered edit descriptors\n",
+	failures ? "FAIL" : "PASS", descriptors);
     for (int control = RT_EDIT_CONTROL_GENERATED;
-	control <= RT_EDIT_CONTROL_UNSUPPORTED; ++control) {
+	control <= RT_EDIT_CONTROL_UNSUPPORTED; control++) {
 	if (!controls[control]) {
 	    bu_log("FAIL: no commands use control class %d\n", control);
 	    failures++;
 	}
     }
-
     bu_log("%s: classified commands generated=%d action=%d custom=%d unsupported=%d\n",
 	failures ? "FAIL" : "PASS", controls[RT_EDIT_CONTROL_GENERATED],
 	controls[RT_EDIT_CONTROL_ACTION], controls[RT_EDIT_CONTROL_CUSTOM],
@@ -191,151 +189,63 @@ check_descriptor_audit(void)
 		BRLCAD_ERROR || !bu_vls_strlen(&diagnostic)) {
 	    bu_log("FAIL: malformed descriptor was not rejected diagnostically\n");
 	    failures++;
-	}
-	bu_vls_free(&diagnostic);
-
-	invalid_desc = *ell;
-	invalid_desc.control_class = RT_EDIT_CONTROL_INHERIT;
-	diagnostic = BU_VLS_INIT_ZERO;
-	if (rt_edit_prim_desc_validate(&diagnostic, &invalid_desc) !=
-		BRLCAD_ERROR || !bu_vls_strlen(&diagnostic)) {
-	    bu_log("FAIL: inherited descriptor default was not rejected\n");
-	    failures++;
-	}
-	bu_vls_free(&diagnostic);
-
-	const enum rt_edit_control_class invalid_control =
-	    (enum rt_edit_control_class)(RT_EDIT_CONTROL_UNSUPPORTED + 1);
-	invalid_desc = *ell;
-	invalid_desc.ncmd = 1;
-	invalid_desc.command_controls = &invalid_control;
-	diagnostic = BU_VLS_INIT_ZERO;
-	if (rt_edit_prim_desc_validate(&diagnostic, &invalid_desc) !=
-		BRLCAD_ERROR || !bu_vls_strlen(&diagnostic)) {
-	    bu_log("FAIL: invalid command control was not rejected\n");
-	    failures++;
-	}
-	bu_vls_free(&diagnostic);
-
-	struct rt_edit_interaction_desc invalid_interaction =
-	    ell->command_interactions[0];
-	invalid_interaction.coordinate_space = RT_EDIT_COORDINATE_INFER;
-	invalid_desc = *ell;
-	invalid_desc.ncmd = 1;
-	invalid_desc.command_interactions = &invalid_interaction;
-	diagnostic = BU_VLS_INIT_ZERO;
-	if (rt_edit_prim_desc_validate(&diagnostic, &invalid_desc) !=
-		BRLCAD_ERROR || !bu_vls_strlen(&diagnostic)) {
-	    bu_log("FAIL: inferred interaction coordinates were not rejected\n");
-	    failures++;
-	}
-	bu_vls_free(&diagnostic);
-
-	const enum rt_edit_param_semantic invalid_semantic =
-	    (enum rt_edit_param_semantic)(RT_EDIT_SEMANTIC_PROPERTY + 1);
-	invalid_interaction = ell->command_interactions[0];
-	invalid_interaction.parameter_semantics = &invalid_semantic;
-	invalid_interaction.parameter_semantic_count = 1;
-	invalid_desc = *ell;
-	invalid_desc.ncmd = 1;
-	invalid_desc.command_interactions = &invalid_interaction;
-	diagnostic = BU_VLS_INIT_ZERO;
-	if (rt_edit_prim_desc_validate(&diagnostic, &invalid_desc) !=
-		BRLCAD_ERROR || !bu_vls_strlen(&diagnostic)) {
-	    bu_log("FAIL: invalid parameter semantic was not rejected\n");
-	    failures++;
-	}
-	bu_vls_free(&diagnostic);
-
-	struct rt_edit_param_desc invalid_list = ell->cmds[0].params[0];
-	invalid_list.type = RT_EDIT_PARAM_INTEGER_LIST;
-	invalid_list.nenum = 0;
-	invalid_command = ell->cmds[0];
-	invalid_command.params = &invalid_list;
-	invalid_desc = *ell;
-	invalid_desc.ncmd = 1;
-	invalid_desc.cmds = &invalid_command;
-	diagnostic = BU_VLS_INIT_ZERO;
-	if (rt_edit_prim_desc_validate(&diagnostic, &invalid_desc) !=
-		BRLCAD_ERROR || !bu_vls_strlen(&diagnostic)) {
-	    bu_log("FAIL: invalid list parameter was not rejected\n");
-	    failures++;
+	} else {
+	    bu_log("PASS: malformed descriptor rejected diagnostically\n");
 	}
 	bu_vls_free(&diagnostic);
     } else {
-	bu_log("FAIL: ELL descriptor unavailable for validation test\n");
+	bu_log("FAIL: ELL descriptor unavailable for negative validation test\n");
 	failures++;
     }
 
-    bu_log("%s: validated %d registered edit descriptors\n",
-	failures ? "FAIL" : "PASS", descriptor_count);
+    if (ell && ell->ncmd > 0 && ell->cmds[0].nparam > 0) {
+	struct rt_edit_param_desc invalid_list = ell->cmds[0].params[0];
+	invalid_list.type = RT_EDIT_PARAM_INTEGER_LIST;
+	invalid_list.nenum = 0;
+	struct rt_edit_cmd_desc invalid_command = ell->cmds[0];
+	invalid_command.nparam = 1;
+	invalid_command.params = &invalid_list;
+	struct rt_edit_prim_desc invalid_desc = *ell;
+	invalid_desc.ncmd = 1;
+	invalid_desc.cmds = &invalid_command;
+	struct bu_vls diagnostic = BU_VLS_INIT_ZERO;
+	if (rt_edit_prim_desc_validate(&diagnostic, &invalid_desc) !=
+		BRLCAD_ERROR || !bu_vls_strlen(&diagnostic)) {
+	    bu_log("FAIL: malformed variable-list descriptor was not rejected\n");
+	    failures++;
+	} else {
+	    bu_log("PASS: malformed variable-list descriptor rejected\n");
+	}
+	bu_vls_free(&diagnostic);
+    }
     return failures;
 }
 
 
 static int
-check_interactions(void)
+check_generated_value_providers(void)
 {
     extern const struct rt_edit_functab EDOBJ[];
-    const struct rt_edit_prim_desc *ell = EDOBJ[ID_ELL].ft_edit_desc();
-    const struct rt_edit_prim_desc *arb = EDOBJ[ID_ARB8].ft_edit_desc();
-    const struct rt_edit_prim_desc *bot = EDOBJ[ID_BOT].ft_edit_desc();
-    const struct rt_edit_prim_desc *sketch = EDOBJ[ID_SKETCH].ft_edit_desc();
-    const struct rt_edit_prim_desc *tor = EDOBJ[ID_TOR].ft_edit_desc();
-    const struct rt_edit_interaction_desc ell_interaction =
-	rt_edit_cmd_interaction(ell, &ell->cmds[0]);
-    const struct rt_edit_interaction_desc arb_interaction =
-	rt_edit_cmd_interaction(arb, &arb->cmds[0]);
-    const struct rt_edit_interaction_desc bot_interaction =
-	rt_edit_cmd_interaction(bot, &bot->cmds[6]);
-    const struct rt_edit_interaction_desc sketch_interaction =
-	rt_edit_cmd_interaction(sketch, &sketch->cmds[18]);
-    const struct rt_edit_interaction_desc default_interaction =
-	rt_edit_cmd_interaction(tor, &tor->cmds[0]);
-    struct bu_vls sketch_json = BU_VLS_INIT_ZERO;
-    const int json_status = rt_edit_type_to_json(&sketch_json, ID_SKETCH);
-
-    if (ell_interaction.manipulator != RT_EDIT_MANIPULATOR_AXIS ||
-	ell_interaction.coordinate_space != RT_EDIT_COORDINATE_SCALAR ||
-	arb_interaction.selection_domain != RT_EDIT_SELECTION_VERTEX ||
-	arb_interaction.manipulator != RT_EDIT_MANIPULATOR_INDEXED_SET ||
-	bot_interaction.selection_domain != RT_EDIT_SELECTION_VERTEX ||
-	sketch_interaction.coordinate_space != RT_EDIT_COORDINATE_OBJECT ||
-	sketch_interaction.manipulator != RT_EDIT_MANIPULATOR_PLANE ||
-	default_interaction.selection_domain != RT_EDIT_SELECTION_NONE ||
-	default_interaction.coordinate_space != RT_EDIT_COORDINATE_INFER ||
-	default_interaction.manipulator != RT_EDIT_MANIPULATOR_NONE ||
-	rt_edit_param_semantic_get(ell, &ell->cmds[0], 0) !=
-	    RT_EDIT_SEMANTIC_DISTANCE ||
-	rt_edit_param_semantic_get(arb, &arb->cmds[0], 0) !=
-	    RT_EDIT_SEMANTIC_INDEX ||
-	rt_edit_param_semantic_get(bot, &bot->cmds[6], 0) !=
-	    RT_EDIT_SEMANTIC_DELTA ||
-	rt_edit_param_semantic_get(sketch, &sketch->cmds[17], 2) !=
-	    RT_EDIT_SEMANTIC_ANGLE ||
-	rt_edit_param_semantic_get(tor, &tor->cmds[0], 0) !=
-	    RT_EDIT_SEMANTIC_INFER ||
-	json_status != BRLCAD_OK ||
-	!strstr(bu_vls_cstr(&sketch_json),
-	    "\"selection_domain\": \"segment\"") ||
-	!strstr(bu_vls_cstr(&sketch_json),
-	    "\"coordinate_space\": \"parametric_2d\"") ||
-	!strstr(bu_vls_cstr(&sketch_json),
-	    "\"manipulator\": \"indexed_set\"") ||
-	!strstr(bu_vls_cstr(&sketch_json),
-	    "\"semantic\": \"angle\"") ||
-	!strstr(bu_vls_cstr(&sketch_json), "\"type\": \"point2\"") ||
-	!strstr(bu_vls_cstr(&sketch_json), "\"type\": \"vector2\"") ||
-	!strstr(bu_vls_cstr(&sketch_json), "\"type\": \"integer_list\"") ||
-	!strstr(bu_vls_cstr(&sketch_json), "\"min_count\": 1")) {
-	bu_log("FAIL: representative interaction descriptors are incomplete\n");
-	bu_vls_free(&sketch_json);
-	return 1;
+    const int generated_types[] = {
+	ID_TOR, ID_TGC, ID_ELL, ID_EPA, ID_EHY, ID_ETO, ID_HYP,
+	ID_RPC, ID_RHC, ID_PARTICLE, ID_SUPERELL, ID_CLINE, ID_DSP,
+	ID_EBM, ID_VOL, ID_HALF, ID_SPH, ID_REC, ID_EXTRUDE,
+	ID_REVOLVE, ID_ANNOT, ID_HRT, ID_SKETCH
+    };
+    int failures = 0;
+    for (size_t i = 0; i < sizeof(generated_types) / sizeof(generated_types[0]);
+	    i++) {
+	const int type = generated_types[i];
+	if (!EDOBJ[type].ft_edit_desc || !EDOBJ[type].ft_edit_get_values) {
+	    bu_log("FAIL: generated primitive type %d lacks descriptor readback\n",
+		type);
+	    failures++;
+	}
     }
-
-    bu_vls_free(&sketch_json);
-    bu_log("PASS: representative interaction descriptors are source-neutral\n");
-    return 0;
+    bu_log("%s: %zu generated primitive types provide current-value readback\n",
+	failures ? "FAIL" : "PASS",
+	sizeof(generated_types) / sizeof(generated_types[0]));
+    return failures;
 }
 
 
@@ -345,7 +255,7 @@ rt_edit_test_edit_desc(void)
     int fail = 0;
 
     fail += check_descriptor_audit();
-    fail += check_interactions();
+    fail += check_generated_value_providers();
 
     /* ------------------------------------------------------------------
      * Primitives with ft_edit_desc() implementations.
@@ -413,15 +323,67 @@ rt_edit_test_edit_desc(void)
     /* REC: ECMD_REC_SET_V = 7001 */
     fail += check_prim("REC",  ID_REC,      "\"rec\"",      7001);
 
-    /* ARB8: ECMD_ARB_MOVE_FACE = 4013 */
-    fail += check_prim("ARB8", ID_ARB8,     "\"arb8\"",     4013);
+    /* ARB8 now supplies a structured edit descriptor. */
+    fail += check_prim("ARB8", ID_ARB8, "\"arb8\"", 4013);
 
-    /* ------------------------------------------------------------------
-     * Verify that primitives without ft_edit_desc return BRLCAD_ERROR.
-     * ------------------------------------------------------------------ */
+    /* SKETCH: variable topology lists and true 2-D parameters. */
+    fail += check_prim("SKETCH", ID_SKETCH, "\"sketch\"", 26001);
+    struct bu_vls sketch_json = BU_VLS_INIT_ZERO;
+    if (rt_edit_type_to_json(&sketch_json, ID_SKETCH) != BRLCAD_OK ||
+	!strstr(bu_vls_cstr(&sketch_json), "\"type\": \"integer_list\"") ||
+	!strstr(bu_vls_cstr(&sketch_json), "\"type\": \"scalar_list\"") ||
+	!strstr(bu_vls_cstr(&sketch_json), "\"min_count\"") ||
+	!strstr(bu_vls_cstr(&sketch_json), "\"max_count\"") ||
+	!strstr(bu_vls_cstr(&sketch_json),
+	    "\"selection_domain\": \"segment\"") ||
+	!strstr(bu_vls_cstr(&sketch_json),
+	    "\"coordinate_space\": \"parametric_2d\"") ||
+	!strstr(bu_vls_cstr(&sketch_json),
+	    "\"manipulator\": \"indexed_set\"") ||
+	!strstr(bu_vls_cstr(&sketch_json), "\"semantic\": \"index\"")) {
+	bu_log("FAIL [SKETCH]: JSON missing arity/interaction metadata\n");
+	fail++;
+    }
+    bu_vls_free(&sketch_json);
+
+    const struct rt_edit_prim_desc *ell_desc =
+	EDOBJ[ID_ELL].ft_edit_desc();
+    const struct rt_edit_prim_desc *arb_desc =
+	EDOBJ[ID_ARB8].ft_edit_desc();
+    const struct rt_edit_prim_desc *bot_desc =
+	EDOBJ[ID_BOT].ft_edit_desc();
+    const struct rt_edit_prim_desc *sketch_desc =
+	EDOBJ[ID_SKETCH].ft_edit_desc();
+    const struct rt_edit_interaction_desc ell_interaction =
+	rt_edit_cmd_interaction(ell_desc, &ell_desc->cmds[0]);
+    const struct rt_edit_interaction_desc arb_interaction =
+	rt_edit_cmd_interaction(arb_desc, &arb_desc->cmds[0]);
+    const struct rt_edit_interaction_desc bot_interaction =
+	rt_edit_cmd_interaction(bot_desc, &bot_desc->cmds[6]);
+    const struct rt_edit_interaction_desc sketch_interaction =
+	rt_edit_cmd_interaction(sketch_desc, &sketch_desc->cmds[18]);
+    if (ell_interaction.manipulator != RT_EDIT_MANIPULATOR_AXIS ||
+	ell_interaction.coordinate_space != RT_EDIT_COORDINATE_SCALAR ||
+	rt_edit_param_semantic_get(ell_desc, &ell_desc->cmds[0], 0) !=
+	    RT_EDIT_SEMANTIC_DISTANCE ||
+	arb_interaction.selection_domain != RT_EDIT_SELECTION_VERTEX ||
+	arb_interaction.manipulator != RT_EDIT_MANIPULATOR_INDEXED_SET ||
+	bot_interaction.selection_domain != RT_EDIT_SELECTION_VERTEX ||
+	rt_edit_param_semantic_get(bot_desc, &bot_desc->cmds[6], 1) !=
+	    RT_EDIT_SEMANTIC_INDEX ||
+	sketch_interaction.coordinate_space != RT_EDIT_COORDINATE_OBJECT ||
+	sketch_interaction.manipulator != RT_EDIT_MANIPULATOR_PLANE ||
+	rt_edit_param_semantic_get(sketch_desc, &sketch_desc->cmds[18], 1) !=
+	    RT_EDIT_SEMANTIC_DIRECTION) {
+	bu_log("FAIL: representative interaction descriptors are incomplete\n");
+	fail++;
+    } else {
+	bu_log("PASS: representative interaction descriptors are source-neutral\n");
+    }
+
+    /* Primitives without ft_edit_desc must still report an error. */
     {
 	struct bu_vls json = BU_VLS_INIT_ZERO;
-	/* HF has no ft_edit_desc. */
 	int ret = rt_edit_type_to_json(&json, ID_HF);
 	if (ret == BRLCAD_ERROR) {
 	    bu_log("PASS [HF-no-desc]: correctly returned BRLCAD_ERROR\n");

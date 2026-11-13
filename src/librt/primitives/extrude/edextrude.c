@@ -148,7 +148,7 @@ static const enum rt_edit_control_class extr_command_controls[] = {
     RT_EDIT_CONTROL_INHERIT
 };
 _Static_assert(sizeof(extr_command_controls) / sizeof(extr_command_controls[0]) ==
-    sizeof(extr_cmds) / sizeof(extr_cmds[0]), "extr command controls");
+    sizeof(extr_cmds) / sizeof(extr_cmds[0]), "extrude command controls");
 
 static const struct rt_edit_prim_desc extr_prim_desc = {
     "extrude", "Extrusion", 8, extr_cmds,
@@ -165,7 +165,6 @@ rt_edit_extrude_edit_desc(void)
 {
     return &extr_prim_desc;
 }
-
 
 C_DECL int
 rt_edit_extrude_get_values(struct rt_edit *s, int cmd_id,

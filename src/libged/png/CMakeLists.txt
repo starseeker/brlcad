@@ -1,7 +1,7 @@
 set(PLUGIN_LIBS libged libbu)
 
 ged_plugin_library(ged-png
-  png.c
+  png.cpp
   LIBS ${PLUGIN_LIBS}
 )
 

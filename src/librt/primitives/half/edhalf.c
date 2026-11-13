@@ -127,8 +127,7 @@ static const struct rt_edit_param_desc half_d_params[] = {
 
 static const struct rt_edit_cmd_desc half_cmds[] = {
     {
-	ECMD_HALF_SET_D,        /* cmd_id */
-	RT_EDIT_CMD_NAME(ECMD_HALF_SET_D),        /* name */
+	ECMD_HALF_SET_D, RT_EDIT_CMD_NAME(ECMD_HALF_SET_D),        /* cmd_id */
 	"Set D",                /* label */
 	"geometry",             /* category */
 	1,                      /* nparam */
@@ -187,27 +186,21 @@ rt_edit_hlf_edit_xy(struct rt_edit *s, const vect_t mousevec)
     return edit_generic_xy(s, mousevec);
 }
 
-static int
-half_current_numbers(struct rt_edit *s, int cmd_id, fastf_t *vals)
-{
-    struct rt_half_internal *haf;
-    if (!s || !vals)
-	return -1;
-    haf = (struct rt_half_internal *)s->es_int.idb_ptr;
-    RT_HALF_CK_MAGIC(haf);
-    if (cmd_id == ECMD_HALF_SET_D) {
-	vals[0] = haf->eqn[W] * s->base2local;
-	return 1;
-    }
-    return 0;
-}
-
 C_DECL int
 rt_edit_hlf_get_values(struct rt_edit *s, int cmd_id,
 	struct rt_edit_cmd_values *result)
 {
-    return edit_current_values_from_numbers(s, cmd_id, result,
-	half_current_numbers);
+    struct rt_half_internal *haf;
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    haf = (struct rt_half_internal *)s->es_int.idb_ptr;
+    RT_HALF_CK_MAGIC(haf);
+    if (cmd_id == ECMD_HALF_SET_D) {
+	rt_edit_cmd_values_set_value(result, 0,
+	    haf->eqn[W] * s->base2local);
+	return RT_EDIT_VALUE_OK;
+    }
+    return RT_EDIT_VALUE_UNAVAILABLE;
 }
 
 /*

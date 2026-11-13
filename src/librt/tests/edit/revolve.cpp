@@ -35,7 +35,7 @@
  *   - ECMD_REVOLVE_SET_R sets start vector
  *   - ECMD_REVOLVE_SET_ANG sets angle (degrees in, radians stored)
  *   - ECMD_REVOLVE_SET_SKT sets sketch name
- *   - rt_edit_revolve_get_values returns numeric and string values
+ *   - rt_edit_revolve_get_values returns correct values
  */
 
 #include "common.h"
@@ -48,6 +48,8 @@
 #include "bu/malloc.h"
 #include "bu/vls.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
+#include "rt/calc.h"
 #include "rt/geom.h"
 
 #include "test_utils.h"
@@ -118,14 +120,10 @@ rt_edit_test_revolve(void)
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    v->gv_size = 10.0; v->gv_isize = 0.1; v->gv_scale = 5.0;
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width = 512; v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init_identity_size(&v, 10.0);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
     s->local2base = 1.0;
     s->base2local = 1.0;
@@ -240,29 +238,61 @@ rt_edit_test_revolve(void)
     bu_log("TEST 6 PASS: sketch_name = '%s'\n", bu_vls_cstr(&rip->sketch_name));
 
     /* ================================================================
-     * Test 7: rt_edit_revolve_get_values returns typed current values
+     * Test 7: rt_edit_revolve_get_values returns angle in degrees
      * ================================================================*/
     reset_s(s, rip);   /* ang = M_2PI */
-    struct rt_edit_cmd_values current;
-    int status = rt_edit_cmd_values_get(s, ECMD_REVOLVE_SET_ANG, &current);
-    if (status != RT_EDIT_VALUE_OK || current.value_count != 1 ||
-	!current.value_valid[0] ||
-	!NEAR_EQUAL(current.values[0], 360.0, 1e-9))
+    struct rt_edit_cmd_values vals;
+    int status = rt_edit_cmd_values_get(s, ECMD_REVOLVE_SET_ANG, &vals);
+    if (status != RT_EDIT_VALUE_OK || vals.value_count != 1 ||
+	!NEAR_EQUAL(vals.values[0], 360.0, 1e-9))
 	bu_exit(1, "ERROR: get_values(SET_ANG): status=%d value=%g\n",
-	    status, current.values[0]);
+	    status, vals.values[0]);
+    bu_log("TEST 7 PASS: get_values(SET_ANG) = %g deg\n",
+	vals.values[0]);
 
+    /* ================================================================
+     * Test 8: string current-value readback follows the same contract
+     * ================================================================*/
     bu_vls_trunc(&rip->sketch_name, 0);
     bu_vls_strcpy(&rip->sketch_name, "current_sketch");
-    status = rt_edit_cmd_values_get(s, ECMD_REVOLVE_SET_SKT, &current);
-    if (status != RT_EDIT_VALUE_OK || current.string_count != 1 ||
-	!current.string_valid[0] ||
-	bu_strcmp(current.strings[0], "current_sketch") != 0)
+    status = rt_edit_cmd_values_get(s, ECMD_REVOLVE_SET_SKT, &vals);
+    if (status != RT_EDIT_VALUE_OK || vals.string_count != 1 ||
+	!vals.string_valid[0] ||
+	bu_strcmp(vals.strings[0], "current_sketch") != 0)
 	bu_exit(1, "ERROR: get_values(SET_SKT): status=%d value='%s'\n",
-	    status, current.strings[0]);
-    bu_log("TEST 7 PASS: typed numeric and string values\n");
+	    status, vals.strings[0]);
+    bu_log("TEST 8 PASS: get_values(SET_SKT) = '%s'\n",
+	vals.strings[0]);
 
-    fastf_t vals[4] = {0};
-    int nv;
+    /* ================================================================
+     * Test 9: occurrence transforms preserve all revolve parameters
+     * ================================================================*/
+    reset_s(s, rip);
+    mat_t transform;
+    MAT_IDN(transform);
+    transform[0] = 0.0;
+    transform[1] = -1.0;
+    transform[4] = 1.0;
+    transform[5] = 0.0;
+    MAT_DELTAS(transform, 10.0, 20.0, 30.0);
+    struct rt_db_internal transformed = RT_DB_INTERNAL_INIT_ZERO;
+    if (rt_matrix_transform(&transformed, transform, &s->es_int, 0,
+	    dbip) != 0)
+	bu_exit(1, "ERROR: revolve occurrence transform failed\n");
+    struct rt_revolve_internal *tr =
+	(struct rt_revolve_internal *)transformed.idb_ptr;
+    point_t expected_v = {10.0, 20.0, 30.0};
+    vect_t expected_axis = {0.0, 0.0, 1.0};
+    vect_t expected_r = {0.0, 1.0, 0.0};
+    if (!tr || !VNEAR_EQUAL(tr->v3d, expected_v, SMALL_FASTF) ||
+	!VNEAR_EQUAL(tr->axis3d, expected_axis, SMALL_FASTF) ||
+	!VNEAR_EQUAL(tr->r, expected_r, SMALL_FASTF) ||
+	!NEAR_EQUAL(tr->ang, M_2PI, SMALL_FASTF)) {
+	rt_db_free_internal(&transformed);
+	bu_exit(1, "ERROR: revolve occurrence transform lost geometry state\n");
+    }
+    rt_db_free_internal(&transformed);
+    bu_log("TEST 9 PASS: occurrence transform preserves r and angle\n");
 
     const fastf_t inch = 25.4;
     s->local2base = inch;
@@ -292,10 +322,12 @@ rt_edit_test_revolve(void)
 	!NEAR_EQUAL(rip->r[X], 3.0 * inch, SMALL_FASTF))
 	bu_exit(1, "ERROR: set_r did not convert local length\n");
 
-    nv = edit_test_get_params(s, ECMD_REVOLVE_SET_R, vals);
-    if (nv != 3 || !NEAR_EQUAL(vals[X], 3.0, VUNITIZE_TOL))
+    status = rt_edit_cmd_values_get(s, ECMD_REVOLVE_SET_R, &vals);
+    if (status != RT_EDIT_VALUE_OK || vals.value_count != 3 ||
+	!vals.value_valid[X] ||
+	!NEAR_EQUAL(vals.values[X], 3.0, VUNITIZE_TOL))
 	bu_exit(1, "ERROR: get_params(SET_R) returned count %d, x %g, base x %g, factor %g\n",
-		nv, vals[X], rip->r[X], s->base2local);
+		(int)vals.value_count, vals.values[X], rip->r[X], s->base2local);
 
     rt_edit_set_edflag(s, ECMD_REVOLVE_SET_AXIS);
     s->e_inpara = 2;

@@ -1,7 +1,7 @@
 set(PLUGIN_LIBS libged libbu)
 
 ged_plugin_library(ged-plot
-  plot.c
+  plot.cpp
   LIBS ${PLUGIN_LIBS}
 )
 

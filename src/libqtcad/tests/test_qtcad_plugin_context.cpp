@@ -25,6 +25,7 @@
 #include <QtTest/QTest>
 
 #include "bu/app.h"
+#include "ged/view_types.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSession.h"
 
@@ -45,7 +46,6 @@ QgPluginContextTest::defaultsAreNullSafe()
     QVERIFY(context.getGed() == nullptr);
     QVERIFY(context.activeViewContext() == nullptr);
     QVERIFY(context.getViewWidget() == nullptr);
-    QVERIFY(context.selectionSetName().isEmpty());
     context.logMessage(QStringLiteral("discarded"));
 }
 
@@ -55,7 +55,6 @@ QgPluginContextTest::resolvesChangingHostState()
     QgSession firstSession;
     QgSession secondSession;
     QgSession *activeSession = &firstSession;
-    QString selectionSet = QStringLiteral("first");
     QString loggedMessage;
 
     QgPluginContext context;
@@ -63,23 +62,19 @@ QgPluginContextTest::resolvesChangingHostState()
 	return activeSession->ged();
     };
     context.viewContextAccessor = [&activeSession]() {
-	return activeSession->activeView();
-    };
-    context.selectionSetAccessor = [&selectionSet]() {
-	return selectionSet;
+	return ged_view_context_from_bv(activeSession->activeViewContext());
     };
     context.log = [&loggedMessage](const QString &message) {
 	loggedMessage = message;
     };
 
     QCOMPARE(context.getGed(), firstSession.ged());
-    QCOMPARE(context.activeViewContext(), firstSession.activeView());
-    QCOMPARE(context.selectionSetName(), QStringLiteral("first"));
+    QCOMPARE(context.activeViewContext(),
+	ged_view_context_from_bv(firstSession.activeViewContext()));
     activeSession = &secondSession;
-    selectionSet = QStringLiteral("second");
     QCOMPARE(context.getGed(), secondSession.ged());
-    QCOMPARE(context.activeViewContext(), secondSession.activeView());
-    QCOMPARE(context.selectionSetName(), QStringLiteral("second"));
+    QCOMPARE(context.activeViewContext(),
+	ged_view_context_from_bv(secondSession.activeViewContext()));
 
     context.logMessage(QStringLiteral("context message"));
     QCOMPARE(loggedMessage, QStringLiteral("context message"));

@@ -28,6 +28,8 @@
 #include <stdlib.h>
 #include <ctype.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -42,6 +44,8 @@ ged_m2v_point_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
+
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -83,7 +87,10 @@ ged_m2v_point_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     /* Convert the incoming model point to a view point */
-    MAT4X3PNT(view, gedp->ged_gvp->gv_model2view, model);
+    mat_t model2view;
+    bv_model2view_get(model2view,
+	    bv_context_view_const((const struct bv_context *)view_ctx));
+    MAT4X3PNT(view, model2view, model);
     bn_encode_vect(gedp->ged_result_str, view, 1);
 
     return BRLCAD_OK;

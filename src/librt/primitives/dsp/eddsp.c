@@ -224,8 +224,7 @@ static const struct rt_edit_param_desc dsp_fsize_params[] = {
 
 static const struct rt_edit_cmd_desc dsp_cmds[] = {
     {
-	ECMD_DSP_FNAME,       /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_DSP_FNAME),       /* name       */
+	ECMD_DSP_FNAME, RT_EDIT_CMD_NAME(ECMD_DSP_FNAME),       /* cmd_id       */
 	"Name",               /* label        */
 	"data",               /* category     */
 	1,                    /* nparam       */
@@ -235,8 +234,7 @@ static const struct rt_edit_cmd_desc dsp_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_DSP_SCALE_X,     /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_DSP_SCALE_X),     /* name       */
+	ECMD_DSP_SCALE_X, RT_EDIT_CMD_NAME(ECMD_DSP_SCALE_X),     /* cmd_id       */
 	"Set X",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -246,8 +244,7 @@ static const struct rt_edit_cmd_desc dsp_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_DSP_SCALE_Y,     /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_DSP_SCALE_Y),     /* name       */
+	ECMD_DSP_SCALE_Y, RT_EDIT_CMD_NAME(ECMD_DSP_SCALE_Y),     /* cmd_id       */
 	"Set Y",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -257,8 +254,7 @@ static const struct rt_edit_cmd_desc dsp_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_DSP_SCALE_ALT,   /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_DSP_SCALE_ALT),   /* name       */
+	ECMD_DSP_SCALE_ALT, RT_EDIT_CMD_NAME(ECMD_DSP_SCALE_ALT),   /* cmd_id       */
 	"Set ALT",            /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -268,8 +264,7 @@ static const struct rt_edit_cmd_desc dsp_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_DSP_SET_SMOOTH,  /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_DSP_SET_SMOOTH),  /* name       */
+	ECMD_DSP_SET_SMOOTH, RT_EDIT_CMD_NAME(ECMD_DSP_SET_SMOOTH),  /* cmd_id       */
 	"Toggle Smooth",      /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -279,8 +274,7 @@ static const struct rt_edit_cmd_desc dsp_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_DSP_FSIZE,       /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_DSP_FSIZE),       /* name       */
+	ECMD_DSP_FSIZE, RT_EDIT_CMD_NAME(ECMD_DSP_FSIZE),       /* cmd_id       */
 	"Set File Size",      /* label        */
 	"data",               /* category     */
 	2,                    /* nparam       */
@@ -290,8 +284,7 @@ static const struct rt_edit_cmd_desc dsp_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_DSP_SET_DATASRC, /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_DSP_SET_DATASRC), /* name       */
+	ECMD_DSP_SET_DATASRC, RT_EDIT_CMD_NAME(ECMD_DSP_SET_DATASRC), /* cmd_id       */
 	"Set Data Source",    /* label        */
 	"data",               /* category     */
 	1,                    /* nparam       */
@@ -320,7 +313,6 @@ rt_edit_dsp_edit_desc(void)
 {
     return &dsp_prim_desc;
 }
-
 
 C_DECL int
 rt_edit_dsp_get_values(struct rt_edit *s, int cmd_id,
@@ -461,11 +453,16 @@ ecmd_dsp_fname(struct rt_edit *s)
 
     RT_DSP_CK_MAGIC(dsp);
 
-    const char *av[2] = {NULL};
-    av[0] = bu_vls_cstr(&dsp->dsp_name);
-    rt_edit_map_clbk_get(&f, &d, s->m, ECMD_GET_FILENAME, BU_CLBK_DURING);
-    if (f)
-	(*f)(1, (const char **)av, d, &fname);
+    if (s->e_nstr > 0) {
+	fname = s->e_str[0];
+    } else {
+	const char *av[2] = {NULL};
+	av[0] = bu_vls_cstr(&dsp->dsp_name);
+	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_GET_FILENAME,
+	    BU_CLBK_DURING);
+	if (f)
+	    (*f)(1, (const char **)av, d, &fname);
+    }
 
     if (!fname)
 	return BRLCAD_OK;

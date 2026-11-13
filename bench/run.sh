@@ -607,7 +607,10 @@ fi
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="-F/dev/debug"
 
 # sanity check: make sure $RT runs
-out=`eval \"$RT\" -s1 -F/dev/debug \"${DB}/moss.g\" LIGHT 2>&1`
+# -B and -M select RT's non-interactive batch path.  Without them this
+# preliminary probe waits for interactive view commands when CTest keeps
+# stdin open, preventing the benchmark from ever starting.
+out=`eval \"$RT\" -B -M -s1 -H0 -J0 -F/dev/debug \"${DB}/moss.g\" all.g 2>&1 < /dev/null`
 ret=$?
 if test ! "x${ret}" = "x0" ; then
     $ECHO

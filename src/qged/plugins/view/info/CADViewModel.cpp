@@ -25,17 +25,24 @@
 
 #include <QPainter>
 #include <QString>
-#include <bv.h>
 
+#include "bv.h"
 #include "bu/vls.h"
-#include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgPluginContext.h"
+#include "qtcad/QgSignalFlags.h"
 #include "CADViewModel.h"
+
+static void *
+qged_view_model_view(const QgPluginContext *ctx)
+{
+    return ctx ? ctx->activeViewContext() : nullptr;
+}
 
 CADViewModel::CADViewModel(QObject *parentobj)
     : QgKeyValModel(parentobj)
 {
     m_root = NULL;
+    refresh(QG_VIEW_REFRESH);
 }
 
 CADViewModel::~CADViewModel()
@@ -53,39 +60,47 @@ CADViewModel::update()
 void
 CADViewModel::refresh(unsigned long long)
 {
-    struct bview *view = m_context ? m_context->activeViewContext() : NULL;
-    if (!view)
+    void *v = qged_view_model_view(m_ctx);
+    if (!v)
 	return;
 
     struct bu_vls val = BU_VLS_INIT_ZERO;
+    QMap<QString, QgKeyValNode*> standard_nodes;
     int i = 0;
-    beginResetModel();
+    vect_t aet;
+    mat_t view_center;
     if (m_root)
 	delete m_root;
     m_root = new QgKeyValNode();
+    beginResetModel();
 
-    add_pair("Name", bu_vls_cstr(&view->gv_name), m_root, i);
-    bu_vls_sprintf(&val, "%g", view->gv_size);
-    add_pair("Size", bu_vls_cstr(&val), m_root, i);
-    bu_vls_sprintf(&val, "%d", view->gv_width);
-    add_pair("Width", bu_vls_cstr(&val), m_root, i);
-    bu_vls_sprintf(&val, "%d", view->gv_height);
-    add_pair("Height", bu_vls_cstr(&val), m_root, i);
-    bu_vls_sprintf(&val, "%g", view->gv_aet[0]);
-    add_pair("Az", bu_vls_cstr(&val), m_root, i);
-    bu_vls_sprintf(&val, "%g", view->gv_aet[1]);
-    add_pair("El", bu_vls_cstr(&val), m_root, i);
-    bu_vls_sprintf(&val, "%g", view->gv_aet[2]);
-    add_pair("Tw", bu_vls_cstr(&val), m_root, i);
+    const struct bv *view = bv_context_view_const(static_cast<const struct bv_context *>(v));
+    bv_aet_get(aet, view);
+    bv_center_mat_get(view_center, view);
+
+    const char *view_name = bv_name_get(view);
+    standard_nodes.insert("Name", add_pair("Name", view_name ? view_name : "", m_root, i));
+    bu_vls_sprintf(&val, "%g", bv_size_get(view));
+    standard_nodes.insert("Size", add_pair("Size", bu_vls_cstr(&val), m_root, i));
+    bu_vls_sprintf(&val, "%d", bv_width_get(view));
+    standard_nodes.insert("Width", add_pair("Width", bu_vls_cstr(&val), m_root, i));
+    bu_vls_sprintf(&val, "%d", bv_height_get(view));
+    standard_nodes.insert("Height", add_pair("Height", bu_vls_cstr(&val), m_root, i));
+    bu_vls_sprintf(&val, "%g", aet[0]);
+    standard_nodes.insert("Az", add_pair("Az", bu_vls_cstr(&val), m_root, i));
+    bu_vls_sprintf(&val, "%g", aet[1]);
+    standard_nodes.insert("El", add_pair("El", bu_vls_cstr(&val), m_root, i));
+    bu_vls_sprintf(&val, "%g", aet[2]);
+    standard_nodes.insert("Tw", add_pair("Tw", bu_vls_cstr(&val), m_root, i));
 
     vect_t center;
-    MAT_DELTAS_GET_NEG(center, view->gv_center);
+    MAT_DELTAS_GET_NEG(center, view_center);
     bu_vls_sprintf(&val, "%g", center[0]);
-    add_pair("Center[X]", bu_vls_cstr(&val), m_root, i);
+    standard_nodes.insert("Center[X]", add_pair("Center[X]", bu_vls_cstr(&val), m_root, i));
     bu_vls_sprintf(&val, "%g", center[1]);
-    add_pair("Center[Y]", bu_vls_cstr(&val), m_root, i);
+    standard_nodes.insert("Center[Y]", add_pair("Center[Y]", bu_vls_cstr(&val), m_root, i));
     bu_vls_sprintf(&val, "%g", center[2]);
-    add_pair("Center[Z]", bu_vls_cstr(&val), m_root, i);
+    standard_nodes.insert("Center[Z]", add_pair("Center[Z]", bu_vls_cstr(&val), m_root, i));
 
     endResetModel();
 
@@ -100,5 +115,3 @@ CADViewModel::refresh(unsigned long long)
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-
-

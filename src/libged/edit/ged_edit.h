@@ -205,8 +205,8 @@ struct ged_edit_geom_spec {
     std::string fragment;  /**< @brief URI fragment, e.g. "V1" from "obj.s#V1" */
     std::string query;     /**< @brief URI query, e.g. "V*" from "obj.s?V*"   */
     bool is_batch;         /**< @brief true when token was "." (each-object)   */
-    std::vector<unsigned long long> hashes; /**< @brief database index path IDs */
-    struct directory *dp;  /**< @brief terminal object directory entry */
+    std::vector<unsigned long long> hashes; /**< @brief database-index path ids */
+    struct directory *dp;  /**< @brief terminal database object for dispatch */
 };
 
 
@@ -242,8 +242,9 @@ struct ged_edit_ctx {
      * active selection and no arbiter flag was given. */
     bool has_conflict;
 
-    /* Convenience: dp for the primary (first) object.
-     * RT_DIR_NULL when the primary spec is a multi-segment comb path. */
+    /* Convenience: terminal database object for the primary path.  The
+     * complete path in geom_specs remains authoritative for instance
+     * transforms, session identity, and retained-scene presentation. */
     struct directory *dp;
 };
 

@@ -44,7 +44,7 @@
 #include "bu/malloc.h"
 #include "bu/vls.h"
 #include "raytrace.h"
-#include "test_utils.h"
+#include "edit_test_view.h"
 #include "rt/geom.h"
 
 /* Mirror the private ECMD numbers from edarbn.c */
@@ -171,7 +171,7 @@ arbn_unit_matrix(struct db_i *dbip, struct db_full_path *path,
 	    same_planes(arbn, expected, ARBN_CUBE_PLANE_COUNT) &&
 	    NEAR_EQUAL(edit->e_para[0], inch_to_mm / scale, VUNITIZE_TOL);
 	fastf_t values[4] = {0};
-	passed = edit_test_get_params(edit,
+	passed = rt_edit_test_get_params(edit,
 	    ECMD_ARBN_PLANE_SET_DIST, values) == 1 &&
 	    NEAR_EQUAL(values[0], inch_to_mm / scale, VUNITIZE_TOL) &&
 	    passed;
@@ -298,7 +298,7 @@ arbn_unit_matrix(struct db_i *dbip, struct db_full_path *path,
 
 static int
 arbn_transform_matrix(struct db_i *dbip, struct db_full_path *path,
-		      struct bn_tol *tol, struct bview *view)
+		      struct bn_tol *tol, struct rt_edit_view *view)
 {
     const fastf_t inch_to_mm = 25.4;
     const fastf_t scales[] = {1.0, inch_to_mm};
@@ -401,20 +401,10 @@ rt_edit_test_arbn(void)
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size = 10.0;
-    v->gv_isize = 0.1;
-    v->gv_scale = 5.0;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width  = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init_size(&v, 10.0);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
     s->local2base = 1.0;
     s->base2local = 1.0;
@@ -540,15 +530,18 @@ rt_edit_test_arbn(void)
     s->e_para[0] = 0.0;
     rt_edit_process(s);
 
-    fastf_t vals[4] = {0};
-    int nv = edit_test_get_params(s, ECMD_ARBN_PLANE_SELECT, vals);
-    if (nv != 1 || (int)vals[0] != 0)
-	bu_exit(1, "ERROR: get_params(SELECT): nv=%d vals[0]=%g\n", nv, vals[0]);
-    bu_log("TEST 8 PASS: get_params(SELECT) returns plane_index=%g\n", vals[0]);
+    struct rt_edit_cmd_values vals;
+    int status = rt_edit_cmd_values_get(s, ECMD_ARBN_PLANE_SELECT, &vals);
+    if (status != RT_EDIT_VALUE_OK || vals.value_count != 1 ||
+	(int)vals.values[0] != 0)
+	bu_exit(1, "ERROR: get_values(SELECT): status=%d value=%g\n",
+	    status, vals.values[0]);
+    bu_log("TEST 8 PASS: get_values(SELECT) returns plane_index=%g\n",
+	vals.values[0]);
 
     rt_edit_destroy(s);
     int failures = arbn_unit_matrix(dbip, &fp, &tol);
-    failures += arbn_transform_matrix(dbip, &fp, &tol, v);
+    failures += arbn_transform_matrix(dbip, &fp, &tol, &v);
     db_close(dbip);
     if (!failures)
 	bu_log("All ARBN edit tests PASSED\n");

@@ -247,6 +247,8 @@ rt_edit_sketch_prim_edit_create(struct rt_edit *UNUSED(s))
     se->curr_seg    = -1;
     VSETALL(se->v_pos, 0.0);
     se->v_pos_valid = 0;
+    V2SETALL(se->last_segment_delta, 0.0);
+    se->last_segment_delta_valid = 0;
     return (void *)se;
 }
 
@@ -268,6 +270,8 @@ rt_edit_sketch_prim_edit_reset(struct rt_edit *s)
     se->curr_vert   = -1;
     se->curr_seg    = -1;
     se->v_pos_valid = 0;
+    V2SETALL(se->last_segment_delta, 0.0);
+    se->last_segment_delta_valid = 0;
 }
 
 
@@ -293,14 +297,16 @@ rt_edit_sketch_set_edit_mode(struct rt_edit *s, int mode)
 	default:
 	    break;
     }
-
-    rt_edit_process(s);
 }
 
 static void
 sketch_ed(struct rt_edit *s, int arg, int UNUSED(a), int UNUSED(b), void *UNUSED(data))
 {
     rt_edit_sketch_set_edit_mode(s, arg);
+    /* Menu selection is the legacy immediate-action adapter.  Keep mode
+     * selection itself side-effect free so programmatic and descriptor-based
+     * clients can set parameters before executing exactly once. */
+    rt_edit_process(s);
 }
 
 
@@ -354,20 +360,6 @@ static const struct rt_edit_param_desc sketch_uv_delta_param[] = {
       RT_EDIT_PARAM_NO_LIMIT, RT_EDIT_PARAM_NO_LIMIT, "length", 0, NULL, NULL, NULL }
 };
 
-static const struct rt_edit_param_desc sketch_move_vertex_list_params[] = {
-    { "delta", "Delta", RT_EDIT_PARAM_VECTOR2, 0,
-      RT_EDIT_PARAM_NO_LIMIT, RT_EDIT_PARAM_NO_LIMIT, "length", 0, NULL, NULL, NULL },
-    { "vertices", "Vertices", RT_EDIT_PARAM_INTEGER_LIST, 2,
-      0.0, RT_EDIT_PARAM_NO_LIMIT, "count", 1, NULL, NULL, NULL }
-};
-
-static const struct rt_edit_param_desc sketch_split_params[] = {
-    { "segment", "Segment Index", RT_EDIT_PARAM_INTEGER, 0,
-      0.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL },
-    { "t", "Split Fraction", RT_EDIT_PARAM_SCALAR, 1,
-      0.0, 1.0, "none", 0, NULL, NULL, NULL }
-};
-
 static const struct rt_edit_param_desc sketch_line_params[] = {
     { "start", "Start Vertex", RT_EDIT_PARAM_INTEGER, 0,
       0.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL },
@@ -393,11 +385,18 @@ static const struct rt_edit_param_desc sketch_bezier_params[] = {
       0.0, RT_EDIT_PARAM_NO_LIMIT, "count", 2, NULL, NULL, NULL }
 };
 
-static const struct rt_edit_param_desc sketch_arc_radius_params[] = {
-    { "segment", "Arc Segment", RT_EDIT_PARAM_INTEGER, 0,
+static const struct rt_edit_param_desc sketch_move_vertex_list_params[] = {
+    { "delta", "Delta", RT_EDIT_PARAM_VECTOR2, 0,
+      RT_EDIT_PARAM_NO_LIMIT, RT_EDIT_PARAM_NO_LIMIT, "length", 0, NULL, NULL, NULL },
+    { "vertices", "Vertices", RT_EDIT_PARAM_INTEGER_LIST, 2,
+      0.0, RT_EDIT_PARAM_NO_LIMIT, "count", 1, NULL, NULL, NULL }
+};
+
+static const struct rt_edit_param_desc sketch_split_params[] = {
+    { "segment", "Segment", RT_EDIT_PARAM_INTEGER, 0,
       0.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL },
-    { "radius", "Radius", RT_EDIT_PARAM_SCALAR, 1,
-      RT_EDIT_PARAM_NO_LIMIT, RT_EDIT_PARAM_NO_LIMIT, "length", 0, NULL, NULL, NULL }
+    { "fraction", "Fraction", RT_EDIT_PARAM_SCALAR, 1,
+      0.0, 1.0, "fraction", 0, NULL, NULL, NULL }
 };
 
 static const struct rt_edit_param_desc sketch_nurb_params[] = {
@@ -423,13 +422,16 @@ static const struct rt_edit_param_desc sketch_weight_params[] = {
       0.0, RT_EDIT_PARAM_NO_LIMIT, "none", 1, NULL, NULL, NULL }
 };
 
+static const struct rt_edit_param_desc sketch_radius_param[] = {
+    { "radius", "Radius", RT_EDIT_PARAM_SCALAR, 0,
+      RT_EDIT_PARAM_NO_LIMIT, RT_EDIT_PARAM_NO_LIMIT, "length", 0, NULL, NULL, NULL }
+};
+
 static const struct rt_edit_param_desc sketch_tangency_params[] = {
-    { "segment", "Arc Segment", RT_EDIT_PARAM_INTEGER, 0,
+    { "adjacent_segment", "Adjacent Segment", RT_EDIT_PARAM_INTEGER, 0,
       0.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL },
-    { "adjacent", "Adjacent Segment", RT_EDIT_PARAM_INTEGER, 1,
-      0.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL },
-    { "angle", "Tangency Angle", RT_EDIT_PARAM_SCALAR, 2,
-      RT_EDIT_PARAM_NO_LIMIT, RT_EDIT_PARAM_NO_LIMIT, "radians", 0, NULL, NULL, NULL }
+    { "angle", "Offset Angle", RT_EDIT_PARAM_SCALAR, 1,
+      RT_EDIT_PARAM_NO_LIMIT, RT_EDIT_PARAM_NO_LIMIT, "angle_rad", 0, NULL, NULL, NULL }
 };
 
 static const struct rt_edit_param_desc sketch_plane_params[] = {
@@ -447,47 +449,22 @@ static const struct rt_edit_cmd_desc sketch_cmds[] = {
     { ECMD_SKETCH_PICK_SEGMENT, RT_EDIT_CMD_NAME(ECMD_SKETCH_PICK_SEGMENT),          "Pick Segment",         "selection", 1, sketch_idx_param,   1, 30, NULL },
     { ECMD_SKETCH_MOVE_SEGMENT, RT_EDIT_CMD_NAME(ECMD_SKETCH_MOVE_SEGMENT),          "Move Segment",         "movement",  1, sketch_uv_delta_param, 1, 40, NULL },
     { ECMD_SKETCH_APPEND_LINE, RT_EDIT_CMD_NAME(ECMD_SKETCH_APPEND_LINE),           "Append Line",          "topology",  2, sketch_line_params, 1, 50, NULL },
-    { ECMD_SKETCH_APPEND_ARC, RT_EDIT_CMD_NAME(ECMD_SKETCH_APPEND_ARC),            "Append Arc",           "topology",  5, sketch_arc_params,  1, 60, NULL },
+    { ECMD_SKETCH_APPEND_ARC, RT_EDIT_CMD_NAME(ECMD_SKETCH_APPEND_ARC),            "Append Arc",           "topology",  5, sketch_arc_params, 1, 60, NULL },
     { ECMD_SKETCH_APPEND_BEZIER, RT_EDIT_CMD_NAME(ECMD_SKETCH_APPEND_BEZIER),         "Append Bezier",        "topology",  1, sketch_bezier_params, 1, 70, NULL },
-    { ECMD_SKETCH_DELETE_VERTEX, RT_EDIT_CMD_NAME(ECMD_SKETCH_DELETE_VERTEX),         "Delete Vertex",        "topology",  1, sketch_idx_param,   1, 80, NULL },
-    { ECMD_SKETCH_DELETE_SEGMENT, RT_EDIT_CMD_NAME(ECMD_SKETCH_DELETE_SEGMENT),        "Delete Segment",       "topology",  1, sketch_idx_param,   1, 90, NULL },
+    { ECMD_SKETCH_DELETE_VERTEX, RT_EDIT_CMD_NAME(ECMD_SKETCH_DELETE_VERTEX),         "Delete Vertex",        "topology",  0, NULL,               1, 80, NULL },
+    { ECMD_SKETCH_DELETE_SEGMENT, RT_EDIT_CMD_NAME(ECMD_SKETCH_DELETE_SEGMENT),        "Delete Segment",       "topology",  0, NULL,               1, 90, NULL },
     { ECMD_SKETCH_MOVE_VERTEX_LIST, RT_EDIT_CMD_NAME(ECMD_SKETCH_MOVE_VERTEX_LIST),      "Move Vertex List",     "movement",  2, sketch_move_vertex_list_params, 1, 100, NULL },
     { ECMD_SKETCH_SPLIT_SEGMENT, RT_EDIT_CMD_NAME(ECMD_SKETCH_SPLIT_SEGMENT),         "Split Segment",        "topology",  2, sketch_split_params, 1, 110, NULL },
     { ECMD_SKETCH_APPEND_NURB, RT_EDIT_CMD_NAME(ECMD_SKETCH_APPEND_NURB),           "Append NURB",          "topology",  2, sketch_nurb_params, 1, 120, NULL },
     { ECMD_SKETCH_NURB_EDIT_KV, RT_EDIT_CMD_NAME(ECMD_SKETCH_NURB_EDIT_KV),          "NURB Edit KV",         "topology",  2, sketch_knot_params, 1, 130, NULL },
     { ECMD_SKETCH_NURB_EDIT_WEIGHTS, RT_EDIT_CMD_NAME(ECMD_SKETCH_NURB_EDIT_WEIGHTS),     "NURB Edit Weights",    "topology",  3, sketch_weight_params, 1, 140, NULL },
     { ECMD_SKETCH_ADD_VERTEX, RT_EDIT_CMD_NAME(ECMD_SKETCH_ADD_VERTEX),            "Add Vertex",           "topology",  1, sketch_uv_point_param, 1, 150, NULL },
-    { ECMD_SKETCH_TOGGLE_ARC_ORIENT, RT_EDIT_CMD_NAME(ECMD_SKETCH_TOGGLE_ARC_ORIENT),     "Toggle Arc Orient",    "topology",  1, sketch_idx_param,   1, 160, NULL },
-    { ECMD_SKETCH_SET_ARC_RADIUS, RT_EDIT_CMD_NAME(ECMD_SKETCH_SET_ARC_RADIUS),        "Set Arc Radius",       "topology",  2, sketch_arc_radius_params, 1, 170, NULL },
-    { ECMD_SKETCH_SET_TANGENCY, RT_EDIT_CMD_NAME(ECMD_SKETCH_SET_TANGENCY),          "Set Arc Tangency",     "topology",  3, sketch_tangency_params,   1, 180, NULL },
+    { ECMD_SKETCH_TOGGLE_ARC_ORIENT, RT_EDIT_CMD_NAME(ECMD_SKETCH_TOGGLE_ARC_ORIENT),     "Toggle Arc Orient",    "topology",  0, NULL,               1, 160, NULL },
+    { ECMD_SKETCH_SET_ARC_RADIUS, RT_EDIT_CMD_NAME(ECMD_SKETCH_SET_ARC_RADIUS),        "Set Arc Radius",       "topology",  1, sketch_radius_param, 1, 170, NULL },
+    { ECMD_SKETCH_SET_TANGENCY, RT_EDIT_CMD_NAME(ECMD_SKETCH_SET_TANGENCY),          "Set Arc Tangency",     "topology",  2, sketch_tangency_params, 1, 180, NULL },
     { ECMD_SKETCH_SET_PLANE, RT_EDIT_CMD_NAME(ECMD_SKETCH_SET_PLANE),             "Set Sketch Plane",     "geometry",  3, sketch_plane_params, 1, 190, NULL },
-    { ECMD_SKETCH_TOGGLE_SEGMENT_REVERSE, RT_EDIT_CMD_NAME(ECMD_SKETCH_TOGGLE_SEGMENT_REVERSE),"Toggle Seg Reverse",   "topology",  1, sketch_idx_param,   1, 200, NULL }
+    { ECMD_SKETCH_TOGGLE_SEGMENT_REVERSE, RT_EDIT_CMD_NAME(ECMD_SKETCH_TOGGLE_SEGMENT_REVERSE),"Toggle Seg Reverse",   "topology",  0, NULL,               1, 200, NULL }
 };
-
-static const enum rt_edit_control_class sketch_command_controls[] = {
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_ACTION,
-    RT_EDIT_CONTROL_ACTION,
-    RT_EDIT_CONTROL_ACTION,
-    RT_EDIT_CONTROL_ACTION,
-    RT_EDIT_CONTROL_ACTION,
-    RT_EDIT_CONTROL_ACTION,
-    RT_EDIT_CONTROL_ACTION,
-    RT_EDIT_CONTROL_ACTION,
-    RT_EDIT_CONTROL_ACTION,
-    RT_EDIT_CONTROL_ACTION,
-    RT_EDIT_CONTROL_ACTION,
-    RT_EDIT_CONTROL_ACTION,
-    RT_EDIT_CONTROL_GENERATED,
-    RT_EDIT_CONTROL_ACTION,
-    RT_EDIT_CONTROL_GENERATED,
-    RT_EDIT_CONTROL_ACTION
-};
-_Static_assert(sizeof(sketch_command_controls) / sizeof(sketch_command_controls[0]) ==
-    sizeof(sketch_cmds) / sizeof(sketch_cmds[0]), "sketch command controls");
 
 static const enum rt_edit_param_semantic sketch_index_semantics[] = {
     RT_EDIT_SEMANTIC_INDEX
@@ -498,21 +475,35 @@ static const enum rt_edit_param_semantic sketch_position_semantics[] = {
 static const enum rt_edit_param_semantic sketch_delta_semantics[] = {
     RT_EDIT_SEMANTIC_DELTA
 };
-static const enum rt_edit_param_semantic sketch_delta_list_semantics[] = {
-    RT_EDIT_SEMANTIC_DELTA, RT_EDIT_SEMANTIC_INDEX
-};
 static const enum rt_edit_param_semantic sketch_index2_semantics[] = {
     RT_EDIT_SEMANTIC_INDEX, RT_EDIT_SEMANTIC_INDEX
+};
+static const enum rt_edit_param_semantic sketch_arc_semantics[] = {
+    RT_EDIT_SEMANTIC_INDEX, RT_EDIT_SEMANTIC_INDEX,
+    RT_EDIT_SEMANTIC_DISTANCE, RT_EDIT_SEMANTIC_PROPERTY,
+    RT_EDIT_SEMANTIC_PROPERTY
+};
+static const enum rt_edit_param_semantic sketch_delta_list_semantics[] = {
+    RT_EDIT_SEMANTIC_DELTA, RT_EDIT_SEMANTIC_INDEX
 };
 static const enum rt_edit_param_semantic sketch_split_semantics[] = {
     RT_EDIT_SEMANTIC_INDEX, RT_EDIT_SEMANTIC_FRACTION
 };
-static const enum rt_edit_param_semantic sketch_radius_semantics[] = {
-    RT_EDIT_SEMANTIC_INDEX, RT_EDIT_SEMANTIC_DISTANCE
+static const enum rt_edit_param_semantic sketch_nurb_semantics[] = {
+    RT_EDIT_SEMANTIC_COUNT, RT_EDIT_SEMANTIC_INDEX
+};
+static const enum rt_edit_param_semantic sketch_knot_semantics[] = {
+    RT_EDIT_SEMANTIC_COUNT, RT_EDIT_SEMANTIC_PROPERTY
+};
+static const enum rt_edit_param_semantic sketch_weight_semantics[] = {
+    RT_EDIT_SEMANTIC_INDEX, RT_EDIT_SEMANTIC_COUNT,
+    RT_EDIT_SEMANTIC_PROPERTY
+};
+static const enum rt_edit_param_semantic sketch_distance_semantics[] = {
+    RT_EDIT_SEMANTIC_DISTANCE
 };
 static const enum rt_edit_param_semantic sketch_tangency_semantics[] = {
-    RT_EDIT_SEMANTIC_INDEX, RT_EDIT_SEMANTIC_INDEX,
-    RT_EDIT_SEMANTIC_ANGLE
+    RT_EDIT_SEMANTIC_INDEX, RT_EDIT_SEMANTIC_ANGLE
 };
 static const enum rt_edit_param_semantic sketch_plane_semantics[] = {
     RT_EDIT_SEMANTIC_POSITION, RT_EDIT_SEMANTIC_DIRECTION,
@@ -531,38 +522,40 @@ static const struct rt_edit_interaction_desc sketch_interactions[] = {
     { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_PARAMETRIC_2D,
       RT_EDIT_MANIPULATOR_INDEXED_SET, sketch_index2_semantics, 2 },
     { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_PARAMETRIC_2D,
-      RT_EDIT_MANIPULATOR_CUSTOM, NULL, 0 },
+      RT_EDIT_MANIPULATOR_CUSTOM, sketch_arc_semantics, 5 },
     { RT_EDIT_SELECTION_CONTROL_POINT, RT_EDIT_COORDINATE_PARAMETRIC_2D,
-      RT_EDIT_MANIPULATOR_INDEXED_SET, NULL, 0 },
+      RT_EDIT_MANIPULATOR_INDEXED_SET, sketch_index_semantics, 1 },
     { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_SCALAR,
-      RT_EDIT_MANIPULATOR_INDEXED_SET, sketch_index_semantics, 1 },
+      RT_EDIT_MANIPULATOR_INDEXED_SET, NULL, 0 },
     { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_SCALAR,
-      RT_EDIT_MANIPULATOR_INDEXED_SET, sketch_index_semantics, 1 },
+      RT_EDIT_MANIPULATOR_INDEXED_SET, NULL, 0 },
     { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_PARAMETRIC_2D,
       RT_EDIT_MANIPULATOR_INDEXED_SET, sketch_delta_list_semantics, 2 },
     { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_PARAMETRIC_2D,
       RT_EDIT_MANIPULATOR_INDEXED_SET, sketch_split_semantics, 2 },
     { RT_EDIT_SELECTION_CONTROL_POINT, RT_EDIT_COORDINATE_PARAMETRIC_2D,
-      RT_EDIT_MANIPULATOR_INDEXED_SET, NULL, 0 },
+      RT_EDIT_MANIPULATOR_INDEXED_SET, sketch_nurb_semantics, 2 },
     { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_SCALAR,
-      RT_EDIT_MANIPULATOR_CUSTOM, NULL, 0 },
+      RT_EDIT_MANIPULATOR_CUSTOM, sketch_knot_semantics, 2 },
     { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_SCALAR,
-      RT_EDIT_MANIPULATOR_CUSTOM, NULL, 0 },
+      RT_EDIT_MANIPULATOR_CUSTOM, sketch_weight_semantics, 3 },
     { RT_EDIT_SELECTION_PRIMITIVE, RT_EDIT_COORDINATE_PARAMETRIC_2D,
       RT_EDIT_MANIPULATOR_POINT, sketch_position_semantics, 1 },
     { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_SCALAR,
-      RT_EDIT_MANIPULATOR_CUSTOM, sketch_index_semantics, 1 },
+      RT_EDIT_MANIPULATOR_CUSTOM, NULL, 0 },
     { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_SCALAR,
-      RT_EDIT_MANIPULATOR_RADIUS, sketch_radius_semantics, 2 },
+      RT_EDIT_MANIPULATOR_RADIUS, sketch_distance_semantics, 1 },
     { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_SCALAR,
-      RT_EDIT_MANIPULATOR_ROTATION_RING, sketch_tangency_semantics, 3 },
+      RT_EDIT_MANIPULATOR_ROTATION_RING, sketch_tangency_semantics, 2 },
     { RT_EDIT_SELECTION_PRIMITIVE, RT_EDIT_COORDINATE_OBJECT,
-	RT_EDIT_MANIPULATOR_PLANE, sketch_plane_semantics, 3 },
+      RT_EDIT_MANIPULATOR_PLANE, sketch_plane_semantics, 3 },
     { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_SCALAR,
-      RT_EDIT_MANIPULATOR_CUSTOM, sketch_index_semantics, 1 }
+      RT_EDIT_MANIPULATOR_CUSTOM, NULL, 0 }
 };
-_Static_assert(sizeof(sketch_interactions) / sizeof(sketch_interactions[0]) ==
-    sizeof(sketch_cmds) / sizeof(sketch_cmds[0]), "sketch command interactions");
+_Static_assert(sizeof(sketch_interactions) /
+	sizeof(sketch_interactions[0]) ==
+    sizeof(sketch_cmds) / sizeof(sketch_cmds[0]),
+    "sketch command interactions");
 
 static int
 sketch_parameter_bounds(struct rt_edit_param_bounds *bounds,
@@ -579,19 +572,15 @@ sketch_parameter_bounds(struct rt_edit_param_bounds *bounds,
 	(command_id == ECMD_SKETCH_APPEND_LINE && parameter_index < 2) ||
 	(command_id == ECMD_SKETCH_APPEND_ARC && parameter_index < 2) ||
 	(command_id == ECMD_SKETCH_APPEND_BEZIER && parameter_index == 0) ||
-	(command_id == ECMD_SKETCH_DELETE_VERTEX && parameter_index == 0) ||
 	(command_id == ECMD_SKETCH_MOVE_VERTEX_LIST && parameter_index == 1) ||
 	(command_id == ECMD_SKETCH_APPEND_NURB && parameter_index == 1))
 	domain = RT_EDIT_SELECTION_VERTEX;
-    else if ((command_id == ECMD_SKETCH_PICK_SEGMENT && parameter_index == 0) ||
-	(command_id == ECMD_SKETCH_DELETE_SEGMENT && parameter_index == 0) ||
+    else if ((command_id == ECMD_SKETCH_PICK_SEGMENT &&
+	parameter_index == 0) ||
 	(command_id == ECMD_SKETCH_SPLIT_SEGMENT && parameter_index == 0) ||
-	(command_id == ECMD_SKETCH_TOGGLE_ARC_ORIENT && parameter_index == 0) ||
-	(command_id == ECMD_SKETCH_SET_ARC_RADIUS && parameter_index == 0) ||
-	(command_id == ECMD_SKETCH_SET_TANGENCY && parameter_index < 2) ||
-	(command_id == ECMD_SKETCH_NURB_EDIT_WEIGHTS && parameter_index == 0) ||
-	(command_id == ECMD_SKETCH_TOGGLE_SEGMENT_REVERSE &&
-	 parameter_index == 0))
+	(command_id == ECMD_SKETCH_NURB_EDIT_WEIGHTS &&
+	parameter_index == 0) ||
+	(command_id == ECMD_SKETCH_SET_TANGENCY && parameter_index == 0))
 	domain = RT_EDIT_SELECTION_SEGMENT;
     if (domain == RT_EDIT_SELECTION_NONE)
 	return BRLCAD_OK;
@@ -604,6 +593,40 @@ sketch_parameter_bounds(struct rt_edit_param_bounds *bounds,
     bounds->has_maximum = 1;
     return BRLCAD_OK;
 }
+
+/*
+ * Sketch picking and direct movement need the retained 2-D interaction
+ * adapter.  The remaining operations already have a complete typed parameter
+ * contract and can use the shared generated form.  Topology mutations are
+ * actions (their inputs are not persistent current values); arc radius and the
+ * sketch plane are ordinary generated properties with authoritative readback.
+ */
+static const enum rt_edit_control_class sketch_command_controls[] = {
+    RT_EDIT_CONTROL_CUSTOM,     /* Pick Vertex */
+    RT_EDIT_CONTROL_CUSTOM,     /* Move Vertex */
+    RT_EDIT_CONTROL_CUSTOM,     /* Pick Segment */
+    RT_EDIT_CONTROL_CUSTOM,     /* Move Segment */
+    RT_EDIT_CONTROL_ACTION,     /* Append Line */
+    RT_EDIT_CONTROL_ACTION,     /* Append Arc */
+    RT_EDIT_CONTROL_ACTION,     /* Append Bezier */
+    RT_EDIT_CONTROL_ACTION,     /* Delete Vertex */
+    RT_EDIT_CONTROL_ACTION,     /* Delete Segment */
+    RT_EDIT_CONTROL_ACTION,     /* Move Vertex List */
+    RT_EDIT_CONTROL_ACTION,     /* Split Segment */
+    RT_EDIT_CONTROL_ACTION,     /* Append NURB */
+    RT_EDIT_CONTROL_ACTION,     /* NURB Edit KV */
+    RT_EDIT_CONTROL_ACTION,     /* NURB Edit Weights */
+    RT_EDIT_CONTROL_ACTION,     /* Add Vertex */
+    RT_EDIT_CONTROL_ACTION,     /* Toggle Arc Orient */
+    RT_EDIT_CONTROL_GENERATED,  /* Set Arc Radius */
+    RT_EDIT_CONTROL_ACTION,     /* Set Arc Tangency */
+    RT_EDIT_CONTROL_GENERATED,  /* Set Sketch Plane */
+    RT_EDIT_CONTROL_ACTION      /* Toggle Seg Reverse */
+};
+_Static_assert(sizeof(sketch_command_controls) /
+	sizeof(sketch_command_controls[0]) ==
+	sizeof(sketch_cmds) / sizeof(sketch_cmds[0]),
+    "sketch command control table must match descriptor commands");
 
 static const struct rt_edit_prim_desc sketch_prim_desc = {
     "sketch", "Sketch", 20, sketch_cmds,
@@ -656,6 +679,15 @@ rt_edit_sketch_get_values(struct rt_edit *s, int command_id,
 		return RT_EDIT_VALUE_UNAVAILABLE;
 	    return rt_edit_cmd_values_set_value(result, 0, se->curr_seg) ==
 		BRLCAD_OK ? RT_EDIT_VALUE_OK : RT_EDIT_VALUE_ERROR;
+	case ECMD_SKETCH_MOVE_SEGMENT:
+	    if (!se->last_segment_delta_valid)
+		return RT_EDIT_VALUE_UNAVAILABLE;
+	    if (rt_edit_cmd_values_set_value(result, 0,
+		    se->last_segment_delta[0] * s->base2local) != BRLCAD_OK ||
+		rt_edit_cmd_values_set_value(result, 1,
+		    se->last_segment_delta[1] * s->base2local) != BRLCAD_OK)
+		return RT_EDIT_VALUE_ERROR;
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_SKETCH_SET_ARC_RADIUS:
 	    if (se->curr_seg < 0 || (size_t)se->curr_seg >= skt->curve.count ||
 		!skt->curve.segment[se->curr_seg] ||
@@ -908,6 +940,23 @@ ecmd_sketch_move_vertex_list(struct rt_edit *s)
     }
     for (int k = 2; k < count; k++) {
 	int vi = vertices[k - 2];
+	int duplicate = 0;
+	for (int previous = 2; previous < k; previous++) {
+	    if (vertices[previous - 2] == vi) {
+		duplicate = 1;
+		break;
+	    }
+	}
+	if (duplicate)
+	    continue;
+	if (!isfinite(skt->verts[vi][0] + du) ||
+	    !isfinite(skt->verts[vi][1] + dv)) {
+	    bu_vls_printf(s->log_str,
+		    "ERROR: moving vertex %d would produce invalid coordinates\n",
+		    vi);
+	    s->e_inpara = 0;
+	    return BRLCAD_ERROR;
+	}
 	skt->verts[vi][0] += du;
 	skt->verts[vi][1] += dv;
 	rt_edit_snap_point(skt->verts[vi], s);
@@ -941,32 +990,37 @@ ecmd_sketch_pick_segment(struct rt_edit *s)
     return 0;
 }
 
-/* Allocate enough space for every control point of the selected segment. */
+/* Return a caller-owned list of vertex indices referenced by segment[si]. */
 static int *
-sketch_seg_verts(const struct rt_sketch_internal *skt, int si, int *count_out)
+sketch_seg_verts(const struct rt_sketch_internal *skt, int si,
+		 size_t *count_out)
 {
     *count_out = 0;
     void *seg = skt->curve.segment[si];
     if (!seg)
 	return NULL;
     uint32_t magic = *(uint32_t *)seg;
-    int count = 0;
-    if (magic == CURVE_LSEG_MAGIC || magic == CURVE_CARC_MAGIC) {
+    size_t count = 0;
+    if (magic == CURVE_LSEG_MAGIC) {
+	count = 2;
+    } else if (magic == CURVE_CARC_MAGIC) {
 	count = 2;
     } else if (magic == CURVE_BEZIER_MAGIC) {
 	struct bezier_seg *bs = (struct bezier_seg *)seg;
-	if (bs->degree < 0 || bs->degree >= INT_MAX || !bs->ctl_points)
+	if (bs->degree < 0 || !bs->ctl_points)
 	    return NULL;
-	count = bs->degree + 1;
+	count = (size_t)bs->degree + 1;
     } else if (magic == CURVE_NURB_MAGIC) {
 	struct nurb_seg *ns = (struct nurb_seg *)seg;
 	if (ns->c_size <= 0 || !ns->ctl_points)
 	    return NULL;
-	count = ns->c_size;
-    }
-    if (!count || (size_t)count > SIZE_MAX / sizeof(int))
+	count = (size_t)ns->c_size;
+    } else {
 	return NULL;
-    int *vertices = (int *)bu_malloc((size_t)count * sizeof(int),
+    }
+    if (!count || count > SIZE_MAX / sizeof(int))
+	return NULL;
+    int *vertices = (int *)bu_malloc(count * sizeof(int),
 	"sketch segment vertex indices");
     if (magic == CURVE_LSEG_MAGIC) {
 	struct line_seg *ls = (struct line_seg *)seg;
@@ -978,10 +1032,10 @@ sketch_seg_verts(const struct rt_sketch_internal *skt, int si, int *count_out)
 	vertices[1] = cs->end;
     } else if (magic == CURVE_BEZIER_MAGIC) {
 	struct bezier_seg *bs = (struct bezier_seg *)seg;
-	memcpy(vertices, bs->ctl_points, (size_t)count * sizeof(int));
+    memcpy(vertices, bs->ctl_points, count * sizeof(int));
     } else {
 	struct nurb_seg *ns = (struct nurb_seg *)seg;
-	memcpy(vertices, ns->ctl_points, (size_t)count * sizeof(int));
+    memcpy(vertices, ns->ctl_points, count * sizeof(int));
     }
     *count_out = count;
     return vertices;
@@ -1022,17 +1076,17 @@ ecmd_sketch_move_segment(struct rt_edit *s)
 	return BRLCAD_ERROR;
     }
 
-    int nv = 0;
+    size_t vertex_count = 0;
     if ((size_t)se->curr_seg >= skt->curve.count) {
 	bu_vls_printf(s->log_str, "ERROR: selected segment is out of range\n");
 	return BRLCAD_ERROR;
     }
-    int *vertices = sketch_seg_verts(skt, se->curr_seg, &nv);
+    int *vertices = sketch_seg_verts(skt, se->curr_seg, &vertex_count);
     if (!vertices) {
 	bu_vls_printf(s->log_str, "ERROR: selected segment has no vertices\n");
 	return BRLCAD_ERROR;
     }
-    for (int j = 0; j < nv; ++j) {
+    for (size_t j = 0; j < vertex_count; ++j) {
 	int vi = vertices[j];
 	if (vi < 0 || (size_t)vi >= skt->vert_count ||
 	    !isfinite(skt->verts[vi][0] + du) ||
@@ -1042,16 +1096,20 @@ ecmd_sketch_move_segment(struct rt_edit *s)
 	    return BRLCAD_ERROR;
 	}
     }
-    bu_sort(vertices, (size_t)nv, sizeof(int), sketch_vertex_index_compare,
+    bu_sort(vertices, vertex_count, sizeof(int), sketch_vertex_index_compare,
 	NULL);
-    for (int j = 0; j < nv; ++j) {
+    for (size_t j = 0; j < vertex_count; ++j) {
 	int vi = vertices[j];
 	if (j && vertices[j - 1] == vi)
 	    continue;
 	skt->verts[vi][0] += du;
 	skt->verts[vi][1] += dv;
+	rt_edit_snap_point(skt->verts[vi], s);
     }
     bu_free(vertices, "sketch segment vertex indices");
+
+    V2SET(se->last_segment_delta, du, dv);
+    se->last_segment_delta_valid = 1;
 
     s->e_inpara = 0;
     return 0;

@@ -31,7 +31,6 @@
 #include "bu/log.h"
 #include "bu/malloc.h"
 #include "raytrace.h"
-#include "test_utils.h"
 #include "rt/edit.h"
 #include "rt/geom.h"
 #include "wdb.h"
@@ -45,13 +44,15 @@
 static void
 check_getter(struct rt_edit *s, int cmd, int count, const fastf_t *expected)
 {
-    fastf_t values[3] = {0.0, 0.0, 0.0};
-    if (edit_test_get_params(s, cmd, values) != count)
+    struct rt_edit_cmd_values values;
+    if (rt_edit_cmd_values_get(s, cmd, &values) != RT_EDIT_VALUE_OK ||
+	values.value_count != count)
         bu_exit(1, "REC getter returned wrong value count for %d\n", cmd);
     for (int i = 0; i < count; i++) {
-        if (!NEAR_EQUAL(values[i], expected[i], VUNITIZE_TOL))
+	if (!values.value_valid[i] ||
+	    !NEAR_EQUAL(values.values[i], expected[i], VUNITIZE_TOL))
             bu_exit(1, "REC getter %d value %d: got %g, expected %g\n",
-                    cmd, i, values[i], expected[i]);
+		    cmd, i, values.values[i], expected[i]);
     }
 }
 
@@ -201,8 +202,11 @@ check_rec_units(const fastf_t local2base)
         !VNEAR_EQUAL(rec->h, saved_h, VUNITIZE_TOL))
         bu_exit(1, "REC accepted a zero height or changed geometry\n");
 
-    if (edit_test_get_params(s, -1, s->e_para) != 0 ||
-	edit_test_get_params(s, ECMD_REC_SCALE_R, NULL) >= 0)
+    struct rt_edit_cmd_values values;
+    if (rt_edit_cmd_values_get(s, -1, &values) !=
+	    RT_EDIT_VALUE_UNAVAILABLE ||
+	rt_edit_cmd_values_get(s, ECMD_REC_SCALE_R, NULL) !=
+	    RT_EDIT_VALUE_ERROR)
         bu_exit(1, "REC getter accepted invalid arguments\n");
 
     point_t saved_center;

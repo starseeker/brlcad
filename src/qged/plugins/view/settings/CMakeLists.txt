@@ -11,9 +11,9 @@ if(BRLCAD_ENABLE_QT)
   )
 endif(BRLCAD_ENABLE_QT)
 
-set(view_settings_srcs view_settings.cpp CADViewSettings.cpp view_settings.json)
+set(view_settings_srcs view_settings.cpp CADViewSettings.cpp)
 
-set(view_settings_moc_hdrs CADViewSettings.h)
+set(view_settings_moc_hdrs CADViewSettings.h ViewSettingsFactory.h)
 
 if(BRLCAD_ENABLE_QT)
   if(Qt6Widgets_FOUND)
@@ -24,7 +24,6 @@ if(BRLCAD_ENABLE_QT)
     qt5_add_resources(icon_qrc icon.qrc)
   endif(Qt6Widgets_FOUND)
   qged_plugin(qged_view_settings SHARED ${view_settings_srcs} ${view_settings_moc_srcs} ${icon_qrc})
-  set_target_properties(qged_view_settings PROPERTIES AUTOMOC ON)
   if(Qt6Widgets_FOUND)
     target_link_libraries(
       qged_view_settings
@@ -46,13 +45,45 @@ if(BRLCAD_ENABLE_QT)
   endif(Qt6Widgets_FOUND)
   set_property(TARGET qged_view_settings APPEND PROPERTY COMPILE_DEFINITIONS BRLCADBUILD HAVE_CONFIG_H)
   validate_style(qged_view_settings view_settings.cpp)
-  plugin_setup(qged_view_settings qged-qt)
+  plugin_setup(qged_view_settings qged)
+
+  add_executable(test_qged_obol_settings
+    test_qged_obol_settings.cpp
+    CADViewSettings.cpp
+    CADViewSettings.h
+    ${CMAKE_CURRENT_BINARY_DIR}/moc_CADViewSettings.cpp)
+  if(Qt6Widgets_FOUND)
+    target_link_libraries(
+      test_qged_obol_settings
+      libqtcad
+      libged
+      librt
+      libbu
+      Qt6::Widgets
+    )
+  else()
+    target_link_libraries(
+      test_qged_obol_settings
+      libqtcad
+      libged
+      librt
+      libbu
+      Qt5::Widgets
+    )
+  endif(Qt6Widgets_FOUND)
+  target_compile_definitions(test_qged_obol_settings
+    PRIVATE BRLCADBUILD HAVE_CONFIG_H)
+  brlcad_add_test(NAME test_qged_obol_settings COMMAND test_qged_obol_settings)
+  set_property(TEST test_qged_obol_settings
+    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  set_property(TEST test_qged_obol_settings
+    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+  set_property(TEST test_qged_obol_settings APPEND PROPERTY LABELS drawing_baseline)
 
   distclean(
     icon.qrc.depends
     moc_CADViewSettings.cpp_parameters
-    "${CMAKE_BINARY_DIR}/${LIBEXEC_DIR}/qged-qt/qged_view_settings.exp"
-    "${CMAKE_BINARY_DIR}/${LIBEXEC_DIR}/qged-qt/qged_view_settings.pdb"
+    moc_ViewSettingsFactory.cpp_parameters
   )
 endif(BRLCAD_ENABLE_QT)
 
@@ -61,6 +92,7 @@ set(
   CMakeLists.txt
   ${view_settings_srcs}
   ${view_settings_moc_hdrs}
+  test_qged_obol_settings.cpp
   icon.qrc
   settings.svg
   view_settings.json
