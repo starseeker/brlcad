@@ -2133,7 +2133,7 @@ check_enum_replacement()
 	    require(field.getEnum(i, name) == (failed ? originalValues[i] : nextValues[i]) &&
 		name == (failed ? originalNames[i] : nextNames[i]), "enum replacement corrupted mapping");
 	}
-	field = field;
+	field.operator=(field);
 	require(field.getNumEnums() == (failed ? 2 : 3) && field.getValue() == 7,
 	    "enum self-assignment corrupted mappings");
     }
@@ -32306,7 +32306,7 @@ check_name_registry_transaction()
     enum class Change { First, Rename, Shared, Same, Normalize, Clear };
     constexpr size_t sharedNamePopulation = 32; // Force growth of the target name's pointer list.
     for (auto change : {Change::First, Change::Rename, Change::Shared, Change::Same, Change::Normalize, Change::Clear}) {
-	auto run = [change, sharedNamePopulation](size_t failure, bool &threw) {
+	auto run = [change](size_t failure, bool &threw) {
 	    auto owner = retain_node(new SoSeparator);
 	    const SbName original("obol_transaction_original");
 	    const std::string suffix = "_" + std::to_string(int(change)) + "_" + std::to_string(failure);

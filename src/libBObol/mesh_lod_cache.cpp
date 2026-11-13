@@ -2727,8 +2727,8 @@ BObolPopState::publishCoveragePreview(void)
 
     std::atomic<uint64_t> sampledVertexCount(0);
     const auto sampleRange = [this, previewMinimum, previewMaximum,
-	&extent, &workers, &sampledVertexCount, valuesPerCell, cellAxis,
-	samplesPerWorkerCell, boundRelativeTolerance](size_t workerIndex, size_t begin,
+	&extent, &workers, &sampledVertexCount, valuesPerCell,
+	samplesPerWorkerCell](size_t workerIndex, size_t begin,
 	size_t end) {
 	CoverageWorkerSamples &worker = workers[workerIndex];
 	BObolPopSourceReader reader(*this, BObolPopPointAccess::Sequential);

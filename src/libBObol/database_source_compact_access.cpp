@@ -1184,7 +1184,7 @@ public:
 	    this->appearanceChanged = true;
 	    return 1;
 	}
-	void commit(const SoBRLDatabaseSource &source)
+	void commit(const SoBRLDatabaseSource &databaseSource)
 	{
 	    if (this->entry.visible != this->visible)
 		this->entry.visibilityRevision = compact_next_revision(this->entry.visibilityRevision);
@@ -1211,7 +1211,7 @@ public:
 	    if (this->metadata)
 		this->metadata->commit(this->entry);
 	    if (this->materialColorChanged)
-		compact_set_material_styles(this->entry, source, true);
+		compact_set_material_styles(this->entry, databaseSource, true);
 	    this->entry.style = compact_effective_style(this->entry);
 	    compact_sync_shape_display_summary(this->entry);
 	}

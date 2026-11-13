@@ -9100,7 +9100,7 @@ test_completed_pass_composed_lifecycle(void)
 
     for (uint64_t trace = 1; trace <= TraceCount; ++trace) {
 	uint64_t randomState = trace;
-	auto random = [&randomState, RandomMultiplier, RandomIncrement]() {
+	auto random = [&randomState]() {
 	    randomState = randomState * RandomMultiplier + RandomIncrement;
 	    return randomState;
 	};
