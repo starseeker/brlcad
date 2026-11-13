@@ -891,6 +891,7 @@ static int
 _pkg_permserver_impl(struct in_addr iface, const char *service, const char *protocol, int backlog, void (*errlog)(const char *msg))
 {
     struct servent *sp;
+    unsigned short numeric_port = 0;
 #ifdef HAVE_WINSOCK_H
     SOCKET pkg_listenfd;
     SOCKADDR_IN saServer;
@@ -958,14 +959,6 @@ _pkg_permserver_impl(struct in_addr iface, const char *service, const char *prot
 	closesocket(pkg_listenfd);
 
 	return -1;
-    }
-
-    {
-	int bound_size = (int)sizeof(saServer);
-	if (getsockname(pkg_listenfd, (LPSOCKADDR)&saServer, &bound_size) == 0)
-	    pkg_permport = (int)ntohs(saServer.sin_port);
-	else
-	    pkg_permport = (int)numeric_port;
     }
 
     if (backlog > 5)
@@ -1079,17 +1072,6 @@ _pkg_permserver_impl(struct in_addr iface, const char *service, const char *prot
 	return -1;
     }
 
-    if (addr->sa_family == AF_INET) {
-	struct sockaddr_in bound;
-	socklen_t bound_size = (socklen_t)sizeof(bound);
-	memset(&bound, 0, sizeof(bound));
-	if (getsockname(pkg_listenfd, (struct sockaddr *)&bound,
-		&bound_size) == 0)
-	    pkg_permport = (int)ntohs(bound.sin_port);
-	else
-	    pkg_permport = (int)numeric_port;
-    }
-
     if (backlog > 5)  backlog = 5;
     if (listen(pkg_listenfd, backlog) < 0) {
 	_pkg_perror(errlog, "pkg_permserver: listen");
@@ -1103,6 +1085,22 @@ _pkg_permserver_impl(struct in_addr iface, const char *service, const char *prot
     return pkg_listenfd;
 #endif /* HAVE_WINSOCK_H */
 }
+
+#ifdef FIONBIO
+static int
+pkg_set_nonblocking(int fd, int enabled)
+{
+#  ifdef HAVE_WINSOCK_H
+    u_long mode = (u_long)enabled;
+    int result = ioctlsocket((SOCKET)(uintptr_t)fd, FIONBIO, &mode);
+    if (result == SOCKET_ERROR)
+	errno = WSAGetLastError();
+    return result;
+#  else
+    return ioctl(fd, FIONBIO, &enabled);
+#  endif
+}
+#endif
 
 
 static struct pkg_conn *

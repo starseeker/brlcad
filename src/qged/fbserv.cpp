@@ -48,12 +48,8 @@
 
 #include <QPointer>
 
+#include <climits>
 #include <cstring>
-
-#ifdef _WIN32
-#  include <io.h>
-#  include <windows.h>
-#endif
 
 namespace {
 static const qint64 DRAIN_TIME_BUDGET_MS = 4;
@@ -117,7 +113,7 @@ QFBSocket::client_handler()
 
     /* If our client slot has already been torn down (e.g. socket
      * disconnected, drop_client called), there is nothing to do. */
-    if (!fbs_client_active(fbs, ind))
+    if (fbs_client_channel(fbs, ind) != this)
 	return;
     struct pkg_conn *pkc = fbs_client_pkg(fbs, ind);
     if (!pkc || !s)
@@ -166,7 +162,7 @@ QFBSocket::on_disconnected()
 {
     QTCAD_SLOT("QFBSocket::on_disconnected", 1);
     struct fbserv_obj *fbs = qged_fbserv_obj(fbsp);
-    if (!fbs_client_active(fbs, ind))
+    if (fbs_client_channel(fbs, ind) != this)
 	return;	/* already dropped */
     fbs_drop_client(fbs, ind);
 }
@@ -187,30 +183,28 @@ QFBServer::on_Connect()
     QTCAD_SLOT("QFBServer::on_Connect", 1);
     // Have a new connection pending, accept it.
     QTcpSocket *tcps = nextPendingConnection();
+    if (!tcps)
+	return;
 
-    bu_log("new connection");
-
-    QFBSocket *fs = new QFBSocket;
-    fs->s = tcps;
-    fs->fbsp = fbsp;
-
-    int fd = tcps->socketDescriptor();
-    bu_log("fd: %d\n", fd);
-    struct pkg_conn *pc = pkg_adopt_socket(fd, fbs_pkg_switch(), 0);
-    if (pc == PKC_ERROR) {
-	bu_log("new connection failed (pkg_adopt_socket)");
-	tcps->close();
-	delete fs;
+    const qintptr fd = tcps->socketDescriptor();
+    if (fd < 0 || fd > INT_MAX) {
+	tcps->deleteLater();
 	return;
     }
 
-    fs->ind = fbs_new_client(qged_fbserv_obj(fbsp), pc, (void *)fs);
-    if (fs->ind == -1) {
-	bu_log("new connection failed");
-	pkg_close(pc);
-	tcps->close();
-	delete fs;
+    struct pkg_conn *pc = pkg_borrow_socket(static_cast<int>(fd), fbs_pkg_switch(), NULL);
+    if (pc == PKC_ERROR || pc == PKC_NULL) {
+	tcps->deleteLater();
+	return;
     }
+
+    QFBSocket *fs = new QFBSocket;
+    tcps->setParent(fs);
+    fs->s = tcps;
+    fs->fbsp = fbsp;
+    fs->ind = fbs_new_client(qged_fbserv_obj(fbsp), pc, fs);
+    if (fs->ind < 0)
+	delete fs;
 }
 
 /* Check if we're already listening. */
@@ -263,6 +257,7 @@ qged_fbserv_close_server_handler(struct fbserv_obj *fbsp)
     QFBServer *nl = (QFBServer *)fbs_listener_channel(fbsp);
     delete nl;
     fbs_set_listener_channel(fbsp, NULL);
+    fbs_set_listener_fd(fbsp, -1);
 }
 
 static void
@@ -285,12 +280,13 @@ qged_fbserv_close_client_handler(struct fbserv_obj *fbsp, int i)
 {
     bu_log("close_client_handler\n");
     QFBSocket *s = (QFBSocket *)fbs_client_channel(fbsp, i);
-    if (s) {
-	/* Phase D2 (ert reliability): use deleteLater() to be safe when
-	 * called from within a slot of `s` itself (e.g. on_disconnected). */
-	s->deleteLater();
-    }
     fbs_set_client_channel(fbsp, i, NULL);
+    if (!s)
+	return;
+    QObject::disconnect(s->s, nullptr, s, nullptr);
+    s->s->abort();
+    s->fbsp = nullptr;
+    s->deleteLater();
 }
 
 void
@@ -351,7 +347,7 @@ QFBIPCSocket::ipc_handler()
 
     struct fbserv_obj *fbs = qged_fbserv_obj(fbsp);
 
-    if (!fbs_client_active(fbs, ind))
+    if (fbs_client_channel(fbs, ind) != this)
 	return;
 
     struct pkg_conn *pkc = fbs_client_pkg(fbs, ind);
@@ -362,27 +358,16 @@ QFBIPCSocket::ipc_handler()
     }
 
 #ifdef _WIN32
-    /* QSocketNotifier only supports Winsock sockets on Windows.  IPC uses
-     * anonymous pipes, so poll their HANDLE without consuming bytes and let
-     * the regular fbserv handler perform one bounded blocking read. */
-    int fd = fbs_client_fd(fbs, ind);
-    HANDLE pipe = fd >= 0 ? (HANDLE)_get_osfhandle(fd) : INVALID_HANDLE_VALUE;
-    DWORD available = 0;
-    if (pipe == INVALID_HANDLE_VALUE ||
-	!PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)) {
-	if (timer) timer->stop();
+    const int ready = pkg_conn_poll(pkc);
+    if (ready < 0) {
+	fbs_drop_client(fbs, ind);
 	return;
     }
-    if (!available)
+    if (!ready)
 	return;
-
-    void *client_data = fbs_client_handler_data(fbs, ind);
-    if (!client_data)
-	return;
-    fbs_existing_client_handler(client_data, 0);
-    if (fbs_client_active(fbs, ind))
-	emit updated();
-    return;
+    const int iteration_limit = 1;
+#else
+    const int iteration_limit = DRAIN_ITERATION_CAP;
 #endif
 
     /* Phase H2 (ert reliability): pkc_server_data is set once at slot
@@ -404,7 +389,7 @@ QFBIPCSocket::ipc_handler()
 
     struct fbserv_process_result result;
     int process_status = fbs_drain_client(fbs, ind, DRAIN_BYTES_BUDGET,
-	DRAIN_ITERATION_CAP, DRAIN_TIME_BUDGET_MS * 1000, &result);
+	iteration_limit, DRAIN_TIME_BUDGET_MS * 1000, &result);
     if (result.messages_processed > 0)
 	emit updated();
     if (process_status != BRLCAD_OK)
@@ -412,7 +397,7 @@ QFBIPCSocket::ipc_handler()
     if (result.disconnected)
 	return;
 
-    if (notifier)
+    if (notifier && fbs_client_channel(fbs, ind) == this)
 	notifier->setEnabled(true);
 }
 
@@ -459,6 +444,7 @@ qged_fbserv_close_ipc_client_handler(struct fbserv_obj *fbsp, int i)
 	    s->notifier->setEnabled(false);
 	if (s->timer)
 	    s->timer->stop();
+	s->fbsp = nullptr;
 	s->deleteLater();
     }
     fbs_set_client_channel(fbsp, i, NULL);

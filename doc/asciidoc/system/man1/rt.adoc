@@ -326,9 +326,9 @@ The first command starts an *fbserv*(1) framebuffer server on port 0. The second
 ====
 [source,bash]
 ----
-set FBSERV_TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-set FBSERV_TLS=1
-set FBSERV_TLS_SHA256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+export FBSERV_TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+export FBSERV_TLS=1
+export FBSERV_TLS_SHA256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 fbserv -R -p 0 -F /dev/wgl &
 rt -F 0 model.g object
 ----

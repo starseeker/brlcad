@@ -46,9 +46,9 @@ class QFBSocket : public QObject
     Q_OBJECT
 
     public:
-	QTcpSocket *s;
-	int ind;
-	void *fbsp;
+	QTcpSocket *s = nullptr;
+	int ind = -1;
+	void *fbsp = nullptr;
 
     signals:
 	void updated();

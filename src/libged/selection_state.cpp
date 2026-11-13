@@ -212,6 +212,40 @@ ged_selection_path_split(std::vector<std::string> &objs, const char *str)
 
 
 static std::string
+ged_selection_strip_comb_instance_suffix(const std::string &name)
+{
+    size_t at_pos = name.rfind('@');
+    if (at_pos == std::string::npos || at_pos == 0 ||
+	    at_pos + 1 >= name.size())
+	return name;
+
+    for (size_t i = at_pos + 1; i < name.size(); i++) {
+	if (name[i] < '0' || name[i] > '9')
+	    return name;
+    }
+    return name.substr(0, at_pos);
+}
+
+
+static std::string
+ged_selection_semantic_path(const char *path)
+{
+    std::vector<std::string> elements;
+    ged_selection_path_split(elements, path);
+    if (elements.empty())
+	return std::string();
+
+    std::string out;
+    for (const std::string &element : elements) {
+	if (!out.empty())
+	    out += "/";
+	out += ged_selection_strip_comb_instance_suffix(element);
+    }
+    return out;
+}
+
+
+static std::string
 ged_selection_name_deescape(const std::string &name)
 {
     std::string nstr;
@@ -1129,6 +1163,22 @@ ged_selection_state_create(struct ged *gedp)
     state->batch_depth = 0;
     state->presented_scene_revision = 0;
     return state;
+}
+
+
+void
+ged_selection_database_reset_private(struct ged *gedp)
+{
+    struct ged_selection_state *state = ged_selection_native_state(gedp);
+    if (!state)
+	return;
+
+    if (!state->native_sets.empty())
+	state->revision++;
+    state->native_sets.clear();
+    state->dirty_sets.clear();
+    state->presented_paths.clear();
+    state->presented_scene_revision = 0;
 }
 
 

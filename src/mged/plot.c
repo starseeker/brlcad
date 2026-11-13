@@ -94,11 +94,6 @@ f_area(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
-#ifdef _WIN32
-    (void)interp;
-    (void)argc;
-    (void)argv;
-#else
     struct mged_state *s = ctp->s;
 
     char result[RT_MAXLINE] = {0};

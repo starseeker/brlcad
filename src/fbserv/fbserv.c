@@ -92,9 +92,10 @@ static int use_tls = 0;
 static int remote_access = 0;
 static int allow_insecure_remote = 0;
 static int verbose = 0;
+static int single_client = 0;
 
 static const char usage[] =
-    "Usage: fbserv [-v] [-T] [-A] [-R [-u]] [-F framebuffer] [-s size]\n"
+    "Usage: fbserv [-v] [-T] [-A] [-1] [-R [-u]] [-F framebuffer] [-s size]\n"
     "              [-w width] [-n height] (-p port | -I ipc_address)\n"
     "       fbserv port [framebuffer]\n"
     "\n"
@@ -102,6 +103,7 @@ static const char usage[] =
     "If -F is omitted, a memory framebuffer is used.\n"
     "  -T  enable TLS (requires an OpenSSL build)\n"
     "  -A  require FBSERV_TOKEN authentication\n"
+    "  -1  exit after serving one client\n"
     "  -R  accept remote TCP clients (requires authenticated, pinned TLS)\n"
     "  -u  permit legacy insecure remote TCP (only with -R)\n"
     "  -I  listen on a libpkg IPC address\n";
@@ -161,11 +163,12 @@ parse_args(int argc, char **argv)
     int c;
     int port_set = 0;
 
-    while ((c = bu_getopt(argc, argv, "vTARuI:F:s:w:n:S:W:N:p:h?")) != -1) {
+    while ((c = bu_getopt(argc, argv, "vTA1RuI:F:s:w:n:S:W:N:p:h?")) != -1) {
 	switch (c) {
 	    case 'v': verbose = 1; break;
 	    case 'T': use_tls = 1; break;
 	    case 'A': require_auth = 1; break;
+	    case '1': single_client = 1; break;
 	    case 'R': remote_access = 1; break;
 	    case 'u': allow_insecure_remote = 1; break;
 	    case 'I': ipc_address = bu_optarg; break;
@@ -216,11 +219,13 @@ service_client(int sub)
 static int
 service_loop(struct pkg_listener *listener)
 {
+    int accepted_client = 0;
     for (;;) {
 	fd_set read_fds;
 	struct timeval timeout = {60, 0};
 	int max_fd = -1;
-	int listener_fd = listener ? pkg_get_listener_fd(listener) : -1;
+	const int accept_clients = listener && !(single_client && accepted_client);
+	int listener_fd = accept_clients ? pkg_get_listener_fd(listener) : -1;
 
 	FD_ZERO(&read_fds);
 	if (listener_fd >= 0) {
@@ -247,12 +252,14 @@ service_loop(struct pkg_listener *listener)
 
 #ifdef _WIN32
 	/* Named-pipe listeners do not expose a select-compatible descriptor. */
-	if (listener && listener_fd < 0) {
+	if (accept_clients && listener_fd < 0) {
 	    struct pkg_conn *pcp = pkg_accept(listener, fbs_pkg_switch(),
 		communications_error, 0);
 	    int sub = fbs_new_client(&server, pcp, NULL);
 	    while (sub >= 0 && fbs_client_active(&server, sub))
 		(void)service_client(sub);
+	    if (sub >= 0 && single_client)
+		return BRLCAD_OK;
 	    continue;
 	}
 #endif
@@ -275,8 +282,9 @@ service_loop(struct pkg_listener *listener)
 	if (listener_fd >= 0 && FD_ISSET(listener_fd, &read_fds)) {
 	    struct pkg_conn *pcp = pkg_accept(listener, fbs_pkg_switch(),
 		communications_error, 0);
-	    if (pcp != PKC_ERROR && pcp != PKC_NULL)
-		(void)fbs_new_client(&server, pcp, NULL);
+	    if (pcp != PKC_ERROR && pcp != PKC_NULL &&
+		fbs_new_client(&server, pcp, NULL) >= 0)
+		accepted_client = 1;
 	}
 
 	for (int i = 0; i < FBSERV_MAX_CLIENTS; i++) {
@@ -286,7 +294,8 @@ service_loop(struct pkg_listener *listener)
 		(void)service_client(i);
 	}
 
-	if (!listener && active_clients(&server) == 0)
+	if ((!listener || (single_client && accepted_client)) &&
+	    active_clients(&server) == 0)
 	    return BRLCAD_OK;
     }
 }
@@ -331,7 +340,7 @@ main(int argc, char **argv)
     if (require_auth || verbose)
 	fprintf(stderr, "fbserv: Session token: %s\n", server.fbs_auth_token);
 
-    if (use_tls || getenv("FBSERV_TLS")) {
+    if (!ipc_address && (use_tls || getenv("FBSERV_TLS"))) {
 	server.fbs_tls_ctx = fbs_tls_server_context_create(getenv("FBSERV_TLS_CERT"),
 		getenv("FBSERV_TLS_KEY"));
 	if (!server.fbs_tls_ctx)

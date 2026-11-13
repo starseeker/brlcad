@@ -1168,6 +1168,23 @@ ged_event_librt_callbacks_disable(struct ged *gedp)
 
 
 void
+ged_event_database_close_private(struct ged *gedp)
+{
+    struct ged_event_service *state = ged_event_service_get(gedp);
+    if (state) {
+	std::lock_guard<std::mutex> lock(state->state_mutex);
+	(void)ged_event_librt_callbacks_disable(gedp);
+	// Queued mutations belong to the database that produced them.
+	state->queued_events.clear();
+	state->followup_events.clear();
+	state->bulk_refresh_pending = 0;
+    }
+    ged_db_index_database_set_private(gedp, NULL);
+    ged_selection_database_reset_private(gedp);
+}
+
+
+void
 ged_event_init(struct ged_event *event)
 {
     if (!event)

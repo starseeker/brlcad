@@ -167,10 +167,11 @@ imgstream_fb_remote_open(const imgstream_fb_spec_info_t *info,
 	const char *inherited = getenv(PKG_ADDR_ENVVAR);
 	if (inherited && inherited[0]) {
 	    connection = pkg_connect_addr(inherited, remote_switch, remote_log);
-	    if (connection != PKC_NULL && connection != PKC_ERROR)
-		local_transport = 1;
-	}
-	if (connection == PKC_NULL || connection == PKC_ERROR) {
+	    if (connection == PKC_NULL || connection == PKC_ERROR)
+		goto cleanup;
+	    local_transport = 1;
+	    use_tls = 0;
+	} else {
 	    if (!info->host || !info->host_len || info->port < 0)
 		goto cleanup;
 	    host = span_copy(info->host, info->host_len);
@@ -207,6 +208,8 @@ imgstream_fb_remote_open(const imgstream_fb_spec_info_t *info,
 	    goto cleanup;
 	}
 	SSL_CTX_free(tls_context);
+	if (host)
+	    bu_log("remote framebuffer: TLS established with %s\n", host);
     }
 #else
     if (info->remote == IMGSTREAM_FB_REMOTE_TCP && use_tls)

@@ -78,11 +78,6 @@
 #include "wdb.h"
 #include "mged_startup.h"
 
-/* Needed to define struct bv_scene_obj */
-#include "bv/defines.h"
-
-__BEGIN_DECLS
-
 #include "tcl.h"
 #ifdef HAVE_TK
 #  include "tk.h"

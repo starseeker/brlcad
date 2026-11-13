@@ -3478,7 +3478,7 @@ main(int argc, char *argv[])
     /* Initialize an Obol endpoint host. Interactive classic MGED prompts when
      * no target is specified; batch/classic MGED only attaches when the user
      * explicitly requests a non-nu host. */
-    if (s->startup.dm != MGED_DM_NONE) {
+    if (s->startup.ui != MGED_UI_GUI && s->startup.dm != MGED_DM_NONE) {
 	if (s->startup.dm == MGED_DM_AUTO) {
 	    get_attached(s);
 	} else {

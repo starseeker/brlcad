@@ -1056,7 +1056,7 @@ test_p1_option_named_object(struct ged *gedp)
     CHECK(ged_exec(gedp, 8, edit) == BRLCAD_OK,
 	"edit parses -i as an option even when it names an object");
     ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
-    if (find_object_session(gedp, "tor.s", &session) == GED_EDIT_OK)
+    if (find_unique_object_session(gedp, "tor.s", &session) == GED_EDIT_OK)
 	CHECK(ged_edit_session_cancel(gedp, session) == GED_EDIT_OK,
 	    "cancel the intermediate edit");
     else
@@ -5428,7 +5428,87 @@ test_unit_pipe_edits(struct ged *gedp)
 	pipe.point_count == 5 && NEAR_EQUAL(pipe.first[X], -inch, NEAR_ENOUGH),
 	"inch pipe prepend persists a base-unit point");
 
+    const char *move[] = {
+	"edit", "unit_pipe.s", "move_point", "-1.5", "0", "0", NULL
+    };
+    CHECK(select_unit_pipe_point(gedp, "-1") == BRLCAD_OK &&
+	ged_exec(gedp, 6, move) == BRLCAD_OK &&
+	read_unit_pipe(gedp, &pipe) == BRLCAD_OK &&
+	NEAR_EQUAL(pipe.first[X], -1.5 * inch, NEAR_ENOUGH),
+	"inch pipe move persists a base-unit point");
 
+    const char *split[] = {
+	"edit", "unit_pipe.s", "split_segment", "-0.75", "0", "0", NULL
+    };
+    CHECK(select_unit_pipe_point(gedp, "-1.5") == BRLCAD_OK &&
+	ged_exec(gedp, 6, split) == BRLCAD_OK &&
+	read_unit_pipe(gedp, &pipe) == BRLCAD_OK &&
+	pipe.point_count == 6 && NEAR_EQUAL(pipe.second[X], -0.75 * inch, NEAR_ENOUGH),
+	"inch pipe split persists a base-unit point");
+
+    const char *remove[] = {
+	"edit", "unit_pipe.s", "delete_point", NULL
+    };
+    CHECK(select_unit_pipe_point(gedp, "-0.75") == BRLCAD_OK &&
+	ged_exec(gedp, 3, remove) == BRLCAD_OK &&
+	read_unit_pipe(gedp, &pipe) == BRLCAD_OK &&
+	pipe.point_count == 5 && NEAR_EQUAL(pipe.second[X], 0.0, NEAR_ENOUGH),
+	"inch pipe delete removes the selected point");
+
+    const char *point_od[] = {
+	"edit", "unit_pipe.s", "set_point_od", "0.2", NULL
+    };
+    CHECK(select_unit_pipe_point(gedp, "-1.5") == BRLCAD_OK &&
+	ged_exec(gedp, 4, point_od) == BRLCAD_OK &&
+	read_unit_pipe(gedp, &pipe) == BRLCAD_OK &&
+	NEAR_EQUAL(pipe.first_od, 0.2 * inch, NEAR_ENOUGH) &&
+	NEAR_EQUAL(pipe.second_od, 0.1 * inch, NEAR_ENOUGH),
+	"inch pipe point OD converts once");
+
+    const char *point_id[] = {
+	"edit", "unit_pipe.s", "set_point_id", "0.05", NULL
+    };
+    CHECK(select_unit_pipe_point(gedp, "-1.5") == BRLCAD_OK &&
+	ged_exec(gedp, 4, point_id) == BRLCAD_OK &&
+	read_unit_pipe(gedp, &pipe) == BRLCAD_OK &&
+	NEAR_EQUAL(pipe.first_id, 0.05 * inch, NEAR_ENOUGH),
+	"inch pipe point ID converts once");
+
+    const char *point_bend[] = {
+	"edit", "unit_pipe.s", "set_point_bend", "0.6", NULL
+    };
+    CHECK(select_unit_pipe_point(gedp, "-1.5") == BRLCAD_OK &&
+	ged_exec(gedp, 4, point_bend) == BRLCAD_OK &&
+	read_unit_pipe(gedp, &pipe) == BRLCAD_OK &&
+	NEAR_EQUAL(pipe.first_bend, 0.6 * inch, NEAR_ENOUGH),
+	"inch pipe point bend converts once");
+
+    const char *pipe_od[] = {
+	"edit", "unit_pipe.s", "set_pipe_od", "0.25", NULL
+    };
+    CHECK(ged_exec(gedp, 4, pipe_od) == BRLCAD_OK &&
+	read_unit_pipe(gedp, &pipe) == BRLCAD_OK &&
+	NEAR_EQUAL(pipe.first_od, 0.25 * inch, NEAR_ENOUGH) &&
+	NEAR_EQUAL(pipe.second_od, 0.125 * inch, NEAR_ENOUGH),
+	"inch pipe OD sets the reference point and scales the pipe");
+
+    const char *pipe_id[] = {
+	"edit", "unit_pipe.s", "set_pipe_id", "0.06", NULL
+    };
+    CHECK(ged_exec(gedp, 4, pipe_id) == BRLCAD_OK &&
+	read_unit_pipe(gedp, &pipe) == BRLCAD_OK &&
+	NEAR_EQUAL(pipe.first_id, 0.06 * inch, NEAR_ENOUGH) &&
+	NEAR_EQUAL(pipe.second_id, 0.048 * inch, NEAR_ENOUGH),
+	"inch pipe ID sets the reference point and scales the pipe");
+
+    const char *pipe_bend[] = {
+	"edit", "unit_pipe.s", "set_pipe_bend", "0.7", NULL
+    };
+    CHECK(ged_exec(gedp, 4, pipe_bend) == BRLCAD_OK &&
+	read_unit_pipe(gedp, &pipe) == BRLCAD_OK &&
+	NEAR_EQUAL(pipe.first_bend, 0.7 * inch, NEAR_ENOUGH) &&
+	NEAR_EQUAL(pipe.second_bend, 0.5 * inch * (0.7 / 0.6), NEAR_ENOUGH),
+	"inch pipe bend sets the reference point and scales the pipe");
 }
 
 struct unit_vol_state {
@@ -5607,9 +5687,14 @@ main(int ac, char *av[])
 	struct unit_pipe_state pipe = {};
 	CHECK(read_unit_pipe(gedp, &pipe) == BRLCAD_OK &&
 	      pipe.point_count == 5 &&
-	      NEAR_EQUAL(pipe.first[X], -inch, NEAR_ENOUGH) &&
-	      NEAR_EQUAL(pipe.last[X], 3.0 * inch, NEAR_ENOUGH),
-	      "inch pipe append and prepend survive database reopen");	struct unit_vol_state vol = {};
+	      NEAR_EQUAL(pipe.first[X], -1.5 * inch, NEAR_ENOUGH) &&
+	      NEAR_EQUAL(pipe.second[X], 0.0, NEAR_ENOUGH) &&
+	      NEAR_EQUAL(pipe.last[X], 3.0 * inch, NEAR_ENOUGH) &&
+	      NEAR_EQUAL(pipe.first_od, 0.25 * inch, NEAR_ENOUGH) &&
+	      NEAR_EQUAL(pipe.first_id, 0.06 * inch, NEAR_ENOUGH) &&
+	      NEAR_EQUAL(pipe.first_bend, 0.7 * inch, NEAR_ENOUGH),
+	      "inch pipe edits survive database reopen");
+	struct unit_vol_state vol = {};
 	const vect_t expected_vol_cellsize = {
 	    2.0 * inch, 3.0 * inch, 4.0 * inch
 	};
@@ -5969,6 +6054,10 @@ main(int ac, char *av[])
         if (!gedp) { bu_log("ERROR: ged_open failed (section 5)\n"); bu_vls_free(&p5_path); return 1; }
         bu_log("\n--- Section 5: pipe descriptor completions ---\n");
         test_p5_pipe_list_ops(gedp);
+        test_p5_pipe_select_next_prev(gedp);
+        test_p5_pipe_append_del(gedp);
+        test_p5_pipe_prepend(gedp);
+        test_p5_pipe_split(gedp);
         bu_log("--- Section 5: arb8 descriptor ---\n");
         test_p5_arb8_list_ops(gedp);
         test_p5_arb8_list_ops_json(gedp);

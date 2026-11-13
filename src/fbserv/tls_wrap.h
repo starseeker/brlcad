@@ -118,6 +118,13 @@ _fbserv_ssl_write(void *ctx, const void *buf, size_t n)
 }
 
 
+static int
+_fbserv_ssl_pending(void *ctx)
+{
+    return SSL_pending((SSL *)ctx);
+}
+
+
 /**
  * Cleanup callback registered in pkc_tls_free.  Sends TLS
  * close_notify and frees the SSL object.  The underlying fd is closed
@@ -384,7 +391,8 @@ fbserv_tls_accept(SSL_CTX *ctx, struct pkg_conn *pc)
     }
 
     pkg_set_tls(pc, (void *)ssl,
-		_fbserv_ssl_read, _fbserv_ssl_write, _fbserv_ssl_free);
+		_fbserv_ssl_read, _fbserv_ssl_write, _fbserv_ssl_pending,
+		_fbserv_ssl_free);
 
     return FBSERV_TLS_OK;
 }
@@ -466,7 +474,8 @@ fbserv_tls_connect(SSL_CTX *ctx, struct pkg_conn *pc,
 	X509_free(certificate);
 
     pkg_set_tls(pc, (void *)ssl,
-		_fbserv_ssl_read, _fbserv_ssl_write, _fbserv_ssl_free);
+		_fbserv_ssl_read, _fbserv_ssl_write, _fbserv_ssl_pending,
+		_fbserv_ssl_free);
 
     return FBSERV_TLS_OK;
 }

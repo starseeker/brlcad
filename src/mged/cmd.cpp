@@ -48,6 +48,7 @@
 #endif
 #include "bio.h"
 #include "bresource.h"
+#include "libtermio.h"
 
 
 #include "vmath.h"
@@ -317,6 +318,8 @@ run_ged_async(struct mged_state *s, std::function<int()> func)
 	bu_log("mged: refusing re-entrant GED command execution\n");
 	return BRLCAD_ERROR;
     }
+
+    mged_terminal_columns(s);
 
     AsyncCommandState command_state;
 

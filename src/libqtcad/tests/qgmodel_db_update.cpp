@@ -17,7 +17,9 @@
 #include <QTemporaryDir>
 
 #include "bu/app.h"
+#include "ged.h"
 #include "qtcad/QgModel.h"
+#include "qtcad/QgRoles.h"
 #include "wdb.h"
 
 
@@ -67,8 +69,8 @@ main(int argc, char **argv)
 
     const QAbstractItemModel &tree = model;
     const QModelIndex root_child = tree.index(0, 0);
-    const QVariant directory_entry = tree.data(root_child, QgModel::DirectoryInternalRole);
-    if (directory_entry.value<void *>() != db_lookup(model.gedp->dbip,
+    const QVariant directory_entry = tree.data(root_child, QgDataRoles::DirectoryInternalRole);
+    if (directory_entry.value<void *>() != db_lookup(model.ged()->dbip,
 	    make[1], LOOKUP_QUIET)) {
 	bu_log("A hierarchy row retained a directory entry from the old database\n");
 	return 1;
