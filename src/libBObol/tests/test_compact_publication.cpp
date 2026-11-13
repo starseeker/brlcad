@@ -717,9 +717,9 @@ struct ExternalPrimitiveInputs {
 	for (size_t i = 0; i < 8; ++i) VMOVE(arb.pt[i], corners[i]);
 	initialize(line, ID_ELL, &ell);
 	initialize(plot, ID_ARB8, &arb);
-	database.reset(db_create_inmem());
+	database.reset(db_open_inmem_ex(indexed ?
+	    DB_OPEN_INMEM_COMB_INSTANCES : DB_OPEN_INMEM_DEFAULT));
 	require(bool(database), "external primitive database");
-	db_comb_instance_ids_set(database.get(), indexed ? 1 : 0);
 	rt_wdb *writer = wdb_dbopen(database.get(), RT_WDB_TYPE_DB_INMEM);
 	rt_arb_internal *copy;
 	BU_ALLOC(copy, rt_arb_internal); *copy = arb;

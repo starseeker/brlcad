@@ -150,7 +150,8 @@ main(int argc, char **argv)
 
     {
 	ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
-	CHECK(ged_edit_session_begin(gedp, "sketch.s", nullptr, &session) ==
+	CHECK(ged_edit_session_begin(gedp, "sketch.s", GED_EDIT_TARGET_OBJECT,
+		&session) ==
 	    GED_EDIT_OK, "could not begin the sketch interaction session");
 	QgSketchEdit sketch;
 	CHECK(sketch.refresh(gedp, session, QStringLiteral("sketch.s")) &&
@@ -218,11 +219,15 @@ main(int argc, char **argv)
 	    "generated HYP editor initializes from absolute descriptor values");
 	height->setValue(12.0);
 	apply->click();
-	const char *getHeight[] = {"edit", "hyp.s", "get", "h", nullptr};
-	CHECK(ged_exec(gedp, 4, getHeight) == BRLCAD_OK &&
-	    QString::fromUtf8(bu_vls_cstr(gedp->ged_result_str)).contains(
-		QStringLiteral("12")),
-	    "CLI observes an absolute HYP update made by the generated widget");
+	struct ged_edit_session_info heightInfo = {};
+	struct rt_edit_cmd_values heightValues;
+	CHECK(ged_edit_session_info_get(gedp, editor.session(), &heightInfo) ==
+		GED_EDIT_OK &&
+	    ged_edit_session_command_values_get(gedp, editor.session(),
+		heightInfo.command_id, &heightValues) == GED_EDIT_OK &&
+	    heightValues.value_valid[0] &&
+	    std::fabs(heightValues.values[0] - 12.0) < 1.0e-9,
+	    "generated widget applies an absolute HYP session update");
 	const char *setB[] = {"edit", "-i", "hyp.s", "b", "5", nullptr};
 	CHECK(ged_exec(gedp, 5, setB) == BRLCAD_OK &&
 	    operation->currentText() == QStringLiteral("Set B"),
@@ -417,9 +422,9 @@ main(int argc, char **argv)
 	QgPrimitiveEdit editor;
 	editor.setGed(gedp);
 	editor.setTargetPath(QStringLiteral("ell.s"));
-	const ged_edit_session_ref owned = editor.session();
-	CHECK(!ged_edit_session_ref_is_null(owned),
-	    "target-switch test begins a widget-owned session");
+	const ged_edit_session_ref shared = editor.session();
+	CHECK(!ged_edit_session_ref_is_null(shared),
+	    "target-switch test joins a shared default session");
 	QDoubleSpinBox *axisA = editor.findChild<QDoubleSpinBox *>(
 	    QStringLiteral("primitiveEdit.param.a.0"));
 	QPushButton *apply = editor.findChild<QPushButton *>(
@@ -429,24 +434,28 @@ main(int argc, char **argv)
 	apply->click();
 	editor.setTargetPath(QStringLiteral("annot.s"));
 	struct ged_edit_session_info oldInfo = {};
-	CHECK(ged_edit_session_info_get(gedp, owned, &oldInfo) == GED_EDIT_STALE &&
+	CHECK(ged_edit_session_info_get(gedp, shared, &oldInfo) == GED_EDIT_OK &&
 	    editor.targetPath() == QStringLiteral("annot.s") &&
 	    !ged_edit_session_ref_is_null(editor.session()),
-	    "switching targets cancels only the widget-owned intermediate");
+	    "switching targets leaves the shared default session active");
 	CHECK(std::fabs(database_axis_a(gedp) - 12.0) < 1.0e-9,
-	    "target switching does not commit abandoned widget geometry");
+	    "target switching does not commit detached session geometry");
 	editor.cancel();
+	CHECK(ged_edit_session_cancel(gedp, shared) == GED_EDIT_OK,
+	    "detached shared session remains explicitly controllable");
     }
 
     {
 	ged_edit_session_ref cliSession = GED_EDIT_SESSION_REF_NULL;
-	CHECK(ged_edit_session_begin(gedp, "ell.s", nullptr, &cliSession) ==
+	CHECK(ged_edit_session_begin(gedp, "ell.s", GED_EDIT_TARGET_OBJECT,
+		&cliSession) ==
 	    GED_EDIT_OK, "CLI-owned target-switch fixture begins a session");
 	QgPrimitiveEdit editor;
 	editor.setGed(gedp);
-	editor.setTargetPath(QStringLiteral("ell.s"));
+	CHECK(editor.setSession(cliSession),
+	    "generated editor binds an explicitly selected session");
 	CHECK(editor.session().id == cliSession.id,
-	    "generated editor joins an independently owned session");
+	    "generated editor retains the selected session identity");
 	editor.setTargetPath(QStringLiteral("annot.s"));
 	struct ged_edit_session_info cliInfo = {};
 	CHECK(ged_edit_session_info_get(gedp, cliSession, &cliInfo) == GED_EDIT_OK,

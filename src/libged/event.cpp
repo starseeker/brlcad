@@ -25,6 +25,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
+#include <mutex>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -62,6 +64,8 @@ struct ged_event_observer_entry {
 struct ged_event_service {
     struct ged *gedp = nullptr;
     struct db_i *callback_dbip = nullptr;
+    std::mutex state_mutex;
+    bool processing = false;
     ged_event_observer_token next_token = 1;
     int suspended = 0;
     int bulk_depth = 0;
@@ -521,13 +525,31 @@ ged_event_dispatch_phase_on_owner(void *data)
     if (!state || events.empty())
 	return 0;
 
-    size_t len = state->observers.size();
-    for (size_t i = 0; i < len; i++) {
-	ged_event_observer_entry &entry = state->observers[i];
-	if (entry.removed || entry.phase != context->phase || !entry.func)
-	    continue;
-	entry.func(state->gedp, events.data(), events.size(), context->result,
-		entry.client_data);
+    std::vector<ged_event_observer_token> tokens;
+    {
+	std::lock_guard<std::mutex> guard(state->state_mutex);
+	for (const ged_event_observer_entry &entry : state->observers) {
+	    if (!entry.removed && entry.phase == context->phase && entry.func)
+		tokens.push_back(entry.token);
+	}
+    }
+
+    for (ged_event_observer_token token : tokens) {
+	ged_event_observer_func_t func = nullptr;
+	void *client_data = nullptr;
+	{
+	    std::lock_guard<std::mutex> guard(state->state_mutex);
+	    for (const ged_event_observer_entry &entry : state->observers) {
+		if (entry.token == token && !entry.removed) {
+		    func = entry.func;
+		    client_data = entry.client_data;
+		    break;
+		}
+	    }
+	}
+	if (func)
+	    func(state->gedp, events.data(), events.size(), context->result,
+		client_data);
     }
     return 1;
 }
@@ -824,15 +846,26 @@ static enum ged_event_status ged_event_publish_impl(
 static void
 ged_event_process_followups(struct ged_event_service *state)
 {
-    if (!state || state->batch_depth > 0 || state->dispatch_depth > 0)
+    if (!state)
 	return;
 
     int guard = 0;
-    while (!state->followup_events.empty() && guard++ < 1024) {
+    while (guard++ < 1024) {
 	std::vector<ged_event_owned> followups;
-	followups.swap(state->followup_events);
+	{
+	    std::lock_guard<std::mutex> lock(state->state_mutex);
+	    followups.swap(state->followup_events);
+	    if (followups.empty()) {
+		state->processing = false;
+		return;
+	    }
+	}
 	ged_event_process_owned(state, followups, nullptr);
     }
+
+    std::lock_guard<std::mutex> lock(state->state_mutex);
+    state->followup_events.clear();
+    state->processing = false;
 }
 
 
@@ -855,7 +888,10 @@ ged_event_process_owned(struct ged_event_service *state,
     ged_event_result_prepare(result, state->gedp, events.size(),
 	    coalesced.size());
 
-    state->dispatch_depth++;
+    {
+	std::lock_guard<std::mutex> lock(state->state_mutex);
+	state->dispatch_depth++;
+    }
     ged_event_dispatch_phase(state, GED_EVENT_OBSERVER_INTERNAL, views,
 	    result);
 
@@ -906,8 +942,11 @@ ged_event_process_owned(struct ged_event_service *state,
 
     ged_event_dispatch_phase(state, GED_EVENT_OBSERVER_POST_RECONCILE, views,
 	    result);
-    state->dispatch_depth--;
-    ged_event_prune_observers(state);
+    {
+	std::lock_guard<std::mutex> lock(state->state_mutex);
+	state->dispatch_depth--;
+	ged_event_prune_observers(state);
+    }
 
     if (state->bulk_refresh_pending &&
 	    ged_event_contains_batch_rebuild(coalesced)) {
@@ -917,7 +956,6 @@ ged_event_process_owned(struct ged_event_service *state,
 	    ged_refresh_cb(state->gedp);
     }
 
-    ged_event_process_followups(state);
     return result->status;
 }
 
@@ -1253,7 +1291,10 @@ enum ged_event_status
 ged_event_batch_begin(struct ged *gedp)
 {
     struct ged_event_service *state = ged_event_service_get(gedp);
-    if (!state || state->suspended)
+    if (!state)
+	return GED_EVENT_UNAVAILABLE;
+    std::lock_guard<std::mutex> lock(state->state_mutex);
+    if (state->suspended)
 	return GED_EVENT_UNAVAILABLE;
     state->batch_depth++;
     return GED_EVENT_OK;
@@ -1264,30 +1305,45 @@ enum ged_event_status
 ged_event_batch_end(struct ged *gedp, struct ged_event_result *result)
 {
     struct ged_event_service *state = ged_event_service_get(gedp);
-    if (!state || state->batch_depth <= 0)
-	return state ? GED_EVENT_INVALID : GED_EVENT_UNAVAILABLE;
-
-    state->batch_depth--;
-    if (state->batch_depth > 0)
-	return GED_EVENT_OK;
-
-    if (state->bulk_depth > 0) {
-	if (!state->queued_events.empty()) {
-	    state->bulk_dirty = 1;
-	    state->queued_events.clear();
-	}
-	state->followup_events.clear();
-	return GED_EVENT_OK;
-    }
+    if (!state)
+	return GED_EVENT_UNAVAILABLE;
 
     std::vector<ged_event_owned> events;
-    events.swap(state->queued_events);
-    enum ged_event_status ret = GED_EVENT_OK;
-    if (!events.empty())
-	ret = static_cast<enum ged_event_status>(
-	    ged_event_process_owned(state, events, result));
-    else if (result)
-	ged_event_result_clear(result);
+    {
+	std::lock_guard<std::mutex> lock(state->state_mutex);
+	if (state->batch_depth <= 0)
+	    return GED_EVENT_INVALID;
+
+	state->batch_depth--;
+	if (state->batch_depth > 0)
+	    return GED_EVENT_OK;
+
+	if (state->bulk_depth > 0) {
+	    if (!state->queued_events.empty()) {
+		state->bulk_dirty = 1;
+		state->queued_events.clear();
+	    }
+	    state->followup_events.clear();
+	    return GED_EVENT_OK;
+	}
+
+	events.swap(state->queued_events);
+	if (events.empty()) {
+	    if (result)
+		ged_event_result_clear(result);
+	    return GED_EVENT_OK;
+	}
+	if (state->processing) {
+	    state->followup_events.insert(state->followup_events.end(),
+		std::make_move_iterator(events.begin()),
+		std::make_move_iterator(events.end()));
+	    return GED_EVENT_OK;
+	}
+	state->processing = true;
+    }
+
+    enum ged_event_status ret = static_cast<enum ged_event_status>(
+	ged_event_process_owned(state, events, result));
     ged_event_process_followups(state);
     return ret;
 }
@@ -1301,28 +1357,32 @@ ged_event_publish_impl(struct ged *gedp,
 		       int librt)
 {
     struct ged_event_service *state = ged_event_service_get(gedp);
-    if (!state || state->suspended)
+    if (!state)
 	return GED_EVENT_UNAVAILABLE;
     if (!events || !event_count)
 	return GED_EVENT_INVALID;
 
-    if (state->bulk_depth > 0) {
-	state->bulk_dirty = 1;
-	return GED_EVENT_OK;
-    }
-
-    if (state->dispatch_depth > 0) {
-	ged_event_queue(state->followup_events, events, event_count, librt);
-	return GED_EVENT_OK;
-    }
-
-    if (state->batch_depth > 0) {
-	ged_event_queue(state->queued_events, events, event_count, librt);
-	return GED_EVENT_OK;
-    }
-
     std::vector<ged_event_owned> owned;
-    ged_event_queue(owned, events, event_count, librt);
+    {
+	std::lock_guard<std::mutex> lock(state->state_mutex);
+	if (state->suspended)
+	    return GED_EVENT_UNAVAILABLE;
+	if (state->bulk_depth > 0) {
+	    state->bulk_dirty = 1;
+	    return GED_EVENT_OK;
+	}
+	if (state->processing) {
+	    ged_event_queue(state->followup_events, events, event_count, librt);
+	    return GED_EVENT_OK;
+	}
+	if (state->batch_depth > 0) {
+	    ged_event_queue(state->queued_events, events, event_count, librt);
+	    return GED_EVENT_OK;
+	}
+	ged_event_queue(owned, events, event_count, librt);
+	state->processing = true;
+    }
+
     enum ged_event_status ret = static_cast<enum ged_event_status>(
 	ged_event_process_owned(state, owned, result));
     ged_event_process_followups(state);
@@ -1543,6 +1603,7 @@ ged_event_observer_add(struct ged *gedp,
 	phase != GED_EVENT_OBSERVER_POST_RECONCILE)
 	return 0;
 
+    std::lock_guard<std::mutex> lock(state->state_mutex);
     ged_event_observer_entry entry;
     entry.token = state->next_token++;
     if (!entry.token)
@@ -1562,6 +1623,7 @@ ged_event_observer_remove(struct ged *gedp, ged_event_observer_token token)
     if (!state || !token)
 	return 0;
 
+    std::lock_guard<std::mutex> lock(state->state_mutex);
     for (ged_event_observer_entry &entry : state->observers) {
 	if (entry.token != token || entry.removed)
 	    continue;
