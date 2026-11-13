@@ -1212,6 +1212,14 @@ public:
     int advanceProgressiveWork(
 	const BObolProgressiveOptions *options = NULL,
 	BObolProgressiveStatus *status = NULL);
+    /** Defer background progressive work while an application foreground
+     * operation needs the owner thread.  Explicit presentation requests and
+     * owner-thread callbacks remain serviceable.  Calls may be nested; the
+     * final endForegroundActivity() publishes a fresh host wake for retained
+     * work. */
+    void beginForegroundActivity(void);
+    void endForegroundActivity(void);
+    SbBool hasForegroundActivity(void) const;
     /** Publish a semantic edge after an application mutates the compact
      * inventory or visibility journal of an attached database source.  The
      * controller coalesces repeated notifications until its bounded planner
@@ -1660,7 +1668,8 @@ private:
     void discardLodControlTransition(void) noexcept;
     void recordLodControlTransition(BObolLodControlTransitionEvent event,
 	const BObolLodControlTraceState &before,
-	const BObolLodControlTraceState &after, SbBool force = FALSE);
+	const BObolLodControlTraceState &after, SbBool force = FALSE,
+	uint64_t durationMicroseconds = 0);
     void syncRenderManager(void);
     void prepareViewportRegionPublication(const SbViewportRegion &region,
 	const char *reason, PreparedViewportPublication &publication);

@@ -7889,7 +7889,8 @@ void
 BObolViewController::recordLodControlTransition(
     BObolLodControlTransitionEvent event,
     const BObolLodControlTraceState &before,
-    const BObolLodControlTraceState &after, SbBool force)
+    const BObolLodControlTraceState &after, SbBool force,
+    uint64_t durationMicroseconds)
 {
     if (!this->d->lodControlTransitionActive() ||
 	(!force && controller_lod_control_trace_state_equal(before, after)))
@@ -7902,7 +7903,8 @@ BObolViewController::recordLodControlTransition(
     record.before = before;
     record.after = after;
     if (this->d->lodTelemetry)
-	this->d->lodTelemetry->recordTransition(*this, record);
+	this->d->lodTelemetry->recordTransition(*this, record,
+	    durationMicroseconds);
     if (!this->d->lodControlTransitionJournalEnabled)
 	return;
     if (this->d->lodControlTransitionRecords.size() >=
@@ -7932,6 +7934,7 @@ BObolViewController::beginLodControlTransition(
 	BObolLodControlTransitionFrame frame;
 	frame.token = bobol_nonzero_identity_take(
 	    this->d->lodControlTransitionNextToken);
+	frame.startedMicroseconds = bu_gettime();
 	frame.suppressed = TRUE;
 	frame.state = state;
 	this->d->lodControlTransitionFrames.push_back(frame);
@@ -7956,6 +7959,7 @@ BObolViewController::beginLodControlTransition(
     BObolLodControlTransitionFrame frame;
     frame.token = bobol_nonzero_identity_take(
 	this->d->lodControlTransitionNextToken);
+    frame.startedMicroseconds = bu_gettime();
     frame.event = event;
     frame.ownerEvent = ownerEvent;
     frame.state = state;
@@ -7989,7 +7993,13 @@ BObolViewController::endLodControlTransition(uint64_t token)
 	this->captureLodControlTraceState();
     const BObolLodControlTransitionEvent event = frame.ownerEvent ?
 	controller_lod_control_owner_event(frame.state, state) : frame.event;
-    this->recordLodControlTransition(event, frame.state, state);
+    const int64_t completedMicroseconds = bu_gettime();
+    const uint64_t durationMicroseconds =
+	completedMicroseconds >= frame.startedMicroseconds ?
+	static_cast<uint64_t>(completedMicroseconds -
+	    frame.startedMicroseconds) : 0;
+    this->recordLodControlTransition(event, frame.state, state, FALSE,
+	durationMicroseconds);
     this->d->lodControlTransitionFrames.pop_back();
     if (this->d->lodControlTransitionFrames.empty()) {
 	this->d->lodControlTransitionEndpoint = state;

@@ -46,6 +46,7 @@ class SoBRLViewLodGroup;
  * private implementation name from libBObol. */
 struct BObolLodControlTransitionFrame {
     uint64_t token = 0;
+    int64_t startedMicroseconds = 0;
     BObolLodControlTransitionEvent event =
 	BOBOL_LOD_CONTROL_TRANSITION_UNNAMED;
     SbBool ownerEvent = FALSE;
@@ -535,10 +536,14 @@ struct BObolViewController::Impl : BObolLodCoordinator {
 	std::lock_guard<std::mutex> lock(this->renderRequestMutex);
 	const bool renderRetired = this->renderRequest.clear();
 	const bool frameRetired = renderRetired || this->renderClaimed;
-	const bool changed = frameRetired || this->progressiveWorkPending;
+	const bool changed = frameRetired || this->progressiveWorkPending ||
+	    this->foregroundActivityDepth;
 	this->renderClaimed = FALSE;
 	this->capacitySampleClaimed = FALSE;
 	this->progressiveWorkPending = FALSE;
+	this->foregroundActivityDepth = 0;
+	this->foregroundActivityActiveSerial = 0;
+	this->foregroundActivityStartedMicroseconds = 0;
 	if (changed) {
 	    bobol_identity_advance(this->hostWorkRevision);
 	    if (frameRetired)
@@ -597,6 +602,10 @@ struct BObolViewController::Impl : BObolLodCoordinator {
     double cuttingPlaneAffordanceAspect = 1.0;
     mutable std::mutex renderRequestMutex;
     SbBool progressiveWorkPending = FALSE;
+    unsigned int foregroundActivityDepth = 0;
+    uint64_t foregroundActivitySerial = 1;
+    uint64_t foregroundActivityActiveSerial = 0;
+    int64_t foregroundActivityStartedMicroseconds = 0;
     BObolRenderRequestState renderRequest;
     SbBool renderClaimed = FALSE;
     SbBool capacitySampleClaimed = FALSE;

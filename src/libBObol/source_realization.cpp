@@ -17,6 +17,7 @@
 #include "parallel_budget_private.h"
 #include "transaction_fault_private.h"
 #include "bu/app.h"
+#include "bu/datetime.h"
 #include "bu/file.h"
 #include "bu/parallel.h"
 #include "rt/db4.h"
@@ -131,6 +132,7 @@ struct BObolSourceRealizationJobPrivate {
 struct SourceRealizationWork {
     std::shared_ptr<BObolSourceRealizationJobPrivate> job;
     size_t itemIndex = 0;
+    int64_t queuedAtMicroseconds = 0;
     /* First-fit memory admission may bypass an older, temporarily too-large
      * root to keep otherwise idle workers useful.  Bound those bypasses so a
      * sustained stream of small roots cannot starve a vehicle-scale source. */
@@ -282,7 +284,9 @@ source_realize_item(const std::shared_ptr<BObolSourceRealizationJobPrivate> &job
     SoBRLDatabaseSource *source = item->source;
     bool success = source != NULL;
 
+    const bool timing = getenv("BOBOL_DRAW_TIMING") != NULL;
     int warmManifest = 0;
+    const int64_t manifestStarted = timing ? bu_gettime() : 0;
     if (success && item->probeWarmManifest && item->stream &&
 	item->snapshotSourceDatabase && !source_item_cancelled(job.get(), item)) {
 	warmManifest = item->probeWarmManifest(source,
@@ -290,6 +294,9 @@ source_realize_item(const std::shared_ptr<BObolSourceRealizationJobPrivate> &job
 	    source->sourceRevision.getValue(), item->stream.get(),
 	    item->callbackContext.get());
     }
+    if (timing)
+	bu_log("[obol-timing] source worker: manifest probe %.1f ms\n",
+	    static_cast<double>(bu_gettime() - manifestStarted) / 1000.0);
     item->warmManifest.store(warmManifest == 2, std::memory_order_release);
     if (item->warmManifest.load(std::memory_order_acquire) &&
 	item->snapshotSourceDatabase) {
@@ -297,6 +304,7 @@ source_realize_item(const std::shared_ptr<BObolSourceRealizationJobPrivate> &job
 	item->snapshotSourceDatabase = NULL;
     }
 
+    const int64_t databaseStarted = timing ? bu_gettime() : 0;
     if (success && !item->warmManifest && !item->database) {
 	if (source_item_cancelled(job.get(), item)) {
 	    success = false;
@@ -311,7 +319,11 @@ source_realize_item(const std::shared_ptr<BObolSourceRealizationJobPrivate> &job
 	    item->snapshotSourceDatabase = NULL;
 	}
     }
+    if (timing)
+	bu_log("[obol-timing] source worker: database bind %.1f ms\n",
+	    static_cast<double>(bu_gettime() - databaseStarted) / 1000.0);
 
+    const int64_t realizationStarted = timing ? bu_gettime() : 0;
     if (success && !source_item_cancelled(job.get(), item)) {
 	const bool mesh = source->usesMeshRealization() ? true : false;
 	BObolCompactOccurrenceStream *stream =
@@ -357,6 +369,9 @@ source_realize_item(const std::shared_ptr<BObolSourceRealizationJobPrivate> &job
     } else {
 	success = false;
     }
+    if (timing)
+	bu_log("[obol-timing] source worker: realization %.1f ms\n",
+	    static_cast<double>(bu_gettime() - realizationStarted) / 1000.0);
 
     if (source_item_cancelled(job.get(), item)) {
 	item->finish(BOBOL_SOURCE_REALIZATION_CANCELLED);
@@ -544,11 +559,20 @@ source_realization_worker(BObolSourceRealizationCoordinatorPrivate *service,
 	}
 
 	try {
+	    if (getenv("BOBOL_DRAW_TIMING") && work.queuedAtMicroseconds)
+		bu_log("[obol-timing] source worker: queue wait %.1f ms\n",
+		    static_cast<double>(bu_gettime() -
+			work.queuedAtMicroseconds) / 1000.0);
 	    /* Source discovery and mesh-LoD production may overlap during a cold
 	     * draw.  Count both against the same process budget so each one's
 	     * internal helpers cannot multiply the other's outer worker pool. */
 	    BObolParallelBudgetLease cpuBudget;
+	    const int64_t budgetStarted = getenv("BOBOL_DRAW_TIMING") ?
+		bu_gettime() : 0;
 	    cpuBudget.acquireOuter();
+	    if (budgetStarted)
+		bu_log("[obol-timing] source worker: CPU budget wait %.1f ms\n",
+		    static_cast<double>(bu_gettime() - budgetStarted) / 1000.0);
 	    source_realize_item(work.job, work.itemIndex);
 	} catch (const std::bad_alloc &) {
 	    source_job_fail(work.job, work.itemIndex);
@@ -827,6 +851,7 @@ BObolSourceRealizationCoordinator::submit(
 			SourceRealizationWork work;
 			work.job = job;
 			work.itemIndex = i;
+			work.queuedAtMicroseconds = bu_gettime();
 			/* Exercise rollback after a prefix already owns queue storage. */
 			if (i > 0 && failQueueAppend)
 			    throw std::bad_alloc();

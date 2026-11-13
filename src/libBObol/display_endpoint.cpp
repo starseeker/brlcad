@@ -2339,6 +2339,28 @@ bobol_display_endpoint_request_presentation_frame(
 }
 
 extern "C" int
+bobol_display_endpoint_foreground_activity_begin(
+	bobol_display_endpoint_t *endpoint)
+{
+    if (!endpoint || endpoint->destructionStarted() || !endpoint->controller)
+	return 0;
+    EndpointOperationScope endpointScope(endpoint);
+    endpoint->controller->beginForegroundActivity();
+    return 1;
+}
+
+extern "C" int
+bobol_display_endpoint_foreground_activity_end(
+	bobol_display_endpoint_t *endpoint)
+{
+    if (!endpoint || endpoint->destructionStarted() || !endpoint->controller)
+	return 0;
+    EndpointOperationScope endpointScope(endpoint);
+    endpoint->controller->endForegroundActivity();
+    return 1;
+}
+
+extern "C" int
 bobol_display_endpoint_resize(bobol_display_endpoint_t *endpoint,
 	unsigned int width, unsigned int height, double device_pixel_ratio)
 {

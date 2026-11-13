@@ -1677,7 +1677,8 @@ BObolViewController::getHostWorkSnapshot(void) const
     std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
     snapshot.revision = this->d->hostWorkRevision;
     snapshot.renderRevision = this->d->renderRequestSerial;
-    if (this->d->progressiveWorkPending)
+    if (this->d->progressiveWorkPending &&
+	!this->d->foregroundActivityDepth)
 	snapshot.flags |= BOBOL_HOST_WORK_PUMP;
     if (this->d->renderRequest.pending()) {
 	snapshot.flags |= BOBOL_HOST_WORK_RENDER;

@@ -12087,16 +12087,24 @@ ged_draw_obol_backend_apply_transaction(
     const int frontier_only = result && result->presentation_only &&
 	(txn->kind == GED_SCENE_REDUCER_DRAW || txn->kind == GED_SCENE_REDUCER_ERASE ||
 	 txn->kind == GED_SCENE_REDUCER_ERASE_PREFIX);
+    int64_t stage_started = ged_obol_timing_enabled() ? bu_gettime() : 0;
     const int changed = frontier_only ? 0 :
 	ged_draw_obol_scene_sync_attached_transaction(gedp, txn, result);
+    ged_obol_timing_log("transaction: synchronize scenes", stage_started, -1);
+    stage_started = ged_obol_timing_enabled() ? bu_gettime() : 0;
     ged_obol_frontier_visibility_changes_apply(gedp);
+    ged_obol_timing_log("transaction: frontier visibility", stage_started, -1);
+    stage_started = ged_obol_timing_enabled() ? bu_gettime() : 0;
     if (txn->kind != GED_SCENE_REDUCER_CLEAR &&
 	txn->kind != GED_SCENE_REDUCER_TEARDOWN)
 	ged_obol_notify_source_inputs_changed(gedp);
+    ged_obol_timing_log("transaction: source notification", stage_started, -1);
     if (txn->kind == GED_SCENE_REDUCER_CLEAR ||
 	txn->kind == GED_SCENE_REDUCER_TEARDOWN)
 	ged_draw_registry_free(gedp);
+    stage_started = ged_obol_timing_enabled() ? bu_gettime() : 0;
     ged_obol_progressive_autoview_transaction(gedp, txn, result);
+    ged_obol_timing_log("transaction: progressive setup", stage_started, -1);
     return changed || frontier_only;
 }
 
