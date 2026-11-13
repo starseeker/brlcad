@@ -57,7 +57,6 @@
 #include "bu/opt.h"
 #include "bu/datetime.h"
 #include "bg/trimesh.h"
-#include "bv/vlist.h"
 #include "brep/cdt.h"
 #include "brep/util.h"
 #include "raytrace.h"
@@ -286,34 +285,6 @@ capture_index(std::vector<int> *indices, size_t *omitted, int index)
 }
 
 static void
-wire_item_status(int item_type, int item_index, int status, void *data)
-{
-    geom_result *result = (geom_result *)data;
-    if (status == RT_BREP_DRAW_ITEM_COMPLETED)
-	return;
-    if (item_type == RT_BREP_DRAW_EDGE) {
-	if (status == RT_BREP_DRAW_ITEM_FAILED)
-	    capture_index(&result->failed_edges,
-		&result->omitted_failed_edges, item_index);
-	else
-	    capture_index(&result->unprocessed_edges,
-		&result->omitted_unprocessed_edges, item_index);
-	return;
-    }
-    if (status == RT_BREP_DRAW_ITEM_APPROXIMATED) {
-	capture_index(&result->approximated_surface_cues,
-	    &result->omitted_approximated_surface_cues, item_index);
-	return;
-    }
-    if (status == RT_BREP_DRAW_ITEM_FAILED)
-	capture_index(&result->failed_surface_cues,
-	    &result->omitted_failed_surface_cues, item_index);
-    else
-	capture_index(&result->unprocessed_surface_cues,
-	    &result->omitted_unprocessed_surface_cues, item_index);
-}
-
-static void
 shaded_face_status(int face_index, int status, void *data)
 {
     geom_result *result = (geom_result *)data;
@@ -505,25 +476,6 @@ face_boundary_bbox(const ON_BrepFace &face, ON_BoundingBox &bbox)
     return bbox.IsValid();
 }
 
-static bool
-drawable_vlist_cmd(int cmd)
-{
-    switch (cmd) {
-	case BV_VLIST_LINE_MOVE:
-	case BV_VLIST_LINE_DRAW:
-	case BV_VLIST_POLY_MOVE:
-	case BV_VLIST_POLY_DRAW:
-	case BV_VLIST_POLY_END:
-	case BV_VLIST_TRI_MOVE:
-	case BV_VLIST_TRI_DRAW:
-	case BV_VLIST_TRI_END:
-	case BV_VLIST_POINT_DRAW:
-	    return true;
-	default:
-	    return false;
-    }
-}
-
 static struct db_i *
 open_db(const char *path)
 {
@@ -552,8 +504,7 @@ load_brep(struct db_i *dbip, struct directory *dp, struct rt_db_internal *intern
 
 static geom_result
 wireframe_result(struct db_i *dbip, struct directory *dp,
-	const struct bg_tess_tol *ttol, const struct bn_tol *tol,
-	const struct rt_brep_draw_options *options,
+	const struct bn_tol *tol,
 	std::vector<image_segment> *segments)
 {
     geom_result result;
@@ -563,74 +514,46 @@ wireframe_result(struct db_i *dbip, struct directory *dp,
 	return result;
     }
 
-    struct bu_list vhead;
-    BU_LIST_INIT(&vhead);
-    struct rt_brep_draw_options active_options = *options;
-    active_options.item_status = wire_item_status;
-    active_options.item_status_data = &result;
+    struct rt_primitive_lod_realization realization = {};
     int64_t start = bu_gettime();
-    struct rt_brep_draw_report report = {};
-    result.ret = rt_brep_plot_ex(&vhead, &intern, ttol, tol, NULL,
-	&active_options, &report);
+    result.ret = rt_brep_wireframe_line_set(&realization, &intern, tol);
     result.seconds = (bu_gettime() - start) / 1000000.0;
     result.peak_rss_bytes = peak_rss_bytes();
-    result.requested_items = report.requested_edges +
-	report.requested_surface_cues;
-    result.completed_items = report.completed_edges +
-	report.completed_surface_cues + report.approximated_surface_cues;
-    result.approximated_items = report.approximated_surface_cues;
-    result.memory_approximated_surface_cues =
-	report.memory_approximated_surface_cues;
-    result.time_approximated_surface_cues =
-	report.time_approximated_surface_cues;
-    result.failed_items = report.failed_edges +
-	report.requested_surface_cues - report.completed_surface_cues -
-	report.approximated_surface_cues;
-    result.hit_time_limit = report.hit_time_limit;
-    result.hit_memory_limit = report.hit_memory_limit;
-    result.hit_point_limit = report.hit_point_limit;
 
-    struct bv_vlist *vp;
-    for (BU_LIST_FOR(vp, bv_vlist, &vhead)) {
-	point_t previous = VINIT_ZERO;
-	bool have_previous = false;
-	for (size_t i = 0; i < vp->nused; i++) {
-	    result.commands++;
-	    int cmd = vp->cmd[i];
-	    if (!drawable_vlist_cmd(cmd))
-		continue;
-	    const point_t &p = vp->pt[i];
-	    if (!std::isfinite(p[X]) || !std::isfinite(p[Y]) || !std::isfinite(p[Z])) {
-		result.finite = false;
-		continue;
-	    }
-	    result.vertices++;
-	    bbox_add(result.bmin, result.bmax, &result.have_bbox, p);
-	    if (segments && cmd == BV_VLIST_LINE_MOVE) {
-		VMOVE(previous, p);
-		have_previous = true;
-	    } else if (segments && cmd == BV_VLIST_LINE_DRAW && have_previous) {
+    point_t previous = VINIT_ZERO;
+    bool have_previous = false;
+    for (size_t i = 0; i < realization.line_count; i++) {
+	result.commands++;
+	const int cmd = realization.line_commands[i];
+	if (cmd != RT_PRIMITIVE_LINE_MOVE && cmd != RT_PRIMITIVE_LINE_DRAW &&
+		cmd != RT_PRIMITIVE_POINT_DRAW)
+	    continue;
+	const point_t &p = realization.line_points[i];
+	if (!std::isfinite(p[X]) || !std::isfinite(p[Y]) || !std::isfinite(p[Z])) {
+	    result.finite = false;
+	    continue;
+	}
+	result.vertices++;
+	bbox_add(result.bmin, result.bmax, &result.have_bbox, p);
+	if (cmd == RT_PRIMITIVE_LINE_MOVE) {
+	    VMOVE(previous, p);
+	    have_previous = true;
+	} else if (cmd == RT_PRIMITIVE_LINE_DRAW) {
+	    if (segments && have_previous) {
 		image_segment segment;
 		VMOVE(segment.a, previous);
 		VMOVE(segment.b, p);
 		segments->push_back(segment);
-		VMOVE(previous, p);
 	    }
-	    if (cmd == BV_VLIST_LINE_DRAW || cmd == BV_VLIST_POLY_DRAW ||
-		    cmd == BV_VLIST_POLY_END || cmd == BV_VLIST_TRI_DRAW ||
-		    cmd == BV_VLIST_TRI_END || cmd == BV_VLIST_POINT_DRAW)
-		result.primitives++;
+	    VMOVE(previous, p);
+	    have_previous = true;
 	}
+	if (cmd == RT_PRIMITIVE_LINE_DRAW || cmd == RT_PRIMITIVE_POINT_DRAW)
+	    result.primitives++;
     }
 
-    if (result.ret == RT_BREP_DRAW_PARTIAL) {
-	if (result.failed_items > 0)
-	    result.issues.push_back("partial_geometry");
-    } else if (result.ret == RT_BREP_DRAW_LIMIT) {
-	result.issues.push_back("resource_limit");
-    } else if (result.ret != RT_BREP_DRAW_OK) {
+    if (result.ret != BRLCAD_OK)
 	result.issues.push_back("generation_failed");
-    }
     if (!result.vertices || !result.primitives)
 	result.issues.push_back("empty_geometry");
     if (!result.finite)
@@ -638,7 +561,7 @@ wireframe_result(struct db_i *dbip, struct directory *dp,
     if (!result.have_bbox)
 	result.issues.push_back("missing_bbox");
 
-    BV_FREE_VLIST(&rt_vlfree, &vhead);
+    rt_primitive_lod_realization_free(&realization);
     rt_db_free_internal(&intern);
     return result;
 }
@@ -1983,30 +1906,19 @@ audit_brep(struct db_i *dbip, struct directory *dp, const char *db_path,
     ttol.norm = config.tess_norm;
     struct brep_cdt_fast_options fast_options;
     brep_cdt_fast_options_default(&fast_options);
-    struct rt_brep_draw_options draw_options;
-    rt_brep_draw_options_default(&draw_options);
     if (config.jobs > 0)
-	fast_options.max_workers = draw_options.max_workers =
-	    (size_t)config.jobs;
-    if (config.max_time_ms > 0) {
+	fast_options.max_workers = (size_t)config.jobs;
+    if (config.max_time_ms > 0)
 	fast_options.max_time_ms = config.max_time_ms;
-	draw_options.max_time_ms = config.max_time_ms;
-    }
     if (config.max_result_mib > 0) {
 	fast_options.max_result_bytes =
 	    (size_t)config.max_result_mib * 1024 * 1024;
-	draw_options.max_result_bytes =
-	    (size_t)config.max_result_mib * 1024 * 1024;
-	draw_options.max_working_bytes = std::max((size_t)1,
-	    draw_options.max_result_bytes / 4);
     }
     if (config.max_working_mib > 0)
-	fast_options.max_working_bytes = draw_options.max_working_bytes =
+	fast_options.max_working_bytes =
 	    (size_t)config.max_working_mib * 1024 * 1024;
-    if (config.max_points > 0) {
+    if (config.max_points > 0)
 	fast_options.max_points = (size_t)config.max_points;
-	draw_options.max_points = (size_t)config.max_points;
-    }
     if (config.max_triangles > 0)
 	fast_options.max_triangles = (size_t)config.max_triangles;
     if (config.display_coarse_rel > 0.0)
@@ -2185,10 +2097,10 @@ audit_brep(struct db_i *dbip, struct directory *dp, const char *db_path,
     if (run_wireframe && !excluded) {
 	std::cerr << "brep-audit: phase=wireframe" << std::endl;
 	try {
-	    wire = wireframe_result(dbip, dp, &ttol, &tol, &draw_options,
+	    wire = wireframe_result(dbip, dp, &tol,
 		config.image_dir ? &wire_segments : NULL);
 	} catch (const std::bad_alloc &) {
-	    wire.ret = RT_BREP_DRAW_LIMIT;
+	    wire.ret = BRLCAD_ERROR;
 	    wire.hit_memory_limit = true;
 	    wire.issues.push_back("resource_limit");
 	}
@@ -2341,12 +2253,8 @@ audit_brep(struct db_i *dbip, struct directory *dp, const char *db_path,
 	<< fast_options.coarse_relative_tolerance
 	<< ",\"area_change_tolerance\":"
 	<< fast_options.area_change_tolerance << "}"
-	<< ",\"wire_options\":{\"jobs\":" << draw_options.max_workers
-	<< ",\"max_time_ms\":" << draw_options.max_time_ms
-	<< ",\"max_result_bytes\":" << draw_options.max_result_bytes
-	<< ",\"max_working_bytes\":" << draw_options.max_working_bytes
-	<< ",\"max_points\":" << draw_options.max_points << "}"
-	<< ",\"generators\":{\"wireframe\":\"rt_brep_plot\""
+	<< ",\"wire_options\":{\"resource_limits_supported\":false}"
+	<< ",\"generators\":{\"wireframe\":\"rt_brep_wireframe_line_set\""
 	<< ",\"shaded\":\"brep_cdt_fast\""
 	<< ",\"quality\":\"ON_Brep_CDT_Tessellate\"}"
 	<< ",\"reference\":{\"method\":\"face_GetBoundingBox_trim_parameter_envelope\""

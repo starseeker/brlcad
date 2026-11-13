@@ -72,7 +72,7 @@ set_absolute_scale(struct rt_edit *edit, struct rt_edit_view *view, fastf_t valu
 }
 
 static int
-check_invalid_inputs(struct rt_edit *edit, struct bview *view)
+check_invalid_inputs(struct rt_edit *edit, struct rt_edit_view *view)
 {
     vect_t rotation = VINIT_ZERO;
     vect_t translation = VINIT_ZERO;
@@ -97,9 +97,6 @@ check_invalid_inputs(struct rt_edit *edit, struct bview *view)
 	BRLCAD_ERROR ||
 	rt_edit_knob_cmd_process(edit, &rotation, &do_rotate, &translation,
 	    &do_translate, NULL, view, "aS", 1.0, 'k', 0, NULL) !=
-	BRLCAD_ERROR ||
-	rt_edit_knob_cmd_process(edit, &rotation, &do_rotate, &translation,
-	    &do_translate, &do_scale, NULL, "aS", 1.0, 'k', 0, NULL) !=
 	BRLCAD_ERROR ||
 	rt_edit_knob_cmd_process(edit, &rotation, &do_rotate, &translation,
 	    &do_translate, &do_scale, view, NULL, 1.0, 'k', 0, NULL) !=
