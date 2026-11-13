@@ -31,9 +31,7 @@
 
 #define RT_MAXLINE 10240
 
-void noMessageOutput(QtMsgType, const QMessageLogContext&, const QString&) {}
-
-QConsoleListener::QConsoleListener(int fd, struct ged_subprocess *p,
+QgConsoleListener::QgConsoleListener(int fd, struct ged_subprocess *p,
     bu_process_io_t t, ged_io_func_t c, void *d, QObject *parent)
     : QObject(parent)
 {
@@ -42,8 +40,8 @@ QConsoleListener::QConsoleListener(int fd, struct ged_subprocess *p,
     this->data = d;
     this->type = t;
     QObject::connect(
-	    this, &QConsoleListener::finishedGetLine,
-	    this, &QConsoleListener::on_finishedGetLine,
+	    this, &QgConsoleListener::finishedGetLine,
+	    this, &QgConsoleListener::on_finishedGetLine,
 	    Qt::QueuedConnection
 	    );
 #ifdef Q_OS_WIN
@@ -77,23 +75,23 @@ QConsoleListener::QConsoleListener(int fd, struct ged_subprocess *p,
 	});
 }
 
-QConsoleListener::~QConsoleListener()
+QgConsoleListener::~QgConsoleListener()
 {
     disconnectNotifier();
 }
 
-void QConsoleListener::disconnectNotifier()
+void QgConsoleListener::disconnectNotifier()
 {
     if (m_notifier)
 	m_notifier->disconnect();
 }
 
-void QConsoleListener::on_finishedGetLine(const QString &strNewLine)
+void QgConsoleListener::on_finishedGetLine(const QString &strNewLine)
 {
     Q_EMIT this->newLine(strNewLine);
 }
 
-void QConsoleListener::on_finished()
+void QgConsoleListener::on_finished()
 {
     Q_EMIT this->is_finished(this->process, (int)this->type);
 }

@@ -45,7 +45,7 @@ QgConsoleTest::retiresListenersAfterNotifierCallbacks()
 
     QgConsole console(nullptr);
     console.listen(-1, &process, BU_PROCESS_STDOUT, nullptr, nullptr);
-    QConsoleListener *listener = console.findListener(&process,
+    QgConsoleListener *listener = console.findListener(&process,
 	BU_PROCESS_STDOUT);
     QVERIFY(listener != nullptr);
 
@@ -61,7 +61,7 @@ void
 QgConsoleTest::ownsActiveListeners()
 {
     struct ged_subprocess process = {};
-    QPointer<QConsoleListener> listener;
+    QPointer<QgConsoleListener> listener;
     {
 	QgConsole console(nullptr);
 	console.listen(-1, &process, BU_PROCESS_STDERR, nullptr, nullptr);
@@ -77,7 +77,7 @@ QgConsoleTest::ignoresDuplicateListeners()
     struct ged_subprocess process = {};
     QgConsole console(nullptr);
     console.listen(-1, &process, BU_PROCESS_STDOUT, nullptr, nullptr);
-    QPointer<QConsoleListener> original = console.findListener(&process,
+    QPointer<QgConsoleListener> original = console.findListener(&process,
 	BU_PROCESS_STDOUT);
 
     console.listen(-1, &process, BU_PROCESS_STDOUT, nullptr, nullptr);
