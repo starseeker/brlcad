@@ -663,14 +663,18 @@ endif(MSVC)
 
 # Link-time checks used by BRL-CAD library validation.  These must be probed
 # before use so platforms without GNU/LLVM-style linker options are skipped.
-brlcad_check_linker_flag(C "LINKER:--no-undefined" BRLCAD_LINKER_NO_UNDEFINED_C_FLAG_FOUND)
-brlcad_check_linker_flag(CXX "LINKER:--no-undefined" BRLCAD_LINKER_NO_UNDEFINED_CXX_FLAG_FOUND)
-if(BRLCAD_LINKER_NO_UNDEFINED_C_FLAG_FOUND AND BRLCAD_LINKER_NO_UNDEFINED_CXX_FLAG_FOUND
-   AND NOT BRLCAD_ENABLE_ADDRESS_SANITIZER)
-  set(BRLCAD_LINKER_NO_UNDEFINED_FLAG "LINKER:--no-undefined" CACHE STRING "Linker flag requiring resolved shared library symbols" FORCE)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+  brlcad_check_linker_flag(C "LINKER:--no-undefined" BRLCAD_LINKER_NO_UNDEFINED_C_FLAG_FOUND)
+  brlcad_check_linker_flag(CXX "LINKER:--no-undefined" BRLCAD_LINKER_NO_UNDEFINED_CXX_FLAG_FOUND)
+  if(BRLCAD_LINKER_NO_UNDEFINED_C_FLAG_FOUND AND BRLCAD_LINKER_NO_UNDEFINED_CXX_FLAG_FOUND
+     AND NOT BRLCAD_ENABLE_ADDRESS_SANITIZER)
+    set(BRLCAD_LINKER_NO_UNDEFINED_FLAG "LINKER:--no-undefined" CACHE STRING "Linker flag requiring resolved shared library symbols" FORCE)
+  else()
+    # Clang links the AddressSanitizer runtime into executables, leaving its
+    # shared-library instrumentation symbols unresolved until then.
+    set(BRLCAD_LINKER_NO_UNDEFINED_FLAG "" CACHE STRING "Linker flag requiring resolved shared library symbols" FORCE)
+  endif()
 else()
-  # Clang links the AddressSanitizer runtime into executables, leaving its
-  # shared-library instrumentation symbols unresolved until then.
   set(BRLCAD_LINKER_NO_UNDEFINED_FLAG "" CACHE STRING "Linker flag requiring resolved shared library symbols" FORCE)
 endif()
 brlcad_check_linker_flags(C BRLCAD_LINKER_WHOLE_ARCHIVE_GROUP_C_FLAG_FOUND "LINKER:--whole-archive" "LINKER:--no-whole-archive")
