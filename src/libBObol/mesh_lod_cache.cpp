@@ -4908,9 +4908,9 @@ BObolPopState::cacheSpatialLeaves(void)
     }
     if (records.empty() || !cachePage())
 	return fail();
-	reportProgress(BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION,
-	    static_cast<uint64_t>(firstUnclassifiedFace),
-	    static_cast<uint64_t>(faceCount));
+    reportProgress(BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION,
+	static_cast<uint64_t>(firstUnclassifiedFace),
+	static_cast<uint64_t>(faceCount));
     minPopCut = firstCut;
     spatialLeafCache = true;
     if (spatialPublicationLimited)

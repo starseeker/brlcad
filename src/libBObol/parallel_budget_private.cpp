@@ -22,13 +22,13 @@ namespace {
 struct BObolParallelBudgetState {
     BObolParallelBudgetState(void)
     {
-	const int available = bu_avail_cpus();
+	const int availableCpus = bu_avail_cpus();
 	/* The display service itself is capped at eight workers.  Applying the
 	 * same ceiling here bounds both explicitly larger services and nested
 	 * cache helpers without changing the established default on ordinary
 	 * workstations. */
 	limit = std::min<size_t>(8,
-	    static_cast<size_t>(std::max(1, available)));
+	    static_cast<size_t>(std::max(1, availableCpus)));
     }
 
     std::mutex mutex;
