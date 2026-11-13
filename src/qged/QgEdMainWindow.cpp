@@ -27,6 +27,7 @@
 #include <QMessageBox>
 #include <QSettings>
 #include "qtcad/QgPaletteController.h"
+#include "qtcad/QgSession.h"
 #include "qtcad/QgToolPalette.h"
 #include "qtcad/QgViewCtrl.h"
 #include "qtcad/QgTreeSelectionModel.h"
@@ -255,8 +256,9 @@ QgEdMainWindow::ConnectWidgets()
     QgEdApp *ap = (QgEdApp *)qApp;
     QgModel *m = ap->mdl;
 
-    // If the model does something that it things should trigger a view update, let the app know
-    QObject::connect(m, &QgModel::view_changed, ap, &QgEdApp::do_view_changed);
+    // Route model-originated view changes through the shared session.
+    QObject::connect(m->session(), &QgSession::view_changed,
+	ap, &QgEdApp::do_view_changed);
 
     // Make the fundamental connection that allows the view to update in
     // response to commands or widgets taking actions that will impact the

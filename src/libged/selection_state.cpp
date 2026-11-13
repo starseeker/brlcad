@@ -570,10 +570,16 @@ ged_selection_native_index_ensure(struct ged *gedp,
 		if (parent_hash)
 		    set->active_parent_path_hashes.insert(parent_hash);
 	    }
-	    if (ids.size() > 1)
-		set->immediate_parent_object_ids.insert(ids[ids.size() - 2]);
-	    for (size_t i = 0; i + 2 < ids.size(); i++)
-		set->grand_parent_object_ids.insert(ids[i]);
+	    if (ids.size() > 1) {
+		struct ged_db_index_record parent = {};
+		if (ged_db_index_record_get(gedp, ids[ids.size() - 2], &parent))
+		    set->immediate_parent_object_ids.insert(parent.object_id);
+	    }
+	    for (size_t i = 0; i + 2 < ids.size(); i++) {
+		struct ged_db_index_record parent = {};
+		if (ged_db_index_record_get(gedp, ids[i], &parent))
+		    set->grand_parent_object_ids.insert(parent.object_id);
+	    }
 	} else {
 	    const std::vector<unsigned long long> digest =
 		ged_selection_path_digest_string(path.c_str());
