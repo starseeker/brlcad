@@ -403,7 +403,7 @@ static struct cmdtab mged_cmdtab[] = {
     {MGED_CMD_MAGIC, "rtcheck", cmd_rt, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "rtedge", cmd_rt, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "rtweight", cmd_rt, GED_FUNC_PTR_NULL, NULL},
-    {MGED_CMD_MAGIC, "rtwizard", cmd_ged_fb_render_wrapper, ged_exec_rtwizard, NULL},
+    {MGED_CMD_MAGIC, "rtwizard", cmd_ged_display_wrapper, ged_exec_rtwizard, NULL},
     {MGED_CMD_MAGIC, "save", f_bv_vsave, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "savekey", cmd_ged_plain_wrapper, ged_exec_savekey, NULL},
     {MGED_CMD_MAGIC, "saveview", cmd_ged_plain_wrapper, ged_exec_saveview, NULL},

@@ -1084,16 +1084,28 @@ qged_test_assert_edit_session_preview(QgEdApp &app,
 	return false;
     }
 
-    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
     const QByteArray pathBytes = path.toUtf8();
-    if (ged_edit_session_find(gedp, pathBytes.constData(), &session) !=
-	    GED_EDIT_OK) {
+    size_t sessionCount = 0;
+    if (ged_edit_sessions_get(gedp, pathBytes.constData(),
+	    GED_EDIT_TARGET_OBJECT, nullptr, 0, &sessionCount) != GED_EDIT_OK ||
+	sessionCount != 1) {
 	if (error)
-	    *error = QStringLiteral("no active edit session for path: %1")
+	    *error = QStringLiteral(
+		"expected one active edit session for path %1, found %2")
+		.arg(path)
+		.arg(static_cast<qulonglong>(sessionCount));
+	return false;
+    }
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    size_t returnedCount = 0;
+    if (ged_edit_sessions_get(gedp, pathBytes.constData(),
+	    GED_EDIT_TARGET_OBJECT, &session, 1, &returnedCount) != GED_EDIT_OK ||
+	returnedCount != 1) {
+	if (error)
+	    *error = QStringLiteral("unable to resolve edit session for path: %1")
 		.arg(path);
 	return false;
     }
-
     const QString featureName = QString::asprintf(
 	"_ged_edit_preview_%016llx_%016llx",
 	static_cast<unsigned long long>(session.owner),

@@ -47,8 +47,8 @@
 #include "bu/process.h"
 #include "bu/str.h"
 #include "bv.h"
-#include "dm.h"
-#include "dm/fbserv.h"
+#include "imgstream/fb_compat.h"
+#include "imgstream/fbserv.h"
 #include "ged.h"
 #include "icv.h"
 #include "icv/anim.h"
@@ -495,30 +495,32 @@ resolve_view(const rtwizard_settings *s, char picture_type)
     if (ged_exec_autoview(session.get(), 1, autoview_arguments) != BRLCAD_OK)
         throw std::runtime_error("unable to calculate an automatic view: " +
             std::string(bu_vls_addr(session->ged_result_str)));
-    bview *view = session->ged_gvp;
+    struct bv *view = bv_context_view((struct bv_context *)ged_view_active_ctx(session.get()));
 
     vect_t aet = {
         s->az < DBL_MAX ? s->az : 35.0,
         s->el < DBL_MAX ? s->el : 25.0,
         s->tw < DBL_MAX ? s->tw : 0.0
     };
-    bv_view_set_aet(view, aet);
+    bv_aet_set(view, aet);
     if (s->zoom < DBL_MAX) {
         if (!(s->zoom > 0.0)) {
             throw std::runtime_error("zoom must be positive");
         }
-        bv_view_set_size(view, view->gv_size / s->zoom);
+        bv_size_set(view, bv_size_get(view) / s->zoom);
     }
-    view->gv_perspective = result.perspective;
-    if (s->center[0] < DBL_MAX) bv_view_set_center_vec(view, s->center);
+    bv_perspective_set(view, result.perspective);
+    if (s->center[0] < DBL_MAX) bv_center_set(view, s->center);
     bv_update(view);
 
     const char *eye_arguments[] = {"get_eyemodel"};
     if (ged_exec_get_eyemodel(session.get(), 1, eye_arguments) != BRLCAD_OK)
         throw std::runtime_error("unable to resolve the renderer eye point: " +
             std::string(bu_vls_addr(session->ged_result_str)));
-    result.size = view->gv_size;
-    quat_mat2quat(result.orientation, view->gv_rotation);
+    result.size = bv_size_get(view);
+    mat_t rotation;
+    bv_rotation_get(rotation, view);
+    quat_mat2quat(result.orientation, rotation);
     double parsed_size = 0.0;
     quat_t parsed_orientation;
     if (std::sscanf(bu_vls_addr(session->ged_result_str),
@@ -867,7 +869,7 @@ write_framebuffer(JobContext &job, const rtwizard_settings *s, const icv_image_t
     const std::string device = bu_vls_strlen(s->fb_dev) ?
         bu_vls_addr(s->fb_dev) : RTWIZARD_DEFAULT_FB_DEVICE;
 
-    struct fb *framebuffer = nullptr;
+    imgstream_fb_t *framebuffer = nullptr;
     bu_process *server = nullptr;
     std::string server_token;
     std::string target;
@@ -881,12 +883,14 @@ write_framebuffer(JobContext &job, const rtwizard_settings *s, const icv_image_t
         const std::string &auth_token = std::string(),
         const std::string &tls_pin = std::string()) {
         for (int attempt = 0; attempt < open_attempts && !framebuffer; ++attempt) {
-            if (!tls_pin.empty()) {
-                framebuffer = fb_open_with_auth_and_tls(connection.c_str(), width,
-                    height, auth_token.c_str(), tls_pin.c_str());
+            if (auth_token.empty() && tls_pin.empty()) {
+                framebuffer = imgstream_fb_open(connection.c_str(), width, height);
             } else {
-                framebuffer = auth_token.empty() ? fb_open(connection.c_str(), width, height) :
-                    fb_open_with_auth(connection.c_str(), width, height, auth_token.c_str());
+                struct imgstream_fb_remote_options options = IMGSTREAM_FB_REMOTE_OPTIONS_INIT;
+                options.auth_token = auth_token.c_str();
+                options.use_tls = !tls_pin.empty();
+                options.tls_server_sha256 = tls_pin.empty() ? nullptr : tls_pin.c_str();
+                framebuffer = imgstream_fb_open_remote(connection.c_str(), width, height, &options);
             }
             if (framebuffer || (process && !bu_process_alive(process))) break;
             if (attempt + 1 < open_attempts) std::this_thread::sleep_for(open_retry_delay);
@@ -981,7 +985,7 @@ write_framebuffer(JobContext &job, const rtwizard_settings *s, const icv_image_t
     if (!framebuffer && !existing_target) {
         const int port = tcp_requested ? s->port : RTWIZARD_DEFAULT_FB_PORT;
         target = std::to_string(port);
-        framebuffer = fb_open(target.c_str(), width, height);
+        framebuffer = imgstream_fb_open(target.c_str(), width, height);
         if (framebuffer) {
             job.log("Using existing TCP framebuffer server on port " + target + ".\n");
         } else {
@@ -1001,16 +1005,10 @@ write_framebuffer(JobContext &job, const rtwizard_settings *s, const icv_image_t
     std::vector<unsigned char> pixels(image->width * image->height * 3);
     for (size_t i = 0; i < pixels.size(); ++i)
         pixels[i] = static_cast<unsigned char>(std::lround(std::clamp(image->data[i], 0.0, 1.0) * 255.0));
-    int written = fb_writerect(framebuffer, 0, 0, static_cast<int>(image->width),
+    int written = imgstream_fb_writerect(framebuffer, 0, 0, static_cast<int>(image->width),
         static_cast<int>(image->height), pixels.data());
-    if (server) {
-        /* MSG_FBFREE asks fbserv to leave its service loop and close the
-         * opaque IPC listener, including its filesystem endpoint. */
-        (void)fb_free(framebuffer);
-        stop_server(true);
-    } else {
-        fb_close(framebuffer);
-    }
+    imgstream_fb_close(framebuffer);
+    stop_server();
     if (written < 0) throw std::runtime_error("unable to write rendered image to framebuffer");
     return 0;
 }

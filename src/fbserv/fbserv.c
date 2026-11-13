@@ -57,6 +57,26 @@ fbserv_obol_display_provider_register(void)
 }
 #endif
 
+static int
+publish_tls_fingerprint(const char *fingerprint)
+{
+    const char *path = getenv("FBSERV_TLS_PIN_FILE");
+    FILE *stream;
+    int result = 1;
+
+    if (!path || path[0] == '\0')
+	return 1;
+    stream = fopen(path, "wb");
+    if (!stream)
+	return 0;
+    if (fprintf(stream, "%s\n", fingerprint) < 0)
+	result = 0;
+    if (fclose(stream) != 0)
+	result = 0;
+    return result;
+}
+
+
 static struct fbserv_obj server;
 static imgstream_fb_t *framebuffer = NULL;
 #ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
@@ -319,6 +339,8 @@ main(int argc, char **argv)
 	if (fbs_tls_server_sha256(server.fbs_tls_ctx, tls_fingerprint) !=
 		BRLCAD_OK)
 	    bu_exit(1, "fbserv: unable to fingerprint the TLS certificate\n");
+	if (!publish_tls_fingerprint(tls_fingerprint))
+	    bu_exit(1, "fbserv: unable to publish the TLS fingerprint\n");
 	fprintf(stderr, "fbserv: TLS certificate SHA-256: %s\n",
 	    tls_fingerprint);
     }

@@ -655,6 +655,7 @@ IMGSTREAM_EXPORT void fbs_drop_client(struct fbserv_obj *fbsp, int sub);
 IMGSTREAM_EXPORT int fbs_drop_ipc_clients(struct fbserv_obj *fbsp);
 IMGSTREAM_EXPORT int fbs_open_ipc(struct fbserv_obj *fbsp);
 IMGSTREAM_EXPORT const char *fbs_ipc_child_addr_env(struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT int fbs_create_token(char *token, size_t token_size);
 IMGSTREAM_EXPORT const char *fbs_generate_token(struct fbserv_obj *fbsp);
 
 __END_DECLS
