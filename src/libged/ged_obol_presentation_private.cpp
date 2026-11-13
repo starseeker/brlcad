@@ -939,7 +939,7 @@ ged_obol_faceplate_sync_params(GedObolFaceplatePublication &publication,
     publication.replaceHudLabels(name, labels, style);
 }
 
-static void
+static bool
 ged_obol_faceplate_sync_lod_progress(
 			     GedObolFaceplatePublication &publication,
 			     struct ged_view_context *view_ctx)
@@ -954,15 +954,27 @@ ged_obol_faceplate_sync_lod_progress(
 	publication.remove(fill_name);
 	publication.remove(label_name);
     };
+    BObolViewController *controller = publication.viewController();
+    const BObolFeatureOwner owner = ged_obol_feature_owner(view_ctx, 1);
+    const auto local_node = [&](const char *name) {
+	const BObolFeatureHandle handle = controller->features().findOwned(
+	    name, BOBOL_FEATURE_SCOPE_LOCAL, &owner);
+	return handle.isValid() ? controller->features().node(handle) : NULL;
+    };
+    const auto remove_if_present = [&]() {
+	const bool present = local_node(card_name) || local_node(track_name) ||
+	    local_node(fill_name) || local_node(label_name);
+	if (present)
+	    remove_progress();
+	return present;
+    };
 
     int progress_visible = 1;
     if (ged_view_lod_progress_visible_get(&progress_visible, view_ctx) &&
 	!progress_visible) {
-	remove_progress();
-	return;
+	return remove_if_present();
     }
 
-    BObolViewController *controller = publication.viewController();
     struct bv_lod_policy policy;
     bv_lod_policy_init(&policy);
     BObolViewAttachment *attachment = controller->getViewAttachment();
@@ -970,18 +982,29 @@ ged_obol_faceplate_sync_lod_progress(
 	attachment->getLodPolicy(&policy);
     const bool enabled = attachment && policy.policy != BV_LOD_OFF &&
 	(policy.mesh_enabled || policy.csg_enabled);
-    if (!enabled) {
-	remove_progress();
-	return;
-    }
+    if (!enabled)
+	return remove_if_present();
 
     BObolLodConvergenceStatus convergence;
     controller->getLodConvergenceStatus(convergence);
     const BObolLodProgressPresentationStatus status =
 	convergence.progressPresentationStatus();
-    if (!status.visible) {
-	remove_progress();
-	return;
+    if (!status.visible)
+	return remove_if_present();
+
+    SoNode *existing = local_node(card_name);
+    const bool legacy_present = local_node(track_name) ||
+	local_node(fill_name) || local_node(label_name);
+    if (existing && !legacy_present &&
+	existing->isOfType(SoBRLLodProgressOverlay::getClassTypeId())) {
+	const auto *card = static_cast<const SoBRLLodProgressOverlay *>(existing);
+	if (card->title.getValue() == status.title &&
+	    card->detail.getValue() == status.detail &&
+	    card->color.getValue() == status.color &&
+	    card->visible.getValue() == status.visible &&
+	    card->terminal.getValue() == status.terminal &&
+	    card->terminalReady.getValue() == status.terminalReady)
+	    return false;
     }
 
     SoBRLLodProgressOverlay *card = new SoBRLLodProgressOverlay;
@@ -999,6 +1022,7 @@ ged_obol_faceplate_sync_lod_progress(
     publication.remove(track_name);
     publication.remove(fill_name);
     publication.remove(label_name);
+    return true;
 }
 static void
 ged_obol_faceplate_sync_scale(GedObolFaceplatePublication &publication,
@@ -1528,7 +1552,7 @@ ged_obol_view_context_faceplate_sync(struct ged *gedp, struct ged_view_context *
     if (presentation_interval)
 	(void)bv_frametime_set(ged_obol_bv(view_ctx), presentation_interval);
     ged_obol_faceplate_sync_params(publication, view_ctx);
-    ged_obol_faceplate_sync_lod_progress(publication, view_ctx);
+    (void)ged_obol_faceplate_sync_lod_progress(publication, view_ctx);
     ged_obol_faceplate_sync_scale(publication, view_ctx);
     ged_obol_faceplate_sync_axes(publication, view_ctx);
     ged_obol_faceplate_sync_framebuffer(publication);
@@ -1559,14 +1583,28 @@ extern "C" int
 ged_view_lod_progress_sync(struct ged *gedp,
 	struct ged_view_context *view_ctx)
 {
+    return ged_view_lod_progress_sync_changed(NULL, gedp, view_ctx);
+}
+
+extern "C" int
+ged_view_lod_progress_sync_changed(int *changed, struct ged *gedp,
+	struct ged_view_context *view_ctx)
+{
+    if (changed)
+	*changed = 0;
     BObolViewController *controller =
 	ged_obol_view_controller_for_context(view_ctx);
     if (!gedp || !view_ctx || !controller)
 	return BRLCAD_OK;
 
     GedObolFaceplatePublication publication(controller, view_ctx);
-    ged_obol_faceplate_sync_lod_progress(publication, view_ctx);
-    return publication.commit() ? BRLCAD_OK : BRLCAD_ERROR;
+    const bool publication_changed =
+	ged_obol_faceplate_sync_lod_progress(publication, view_ctx);
+    if (!publication.commit())
+	return BRLCAD_ERROR;
+    if (changed)
+	*changed = publication_changed ? 1 : 0;
+    return BRLCAD_OK;
 }
 
 /* First shader token == "light"? */
