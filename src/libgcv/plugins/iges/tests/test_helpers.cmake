@@ -7,14 +7,20 @@ file(MAKE_DIRECTORY "${TEST_DIR}/cache")
 set(ENV{LIBRT_CACHE} "${TEST_DIR}/cache")
 set(ENV{BU_DIR_CACHE} "${TEST_DIR}/cache")
 
-function(run_checked step)
+set(IGES_TEST_SUBPROCESS_TIMEOUT 120)
+
+function(run_checked_with_timeout step timeout)
   execute_process(COMMAND ${ARGN} RESULT_VARIABLE status
     OUTPUT_FILE "${TEST_DIR}/${step}.log" ERROR_FILE "${TEST_DIR}/${step}.log"
-    WORKING_DIRECTORY "${TEST_DIR}" TIMEOUT 120)
+    WORKING_DIRECTORY "${TEST_DIR}" TIMEOUT "${timeout}")
   if(NOT "${status}" STREQUAL "0")
     file(READ "${TEST_DIR}/${step}.log" output)
     message(FATAL_ERROR "${step} failed (${status}):\n${output}")
   endif()
+endfunction()
+
+function(run_checked step)
+  run_checked_with_timeout("${step}" "${IGES_TEST_SUBPROCESS_TIMEOUT}" ${ARGN})
 endfunction()
 
 function(check_complete_report path)

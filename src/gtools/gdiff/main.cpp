@@ -23,8 +23,84 @@
 extern "C" {
 #include "bu/app.h"
 #include "bu/opt.h"
+#include "bu/sort.h"
+#include "bu/str.h"
 #include "./gdiff.h"
 }
+
+
+static int
+diff_avp_name_compare(const void *a, const void *b, void *)
+{
+    const struct diff_avp *avp_a = *(const struct diff_avp * const *)a;
+    const struct diff_avp *avp_b = *(const struct diff_avp * const *)b;
+
+    if (avp_a == avp_b)
+	return 0;
+    if (!avp_a)
+	return 1;
+    if (!avp_b)
+	return -1;
+    if (!avp_a->name)
+	return avp_b->name ? 1 : 0;
+    if (!avp_b->name)
+	return -1;
+
+    return bu_strcmp(avp_a->name, avp_b->name);
+}
+
+
+static int
+diff_result_name_compare(const void *a, const void *b, void *)
+{
+    const struct diff_result *result_a = *(const struct diff_result * const *)a;
+    const struct diff_result *result_b = *(const struct diff_result * const *)b;
+
+    if (result_a == result_b)
+	return 0;
+    if (!result_a)
+	return 1;
+    if (!result_b)
+	return -1;
+    if (!result_a->obj_name)
+	return result_b->obj_name ? 1 : 0;
+    if (!result_b->obj_name)
+	return -1;
+
+    return bu_strcmp(result_a->obj_name, result_b->obj_name);
+}
+
+
+/* Database directory traversal is hash-order dependent.  Keep gdiff's public
+ * output stable by imposing an explicit lexical order on objects and their
+ * parameter/attribute differences before reporting or merging them. */
+static void
+sort_diff_results(struct bu_ptbl *results)
+{
+    if (!results)
+	return;
+
+    for (size_t i = 0; i < BU_PTBL_LEN(results); i++) {
+	struct diff_result *dr = (struct diff_result *)BU_PTBL_GET(results, i);
+	if (!dr)
+	    continue;
+
+	if (dr->param_diffs && BU_PTBL_LEN(dr->param_diffs) > 1) {
+	    bu_sort((void *)BU_PTBL_BASEADDR(dr->param_diffs), BU_PTBL_LEN(dr->param_diffs),
+		    sizeof(struct diff_avp *), diff_avp_name_compare, NULL);
+	}
+	if (dr->attr_diffs && BU_PTBL_LEN(dr->attr_diffs) > 1) {
+	    bu_sort((void *)BU_PTBL_BASEADDR(dr->attr_diffs), BU_PTBL_LEN(dr->attr_diffs),
+		    sizeof(struct diff_avp *), diff_avp_name_compare, NULL);
+	}
+    }
+
+    if (BU_PTBL_LEN(results) > 1) {
+	bu_sort((void *)BU_PTBL_BASEADDR(results), BU_PTBL_LEN(results),
+		  sizeof(struct diff_result *), diff_result_name_compare, NULL);
+    }
+}
+
 
 /*******************************************************************/
 /* Primary function for basic diff operation on two .g files */
@@ -86,6 +162,8 @@ do_diff(struct db_i *left_dbip, struct db_i *right_dbip, struct diff_state *stat
 	bu_ptbl_free(&results_filtered);
     }
 
+    sort_diff_results(&results);
+
     if (state->verbosity) {
 	if (diff_state == DIFF_UNCHANGED || diff_state == DIFF_EMPTY) {
 	    bu_log("No differences found.\n");
@@ -136,6 +214,8 @@ do_diff(struct db_i *left_dbip, struct db_i *right_dbip, struct diff_state *stat
 	    bu_ptbl_cat(&diff3_results, &diff3_results_filtered);
 	    bu_ptbl_free(&diff3_results_filtered);
 	}
+
+	sort_diff_results(&diff3_results);
 
 	(void)diff3_merge(left_dbip, inmem_dbip, right_dbip, state, &diff3_results);
 
@@ -201,6 +281,8 @@ do_diff3(struct db_i *left_dbip, struct db_i *ancestor_dbip, struct db_i *right_
 	diff3_state = filtered_diff_state;
 	bu_ptbl_free(&results_filtered);
     }
+
+    sort_diff_results(&results);
 
     if (state->verbosity) {
 	if (diff3_state == DIFF_UNCHANGED || diff3_state == DIFF_EMPTY) {

@@ -26,7 +26,9 @@ if(BUILD_TESTING AND TARGET rtwizard)
 
   # All rtwizard tests use the same script.  The controls were regenerated
   # after Obol made autoview use the actual combined scene bounds rather than
-  # the legacy per-leaf safety cubes, which displaced otherwise correct views.
+  # the legacy per-leaf safety cubes.  They also record libbv's single
+  # rotation-stable half-diagonal fit of that raw bound; keeping the raw bound
+  # and the fit separate avoids applying the historical safety margin twice.
   set(TSCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/regress-rtwiz.cmake.in")
 
   set(INPUT_FILE "${DATA_DIR}/db/m35.g")
