@@ -903,6 +903,30 @@ test_progressive_status_contract(void)
 	  state.calls == 1 && status.providerAdvanced == 1 &&
 	  status.hasMore && !status.changed,
 	  "pending progressive work does not claim a published scene change");
+
+    FrameRequestCount foregroundWake;
+    controller.setFrameRequestCallback(count_frame_request, &foregroundWake);
+    const int callsBeforeForeground = state.calls;
+    const int wakesBeforeForeground = foregroundWake.calls;
+    controller.beginForegroundActivity();
+    controller.beginForegroundActivity();
+    status.clear();
+    CHECK(controller.hasForegroundActivity() &&
+	  controller.hasProgressiveWorkPending() &&
+	  !controller.getHostWorkSnapshot().pumpPending() &&
+	  controller.advanceProgressiveWork(NULL, &status) > 0 &&
+	  state.calls == callsBeforeForeground && status.hasMore,
+	  "foreground activity defers the background progressive pump");
+    controller.endForegroundActivity();
+    CHECK(controller.hasForegroundActivity() &&
+	  foregroundWake.calls == wakesBeforeForeground,
+	  "nested foreground activity retains the deferred pump");
+    controller.endForegroundActivity();
+    CHECK(!controller.hasForegroundActivity() &&
+	  controller.getHostWorkSnapshot().pumpPending() &&
+	  foregroundWake.calls == wakesBeforeForeground + 1,
+	  "ending foreground activity wakes deferred progressive work");
+    controller.clearFrameRequestCallback(&foregroundWake);
     controller.unregisterProgressiveProvider(token);
     controller.clearProgressiveWorkPending();
 
