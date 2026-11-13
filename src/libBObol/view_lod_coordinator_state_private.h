@@ -1150,6 +1150,7 @@ struct BObolLodCoordinator {
 	resetLodViewQualityHistory();
 	lodInteractiveCalibratedRenderCostPerSecond = 0.0L;
 	lodStableCalibratedRenderCostPerSecond = 0.0L;
+	lodPerformanceResetPending = false;
 	lastRenderTimeNanoseconds = 0;
 	smoothedRenderTimeNanoseconds = 0;
 	lodRendererPerformanceEvidence.reset();
@@ -1978,6 +1979,9 @@ struct BObolLodCoordinator {
     BObolLodStaticQualityTrial lodStaticQualityTrial;
     long double lodInteractiveCalibratedRenderCostPerSecond = 0.0L;
     long double lodStableCalibratedRenderCostPerSecond = 0.0L;
+    /* An empty source transition has no frame from which to relearn capacity.
+     * Defer the reset until a replacement workload can consume it. */
+    bool lodPerformanceResetPending = false;
     size_t lodInteractiveEntryRenderCostBudget = 0;
     int lodInteractiveEntryProgressiveCeiling = -1;
     void seedInteractiveCalibrationFromStable(void)

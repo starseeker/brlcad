@@ -56,6 +56,12 @@ public:
     bool sameVisibilityInputs(const Sources &other) const;
     bool samePlanningInputs(const Sources &other) const;
 
+    /* Renderer throughput is transferable across incremental scene edits,
+     * but not across wholesale workload replacement.  Inventory revisions
+     * are deliberately excluded because progressive realization publishes
+     * them repeatedly within one semantic source contract. */
+    bool startsNewPerformanceEpoch(const Sources &previous) const;
+
 private:
     std::shared_ptr<const Sources> sourceValues;
 };
