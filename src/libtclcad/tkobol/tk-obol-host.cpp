@@ -498,7 +498,7 @@ public:
 
     void schedule_progressive_timer(void)
     {
-	if (!this->opened || this->closing || !this->visible ||
+	if (!this->opened || this->closing || !this->effectively_visible() ||
 	    !this->controller)
 	    return;
 	/* Match the Qt host's bounded background pump.  An immediate file-event
@@ -509,7 +509,8 @@ public:
 
     void dispatch_progressive_timer(void)
     {
-	if (!this->opened || this->closing || !this->visible || !this->controller)
+	if (!this->opened || this->closing || !this->effectively_visible() ||
+	    !this->controller)
 	    return;
 	if (this->controller->hasProgressiveWorkPending())
 	    (void)this->controller->advanceProgressiveWork(NULL, NULL);
@@ -522,10 +523,30 @@ public:
 
     bool progressive_timer_needed(void) const
     {
-	return this->opened && !this->closing && this->visible &&
+	return this->opened && !this->closing && this->effectively_visible() &&
 	    this->controller &&
 	    (this->controller->hasProgressiveWorkPending() ||
 	     this->controller->isRenderRequested());
+    }
+
+    bool effectively_visible(void) const
+    {
+	if (!this->visible || !this->tkwin ||
+	    Tcl_GetCurrentThread() != this->owner_thread)
+	    return false;
+	/* Tk keeps a child widget's own mapped bit set when an ancestor is
+	 * removed from a geometry manager.  MGED's single-pane layout does
+	 * exactly that to the three inactive pane frames, so require the complete
+	 * ancestor chain to be mapped before spending owner-thread time on the
+	 * endpoint. */
+	for (Tk_Window window = this->tkwin; window;
+	     window = Tk_Parent(window)) {
+	    if (!Tk_IsMapped(window))
+		return false;
+	    if (Tk_IsTopLevel(window))
+		break;
+	}
+	return true;
     }
 
     void schedule_heartbeat_timer(void)
@@ -948,7 +969,7 @@ private:
     bool render(void)
     {
 	if (!this->opened || this->closing || !this->controller ||
-	    !this->visible)
+	    !this->effectively_visible())
 	    return false;
 	return this->software ? this->present_software() :
 	    this->render_hardware(true);
@@ -968,7 +989,7 @@ private:
 	    Tcl_WrongNumArgs(interp, 1, objv, "widget");
 	    return TCL_ERROR;
 	}
-	if (!host->opened || host->closing || !host->visible)
+	if (!host->opened || host->closing || !host->effectively_visible())
 	    return TCL_OK;
 	return host->render() ? TCL_OK : TCL_ERROR;
     }
