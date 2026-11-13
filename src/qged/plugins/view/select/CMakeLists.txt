@@ -11,9 +11,9 @@ if(BRLCAD_ENABLE_QT)
   )
 endif(BRLCAD_ENABLE_QT)
 
-set(select_srcs select.cpp CADViewSelector.cpp select.json)
+set(select_srcs select.cpp CADViewSelector.cpp)
 
-set(select_moc_hdrs CADViewSelector.h)
+set(select_moc_hdrs CADViewSelector.h ViewSelectFactory.h)
 
 if(BRLCAD_ENABLE_QT)
   if(Qt6Widgets_FOUND)
@@ -24,7 +24,6 @@ if(BRLCAD_ENABLE_QT)
     qt5_add_resources(icon_qrc icon.qrc)
   endif(Qt6Widgets_FOUND)
   qged_plugin(qged_select SHARED ${select_srcs} ${select_moc_srcs} ${icon_qrc})
-  set_target_properties(qged_select PROPERTIES AUTOMOC ON)
   if(Qt6Widgets_FOUND)
     target_link_libraries(
       qged_select
@@ -46,13 +45,12 @@ if(BRLCAD_ENABLE_QT)
   endif(Qt6Widgets_FOUND)
   set_property(TARGET qged_select APPEND PROPERTY COMPILE_DEFINITIONS BRLCADBUILD HAVE_CONFIG_H)
   validate_style(qged_select select.cpp)
-  plugin_setup(qged_select qged-qt)
+  plugin_setup(qged_select qged)
 
   distclean(
     icon.qrc.depends
     moc_CADViewSelector.cpp_parameters
-    "${CMAKE_BINARY_DIR}/${LIBEXEC_DIR}/qged-qt/qged_select.exp"
-    "${CMAKE_BINARY_DIR}/${LIBEXEC_DIR}/qged-qt/qged_select.pdb"
+    moc_ViewSelectFactory.cpp_parameters
   )
 endif(BRLCAD_ENABLE_QT)
 

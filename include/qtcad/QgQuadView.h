@@ -28,15 +28,14 @@
 
 #include <QWidget>
 
-extern "C" {
-#include "bu/ptbl.h"
-#include "bv.h"
-#include "dm.h"
-}
-
 #include "qtcad/defines.h"
 #include "qtcad/QgTypes.h"
-#include "qtcad/QgView.h"
+
+class QEvent;
+class QgSession;
+class QgView;
+class QGridLayout;
+class QPoint;
 
 // Abbreviations:
 //
@@ -45,12 +44,13 @@ extern "C" {
 // ll == 2 == Lower Left Quadrant
 // lr == 3 == Lower Right Quadrant
 
-class QTCAD_EXPORT QgQuadView : public QWidget
-{
-    Q_OBJECT
+class QTCAD_EXPORT QgQuadView : public QWidget {
+	Q_OBJECT
+	Q_DISABLE_COPY_MOVE(QgQuadView)
 
-    public:
-	explicit QgQuadView(QWidget *parent, struct ged *gedpRef,
+
+public:
+	explicit QgQuadView(QWidget *parent, QgSession *session,
 		QgViewType type);
 	~QgQuadView();
 
@@ -64,15 +64,14 @@ class QTCAD_EXPORT QgQuadView : public QWidget
 	QgView *get(const QPoint &p); // Test is global point coordinates correspond to one of the quad view
 	QgView *get(QEvent *e); // Given a MouseButtonPress QEvent, see if the point identifies a view
 	QgView *curr_view(); // return the currently selected view
-	struct bview * view(QgQuadrantId quadrant = QgQuadrantId::UpperRight);
 
 	void select(QgQuadrantId quadrant);
 	void select(const char *id); // valid inputs: ur, ul, ll and lr
 	QgQuadrantId get_selected();
 
-        void changeToSingleFrame();
-        void changeToQuadFrame();
-        void changeToResizeableQuadFrame();
+	void changeToSingleFrame();
+	void changeToQuadFrame();
+	void changeToResizeableQuadFrame();
 
 	void enableDefaultKeyBindings();
 	void disableDefaultKeyBindings();
@@ -80,40 +79,40 @@ class QTCAD_EXPORT QgQuadView : public QWidget
 	void enableDefaultMouseBindings();
 	void disableDefaultMouseBindings();
 
-    signals:
+signals:
 	void changed(QgView *);
 	void selected(QgView *);
 	void init_done();
 
-    public slots:
+public slots:
 	void do_view_update(QgViewUpdateFlags);
-        void do_view_changed();
+	void do_view_changed();
 	void do_init_done();
 	void set_lmouse_move_default(int);
 
-    private:
-        bool eventFilter(QObject*, QEvent*);
-        QgView *createView(unsigned int index);
-        QGridLayout *createLayout();
+private:
+	bool eventFilter(QObject*, QEvent*);
+	QgView *createView(unsigned int index);
+	QGridLayout *createLayout();
 
-        QgViewType graphicsType = QgViewType::SW;
-        // Holds up to 4 views in single view only the first view is constructed
-        // The other views are constructed if quad view mode is selected by the user
+	QgViewType graphicsType = QgViewType::SW;
+	// Holds up to 4 views in single view only the first view is constructed
+	// The other views are constructed if quad view mode is selected by the user
 	QgView *views[4] = {nullptr, nullptr, nullptr, nullptr};
-        QgView *currentView;
-        // We need to hang on to this because we don't create the other quad views until the user switches mode
-        struct ged *gedp;
+	QgView *currentView = nullptr;
+	// We need to hang on to this because we don't create the other quad views until the user switches mode
+	QgSession *m_session = nullptr;
 
-        // Hang on to these pointers so when we need to clean up memory we have them
-        QGridLayout *currentLayout = nullptr;
+	// Hang on to these pointers so when we need to clean up memory we have them
+	QGridLayout *currentLayout = nullptr;
 	// Note that we use QWidget here rather than QSpacerItem in order to allow
 	// for color control to indicate active quadrants without having to resize
 	// the windows in response to a selection.
-        QWidget *spacerTop = nullptr;
-        QWidget *spacerBottom = nullptr;
-        QWidget *spacerLeft = nullptr;
-        QWidget *spacerRight = nullptr;
-        QWidget *spacerCenter = nullptr;
+	QWidget *spacerTop = nullptr;
+	QWidget *spacerBottom = nullptr;
+	QWidget *spacerLeft = nullptr;
+	QWidget *spacerRight = nullptr;
+	QWidget *spacerCenter = nullptr;
 
 	// Flag for initializations of sub-widgets
 	bool init_done_flag = false;
@@ -129,4 +128,3 @@ class QTCAD_EXPORT QgQuadView : public QWidget
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

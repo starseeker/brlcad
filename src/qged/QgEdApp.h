@@ -26,6 +26,10 @@
 #ifndef QGEDAPP_H
 #define QGEDAPP_H
 
+#include <stdint.h>
+
+#include <memory>
+
 #include <QApplication>
 #include <QObject>
 #include <QString>
@@ -34,7 +38,6 @@
 #include <QSet>
 #include <QModelIndex>
 
-#include "bv.h"
 #include "raytrace.h"
 #include "ged.h"
 #include "qtcad/QgModel.h"
@@ -44,6 +47,7 @@
 
 class QgEdMainWindow;
 class QgPluginManager;
+class QTemporaryDir;
 class QgToolPaletteElement;
 
 /* Command type for application level commands */
@@ -59,7 +63,9 @@ class QgEdApp : public QApplication
     Q_OBJECT
 
     public:
-	QgEdApp(int &argc, char *argv[], const char *g_file, int swrast_mode = 0, int quad_mode = 0);
+	QgEdApp(int &argc, char *argv[], const char *db_file = nullptr,
+		int swrast_mode = 0, int quad_mode = 0,
+		bool test_mode = false);
 	~QgEdApp();
 
 	int run_cmd(struct bu_vls *msg, int argc, const char **argv);
@@ -67,6 +73,7 @@ class QgEdApp : public QApplication
 	QgPluginContext *pluginContext() { return &m_plugin_context; }
 	QgPluginManager *pluginManager() const { return m_plugin_manager; }
 	QgPluginNotifier *pluginNotifier() const { return m_plugin_notifier; }
+	bool isTestMode() const { return m_test_mode; }
 
 	QgModel *mdl = NULL;
 
@@ -92,8 +99,8 @@ class QgEdApp : public QApplication
 	// This slot is used for quad view configurations - it is called if the
 	// user uses the mouse to select one of multiple views.  This slot has
 	// the responsibility to notify GUI elements of a view change via
-	// do_view_change, after updating the current gedp->ged_gvp pointer to
-	// refer to the now-current view.
+	// do_view_change, after updating the session's active view to refer to
+	// the now-current view.
 	void do_quad_view_change(QgView *);
 
        	/* Utility slots */
@@ -109,9 +116,12 @@ class QgEdApp : public QApplication
 	unsigned long long select_hash = 0;
 	long history_mark_start = -1;
 	long history_mark_end = -1;
+	uintptr_t m_obol_draw_observer_token = 0;
 	QgPluginContext m_plugin_context;
 	QgPluginNotifier *m_plugin_notifier = NULL;
 	QgPluginManager *m_plugin_manager = NULL;
+	bool m_test_mode = false;
+	std::unique_ptr<QTemporaryDir> m_test_settings_directory;
 };
 
 #endif // QGEDAPP_H
@@ -124,4 +134,3 @@ class QgEdApp : public QApplication
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

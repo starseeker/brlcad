@@ -130,7 +130,6 @@ check_unit(fastf_t local2base, const char *unit)
     struct rt_edit *edit = rt_edit_create(&path, dbip, &tol, NULL);
     int failures = 0;
     if (!edit || !same_ell(edit, 4) ||
-	edit->tol == &tol || !EQUAL(edit->tol->dist, tol.dist) ||
 	!NEAR_EQUAL(edit->local2base, local2base, VUNITIZE_TOL)) {
 	bu_log("lifecycle initial\t%s\tfail\n", unit);
 	++failures;
@@ -167,7 +166,7 @@ check_unit(fastf_t local2base, const char *unit)
 	    failures ? "fail" : "pass");
 
 	rt_edit_set_edflag(edit, RT_PARAMS_EDIT_SCALE);
-	edit->update_views = 0;
+	edit->view_update_requested = 0;
 	edit->e_inpara = 2;
 	edit->e_mvalid = 1;
 	edit->es_scale = 2.0;
@@ -177,15 +176,17 @@ check_unit(fastf_t local2base, const char *unit)
 	if (rt_edit_process(edit) != BRLCAD_ERROR ||
 	    edit->e_inpara || edit->e_mvalid || !ZERO(edit->es_scale) ||
 	    edit->e_nstr || edit->e_str[0][0] ||
-	    edit->update_views || !EQUAL(edit->e_para[0], 2.0) ||
+	    edit->view_update_requested || !EQUAL(edit->e_para[0], 2.0) ||
 	    !same_ell(edit, 4))
 	    ++failures;
 	rt_edit_set_edflag(edit, ECMD_ELL_SCALE_A);
 	rt_edit_set_str(edit, 0, "transient");
 	if (rt_edit_process(edit) != BRLCAD_OK || !same_ell(edit, 4) ||
-	    edit->update_views != 1 || edit->e_nstr || edit->e_str[0][0])
+	    edit->view_update_requested != 1 || edit->e_nstr ||
+	    edit->e_str[0][0])
 	    ++failures;
-	if (rt_edit_process(edit) != BRLCAD_OK || edit->update_views != 1)
+	if (rt_edit_process(edit) != BRLCAD_OK ||
+	    edit->view_update_requested != 1)
 	    ++failures;
 	bu_log("failed edit consumes input\t%s\t%s\n", unit,
 	    failures ? "fail" : "pass");
@@ -249,23 +250,19 @@ check_unit(fastf_t local2base, const char *unit)
 	    bu_log("lifecycle reset\t%s\tpass\n", unit);
 	}
 
-	const fastf_t expected_tolerance = tol.dist;
 	if (rt_edit_reinit(edit, &path, dbip, &tol, NULL) != BRLCAD_OK ||
-	    edit->dbip != dbip || edit->tol == &tol ||
-	    !EQUAL(edit->tol->dist, expected_tolerance) ||
+	    edit->dbip != dbip || edit->tol != &edit->tol_storage ||
+	    edit->tol->magic != tol.magic ||
+	    !EQUAL(edit->tol->dist, tol.dist) ||
+	    !EQUAL(edit->tol->dist_sq, tol.dist_sq) ||
+	    !EQUAL(edit->tol->perp, tol.perp) ||
+	    !EQUAL(edit->tol->para, tol.para) ||
 	    !NEAR_EQUAL(edit->local2base, local2base, VUNITIZE_TOL) ||
 	    !same_ell(edit, 4)) {
 	    bu_log("lifecycle reinit\t%s\tfail\n", unit);
 	    ++failures;
 	} else {
 	    bu_log("lifecycle reinit\t%s\tpass\n", unit);
-	}
-	tol.dist *= 2.0;
-	if (!EQUAL(edit->tol->dist, expected_tolerance)) {
-	    bu_log("lifecycle tolerance ownership\t%s\tfail\n", unit);
-	    ++failures;
-	} else {
-	    bu_log("lifecycle tolerance ownership\t%s\tpass\n", unit);
 	}
     }
     rt_edit_destroy(edit);
@@ -300,7 +297,7 @@ rt_edit_test_lifecycle_matrix(void)
 	rt_edit_process(idle) != BRLCAD_ERROR ||
 	rt_edit_checkpoint(idle) != BRLCAD_ERROR ||
 	idle->e_inpara || idle->e_mvalid || !ZERO(idle->es_scale) ||
-	idle->update_views)
+	idle->view_update_requested)
 	++failures;
     rt_edit_destroy(idle);
     failures += check_unit(1.0, "mm");

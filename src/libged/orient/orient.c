@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -76,8 +78,12 @@ ged_orient_core(struct ged *gedp, int argc, const char *argv[])
 	}
     }
 
-    quat_quat2mat(gedp->ged_gvp->gv_rotation, quat);
-    bv_update(gedp->ged_gvp);
+    mat_t rotation;
+    quat_quat2mat(rotation, quat);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_rotation_set(view, rotation);
+    ged_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

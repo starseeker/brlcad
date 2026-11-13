@@ -1,0 +1,436 @@
+/*                        G R I D . C P P
+ * BRL-CAD
+ *
+ * Copyright (c) 1998-2026 United States Government as represented by
+ * the U.S. Army Research Laboratory.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public License
+ * version 2.1 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this file; see the file named COPYING for more
+ * information.
+ */
+/** @file libged/grid.cpp
+ *
+ * Routines that provide the basics for a snap to grid capability.
+ *
+ */
+
+#include "common.h"
+
+#include "ged/display_obol_private.h"
+
+#include <math.h>
+#include <string.h>
+
+
+#include "vmath.h"
+#include "bv.h"
+
+#include "../ged_private.h"
+
+
+/* Return zero for passive pre-attachment configuration, one for a successful
+ * endpoint update, and -1 when an attached endpoint rejects the policy. */
+static int
+grid_endpoint_property_set(struct ged_view_context *view_ctx, const char *name,
+	const struct bv_display_property_value *value)
+{
+    if (!ged_view_context_obol_endpoint_get(view_ctx))
+	return 0;
+    return ged_view_context_display_property_set(view_ctx, name, value) ==
+	BV_DISPLAY_PROPERTY_OK ? 1 : -1;
+}
+
+
+static void
+grid_vsnap(struct bv *view)
+{
+    point_t view_pt;
+    point_t model_pt;
+    mat_t model2view;
+    mat_t view2model;
+
+    bv_center_get(model_pt, view);
+    bv_model2view_get(model2view, view);
+    bv_view2model_get(view2model, view);
+
+    MAT4X3PNT(view_pt, model2view, model_pt);
+    bv_snap_grid_2d(view, &view_pt[X], &view_pt[Y]);
+    MAT4X3PNT(model_pt, view2model, view_pt);
+    bv_center_set(view, model_pt);
+}
+
+
+static void
+grid_vls_print(struct ged *gedp, const struct bv_grid_state *grid)
+{
+    double blval = (gedp->dbip) ? gedp->dbip->dbi_base2local : 1.0;
+    bu_vls_printf(gedp->ged_result_str, "anchor = %g %g %g\n",
+		  grid->anchor[0] * blval,
+		  grid->anchor[1] * blval,
+		  grid->anchor[2] * blval);
+    bu_vls_printf(gedp->ged_result_str, "color = %d %d %d\n",
+		  grid->color[0],
+		  grid->color[1],
+		  grid->color[2]);
+    bu_vls_printf(gedp->ged_result_str, "draw = %d\n", grid->draw);
+    bu_vls_printf(gedp->ged_result_str, "mrh = %d\n", grid->res_major_h);
+    bu_vls_printf(gedp->ged_result_str, "mrv = %d\n", grid->res_major_v);
+    bu_vls_printf(gedp->ged_result_str, "rh = %g\n", grid->res_h * blval);
+    bu_vls_printf(gedp->ged_result_str, "rv = %g\n", grid->res_v * blval);
+    bu_vls_printf(gedp->ged_result_str, "snap = %d\n", grid->snap);
+}
+
+
+static void
+grid_usage(struct ged *gedp, const char *argv0)
+{
+    bu_vls_printf(gedp->ged_result_str, "Usage: %s\n", argv0);
+    bu_vls_printf(gedp->ged_result_str, "%s", "  grid vname color [r g b]	set or get the color\n");
+    bu_vls_printf(gedp->ged_result_str, "%s", "  grid vname draw [0|1]		set or get the draw parameter\n");
+    bu_vls_printf(gedp->ged_result_str, "%s", "  grid vname help		prints this help message\n");
+    bu_vls_printf(gedp->ged_result_str, "%s", "  grid vname mrh [ival]		set or get the major resolution (horizontal)\n");
+    bu_vls_printf(gedp->ged_result_str, "%s", "  grid vname mrv [ival]		set or get the major resolution (vertical)\n");
+    bu_vls_printf(gedp->ged_result_str, "%s", "  grid vname rh [fval]		set or get the resolution (horizontal)\n");
+    bu_vls_printf(gedp->ged_result_str, "%s", "  grid vname rv [fval]		set or get the resolution (vertical)\n");
+    bu_vls_printf(gedp->ged_result_str, "%s", "  grid vname snap [0|1]		set or get the snap parameter\n");
+    bu_vls_printf(gedp->ged_result_str, "%s", "  grid vname vars		print a list of all variables (i.e. var = val)\n");
+    bu_vls_printf(gedp->ged_result_str, "%s", "  grid vname vsnap		snaps the view center to the nearest grid point\n");
+}
+
+
+/*
+ * Note - this needs to be rewritten to accept keyword/value pairs so
+ * that multiple attributes can be set with a single command call.
+ */
+int
+ged_grid_core(struct ged *gedp, int argc, const char *argv[])
+{
+    char *command;
+    char *parameter;
+    char **argp = (char **)argv;
+    double user_pt[3];		/* Value(s) provided by user */
+    int i;
+    double blval = (gedp->dbip) ? gedp->dbip->dbi_base2local : 1.0;
+    double lbval = (gedp->dbip) ? gedp->dbip->dbi_local2base : 1.0;
+
+    GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
+    GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
+
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+
+    /* initialize result */
+    bu_vls_trunc(gedp->ged_result_str, 0);
+
+    if (argc == 1) {
+	grid_usage(gedp, argv[0]);
+	return BRLCAD_OK;
+    }
+
+    if (argc < 2 || 5 < argc) {
+	grid_usage(gedp, argv[0]);
+	return BRLCAD_ERROR;
+    }
+
+    command = (char *)argv[0];
+    parameter = (char *)argv[1];
+    argc -= 2;
+    argp += 2;
+
+    for (i = 0; i < argc; ++i)
+	if (sscanf(argp[i], "%lf", &user_pt[i]) != 1) {
+	    grid_usage(gedp, argv[0]);
+	    return BRLCAD_ERROR;
+    }
+
+    struct bv_grid_state grid;
+    if (!bv_grid_state_get(&grid, view))
+	return BRLCAD_ERROR;
+
+    // TODO - need more sophisticated grid drawing - when zoomed out too far
+    // grid disappears.  Need to simply draw a coarse grid that aligns with the
+    // finer grid under it.
+    //
+    // TODO - when zoomed in so close the nearest grid points are not visible,
+    // should probably disable grid snapping automatically and assume the goal
+    // is free-form movement at that scale, since there are no visible snapping
+    // points to target...
+    if (BU_STR_EQUAL(parameter, "draw")) {
+	if (argc == 0) {
+	    bu_vls_printf(gedp->ged_result_str, "%d", grid.draw);
+	    return BRLCAD_OK;
+	} else if (argc == 1) {
+	    i = (int)user_pt[X];
+
+	    if (i)
+		grid.draw = 1;
+	    else
+		grid.draw = 0;
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_BOOL;
+	    value.bool_value = grid.draw;
+	    const int endpoint_result = grid_endpoint_property_set(view_ctx,
+		"view.faceplate.grid.visible", &value);
+	    if (endpoint_result)
+		return endpoint_result > 0 ? BRLCAD_OK : BRLCAD_ERROR;
+	    bv_grid_state_set(view, &grid);
+
+	    return BRLCAD_OK;
+	}
+
+	bu_vls_printf(gedp->ged_result_str, "The '%s draw' command accepts 0 or 1 argument\n", command);
+	return BRLCAD_ERROR;
+    }
+
+    if (BU_STR_EQUAL(parameter, "vsnap")) {
+	if (argc == 0) {
+	    grid_vsnap(view);
+	    ged_view_context_update(view_ctx);
+	    return BRLCAD_OK;
+	}
+
+	bu_vls_printf(gedp->ged_result_str, "The '%s vsnap' command accepts no arguments\n", command);
+	return BRLCAD_ERROR;
+    }
+
+    if (BU_STR_EQUAL(parameter, "snap")) {
+	if (argc == 0) {
+	    bu_vls_printf(gedp->ged_result_str, "%d", grid.snap);
+	    return BRLCAD_OK;
+	} else if (argc == 1) {
+	    i = (int)user_pt[X];
+
+	    if (i)
+		grid.snap = 1;
+	    else
+		grid.snap = 0;
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_BOOL;
+	    value.bool_value = grid.snap;
+	    const int endpoint_result = grid_endpoint_property_set(view_ctx,
+		"view.faceplate.grid.snap", &value);
+	    if (endpoint_result)
+		return endpoint_result > 0 ? BRLCAD_OK : BRLCAD_ERROR;
+	    bv_grid_state_set(view, &grid);
+
+	    return BRLCAD_OK;
+	}
+
+	bu_vls_printf(gedp->ged_result_str, "The '%s snap' command accepts 0 or 1 argument\n", command);
+	return BRLCAD_ERROR;
+    }
+
+    if (BU_STR_EQUAL(parameter, "rh")) {
+	if (argc == 0) {
+	    bu_vls_printf(gedp->ged_result_str, "%g",
+			  grid.res_h * blval);
+	    return BRLCAD_OK;
+	} else if (argc == 1) {
+	    grid.res_h = user_pt[X] * lbval;
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_DOUBLE;
+	    value.double_value = grid.res_h;
+	    const int endpoint_result = grid_endpoint_property_set(view_ctx,
+		"view.faceplate.grid.resolution.horizontal", &value);
+	    if (endpoint_result)
+		return endpoint_result > 0 ? BRLCAD_OK : BRLCAD_ERROR;
+	    bv_grid_state_set(view, &grid);
+
+	    return BRLCAD_OK;
+	}
+
+	bu_vls_printf(gedp->ged_result_str, "The '%s rh' command accepts 0 or 1 argument\n", command);
+	return BRLCAD_ERROR;
+    }
+
+    if (BU_STR_EQUAL(parameter, "rv")) {
+	if (argc == 0) {
+	    bu_vls_printf(gedp->ged_result_str, "%g",
+			  grid.res_v * blval);
+	    return BRLCAD_OK;
+	} else if (argc == 1) {
+	    grid.res_v = user_pt[X] * lbval;
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_DOUBLE;
+	    value.double_value = grid.res_v;
+	    const int endpoint_result = grid_endpoint_property_set(view_ctx,
+		"view.faceplate.grid.resolution.vertical", &value);
+	    if (endpoint_result)
+		return endpoint_result > 0 ? BRLCAD_OK : BRLCAD_ERROR;
+	    bv_grid_state_set(view, &grid);
+
+	    return BRLCAD_OK;
+	}
+
+	bu_vls_printf(gedp->ged_result_str, "The '%s rv' command accepts 0 or 1 argument\n", command);
+	return BRLCAD_ERROR;
+    }
+
+    if (BU_STR_EQUAL(parameter, "mrh")) {
+	if (argc == 0) {
+	    bu_vls_printf(gedp->ged_result_str, "%d", grid.res_major_h);
+	    return BRLCAD_OK;
+	} else if (argc == 1) {
+	    if (user_pt[X] < 0.0 || user_pt[X] > 2147483647.0)
+		return BRLCAD_ERROR;
+	    grid.res_major_h = (int)user_pt[X];
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_UINT;
+	    value.uint_value = (uint64_t)grid.res_major_h;
+	    const int endpoint_result = grid_endpoint_property_set(view_ctx,
+		"view.faceplate.grid.major.horizontal", &value);
+	    if (endpoint_result)
+		return endpoint_result > 0 ? BRLCAD_OK : BRLCAD_ERROR;
+	    bv_grid_state_set(view, &grid);
+
+	    return BRLCAD_OK;
+	}
+
+	bu_vls_printf(gedp->ged_result_str, "The '%s mrh' command accepts 0 or 1 argument\n", command);
+	return BRLCAD_ERROR;
+    }
+
+    if (BU_STR_EQUAL(parameter, "mrv")) {
+	if (argc == 0) {
+	    bu_vls_printf(gedp->ged_result_str, "%d", grid.res_major_v);
+	    return BRLCAD_OK;
+	} else if (argc == 1) {
+	    if (user_pt[X] < 0.0 || user_pt[X] > 2147483647.0)
+		return BRLCAD_ERROR;
+	    grid.res_major_v = (int)user_pt[X];
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_UINT;
+	    value.uint_value = (uint64_t)grid.res_major_v;
+	    const int endpoint_result = grid_endpoint_property_set(view_ctx,
+		"view.faceplate.grid.major.vertical", &value);
+	    if (endpoint_result)
+		return endpoint_result > 0 ? BRLCAD_OK : BRLCAD_ERROR;
+	    bv_grid_state_set(view, &grid);
+
+	    return BRLCAD_OK;
+	}
+
+	bu_vls_printf(gedp->ged_result_str, "The '%s mrv' command accepts 0 or 1 argument\n", command);
+	return BRLCAD_ERROR;
+    }
+
+    if (BU_STR_EQUAL(parameter, "anchor")) {
+	if (argc == 0) {
+	    bu_vls_printf(gedp->ged_result_str, "%g %g %g",
+			  grid.anchor[X] * blval,
+			  grid.anchor[Y] * blval,
+			  grid.anchor[Z] * blval);
+	    return BRLCAD_OK;
+	} else if (argc == 3) {
+	    grid.anchor[0] = user_pt[X] * lbval;
+	    grid.anchor[1] = user_pt[Y] * lbval;
+	    grid.anchor[2] = user_pt[Z] * lbval;
+	    const char *anchor_properties[] = {
+		"view.faceplate.grid.anchor.x",
+		"view.faceplate.grid.anchor.y",
+		"view.faceplate.grid.anchor.z"
+	    };
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_DOUBLE;
+	    for (int axis = 0; axis < 3; axis++) {
+		value.double_value = grid.anchor[axis];
+		const int endpoint_result = grid_endpoint_property_set(view_ctx,
+		    anchor_properties[axis], &value);
+		if (endpoint_result < 0)
+		    return BRLCAD_ERROR;
+		if (!endpoint_result)
+		    break;
+		if (axis == 2)
+		    return BRLCAD_OK;
+	    }
+	    bv_grid_state_set(view, &grid);
+
+	    return BRLCAD_OK;
+	}
+
+	bu_vls_printf(gedp->ged_result_str, "The '%s anchor' command requires 0 or 3 arguments\n", command);
+	return BRLCAD_ERROR;
+    }
+
+    if (BU_STR_EQUAL(parameter, "color")) {
+	if (argc == 0) {
+	    bu_vls_printf(gedp->ged_result_str, "%d %d %d",
+			  grid.color[X],
+			  grid.color[Y],
+			  grid.color[Z]);
+	    return BRLCAD_OK;
+	} else if (argc == 3) {
+	    if (user_pt[X] < 0.0 || user_pt[X] > 255.0 ||
+		user_pt[Y] < 0.0 || user_pt[Y] > 255.0 ||
+		user_pt[Z] < 0.0 || user_pt[Z] > 255.0)
+		return BRLCAD_ERROR;
+	    grid.color[0] = (int)user_pt[X];
+	    grid.color[1] = (int)user_pt[Y];
+	    grid.color[2] = (int)user_pt[Z];
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_COLOR3;
+	    for (int axis = 0; axis < 3; axis++)
+		value.color3[axis] = grid.color[axis] / 255.0;
+	    const int endpoint_result = grid_endpoint_property_set(view_ctx,
+		"view.faceplate.grid.color", &value);
+	    if (endpoint_result)
+		return endpoint_result > 0 ? BRLCAD_OK : BRLCAD_ERROR;
+	    bv_grid_state_set(view, &grid);
+
+	    return BRLCAD_OK;
+	}
+
+	bu_vls_printf(gedp->ged_result_str, "The '%s color' command requires 0 or 3 arguments\n", command);
+	return BRLCAD_ERROR;
+    }
+
+    if (BU_STR_EQUAL(parameter, "vars")) {
+	grid_vls_print(gedp, &grid);
+	return BRLCAD_OK;
+    }
+
+    if (BU_STR_EQUAL(parameter, "help")) {
+	grid_usage(gedp, argv[0]);
+	return GED_HELP;
+    }
+
+    bu_vls_printf(gedp->ged_result_str, "%s: unrecognized command '%s'\n", argv[0], command);
+    grid_usage(gedp, argv[0]);
+
+    return BRLCAD_ERROR;
+}
+
+#include "../include/plugin.h"
+
+#define GED_GRID_COMMANDS(X, XID) \
+    X(grid, ged_grid_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_GRID_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_grid", 1, GED_GRID_COMMANDS)
+
+/*
+ * Local Variables:
+ * mode: C++
+ * tab-width: 8
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

@@ -142,7 +142,6 @@ rt_edit_eto_edit_desc(void)
     return &eto_prim_desc;
 }
 
-
 C_DECL int
 rt_edit_eto_get_values(struct rt_edit *s, int cmd_id,
 	struct rt_edit_cmd_values *result)

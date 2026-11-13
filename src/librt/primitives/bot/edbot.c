@@ -617,25 +617,6 @@ bot_vertex_index(struct rt_edit *s, int param, size_t vertex_count, int *vertex)
     return BRLCAD_OK;
 }
 
-
-static int
-bot_selection_index(struct rt_edit *s, int param, size_t vertex_count,
-	int *vertex)
-{
-    fastf_t index = s->e_para[param];
-    if (!isfinite(index) || index < -1.0 ||
-	index >= (fastf_t)vertex_count || index > (fastf_t)INT_MAX ||
-	!ZERO(index - floor(index))) {
-	bu_vls_printf(s->log_str,
-		"ERROR: invalid selection index %g (valid range [-1, %zu))\n",
-		index, vertex_count);
-	return BRLCAD_ERROR;
-    }
-    *vertex = (int)index;
-    return BRLCAD_OK;
-}
-
-
 static int
 ecmd_bot_movev_list(struct rt_edit *s)
 {
@@ -670,6 +651,15 @@ ecmd_bot_movev_list(struct rt_edit *s)
     }
     for (int i = 0; i < n_verts; i++) {
 	int vi = (int)s->e_para[3 + i];
+	int duplicate = 0;
+	for (int previous = 0; previous < i; previous++) {
+	    if ((int)s->e_para[3 + previous] == vi) {
+		duplicate = 1;
+		break;
+	    }
+	}
+	if (duplicate)
+	    continue;
 	VADD2(&bot->vertices[vi * 3], &bot->vertices[vi * 3], delta);
     }
 
@@ -970,7 +960,7 @@ bot_edit_target_point(point_t target, struct rt_edit *s)
     return 0;
 }
 
-void
+static int
 ecmd_bot_movev(struct rt_edit *s)
 {
     struct rt_bot_edit *b = (struct rt_bot_edit *)s->ipe_ptr;
@@ -980,28 +970,36 @@ ecmd_bot_movev(struct rt_edit *s)
     RT_BOT_CK_MAGIC(bot);
 
     if (b->bot_verts[0] < 0) {
-	bu_log("No BOT point selected\n");
-	return;
+	bu_vls_printf(s->log_str, "No BOT point selected\n");
+	return BRLCAD_ERROR;
     }
 
     if (b->bot_verts[1] >= 0 && b->bot_verts[2] >= 0) {
-	bu_log("A triangle is selected, not a BOT point!\n");
-	return;
+	bu_vls_printf(s->log_str,
+	    "A triangle is selected, not a BOT point!\n");
+	return BRLCAD_ERROR;
     }
 
     if (b->bot_verts[1] >= 0) {
-	bu_log("An edge is selected, not a BOT point!\n");
-	return;
+	bu_vls_printf(s->log_str,
+	    "An edge is selected, not a BOT point!\n");
+	return BRLCAD_ERROR;
     }
 
     vert = b->bot_verts[0];
+    if ((size_t)vert >= bot->num_vertices) {
+	bu_vls_printf(s->log_str, "BOT vertex index %d is out of range\n",
+	    vert);
+	return BRLCAD_ERROR;
+    }
     if (!bot_edit_target_point(new_pt, s))
-	return;
+	return s->e_inpara ? BRLCAD_ERROR : BRLCAD_OK;
 
     VMOVE(&bot->vertices[vert*3], new_pt);
+    return BRLCAD_OK;
 }
 
-void
+static int
 ecmd_bot_movee(struct rt_edit *s)
 {
     struct rt_bot_edit *b = (struct rt_bot_edit *)s->ipe_ptr;
@@ -1018,24 +1016,35 @@ ecmd_bot_movee(struct rt_edit *s)
 	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
 	if (f)
 	    (*f)(0, NULL, d, NULL);
-	return;
+	return BRLCAD_ERROR;
     }
 
     if (b->bot_verts[2] >= 0) {
-	bu_log("A triangle is selected, not a BOT edge!\n");
-	return;
+	bu_vls_printf(s->log_str,
+	    "A triangle is selected, not a BOT edge!\n");
+	return BRLCAD_ERROR;
     }
     v1 = b->bot_verts[0];
     v2 = b->bot_verts[1];
+    if ((size_t)v1 >= bot->num_vertices ||
+	(size_t)v2 >= bot->num_vertices) {
+	bu_vls_printf(s->log_str,
+	    "BOT edge vertex index is out of range\n");
+	return BRLCAD_ERROR;
+    }
     if (!bot_edit_target_point(new_pt, s))
-	return;
+	return s->e_inpara ? BRLCAD_ERROR : BRLCAD_OK;
 
-    VSUB2(diff, new_pt, &bot->vertices[v1*3]);
-    VMOVE(&bot->vertices[v1*3], new_pt);
+    point_t midpoint;
+    VADD2SCALE(midpoint, &bot->vertices[v1*3],
+	&bot->vertices[v2*3], 0.5);
+    VSUB2(diff, new_pt, midpoint);
+    VADD2(&bot->vertices[v1*3], &bot->vertices[v1*3], diff);
     VADD2(&bot->vertices[v2*3], &bot->vertices[v2*3], diff);
+    return BRLCAD_OK;
 }
 
-void
+static int
 ecmd_bot_movet(struct rt_edit *s)
 {
     struct rt_bot_edit *b = (struct rt_bot_edit *)s->ipe_ptr;
@@ -1052,19 +1061,31 @@ ecmd_bot_movet(struct rt_edit *s)
 	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
 	if (f)
 	    (*f)(0, NULL, d, NULL);
-	return;
+	return BRLCAD_ERROR;
     }
     v1 = b->bot_verts[0];
     v2 = b->bot_verts[1];
     v3 = b->bot_verts[2];
+    if ((size_t)v1 >= bot->num_vertices ||
+	(size_t)v2 >= bot->num_vertices ||
+	(size_t)v3 >= bot->num_vertices) {
+	bu_vls_printf(s->log_str,
+	    "BOT face vertex index is out of range\n");
+	return BRLCAD_ERROR;
+    }
 
     if (!bot_edit_target_point(new_pt, s))
-	return;
+	return s->e_inpara ? BRLCAD_ERROR : BRLCAD_OK;
 
-    VSUB2(diff, new_pt, &bot->vertices[v1*3]);
-    VMOVE(&bot->vertices[v1*3], new_pt);
+    point_t centroid;
+    VADD3(centroid, &bot->vertices[v1*3], &bot->vertices[v2*3],
+	&bot->vertices[v3*3]);
+    VSCALE(centroid, centroid, 1.0 / 3.0);
+    VSUB2(diff, new_pt, centroid);
+    VADD2(&bot->vertices[v1*3], &bot->vertices[v1*3], diff);
     VADD2(&bot->vertices[v2*3], &bot->vertices[v2*3], diff);
     VADD2(&bot->vertices[v3*3], &bot->vertices[v3*3], diff);
+    return BRLCAD_OK;
 }
 
 int
@@ -1262,14 +1283,11 @@ rt_edit_bot_edit(struct rt_edit *s)
 	case ECMD_BOT_FACE_FUSE:
 	    return ecmd_bot_face_fuse(s);
 	case ECMD_BOT_MOVEV:
-	    ecmd_bot_movev(s);
-	    break;
+	    return ecmd_bot_movev(s);
 	case ECMD_BOT_MOVEE:
-	    ecmd_bot_movee(s);
-	    break;
+	    return ecmd_bot_movee(s);
 	case ECMD_BOT_MOVET:
-	    ecmd_bot_movet(s);
-	    break;
+	    return ecmd_bot_movet(s);
 	case ECMD_BOT_PICKV:
 	case ECMD_BOT_PICKE:
 	case ECMD_BOT_PICKT: {
@@ -1280,31 +1298,18 @@ rt_edit_bot_edit(struct rt_edit *s)
 		    (struct rt_bot_internal *)s->es_int.idb_ptr;
 		int selected[3] = {-1, -1, -1};
 		for (int i = 0; i < n; ++i) {
-		    if (bot_selection_index(s, i, bot->num_vertices,
+		    if (bot_vertex_index(s, i, bot->num_vertices,
 				 &selected[i]) != BRLCAD_OK) {
 			s->e_inpara = 0;
 			return BRLCAD_ERROR;
 		    }
 		}
 		if (n > 1) {
-		    int clear_selection = 1;
-		    int has_unselected = 0;
-		    for (int i = 0; i < n; ++i) {
-			clear_selection = clear_selection && selected[i] == -1;
-			has_unselected = has_unselected || selected[i] == -1;
-		    }
-		    if (has_unselected && !clear_selection) {
-			bu_vls_printf(s->log_str,
-				"ERROR: BOT edge and face selections must be complete\n");
-			s->e_inpara = 0;
-			return BRLCAD_ERROR;
-		    }
 		    int found = 0;
 		    int distinct = selected[0] != selected[1] &&
 			(n == 2 || (selected[0] != selected[2] &&
 				    selected[1] != selected[2]));
-		    for (size_t fi = 0; !clear_selection && distinct &&
-			fi < bot->num_faces; ++fi) {
+		    for (size_t fi = 0; distinct && fi < bot->num_faces; ++fi) {
 			const int *face = &bot->faces[fi * 3];
 			if (n == 3) {
 			    found = face[0] == selected[0] &&
@@ -1322,7 +1327,7 @@ rt_edit_bot_edit(struct rt_edit *s)
 			if (found)
 			    break;
 		    }
-		    if (!clear_selection && !found) {
+		    if (!found) {
 			bu_vls_printf(s->log_str, "ERROR: selected BOT %s not found\n",
 				n == 2 ? "edge" : "face");
 			s->e_inpara = 0;
@@ -1447,7 +1452,8 @@ static const struct rt_edit_param_desc bot_delta_params[] = {
       RT_EDIT_PARAM_NO_LIMIT, RT_EDIT_PARAM_NO_LIMIT, "length",
       0, NULL, NULL, NULL },
     { "vertices", "Vertices", RT_EDIT_PARAM_INTEGER_LIST, 3,
-      0.0, RT_EDIT_PARAM_NO_LIMIT, "count", 1, NULL, NULL, NULL }
+      0.0, RT_EDIT_PARAM_NO_LIMIT, "count",
+      1, NULL, NULL, NULL }
 };
 
 static const struct rt_edit_param_desc bot_mode_params[] = {
@@ -1496,28 +1502,6 @@ static const struct rt_edit_cmd_desc bot_cmds[] = {
     { ECMD_BOT_FMODE, RT_EDIT_CMD_NAME(ECMD_BOT_FMODE),       "Set Face Mode",       "properties",1, bot_fmode_params,  1, 160, NULL },
     { ECMD_BOT_FLAGS, RT_EDIT_CMD_NAME(ECMD_BOT_FLAGS),       "Set Flags",           "properties",1, bot_flags_params,  1, 170, NULL }
 };
-
-static const enum rt_edit_control_class bot_command_controls[] = {
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_INHERIT,
-    RT_EDIT_CONTROL_INHERIT,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_CUSTOM,
-    RT_EDIT_CONTROL_INHERIT
-};
-_Static_assert(sizeof(bot_command_controls) / sizeof(bot_command_controls[0]) ==
-    sizeof(bot_cmds) / sizeof(bot_cmds[0]), "bot command controls");
 
 static const enum rt_edit_param_semantic bot_index1_semantics[] = {
     RT_EDIT_SEMANTIC_INDEX
@@ -1590,13 +1574,15 @@ bot_parameter_bounds(struct rt_edit_param_bounds *bounds,
     const struct rt_bot_internal *bot =
 	(const struct rt_bot_internal *)edit->es_int.idb_ptr;
     RT_BOT_CK_MAGIC(bot);
-
-    const int is_vertex_index =
-	(command_id == ECMD_BOT_PICKV && parameter_index == 0) ||
-	(command_id == ECMD_BOT_PICKE && parameter_index < 2) ||
-	(command_id == ECMD_BOT_PICKT && parameter_index < 3) ||
-	(command_id == ECMD_BOT_MOVEV_LIST && parameter_index == 1);
-    if (!is_vertex_index)
+    int vertex_parameter = 0;
+    if (command_id == ECMD_BOT_PICKV && parameter_index == 0)
+	vertex_parameter = 1;
+    else if ((command_id == ECMD_BOT_PICKE ||
+	command_id == ECMD_BOT_PICKT) && parameter_index >= 0)
+	vertex_parameter = 1;
+    else if (command_id == ECMD_BOT_MOVEV_LIST && parameter_index == 1)
+	vertex_parameter = 1;
+    if (!vertex_parameter)
 	return BRLCAD_OK;
     if (!bot->num_vertices)
 	return BRLCAD_ERROR;
@@ -1604,6 +1590,28 @@ bot_parameter_bounds(struct rt_edit_param_bounds *bounds,
     bounds->has_maximum = 1;
     return BRLCAD_OK;
 }
+
+static const enum rt_edit_control_class bot_command_controls[] = {
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_INHERIT
+};
+_Static_assert(sizeof(bot_command_controls) / sizeof(bot_command_controls[0]) ==
+    sizeof(bot_cmds) / sizeof(bot_cmds[0]), "bot command controls");
 
 static const struct rt_edit_prim_desc bot_prim_desc = {
     "bot", "BOT", 17, bot_cmds,
@@ -1735,6 +1743,21 @@ bot_current_numbers(struct rt_edit *s, int cmd_id, fastf_t *vals)
     }
 }
 
+C_DECL int
+rt_edit_bot_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
+{
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    fastf_t values[RT_EDIT_MAXPARA] = {0.0};
+    const int count = bot_current_numbers(s, cmd_id, values);
+    if (count <= 0)
+	return RT_EDIT_VALUE_UNAVAILABLE;
+    for (int i = 0; i < count; i++)
+	rt_edit_cmd_values_set_value(result, i, values[i]);
+    return RT_EDIT_VALUE_OK;
+}
+
 int
 rt_edit_bot_repair(struct bu_vls *log_str, struct rt_db_internal *ip, const struct bn_tol *tol, int argc, const char **argv)
 {
@@ -1818,14 +1841,6 @@ rt_edit_bot_repair(struct bu_vls *log_str, struct rt_db_internal *ip, const stru
     }
 
     return 0;
-}
-
-C_DECL int
-rt_edit_bot_get_values(struct rt_edit *s, int cmd_id,
-	struct rt_edit_cmd_values *result)
-{
-    return edit_current_values_from_numbers(s, cmd_id, result,
-	bot_current_numbers);
 }
 
 /*

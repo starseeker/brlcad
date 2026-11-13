@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * Originally from https://github.com/juangburgos/QConsoleListener
+ * Originally from https://github.com/juangburgos/QgConsoleListener
  */
 
 #include "common.h"
@@ -31,8 +31,7 @@
 
 static const int qg_process_poll_interval_ms = 10;
 
-QgConsoleListener::QgConsoleListener(int fd, struct ged_subprocess *p,
-    bu_process_io_t t, ged_io_func_t c, void *d, QObject *parent)
+QgConsoleListener::QgConsoleListener(int fd, struct ged_subprocess *p, bu_process_io_t t, ged_io_func_t c, void *d, QObject *parent)
     : QObject(parent)
 {
     this->process = p;
@@ -79,7 +78,7 @@ void QgConsoleListener::processReady()
 
 QgConsoleListener::~QgConsoleListener()
 {
-    disconnectNotifier();
+	disconnectNotifier();
 }
 
 void QgConsoleListener::deactivate()
@@ -102,13 +101,15 @@ void QgConsoleListener::deactivate()
 
 void QgConsoleListener::disconnectNotifier()
 {
-    if (m_notifier)
-	m_notifier->disconnect();
+	// Sever all signal/slot connections from the platform notifier so that
+	// no further activated() lambdas fire.
+	if (m_notifier)
+		m_notifier->disconnect();
 }
 
 void QgConsoleListener::on_finishedGetLine(const QString &strNewLine)
 {
-    Q_EMIT this->newLine(strNewLine);
+	Q_EMIT this->newLine(strNewLine);
 }
 
 void QgConsoleListener::on_finished()

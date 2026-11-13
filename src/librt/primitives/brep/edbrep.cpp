@@ -514,8 +514,7 @@ static const struct rt_edit_param_desc brep_point_param[] = {
 
 static const struct rt_edit_cmd_desc brep_cmds[] = {
     {
-	ECMD_BREP_SRF_SELECT,           /* cmd_id        */
-	RT_EDIT_CMD_NAME(ECMD_BREP_SRF_SELECT),           /* name        */
+	ECMD_BREP_SRF_SELECT, RT_EDIT_CMD_NAME(ECMD_BREP_SRF_SELECT),           /* cmd_id        */
 	"Select Surface CV",            /* label         */
 	"surface",                      /* category      */
 	3,                              /* nparam        */
@@ -525,8 +524,7 @@ static const struct rt_edit_cmd_desc brep_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_BREP_SRF_CV_MOVE,
-	RT_EDIT_CMD_NAME(ECMD_BREP_SRF_CV_MOVE),
+	ECMD_BREP_SRF_CV_MOVE, RT_EDIT_CMD_NAME(ECMD_BREP_SRF_CV_MOVE),
 	"Move Surface CV",
 	"surface",
 	1,
@@ -536,8 +534,7 @@ static const struct rt_edit_cmd_desc brep_cmds[] = {
 	NULL
     },
     {
-	ECMD_BREP_SRF_CV_SET,
-	RT_EDIT_CMD_NAME(ECMD_BREP_SRF_CV_SET),
+	ECMD_BREP_SRF_CV_SET, RT_EDIT_CMD_NAME(ECMD_BREP_SRF_CV_SET),
 	"Set Surface CV Position",
 	"surface",
 	1,
@@ -610,14 +607,21 @@ brep_current_numbers(struct rt_edit *s, int cmd_id, fastf_t *vals)
     }
 }
 
-
 extern "C" int
 rt_edit_brep_get_values(struct rt_edit *s, int cmd_id,
 	struct rt_edit_cmd_values *result)
 {
-    return edit_current_values_from_numbers(s, cmd_id, result,
-	brep_current_numbers);
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    fastf_t values[RT_EDIT_MAXPARA] = {0.0};
+    const int count = brep_current_numbers(s, cmd_id, values);
+    if (count <= 0)
+	return RT_EDIT_VALUE_UNAVAILABLE;
+    for (int i = 0; i < count; i++)
+	rt_edit_cmd_values_set_value(result, i, values[i]);
+    return RT_EDIT_VALUE_OK;
 }
+
 
 /*
  * Local Variables:

@@ -46,6 +46,7 @@
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
 #include "rt/primitives/pipe.h"
 #include "rt/rt_ecmds.h"
 
@@ -231,7 +232,7 @@ pipe_matches(struct rt_edit *edit, const struct pipe_point_expected *expected,
 
 static int
 pipe_transform_matrix(struct db_i *dbip, struct db_full_path *path,
-		      struct bn_tol *tol, struct bview *view)
+		      struct bn_tol *tol, struct rt_edit_view *view)
 {
     const fastf_t inch_to_mm = 25.4;
     const fastf_t scales[] = {1.0, inch_to_mm};
@@ -511,20 +512,10 @@ rt_edit_test_pipe(void)
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size  = 73.3197;
-    v->gv_isize = 1.0 / v->gv_size;
-    v->gv_scale = 0.5 * v->gv_size;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width  = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init(&v);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
 
     struct rt_pipe_edit_local *pe =
@@ -693,8 +684,8 @@ rt_edit_test_pipe(void)
     VMOVE(s->curr_e_axes_pos, pipe_first(s)->pp_coord);
     {
 	int xpos = 1482, ypos = 762;
-	mousevec[X] = xpos * INV_BV;
-	mousevec[Y] = ypos * INV_BV;
+	mousevec[X] = xpos * RT_INV_VIEW;
+	mousevec[Y] = ypos * RT_INV_VIEW;
 	mousevec[Z] = 0;
     }
     bu_vls_trunc(s->log_str, 0);
@@ -1311,12 +1302,14 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
     pe->es_pipe_pnt = pipe_second(s);
     pipe_first(s)->pp_coord[X] = inch;
     VSET(s->e_keypoint, -1, -1, -1);
-    if (rt_edit_revert(s) != BRLCAD_OK || pe->es_pipe_pnt ||
+    int revert_result = rt_edit_revert(s);
+    pe = (struct rt_pipe_edit_local *)s->ipe_ptr;
+    if (revert_result != BRLCAD_OK || !pe || pe->es_pipe_pnt ||
 	!ZERO(pipe_first(s)->pp_coord[X]) ||
 	!VNEAR_ZERO(s->e_keypoint, VUNITIZE_TOL))
 	bu_exit(1, "ERROR: pipe revert retained stale geometry or selection\n");
 
-    int matrix_failures = pipe_transform_matrix(dbip, &fp, &tol, v);
+    int matrix_failures = pipe_transform_matrix(dbip, &fp, &tol, &v);
     matrix_failures += pipe_dimension_matrix(dbip, &fp, &tol);
     matrix_failures += pipe_point_matrix(dbip, &fp, &tol);
     rt_edit_destroy(s);

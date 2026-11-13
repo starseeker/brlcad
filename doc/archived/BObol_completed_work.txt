@@ -1,0 +1,115 @@
+BRL-CAD Obol Drawing: Completion Record
+=======================================
+
+Status
+------
+
+The current Linux/X Obol drawing migration scope is complete as of
+2026-07-15.  This file is no longer an active feature backlog.  It records the
+closed work, verification evidence, and intentional deferrals so that stale
+checklist text does not obscure the tested state.
+
+Architecture Invariants
+-----------------------
+
+* Obol is the only graphical scene and rendering path.  There is no libdm,
+  libbsg, OGL/WGL, or application-local scene fallback.
+* Each hosted GED view has one GED view context, display endpoint, Obol
+  controller, and factory-owned native host.  Applications own windows and
+  event loops, not parallel renderers or scene lifetimes.
+* libBObol owns BRL-CAD realization, retained drawing, picking, selection,
+  edit previews, compact occurrences, view-local LoD, and retained interactive
+  rendering.  libbv remains passive view state.
+* Qt and Tk hosts own native widgets, contexts, and presentation only.  The
+  endpoint/host contract owns lifecycle, physical-pixel resize/DPI propagation,
+  engine policy, capture, framebuffer composition, progressive presentation,
+  and shutdown.
+* The endpoint property registry is the production renderer-policy surface.
+  Unsupported explicit engine or property requests fail rather than silently
+  selecting another behavior.
+* Application-specific input action tokens remain application-owned.  The
+  endpoint normalizes and routes events but does not acquire MGED/QGED policy.
+
+Closed Work
+-----------
+
+1. The historical rtwizard GUI is restored and uses the shared Obol host.  Its
+   production workflow passes on a real X server.
+
+2. rtcheck/check overlap results, NIRT hits and segments, and GQA severities
+   have retained command-scene schemas with neutral GED readback.  QGED and
+   Tcl consumers use the same metadata, including owner/generation replacement
+   and stable pick identity.  Obsolete callback-overlay plumbing was removed.
+
+3. Supported MGED, QGED, and Archer edit paths use one endpoint/application
+   lifecycle for begin, preview replacement, accept/reject, cancellation, and
+   teardown.  BOT database face/vertex identity remains stable across retained
+   realization; parameter-only primitives do not claim synthetic topology.
+
+4. The production producer inventory is closed for remrt/rtsrv, the supported
+   RT-family tools, framebuffer utilities, and image commands.  They publish
+   through Obol/imgstream or reject an unavailable provider explicitly.  The
+   pivot guard and framebuffer compatibility tests pass.
+
+5. Release whole-path measurements cover Havoc, Generic Twin, and an eight-copy
+   Generic Twin scene (17,984 shapes and 7,709,088 retained points).  FAST and
+   QUALITY runs settle deterministically; the larger scene demonstrated the
+   expected FAST reduction in first-pixel time, styled render time, and peak
+   RSS.  Captures and full figures are in
+   `.build_perf/obol_perf_20260715/` and
+   `doc/notes/obol_draw_perf_debug.txt`.
+
+6. Production deferred-realization and LoD tests cover large native scenes,
+   camera churn, source replacement, proxy-to-final transitions, cancellation,
+   and teardown.  The slow matrix passes 9/9 with bounded queues and memory,
+   no stale publication, and no worker access to toolkit or attached scene
+   state.
+
+7. Retained RT is validated as an interactive production engine in QGED and
+   native hosted MGED.  Live resize/DPI reports physical canvas dimensions,
+   worker results synchronize into presentation, camera changes preserve
+   retained geometry, stale work is cancelled, and framebuffer/background/
+   faceplate composition shares the HW/SW endpoint lifecycle.  QGED ERT passes
+   13/13 on a real X server; MGED passes HW -> RT -> moved-camera RT -> HW with
+   a 320x240 native widget and advancing presentation revision.
+
+Verification Record
+-------------------
+
+* The normal Ninja tree builds in full (813 actions).
+* The focused migration matrix passes 61 tests.  Eight display cases skipped
+  in the sandbox and two sandboxed network cases were rerun successfully with
+  the required real-X or unrestricted local-network environment.
+* Real-X coverage passes for QGED ERT, Qt default and system-GL hosts (including
+  fractional DPI), TclCAD, Archer, rtwizard, MGED HW/RT interaction, fbserv SW
+  and GL presentation, and standalone rt SW and GL presentation.
+* Local TCP/IPC authenticated and TLS framebuffer tests pass outside the
+  network-restricted sandbox.
+* Diagnostic, edit, producer, realization, LoD, and retained-RT focused suites
+  all pass.  Detailed ownership and coverage evidence is maintained in
+  `doc/notes/obol_hosted_application_ownership.txt`,
+  `doc/notes/obol_legacy_dependency_inventory.txt`,
+  `doc/notes/obol_realization_coverage.txt`, and
+  `doc/notes/brl_obol_view_lod.txt`.
+* A clean Release configuration with Qt, Tcl/Tk, OpenGL, and X11 disabled builds
+  `rt` and `fbserv`.  Their dynamic dependencies contain no UI, X11, OpenGL,
+  OSMesa, or Obol library, and `rt -F /dev/null` renders Havoc successfully.
+
+Intentional Deferrals and Scope Boundaries
+------------------------------------------
+
+* ART tile publication remains deferred while the appleseed stack is changing
+  elsewhere.  ADRT validation is likewise owned by concurrent work.  Neither
+  is a completion gate for this scope.
+* Obol is supplied manually to the BEXT build/install staging directory during
+  development.  Finalizing the BEXT commit pin and dependency publication is
+  intentionally deferred and is not a migration completion gate.
+* This record claims the exercised Linux/X application matrix.  Native Windows
+  and macOS validation remains platform release work; it is not inferred from
+  Linux results.
+
+Active Migration Backlog
+------------------------
+
+None in the current scope.  New regressions or expanded platform/producer scope
+should be recorded as new work rather than reopening obsolete checklist items.

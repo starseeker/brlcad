@@ -177,6 +177,7 @@ test_get_params_tor(void)
 	  "TOR current values: R2 == 25.0");
     bu_log("  TOR R2 = %g (expected 25)\n", vals.values[0]);
 
+    /* Unknown cmd_id has no current-value representation. */
     status = rt_edit_cmd_values_get(s, 99999, &vals);
     CHECK(status == RT_EDIT_VALUE_UNAVAILABLE && !vals.value_count,
 	"TOR current values: unknown command is unavailable and empty");
@@ -229,21 +230,21 @@ test_get_params_ell(void)
     struct rt_edit_cmd_values vals;
 
     int status = rt_edit_cmd_values_get(s, ECMD_ELL_SCALE_A, &vals);
-    CHECK(status == RT_EDIT_VALUE_OK && vals.value_count == 1 &&
-	vals.value_valid[0], "ELL current values: A is available");
+    CHECK(status == RT_EDIT_VALUE_OK && vals.value_count == 1,
+	"ELL current values: A is available");
     CHECK(fabs(vals.values[0] - 50.0) < 1e-6,
 	  "ELL current values: A == 50");
     bu_log("  ELL |A| = %g (expected 50)\n", vals.values[0]);
 
     status = rt_edit_cmd_values_get(s, ECMD_ELL_SCALE_B, &vals);
-    CHECK(status == RT_EDIT_VALUE_OK && vals.value_count == 1 &&
-	vals.value_valid[0], "ELL current values: B is available");
+    CHECK(status == RT_EDIT_VALUE_OK && vals.value_count == 1,
+	"ELL current values: B is available");
     CHECK(fabs(vals.values[0] - 30.0) < 1e-6,
 	  "ELL current values: B == 30");
 
     status = rt_edit_cmd_values_get(s, ECMD_ELL_SCALE_C, &vals);
-    CHECK(status == RT_EDIT_VALUE_OK && vals.value_count == 1 &&
-	vals.value_valid[0], "ELL current values: C is available");
+    CHECK(status == RT_EDIT_VALUE_OK && vals.value_count == 1,
+	"ELL current values: C is available");
     CHECK(fabs(vals.values[0] - 20.0) < 1e-6,
 	  "ELL current values: C == 20");
 

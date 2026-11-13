@@ -28,7 +28,6 @@
 #ifndef GED_DEBUG_H
 #define GED_DEBUG_H
 
-#include "common.h"
 #include "ged/defines.h"
 
 __BEGIN_DECLS

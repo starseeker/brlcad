@@ -43,7 +43,7 @@
 #include "bu/opt.h"
 #include "vmath.h"
 #include "raytrace.h"
-#include "bv/plot3.h"
+#include "bg/plot3.h"
 #include "bn/str.h"
 
 #define made_it()	bu_log("Made it to %s:%d\n", __FILE__, __LINE__);

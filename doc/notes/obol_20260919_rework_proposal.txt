@@ -1,0 +1,1180 @@
+BObol / TLA+ ARCHITECTURAL ANALYSIS AND RECOMMENDED COURSE OF ACTION
+Context
+
+This document analyzes the relationship between the TLA+ specifications in:
+
+brlobol6/doc/notes/
+
+and the C++ implementation in:
+
+brlobol6/src/libBObol/
+
+The central question is whether the existing C++ implementation should
+continue to be incrementally retrofitted to the TLA+ specifications, or
+whether the TLA+ work should now be treated as the architectural basis
+for a new implementation.
+
+Recommendation in brief:
+
+FREEZE THE EXISTING BOBOL C++ IMPLEMENTATION AS A PROTOTYPE.
+
+TREAT THE TLA+ MODELS AS THE EMERGING ARCHITECTURAL SPECIFICATION.
+
+BUILD A NEW, SMALLER CONTROL/ORCHESTRATION CORE FROM THE TLA+
+MODELS OUTWARD.
+
+RETAIN AND REUSE THE EXPENSIVE DOMAIN KNOWLEDGE AND ALGORITHMS
+FROM THE EXISTING IMPLEMENTATION, BUT DO NOT PRESERVE ITS
+CONCURRENCY/CONTROL ARCHITECTURE MERELY FOR COMPATIBILITY.
+
+    WHAT THE CURRENT WORK APPEARS TO BE DOING
+
+The TLA+ files do not look like an attempt to rewrite BRL-CAD in TLA+.
+
+They appear to be modeling the control-plane protocols of Obol/BObol:
+
+- CAD mutation
+- scene publication
+- view demand and revisions
+- LOD admission
+- LOD arbitration
+- progressive work
+- LOD convergence
+- resource capacity
+- ownership
+- resident allocation
+- compaction
+- presentation handoff
+- deadline and quality ownership
+
+The models intentionally abstract away geometry, rendering algorithms,
+I/O details, and implementation-specific mechanisms.
+
+Instead, they concentrate on questions such as:
+
+- Can stale work be published?
+- Can an invalid CAD candidate mutate the live scene?
+- Can a newer view demand be superseded by an older preparation?
+- Can a resource-denied operation partially modify visible state?
+- Can an asynchronous worker publish a result from an obsolete epoch?
+- Does the system eventually drain after input becomes stable?
+- Who owns a resource or piece of work at each point?
+- Can two components simultaneously believe they have authority
+  over the same state?
+
+    WHY THIS IS A GOOD USE OF TLA+
+
+This is exactly the class of problem for which TLA+ is valuable.
+
+The difficult part of Obol is not necessarily the geometry algorithm.
+It is the interaction between:
+
+database state
++
+view state
++
+LOD state
++
+asynchronous work
++
+resource limits
++
+publication
++
+rendering
+
+A real system may contain:
+
+threads
+mutexes
+condition variables
+atomics
+queues
+callbacks
+generations
+caches
+shared pointers
+database leases
+memory reservations
+
+The TLA+ model can reduce all of this to a small number of abstract
+state variables and transitions.
+
+For example:
+
+demandRevision
+candidateRevision
+publishedRevision
+consumedRevision
+allocation
+ownership
+capacity
+
+TLC can then exhaustively explore combinations of those states that
+would be extremely difficult to test reliably in the real application.
+
+This is particularly valuable for concurrency bugs.
+
+A normal test might happen to execute:
+
+A -> B -> C -> D
+
+while a real system might also permit:
+
+A -> C -> B -> D
+A -> B -> D -> C
+A -> D -> B -> C
+
+and many other interleavings.
+
+TLA+ is useful precisely because those interleavings can be modeled
+explicitly.
+
+    THE CAD MUTATION MODEL
+
+The CAD mutation specification is one of the cleanest examples.
+
+The desired conceptual pipeline is approximately:
+
+input
+  |
+  v
+validate
+  |
+  v
+stage candidate
+  |
+  v
+begin update scope
+  |
+  v
+bounded mechanical work
+  |
+  v
+atomically publish
+  |
+  v
+notify
+
+The model distinguishes candidate outcomes such as:
+
+valid
+invalid
+unavailable
+
+and establishes properties such as:
+
+- invalid candidates cannot mutate live state;
+- unavailable candidates cannot mutate live state;
+- live state remains stable while a mutation is in progress;
+- publication and notification remain coherent;
+- stable input eventually drains.
+
+The current C++ already appears to have a fairly good correspondence
+with this conceptual structure.
+
+Therefore:
+
+DO NOT THROW AWAY THE CAD DOMAIN CODE.
+
+Instead:
+
+REBUILD THE TRANSACTION/PUBLICATION BOUNDARY AROUND THE MODEL.
+
+    CAD MUTATION RECOMMENDATION
+
+The desired C++ interface should make the state machine obvious.
+
+Conceptually:
+
+candidate = scene.prepare(...)
+
+if (!candidate.valid())
+    return reject(candidate)
+
+tx = scene.begin_update(candidate)
+
+while (tx.has_work())
+    tx.step()
+
+tx.commit()
+
+The critical architectural property is:
+
+THERE SHOULD BE ONE OBVIOUS PLACE WHERE LIVE SCENE STATE
+BECOMES THE NEW PUBLISHED STATE.
+
+The implementation should not permit arbitrary asynchronous components
+to independently modify renderer-visible scene state.
+
+    VIEW PUBLICATION
+
+The view-publication specification is more revealing.
+
+It explicitly distinguishes concepts such as:
+
+activeView
+demandRevision
+preparationState
+preparationView
+preparationRevision
+publishedView
+publishedRevision
+consumedView
+consumedRevision
+
+The important semantic rule is:
+
+PREPARATION FOR AN OLD DEMAND DOES NOT AUTOMATICALLY BECOME
+PUBLISHABLE JUST BECAUSE THE WORK COMPLETED.
+
+For example:
+
+View A requested
+    |
+    v
+prepare A
+    |
+    +---- user changes camera ----+
+                                 |
+                                 v
+                              View B
+                                 |
+                                 v
+                          new demand revision
+
+If A finishes after B has become current, A must not blindly publish.
+
+This is one of the strongest arguments for an architectural reset.
+
+The current C++ has many view/LOD-related components and mechanisms:
+
+lod_revision
+lod_view_snapshot
+lod_view_policy
+view_lod
+view_lod_coordinator_state
+view_controller_progressive
+view_controller_residency
+view_controller_scene
+lod_coordinator
+lod_service
+
+This is not necessarily wrong, but it suggests that "current demand"
+and "current revision" may be distributed across too many objects.
+
+    VIEW PUBLICATION RECOMMENDATION
+
+Create one authoritative concept of demand.
+
+Conceptually:
+
+ViewDemand
+    view
+    revision
+
+Then one authoritative publication state machine:
+
+ViewPublication
+    currentDemand
+    preparation
+    published
+    consumed
+
+Workers should not decide whether their result is current.
+
+Instead they should submit something like:
+
+Result
+    view = X
+    revision = 17
+    payload = ...
+
+The publication controller then determines:
+
+Is revision 17 still current?
+
+Is this result admissible?
+
+Has the demand been superseded?
+
+Is publication permitted?
+
+This is a direct implementation of the semantic structure expressed
+in the TLA+ model.
+
+    LOD ADMISSION
+
+The LOD admission TLA+ model is particularly useful because it is
+small and deliberately abstract.
+
+It is concerned with:
+
+source profile
+    +
+candidate
+    +
+budget
+    |
+    v
+admission decision
+
+The result can distinguish things such as:
+
+aggregate
+direct
+progressive
+constrained
+
+The model does not attempt to model the actual mesh generation,
+renderer, I/O, or geometry algorithms.
+
+That separation is architecturally valuable.
+
+LOD admission and LOD execution are different responsibilities.
+
+    THE MAJOR CURRENT ARCHITECTURAL PROBLEM:
+    LOD SERVICE
+
+The strongest candidate for replacement is the orchestration represented
+by lod_service.cpp.
+
+It has grown to several thousand lines and coordinates many distinct
+concerns:
+
+- database leases
+- task management
+- generations
+- dependencies
+- queues
+- worker threads
+- result handling
+- cache writes
+- resident meshes
+- working-set reservations
+- memory accounting
+- compaction
+- cancellation
+- presentation
+- subscriptions
+- quality
+- capacity
+
+The problem is not line count by itself.
+
+The problem is that one service is becoming responsible for many
+different protocol layers.
+
+This creates a risk that state which should be conceptually separate
+becomes coupled merely because it happens to live in the same service.
+
+    RECOMMENDED LOD ARCHITECTURE
+
+Separate the control plane from the data plane.
+
+Conceptually:
+
+                LOD CONTROL PLANE
+
+request
+   |
+   v
+profile
+   |
+   v
+admission
+   |
+   v
+allocation
+   |
+   v
+work plan
+   |
+   v
+resource/ownership decision
+   |
+   +--------------------------------+
+                                    |
+                                    v
+
+                DATA PLANE
+
+                     execute work
+                          |
+                +---------+---------+
+                |                   |
+            tessellate           cache
+                |                   |
+                +---------+---------+
+                          |
+                          v
+                       result
+                          |
+                          v
+
+                CONTROL PLANE AGAIN
+
+                result validation
+                          |
+                          v
+                     publication
+
+    PROPOSED C++ COMPONENTS
+
+A new implementation could contain a much smaller set of explicit
+protocol components:
+
+BObolControl
+    |
+    +-- DemandTracker
+    |
+    +-- AdmissionController
+    |
+    +-- WorkPlanner
+    |
+    +-- ResourceController
+    |
+    +-- WorkExecutor
+    |
+    +-- ResultCollector
+    |
+    +-- PublicationController
+
+The important rule is:
+
+ONLY THE CONTROL LAYER MAKES PROTOCOL-LEVEL DECISIONS.
+
+The executor does not decide admission.
+
+The cache does not decide publication.
+
+A worker does not decide whether its result supersedes another result.
+
+The renderer does not decide whether a result belongs to the current
+generation.
+
+Those are control-plane decisions.
+
+    LOD CONVERGENCE
+
+The convergence specification is another strong architectural guide.
+
+The desired behavior can be summarized as:
+
+input epoch
+    |
+    v
+bounded / interruptible work
+    |
+    +---- new input? ----> supersede/restart appropriate work
+    |
+    v
+finite remaining work
+    |
+    v
+requested quality
+    OR
+stable constrained state
+
+The model distinguishes concerns such as:
+
+coverage
+residency
+physical debt
+quality
+worker state
+allocation pending
+frame pending
+handoff pending
+submission pending
+performance limitation
+
+These concepts should be represented explicitly in the control system.
+
+They should not emerge indirectly from dozens of queue counters,
+flags, maps, and callbacks.
+
+    RESOURCE OWNERSHIP
+
+The collection of TLA+ models around ownership is especially significant.
+
+The specifications address:
+
+- completed-pass ownership
+- deadline ownership
+- point-quality ownership
+- resident growth
+- resident compaction
+- capacity/presentation handoff
+- successor/quiet states
+
+This suggests that ownership is one of the central architectural
+problems Obol is trying to solve.
+
+The current C++ appears to have several overlapping notions of ownership:
+
+database lease
+task ownership
+generation
+active request
+working-set reservation
+result reservation
+cache-write reservation
+resident mesh
+resident demand
+compaction work
+
+The existence of many such mechanisms is not automatically wrong.
+
+But when several independent mechanisms collectively establish a single
+semantic fact, reasoning becomes difficult.
+
+    RECOMMENDED OWNERSHIP MODEL
+
+Introduce an explicit concept of a work/resource lease or capability.
+
+Conceptually:
+
+WorkLease
+    demand
+    generation
+    resourceClaim
+
+A worker receives a lease.
+
+If the demand becomes obsolete, the lease may become non-publishable.
+
+This is cleaner than allowing several unrelated data structures to
+implicitly determine whether work is still valid.
+
+    THE REFINEMENT GAP
+
+There is one major caveat.
+
+TLA+ proves properties of the model.
+
+It does not automatically prove that the existing C++ implements the
+model.
+
+The desired relationship is:
+
+C++ implementation
+        |
+        | refinement
+        v
+TLA+ behavioral model
+
+not merely:
+
+C++ implementation
+        |
+        | documentation
+        v
+TLA+ model
+
+A specification might prove:
+
+liveScene == notifiedScene
+
+for every modeled execution.
+
+That does NOT automatically prove that the C++:
+
+- uses correct memory ordering;
+- handles exceptions correctly;
+- avoids dangling references;
+- has correct lifetime management;
+- handles callback reentrancy;
+- performs an actually atomic publication;
+- correctly implements cancellation;
+- faithfully represents the modeled state.
+
+    REFINEMENT MAPPINGS SHOULD BECOME A DELIVERABLE
+
+For each major protocol, document the mapping between abstract state
+and concrete implementation.
+
+For example:
+
+TLA+ concept              C++ concept
+-----------------------------------------------
+demand revision           ...
+candidate                 ...
+prepared result           ...
+published revision        ...
+consumed revision         ...
+ownership                 ...
+capacity                  ...
+superseded work           ...
+
+Then ask for every state transition:
+
+WHAT C++ OPERATION IMPLEMENTS THIS TRANSITION?
+
+If there is no simple answer, that is an architectural warning.
+
+    THE EXISTING C++ SHOULD NOT BE DISCARDED
+
+The current implementation contains valuable information that TLA+
+cannot discover by itself.
+
+It has answered practical questions involving:
+
+- BRL-CAD database behavior
+- geometry processing
+- tessellation
+- LOD generation
+- cache behavior
+- renderer integration
+- memory limits
+- actual work costs
+- database leases
+- real asynchronous execution
+
+That knowledge is valuable.
+
+The recommendation is therefore NOT:
+
+"Throw away BObol."
+
+The recommendation is:
+
+"Throw away the accidental orchestration architecture where
+ necessary, while retaining the domain algorithms and empirical
+ knowledge."
+
+    CLASSIFY THE EXISTING CODE
+
+A useful migration exercise is to divide the current implementation
+into three categories.
+
+KEEP:
+
+- geometry algorithms
+- tessellation
+- LOD generation
+- database access
+- spatial queries
+- mesh processing
+- useful cache algorithms
+- proven rendering/data conversions
+
+REWORK:
+
+- revision management
+- publication
+- ownership
+- allocation
+- capacity arbitration
+- cancellation
+- stale-result handling
+- worker scheduling
+- resident-state coordination
+
+DISCARD OR REPLACE:
+
+- manager-of-manager structures
+- duplicate representations of state
+- implicit lifecycle assumptions
+- cross-cutting flags
+- special cases introduced to repair earlier special cases
+- concurrency mechanisms whose purpose is no longer obvious
+
+    USE THE EXISTING IMPLEMENTATION AS A COUNTEREXAMPLE GENERATOR
+
+For every complicated piece of the existing C++, ask:
+
+Why does this state exist?
+
+Why does this lock exist?
+
+Why can this callback arrive here?
+
+Why does this object outlive that one?
+
+Why does this generation number exist?
+
+Why can this result become stale?
+
+Why does this resource need a reservation?
+
+Then classify the answer.
+
+Is it:
+
+1. A real domain requirement?
+2. An implementation detail?
+3. A missing abstraction in the TLA+ model?
+4. Accidental complexity?
+
+Only categories 1 and 3 should normally influence the new architecture.
+
+This gives the prototype a productive role without allowing it to dictate
+the architecture.
+
+    RECOMMENDED DEVELOPMENT PROCESS
+
+Do NOT proceed as:
+
+existing C++
+    |
+    v
+refactor
+    |
+    v
+more C++
+    |
+    v
+adapt TLA+
+    |
+    v
+more refactoring
+
+Instead:
+
+TLA+ specification
+    |
+    v
+architectural contract
+    |
+    v
+small C++ protocol implementation
+    |
+    v
+protocol tests
+    |
+    v
+real domain algorithms
+    |
+    v
+real workers/caches/database
+    |
+    v
+renderer
+
+    RECOMMENDED IMPLEMENTATION ORDER
+
+STEP 1: FREEZE THE CURRENT PROTOTYPE
+
+Tag the current implementation as an architectural prototype.
+
+Its purpose becomes:
+
+"The system we learned from."
+
+It should no longer be treated as the architecture that the future
+implementation must preserve.
+
+STEP 2: ESTABLISH AUTHORITATIVE TLA+ MODELS
+
+Identify which TLA+ specifications are architectural authorities.
+
+Organize them conceptually into:
+
+System
+  |
+  +-- CAD mutation
+  +-- View demand/publication
+  +-- LOD admission
+  +-- LOD control/convergence
+  +-- Resource ownership
+  +-- Presentation
+
+STEP 3: SIMPLIFY THE MODELS WHERE POSSIBLE
+
+The models should describe:
+
+state
+transitions
+invariants
+liveness
+
+They should NOT describe:
+
+std::mutex
+std::thread
+shared_ptr
+BRL-CAD classes
+Coin/OpenInventor objects
+specific cache classes
+
+STEP 4: BUILD VIEW PUBLICATION FIRST
+
+Implement the smallest state machine:
+
+demand
+revision
+preparation
+publication
+consumption
+
+Do this without real geometry.
+
+Use fake data.
+
+Prove that:
+
+stale work cannot publish
+current work can publish
+superseded work can be discarded
+stable demand eventually publishes
+
+STEP 5: ADD CAD MUTATION
+
+Add:
+
+prepare
+validate
+begin update
+bounded work
+commit
+publish
+
+Ensure that live state changes only at the defined commit boundary.
+
+STEP 6: ADD LOD ADMISSION
+
+Implement the small admission policy independently of workers and
+geometry.
+
+Given:
+
+profile
+candidate
+budget
+
+produce:
+
+admission decision
+
+STEP 7: ADD LOD CONTROL/CONVERGENCE
+
+Implement:
+
+epochs
+quality
+coverage
+residency
+pending work
+cancellation/supersession
+constrained terminal states
+
+Use fake work initially.
+
+If the control system cannot behave correctly with fake work,
+real geometry will not fix the architecture.
+
+STEP 8: ADD REAL WORKERS
+
+Only after the control protocol works should the system introduce:
+
+threads
+queues
+condition variables
+asynchronous workers
+
+Workers should remain deliberately simple.
+
+Conceptually:
+
+while (work = controller.next()):
+    result = executor.run(work)
+    controller.complete(result)
+
+STEP 9: ADD REAL GEOMETRY AND DATABASE ACCESS
+
+Now integrate:
+
+BRL-CAD database
+tessellation
+geometry generation
+mesh construction
+actual LOD production
+
+These are data-plane concerns.
+
+STEP 10: ADD CACHING AND RESIDENCY
+
+Finally integrate:
+
+mesh caches
+resident geometry
+compaction
+memory accounting
+serialized sources
+database leases
+
+Their control interfaces should already be defined by the protocol layer.
+
+    THE MOST IMPORTANT ARCHITECTURAL RULE
+
+NO ASYNCHRONOUS WORKER SHOULD DIRECTLY MUTATE RENDERER-VISIBLE STATE.
+
+Instead:
+
+worker
+  |
+  v
+produce result
+  |
+  v
+submit result
+  |
+  v
+controller validates:
+    - current demand?
+    - current generation?
+    - resource claim valid?
+    - result admissible?
+    - publication permitted?
+  |
+  +---- reject
+  |
+  +---- publish
+
+This is the natural consequence of the TLA+ publication and mutation
+models.
+
+    COMPOSITION OF THE TLA+ MODELS
+
+The individual specifications are useful, but eventually a higher-level
+composition model should exist.
+
+For example:
+
+ObolSystem
+   |
+   +-- CAD state
+   |
+   +-- View demand
+   |
+   +-- LOD control
+   |
+   +-- Resource ownership
+   |
+   +-- Presentation
+
+The reason is simple:
+
+A is correct.
+B is correct.
+C is correct.
+D is correct.
+
+does NOT necessarily imply:
+
+A + B + C + D is correct.
+
+The most dangerous bugs may occur at the boundaries between otherwise
+correct protocols.
+
+    WHAT THE NEW CORE SHOULD LOOK LIKE
+
+Conceptually:
+
+                     USER / INPUT
+                          |
+                          v
+                 +-------------------+
+                 | DEMAND / EPOCH    |
+                 | view + revision   |
+                 +---------+---------+
+                           |
+             +-------------+-------------+
+             |                           |
+             v                           v
+    +----------------+          +------------------+
+    | CAD mutation   |          | LOD admission   |
+    | protocol       |          | protocol        |
+    +-------+--------+          +--------+---------+
+            |                            |
+            v                            v
+    +----------------+          +------------------+
+    | scene          |          | work plan       |
+    | candidate      |          +--------+---------+
+    +-------+--------+                   |
+            |                    +-------v---------+
+            |                    | resource/owner  |
+            |                    | protocol        |
+            |                    +-------+---------+
+            |                            |
+            |                    +-------v---------+
+            |                    | workers         |
+            |                    | geometry/cache  |
+            |                    +-------+---------+
+            |                            |
+            +--------------+-------------+
+                           |
+                           v
+                  +-------------------+
+                  | RESULT VALIDATOR  |
+                  | epoch/revision    |
+                  +---------+---------+
+                            |
+                            v
+                  +-------------------+
+                  | PUBLICATION       |
+                  | visible state     |
+                  +---------+---------+
+                            |
+                            v
+                        RENDERER
+
+    WHAT "START OVER" SHOULD MEAN
+
+The recommendation is NOT to start the entire project over.
+
+It means:
+
+START THE ARCHITECTURE OVER.
+
+Keep:
+
+- the prototype
+- algorithms
+- measurements
+- experiments
+- geometry knowledge
+- BRL-CAD integration knowledge
+- useful tests
+- useful cache implementations
+
+Reconsider:
+
+- control architecture
+- concurrency architecture
+- state ownership
+- revision handling
+- publication machinery
+- worker coordination
+- resource coordination
+
+    WHY NOW IS THE RIGHT TIME
+
+The current implementation is already substantial.
+
+That is actually an argument for doing the reset now rather than later.
+
+A small prototype can simply be refactored.
+
+A mature implementation with years of accumulated concurrency behavior
+becomes increasingly expensive to replace.
+
+At the same time, the TLA+ specifications have become detailed enough
+to express meaningful architectural semantics.
+
+That creates a window in which:
+
+existing C++ = valuable prototype/knowledge base
+
+and:
+
+TLA+ = emerging architectural source of truth
+
+This is the ideal time to establish the separation.
+
+    PROPOSED PROJECT PRINCIPLE
+
+A useful project-level rule would be:
+
+THE TLA+ SPECIFICATION DEFINES WHAT THE SYSTEM IS ALLOWED TO DO.
+
+THE C++ IMPLEMENTATION DEFINES HOW IT DOES IT.
+
+THE TEST SUITE CHECKS THE CONCRETE IMPLEMENTATION.
+
+TLC CHECKS THE ABSTRACT STATE SPACE.
+
+REFINEMENT DOCUMENTATION CONNECTS THE TWO.
+
+This prevents the TLA+ work from becoming merely documentation of
+whatever the C++ happens to do.
+
+    FINAL RECOMMENDATION
+
+The strongest recommendation is:
+
+1. Freeze the current libBObol as a prototype.
+
+2. Do not continue indefinitely adding architecture to it.
+
+3. Promote the TLA+ specifications to architectural authority.
+
+4. Consolidate the individual TLA+ models into a coherent hierarchy.
+
+5. Build a very small C++ control kernel directly from those models.
+
+6. Make demand, revision, ownership, admission, cancellation,
+   resource claims, and publication explicit concepts.
+
+7. Test that kernel using fake work before introducing real geometry.
+
+8. Gradually plug the existing geometry, database, LOD, cache,
+   and rendering algorithms into the new control architecture.
+
+9. Establish explicit refinement mappings between important TLA+
+   variables/transitions and their C++ counterparts.
+
+    Eventually create a top-level composed TLA+ model to check the
+    interactions between the individual protocols.
+
+    BOTTOM LINE
+
+The existing C++ should be viewed as:
+
+AN EXPERIMENTAL IMPLEMENTATION THAT HAS REVEALED THE PROBLEM.
+
+The TLA+ work should become:
+
+THE SPECIFICATION OF THE SOLUTION.
+
+The goal should not be:
+
+"Make the existing C++ look like the TLA+."
+
+The goal should be:
+
+"Build the simplest C++ implementation that faithfully realizes
+ the behavior described by the TLA+."
+
+The distinction is important.
+
+If the existing C++ requires thousands of lines of intertwined state,
+locks, queues, flags, generations, reservations, and callbacks to
+implement a relatively small TLA+ state machine, that is not necessarily
+evidence that the TLA+ model is too simple.
+
+It may be evidence that the C++ architecture is too complicated.
+
+The prototype has already done its job if it has exposed the real
+requirements.
+
+The next implementation should be allowed to be substantially
+different.
+
+The ideal outcome is not a formally documented complicated system.
+
+The ideal outcome is:
+
+a small, understandable control architecture
+    +
+formally specified behavioral rules
+    +
+conventional BRL-CAD domain algorithms
+    +
+concrete C++ implementation
+    +
+automated protocol and integration tests.
+
+That would make the TLA+ work a genuine architectural asset rather than
+an additional documentation layer on top of an already complicated
+implementation.a
+
+
+This is the paper I think we should put at the top of the BObol reading list.
+
+Quick-VDR: Out-of-Core View-Dependent Rendering of Gigantic Models.
+
+Its design is almost eerily close to BObol.
+
+Look into meshoptimizer (MIT) and Draco (latter is compression, Apache licensed)

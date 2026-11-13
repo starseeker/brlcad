@@ -22,17 +22,21 @@
  */
 
 #include <QWidget>
+#include <QGroupBox>
 #include <QCheckBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPointer>
-#include "bv.h"
-#include "qtcad/QgColorRGB.h"
-#include "qtcad/QgMeasureFilter.h"
+#include "BObol/BInput.h"
 #include "qtcad/QgSignalFlags.h"
 
 class QgPluginContext;
+class QgColorRGB;
+class QgMeasureFilter;
+class QMeasure2DFilter;
+class QMeasure3DFilter;
 class QgView;
+struct bobol_display_endpoint;
 
 class CADViewMeasure : public QWidget
 {
@@ -41,9 +45,10 @@ class CADViewMeasure : public QWidget
     public:
 	CADViewMeasure(QWidget *p = 0);
 	~CADViewMeasure();
-	void setContext(QgPluginContext *context) { m_context = context; }
+
+	void setContext(QgPluginContext *ctx) { m_ctx = ctx; }
 	void attachToView(QgView *view);
-	void detachFromView(QgView *view = nullptr);
+	void detachFromView(QgView *view);
 
 	QCheckBox *measure_3d;
 
@@ -67,17 +72,25 @@ class CADViewMeasure : public QWidget
 
     private slots:
 	void update_color();
+	void change_measure_mode(bool use3d);
 
     protected:
 	bool eventFilter(QObject *, QEvent *);
 
     private:
-	struct bv_scene_obj *s = NULL;
+	static const BObolInputActionLayer *inputActionLayer();
+	static int inputActionDispatch(void *user_data,
+		BObolInputAction action, const BObolInputEvent *event);
+	int applyInputAction(BObolInputAction action,
+		const BObolInputEvent *event);
+
 	QgMeasureFilter *mf = NULL;
 	QMeasure2DFilter *f2d = NULL;
 	QMeasure3DFilter *f3d = NULL;
-	QgPluginContext *m_context = nullptr;
-	QPointer<QgView> m_view;
+	QgPluginContext *m_ctx = nullptr;
+	QPointer<QgView> m_input_view;
+	struct bobol_display_endpoint *m_input_endpoint = nullptr;
+	bool m_qt_filter_installed = false;
 };
 
 // Local Variables:

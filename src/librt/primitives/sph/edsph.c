@@ -80,8 +80,7 @@ static const struct rt_edit_param_desc sph_r_params[] = {
 
 static const struct rt_edit_cmd_desc sph_cmds[] = {
     {
-	ECMD_SPH_SET_V,             /* cmd_id */
-	RT_EDIT_CMD_NAME(ECMD_SPH_SET_V),             /* name */
+	ECMD_SPH_SET_V, RT_EDIT_CMD_NAME(ECMD_SPH_SET_V),             /* cmd_id */
 	"Set V",                    /* label */
 	"geometry",                 /* category */
 	1,                          /* nparam */
@@ -91,8 +90,7 @@ static const struct rt_edit_cmd_desc sph_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_SPH_SCALE_R,           /* cmd_id */
-	RT_EDIT_CMD_NAME(ECMD_SPH_SCALE_R),           /* name */
+	ECMD_SPH_SCALE_R, RT_EDIT_CMD_NAME(ECMD_SPH_SCALE_R),           /* cmd_id */
 	"Set Radius",               /* label */
 	"geometry",                 /* category */
 	1,                          /* nparam */
@@ -195,36 +193,30 @@ rt_edit_sph_edit_xy(struct rt_edit *s, const vect_t mousevec)
     return rt_edit_ell_edit_xy(s, mousevec);
 }
 
-static int
-sph_current_numbers(struct rt_edit *s, int cmd_id, fastf_t *vals)
-{
-    struct rt_ell_internal *ell;
-    if (!s || !vals)
-	return -1;
-    ell = (struct rt_ell_internal *)s->es_int.idb_ptr;
-    RT_ELL_CK_MAGIC(ell);
-
-    switch (cmd_id) {
-	case ECMD_SPH_SET_V:
-	    vals[0] = ell->v[X] * s->base2local;
-	    vals[1] = ell->v[Y] * s->base2local;
-	    vals[2] = ell->v[Z] * s->base2local;
-	    return 3;
-	case ECMD_SPH_SCALE_R:
-	    vals[0] = MAGNITUDE(ell->a) * s->base2local;
-	    return 1;
-	default:
-	    break;
-    }
-    return 0;
-}
-
 C_DECL int
 rt_edit_sph_get_values(struct rt_edit *s, int cmd_id,
 	struct rt_edit_cmd_values *result)
 {
-    return edit_current_values_from_numbers(s, cmd_id, result,
-	sph_current_numbers);
+    struct rt_ell_internal *ell;
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    ell = (struct rt_ell_internal *)s->es_int.idb_ptr;
+    RT_ELL_CK_MAGIC(ell);
+
+	switch (cmd_id) {
+	case ECMD_SPH_SET_V:
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    ell->v[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_SPH_SCALE_R:
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(ell->a) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	default:
+	    break;
+    }
+    return RT_EDIT_VALUE_UNAVAILABLE;
 }
 
 /*

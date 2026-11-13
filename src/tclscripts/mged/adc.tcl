@@ -42,7 +42,7 @@ proc init { id } {
 	return
     }
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
     set top .$id.adc_control
 
     if [winfo exists $top] {
@@ -412,7 +412,7 @@ proc load { id } {
 	return
     }
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
 
     set mged_adc_control($id,draw) [::brlcad::mged adc draw]
     set mged_adc_control($id,dst) \
@@ -466,7 +466,7 @@ proc convert_coords { id } {
 	return
     }
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
 
     switch $mged_adc_control($id,coords) {
 	model {

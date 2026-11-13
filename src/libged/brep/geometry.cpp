@@ -71,7 +71,7 @@ _brep_cmd_geo_vertex_create(void *bs, int argc, const char **argv)
     }
     ON_3dPoint position(atof(argv[0]), atof(argv[1]), atof(argv[2]));
     int vertex = brep_vertex_create(b_ip->brep, position);
-        if (_brep_write_edit(gib->gb) != BRLCAD_OK) {
+    if (_brep_write_edit(gib->gb) != BRLCAD_OK) {
 	return BRLCAD_ERROR;
     }
     bu_vls_printf(gib->gb->gedp->ged_result_str, "create vertex! id = %d", vertex);
@@ -101,7 +101,7 @@ _brep_cmd_geo_vertex_remove(void *bs, int argc, const char **argv)
 	bu_vls_printf(gib->gb->gedp->ged_result_str, "failed to remove vertex %s\n", argv[0]);
 	return BRLCAD_ERROR;
     }
-        if (_brep_write_edit(gib->gb) != BRLCAD_OK) {
+    if (_brep_write_edit(gib->gb) != BRLCAD_OK) {
 	return BRLCAD_ERROR;
     }
     bu_vls_printf(gib->gb->gedp->ged_result_str, "remove vertex %d", v_id);

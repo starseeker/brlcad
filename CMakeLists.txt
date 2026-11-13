@@ -3070,6 +3070,12 @@ endif(BRLCAD_EXTRADOCS)
 # variable.)
 include(CTest)
 mark_as_advanced(BUILD_TESTING)
+brlcad_add_test(
+  NAME BObol_pivot_guard
+  COMMAND ${CMAKE_COMMAND}
+  -DBRLCAD_SOURCE_DIR=${BRLCAD_SOURCE_DIR}
+  -P ${BRLCAD_CMAKE_DIR}/BObol_pivot_guard.cmake
+)
 
 # Set up the BRL-CAD wrapper around find_package
 include(BRLCAD_Find_Package)
@@ -3203,6 +3209,11 @@ endif()
 set(BRLCAD_HAVE_OSMESA FALSE)
 if(BRLCAD_ENABLE_OSMESA)
   set(BRLCAD_HAVE_OSMESA TRUE)
+endif()
+
+set(BRLCAD_HAVE_BOBOL FALSE)
+if(TARGET libBObol)
+  set(BRLCAD_HAVE_BOBOL TRUE)
 endif()
 
 # Build-tree package files support BRLCAD_DIR=<build_dir> consumers.

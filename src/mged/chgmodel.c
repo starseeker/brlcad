@@ -38,10 +38,11 @@
 #include "nmg.h"
 #include "rt/geom.h"
 #include "ged.h"
+#include "ged/view.h"
 #include "wdb.h"
 
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./sedit.h"
 #include "./cmd.h"
 #include "./f_cmd.h"
@@ -73,12 +74,18 @@ f_make(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	const char *av[8];
 	char center[512];
 	char scale[128];
+	mat_t view_center;
+	fastf_t view_scale;
+	struct bv *view = mged_view_context_view(view_state->vs_gvp);
+
+	bv_center_mat_get(view_center, view);
+	view_scale = bv_scale_get(view);
 
 	sprintf(center, "%.17f %.17f %.17f",
-		(ZERO(view_state->vs_gvp->gv_center[MDX])) ? 0.0 : -view_state->vs_gvp->gv_center[MDX],
-		(ZERO(view_state->vs_gvp->gv_center[MDY])) ? 0.0 : -view_state->vs_gvp->gv_center[MDY],
-		(ZERO(view_state->vs_gvp->gv_center[MDZ])) ? 0.0 : -view_state->vs_gvp->gv_center[MDZ]);
-	sprintf(scale, "%.17f", view_state->vs_gvp->gv_scale * 2.0);
+		(ZERO(view_center[MDX])) ? 0.0 : -view_center[MDX],
+		(ZERO(view_center[MDY])) ? 0.0 : -view_center[MDY],
+		(ZERO(view_center[MDZ])) ? 0.0 : -view_center[MDZ]);
+	sprintf(scale, "%.17f", view_scale * 2.0);
 
 	av[0] = argv[0];
 	av[1] = "-o";
@@ -123,8 +130,8 @@ mged_rot_obj(struct mged_state *s, int iflag, fastf_t *argvect)
     mat_t temp;
     vect_t v_work;
 
-    s->update_views = 1;
-    dm_set_dirty(DMP, 1);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
     if (movedir != ROTARROW) {
 	/* NOT in object rotate mode - put it in obj rot */
@@ -258,8 +265,8 @@ f_sc_obj(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[]
 	return TCL_ERROR;
     }
 
-    s->update_views = 1;
-    dm_set_dirty(DMP, 1);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
     MAT_IDN(incr);
 
@@ -341,8 +348,8 @@ f_tr_obj(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[]
 
     /* Remainder of code concerns object edit case */
 
-    s->update_views = 1;
-    dm_set_dirty(DMP, 1);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
     MAT_IDN(incr);
     MAT_IDN(old);

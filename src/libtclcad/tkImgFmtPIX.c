@@ -63,7 +63,6 @@
 #include "vmath.h"
 #include "bu/malloc.h"
 #include "bn.h"
-#include "dm.h"
 #include "imgstream/fb_compat.h"
 
 #include "tclcad.h"

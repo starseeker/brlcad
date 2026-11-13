@@ -34,6 +34,7 @@
 #include "bu/path.h"
 #include "vmath.h"
 #include "raytrace.h"
+#include "bg/vlist.h"
 #include "./librt_private.h"
 
 
@@ -58,8 +59,8 @@ rt_bound_db_internal(point_t *bmin, point_t *bmax,
 	struct bu_list vhead;
 	BU_LIST_INIT(&vhead);
 	if (ip->idb_meth->ft_plot(&vhead, ip, ttol, tol, NULL) >= 0)
-	    ret = bv_vlist_bbox(&vhead, bmin, bmax, NULL, NULL);
-	BV_FREE_VLIST(&rt_vlfree, &vhead);
+	    ret = bg_vlist_bbox(&vhead, bmin, bmax, NULL, NULL);
+	BG_FREE_VLIST(&rt_vlfree, &vhead);
     }
 
     return ret;

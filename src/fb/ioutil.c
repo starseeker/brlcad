@@ -33,7 +33,7 @@
 #include "bu/log.h"
 #include "bu/malloc.h"
 #include "bu/path.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 static void
@@ -62,7 +62,7 @@ Message(const char *format, ...)
 
 
 void
-Fatal(struct fb *fbp, const char *format, ...)
+Fatal(imgstream_fb_t *fbp, const char *format, ...)
 {
     va_list ap;
 
@@ -70,10 +70,8 @@ Fatal(struct fb *fbp, const char *format, ...)
     VMessage(format, ap);
     va_end(ap);
 
-    if (fbp != FB_NULL && fb_close(fbp) == -1) {
-	Message("Error closing frame buffer");
-	fbp = FB_NULL;
-    }
+    if (fbp != NULL)
+	imgstream_fb_close(fbp);
 
     bu_exit(EXIT_FAILURE, NULL);
     /* NOT REACHED */

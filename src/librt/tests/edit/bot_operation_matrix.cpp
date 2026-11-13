@@ -28,12 +28,13 @@
 #include <string.h>
 #include <vector>
 
+#include "edit_test_view.h"
+
 #include "bu/bitv.h"
 #include "bu/log.h"
 #include "bu/malloc.h"
 #include "bu/vls.h"
 #include "raytrace.h"
-#include "test_utils.h"
 #include "rt/functab.h"
 #include "rt/geom.h"
 #include "rt/rt_ecmds.h"
@@ -150,7 +151,7 @@ check_bot_params(struct rt_edit *edit, int command_id, int expected_count,
                  const fastf_t *expected, const char *unit)
 {
     fastf_t values[3] = {};
-    int count = edit_test_get_params(edit, command_id, values);
+    int count = rt_edit_test_get_params(edit, command_id, values);
     bool ok = count == expected_count;
     for (int i = 0; ok && i < expected_count; ++i)
         ok = NEAR_EQUAL(values[i], expected[i], VUNITIZE_TOL);
@@ -168,6 +169,22 @@ expected_bot_point(fastf_t *point, const struct bot_expected *expected,
     for (int i = 0; i < count; ++i)
         VADD2(point, point, &expected->vertices[vertices[i] * 3]);
     VSCALE(point, point, base2local / count);
+}
+
+static void
+move_expected_bot_selection(struct bot_expected *expected,
+			    const int *vertices, int count,
+			    const fastf_t *target, fastf_t local2base)
+{
+    point_t centroid, target_base;
+    vect_t delta;
+    expected_bot_point(centroid, expected, vertices, count, 1.0);
+    VSCALE(target_base, target, local2base);
+    VSUB2(delta, target_base, centroid);
+    for (int i = 0; i < count; ++i) {
+	fastf_t *vertex = &expected->vertices[vertices[i] * 3];
+	VADD2(vertex, vertex, delta);
+    }
 }
 
 static int
@@ -464,8 +481,8 @@ run_bot_unit(fastf_t local2base, const char *unit)
             ++failures;
 
         const fastf_t move_edge[] = {0, 2 * inch_to_mm / local2base, 0};
-        expected.vertices[1] += inch_to_mm;
-        expected.vertices[4] += inch_to_mm;
+        move_expected_bot_selection(&expected, edge_indices, 2, move_edge,
+				    local2base);
         expected_bot_point(point, &expected, edge_indices, 2,
                            dbip->dbi_base2local);
         failures += run_bot_step(edit, ECMD_BOT_MOVEE, move_edge, 3,
@@ -480,9 +497,8 @@ run_bot_unit(fastf_t local2base, const char *unit)
             ++failures;
 
         const fastf_t move_face[] = {0, 3 * inch_to_mm / local2base, 0};
-        expected.vertices[1] += inch_to_mm;
-        expected.vertices[4] += inch_to_mm;
-        expected.vertices[7] += inch_to_mm;
+        move_expected_bot_selection(&expected, face_indices, 3, move_face,
+				    local2base);
         expected_bot_point(point, &expected, face_indices, 3,
                            dbip->dbi_base2local);
         failures += run_bot_step(edit, ECMD_BOT_MOVET, move_face, 3,

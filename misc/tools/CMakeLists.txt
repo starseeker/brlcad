@@ -179,6 +179,7 @@ cmakefiles(
   db2adoc/db2adoc.xsl
   inactvhdrs/CMakeLists.txt
   inactvhdrs/inactvhdrs.cpp
+  obol_draw_perf.sh
 )
 
 # Locac Variables:

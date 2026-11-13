@@ -37,6 +37,7 @@
 
 #include "./ged_facetize.h"
 #include "./process.h"
+#include "ged/event.h"
 #include "./transfer.h"
 #include "./worker.h"
 
@@ -165,6 +166,8 @@ _ged_facetize_nmgeval(struct _ged_facetize_state *s,
     (void)bu_file_delete(result_file);
 
     if (ret == BRLCAD_OK) {
+	if (s->gedp && target_dbip == s->gedp->dbip)
+	    (void)ged_event_notify_object_added(s->gedp, output_name, NULL);
 	facetize_log(s, 1,
 		"FACETIZE: NMG Boolean evaluation succeeded for %s\n",
 		output_name);

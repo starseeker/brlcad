@@ -29,6 +29,7 @@
 #include <string>
 #include "bu/log.h"
 #include "bn.h"
+#include "bg/vlist.h"
 #include "raytrace.h"
 #include "vmath.h"
 #include "debug_plot.h"
@@ -62,10 +63,10 @@ DebugPlot::DebugPlot(const char *basename) :
 
 DebugPlot::~DebugPlot()
 {
-    struct bv_vlist *vp;
-    while (BU_LIST_WHILE(vp, bv_vlist, &vlist_free_list)) {
+    bg_vlist *vp;
+    while (BU_LIST_WHILE(vp, bg_vlist, &vlist_free_list)) {
 	BU_LIST_DEQUEUE(&(vp->l));
-	bu_free((char *)vp, "bv_vlist");
+	bu_free((char *)vp, "bg_vlist");
     }
 }
 
@@ -93,11 +94,11 @@ DebugPlot::LinkedCurves(void)
 }
 
 static void
-rt_vlist_to_uplot(FILE *fp, const struct bu_list *vhead)
+brep_debug_vlist_to_uplot(FILE *fp, const struct bu_list *vhead)
 {
-    struct bv_vlist *vp;
+    bg_vlist *vp;
 
-    for (BU_LIST_FOR(vp, bv_vlist, vhead)) {
+    for (BU_LIST_FOR(vp, bg_vlist, vhead)) {
 	 int i;
 	 int nused = vp->nused;
 	 const int *cmd = vp->cmd;
@@ -105,23 +106,23 @@ rt_vlist_to_uplot(FILE *fp, const struct bu_list *vhead)
 
 	for (i = 0; i < nused; i++, cmd++, pt++) {
 	    switch (*cmd) {
-		case BV_VLIST_POLY_START:
-		case BV_VLIST_TRI_START:
+		case BG_VLIST_POLY_START:
+		case BG_VLIST_TRI_START:
 		    break;
-		case BV_VLIST_POLY_MOVE:
-		case BV_VLIST_LINE_MOVE:
-		case BV_VLIST_TRI_MOVE:
+		case BG_VLIST_POLY_MOVE:
+		case BG_VLIST_LINE_MOVE:
+		case BG_VLIST_TRI_MOVE:
 		    pdv_3move(fp, *pt);
 		    break;
-		case BV_VLIST_POLY_DRAW:
-		case BV_VLIST_POLY_END:
-		case BV_VLIST_LINE_DRAW:
-		case BV_VLIST_TRI_DRAW:
-		case BV_VLIST_TRI_END:
+		case BG_VLIST_POLY_DRAW:
+		case BG_VLIST_POLY_END:
+		case BG_VLIST_LINE_DRAW:
+		case BG_VLIST_TRI_DRAW:
+		case BG_VLIST_TRI_END:
 		    pdv_3cont(fp, *pt);
 		    break;
 		default:
-		    bu_log("rt_vlist_to_uplot: unknown vlist cmd x%x\n",
+		    bu_log("brep_debug_vlist_to_uplot: unknown vlist cmd x%x\n",
 			   *cmd);
 	    }
 	}
@@ -144,7 +145,7 @@ write_plot_to_file(
 
     pl_linmod(fp, "solid");
     pl_color(fp, lcolor[0], lcolor[1], lcolor[2]);
-    rt_vlist_to_uplot(fp, vhead);
+    brep_debug_vlist_to_uplot(fp, vhead);
 
     fclose(fp);
 }
@@ -159,7 +160,7 @@ DebugPlot::WriteLog()
     struct bu_list vhead;
     BU_LIST_INIT(&vhead);
     point_t origin = {0.0, 0.0, 0.0};
-    BV_ADD_VLIST(&vlist_free_list, &vhead, origin, BV_VLIST_LINE_MOVE);
+    BG_ADD_VLIST(&vlist_free_list, &vhead, origin, BG_VLIST_LINE_MOVE);
 
     filename << prefix << "_empty0.plot3";
     write_plot_to_file(filename.str().c_str(), &vhead, tangent_color);
@@ -264,7 +265,7 @@ DebugPlot::WriteLog()
 		split_face_innerloop_curves[i]);
     }
     fclose(fp);
-    BV_FREE_VLIST(&vlist_free_list, &vhead);
+    BG_FREE_VLIST(&vlist_free_list, &vhead);
 }
 
 static double
@@ -315,7 +316,7 @@ DebugPlot::Plot3DCurve(
     ON_3dPoint p;
     p = crv->PointAt(crv_dom.ParameterAt(0.0));
     VMOVE(pt1, p);
-    BV_ADD_VLIST(&vlist_free_list, vhead, pt1, BV_VLIST_LINE_MOVE);
+    BG_ADD_VLIST(&vlist_free_list, vhead, pt1, BG_VLIST_LINE_MOVE);
 
     /* Dynamic sampling approach - start with an initial guess
      * for the next point of one tenth of the domain length
@@ -334,12 +335,12 @@ DebugPlot::Plot3DCurve(
 	p = crv->PointAt(crv_dom.ParameterAt(t));
 	VMOVE(pt1, p);
 
-	BV_ADD_VLIST(&vlist_free_list, vhead, pt1, BV_VLIST_LINE_DRAW);
+	BG_ADD_VLIST(&vlist_free_list, vhead, pt1, BG_VLIST_LINE_DRAW);
     }
 
     if (!vlist) {
 	write_plot_to_file(filename, vhead, color);
-	BV_FREE_VLIST(&vlist_free_list, vhead);
+	BG_FREE_VLIST(&vlist_free_list, vhead);
     }
 }
 
@@ -375,7 +376,7 @@ DebugPlot::Plot3DCurveFrom2D(
     }
 
     VMOVE(pt1, first_pt);
-    BV_ADD_VLIST(&vlist_free_list, &vhead, pt1, BV_VLIST_LINE_MOVE);
+    BG_ADD_VLIST(&vlist_free_list, &vhead, pt1, BG_VLIST_LINE_MOVE);
 
     /* Dynamic sampling approach - start with an initial guess
      * for the next point of one tenth of the domain length
@@ -421,16 +422,16 @@ DebugPlot::Plot3DCurveFrom2D(
 		VSCALE(perp, perp, mag_tan);
 
 		VADD3(barb, prev_pt, tangent, perp);
-		BV_ADD_VLIST(&vlist_free_list, &vhead, barb, BV_VLIST_LINE_DRAW);
-		BV_ADD_VLIST(&vlist_free_list, &vhead, prev_pt, BV_VLIST_LINE_MOVE);
+		BG_ADD_VLIST(&vlist_free_list, &vhead, barb, BG_VLIST_LINE_DRAW);
+		BG_ADD_VLIST(&vlist_free_list, &vhead, prev_pt, BG_VLIST_LINE_MOVE);
 
 		VSCALE(perp, perp, -1.0);
 		VADD3(barb, prev_pt, tangent, perp);
-		BV_ADD_VLIST(&vlist_free_list, &vhead, barb, BV_VLIST_LINE_DRAW);
-		BV_ADD_VLIST(&vlist_free_list, &vhead, prev_pt, BV_VLIST_LINE_MOVE);
+		BG_ADD_VLIST(&vlist_free_list, &vhead, barb, BG_VLIST_LINE_DRAW);
+		BG_ADD_VLIST(&vlist_free_list, &vhead, prev_pt, BG_VLIST_LINE_MOVE);
 	    }
 	}
-	BV_ADD_VLIST(&vlist_free_list, &vhead, pt1, BV_VLIST_LINE_DRAW);
+	BG_ADD_VLIST(&vlist_free_list, &vhead, pt1, BG_VLIST_LINE_DRAW);
     }
     if (decorate) {
 	VUNITIZE(tangent);
@@ -444,19 +445,19 @@ DebugPlot::Plot3DCurveFrom2D(
 	if (!closed) {
 	    VADD2(barb, barb, tangent);
 	}
-	BV_ADD_VLIST(&vlist_free_list, &vhead, barb, BV_VLIST_LINE_DRAW);
-	BV_ADD_VLIST(&vlist_free_list, &vhead, pt1, BV_VLIST_LINE_MOVE);
+	BG_ADD_VLIST(&vlist_free_list, &vhead, barb, BG_VLIST_LINE_DRAW);
+	BG_ADD_VLIST(&vlist_free_list, &vhead, pt1, BG_VLIST_LINE_MOVE);
 
 	VSCALE(perp, perp, -1.0);
 	VADD2(barb, pt1, perp);
 	if (!closed) {
 	    VADD2(barb, barb, tangent);
 	}
-	BV_ADD_VLIST(&vlist_free_list, &vhead, barb, BV_VLIST_LINE_DRAW);
+	BG_ADD_VLIST(&vlist_free_list, &vhead, barb, BG_VLIST_LINE_DRAW);
     }
 
     write_plot_to_file(filename, &vhead, color);
-    BV_FREE_VLIST(&vlist_free_list, &vhead);
+    BG_FREE_VLIST(&vlist_free_list, &vhead);
 }
 
 void
@@ -506,7 +507,7 @@ DebugPlot::PlotSurface(
 
     write_plot_to_file(filename, &vhead, color);
 
-    BV_FREE_VLIST(&vlist_free_list, &vhead);
+    BG_FREE_VLIST(&vlist_free_list, &vhead);
 }
 
 

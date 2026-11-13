@@ -19,7 +19,7 @@
  */
 /** @file isstgl.h
  *
- * OpenGL widget wrapper encoding the information specific to the
+ * QWidget image presenter encoding the information specific to the
  * TIE raytracing view.
  *
  * TODO:  Look at f_knob, knob_rot, mged_vrot_syz, mged_rot, etc.
@@ -31,49 +31,39 @@
 #ifndef ISSTGL_H
 #define ISSTGL_H
 
-// Mac has deprecated OpenGL since 10.14
-#define GL_SILENCE_DEPRECATION 1
-
-#include <QOpenGLWidget>
-#include <QOpenGLFunctions>
-#include <QPainter>
 #include <QImage>
-
+#include <QWidget>
 #include <QThread>
-#include <QMutex>
-#include <QWaitCondition>
-#include <QElapsedTimer>
+
+#include <atomic>
 
 extern "C" {
 #include "rt/tie.h"
 #include "librender/camera.h"
 }
 
-class isstGL;
+class isstView;
 
-class TIERenderer : public QObject, protected QOpenGLFunctions
+class TIERenderer : public QObject
 {
     Q_OBJECT
     public:
-	TIERenderer(isstGL *w);
+	TIERenderer();
 	~TIERenderer();
 
-	void resize();
-
-	// Thread management
-	void lockRenderer() { m_renderMutex.lock(); }
-	void unlockRenderer() { m_renderMutex.unlock(); }
-	QMutex *grabMutex() { return &m_grabMutex; }
-	QWaitCondition *grabCond() { return &m_grabCond; }
-	void prepareExit() { m_exiting = true; m_grabCond.wakeAll(); }
+	void prepareExit() { m_exiting.store(true); }
 
     signals:
-	void contextWanted();
+	void imageReady(const QImage &image);
 
     public slots:
 	void render();
 	void res_incr();
 	void res_decr();
+	void setResolution(int resolution);
+	void setSize(int width, int height);
+	void setTie(struct tie_s *in_tie);
+	void clearTie();
 
     public:
 	struct tie_s *tie = NULL; // From parent app
@@ -81,66 +71,54 @@ class TIERenderer : public QObject, protected QOpenGLFunctions
 	vect_t camera_pos_init;
 	vect_t camera_focus_init;
 	bool changed = true;
-	bool m_exiting = false;
 
     private:
+	bool resize();
+
 	struct camera_tile_s tile;
-	void *texdata = NULL;
-	long texdata_size = 0;
 	tienet_buffer_t buffer_image;
-	GLuint texid = 0;
 	int resolution = 20;
 	int resolution_factor = 0;
-
-	bool m_init = false;
-	isstGL *m_w;
-
-	bool scaled = false;
-
-	// Threading variables
-	QMutex m_renderMutex;
-	QElapsedTimer m_elapsed;
-	QMutex m_grabMutex;
-	QWaitCondition m_grabCond;
+	int viewport_width = 0;
+	int viewport_height = 0;
+	std::atomic_bool m_exiting{false};
 };
 
-// Use QOpenGLFunctions so we don't have to prefix all OpenGL calls with "f->"
-class isstGL : public QOpenGLWidget
+class isstView : public QWidget
 {
     Q_OBJECT
 
     public:
-	explicit isstGL(QWidget *parent = nullptr);
-	~isstGL();
+	explicit isstView(QWidget *parent = nullptr);
+	~isstView();
 
 	void set_tie(struct tie_s *in_tie);
+	void clear_tie();
+	void setPreviewResolution(int resolution);
 
 	void save_image();
 
     protected:
-	void paintEvent(QPaintEvent *) override { }
+	void paintEvent(QPaintEvent *event) override;
+	void resizeEvent(QResizeEvent *event) override;
 
 	void keyPressEvent(QKeyEvent *k) override;
-	void mouseMoveEvent(QMouseEvent *e) override;
 
     signals:
-      void renderRequested();
+      void resolutionIncreased();
+      void resolutionDecreased();
+      void resolutionRequested(int resolution);
+      void sceneChanged(struct tie_s *in_tie);
+      void sizeChanged(int width, int height);
+      void imagePresented();
 
     public slots:
-      void grabContext();
-
-    private slots:
-      void onAboutToCompose();
-      void onFrameSwapped();
-      void onAboutToResize();
-      void onResized();
+      void setImage(const QImage &image);
 
     private:
-	int x_prev = -INT_MAX;
-	int y_prev = -INT_MAX;
-
 	QThread *m_thread;
 	TIERenderer *m_renderer;
+	QImage m_image;
 };
 
 #endif /* ISSTGL_H */
@@ -153,4 +131,3 @@ class isstGL : public QOpenGLWidget
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

@@ -140,8 +140,8 @@ namespace eval RtWizard {
 	    variable width
 	    variable height
 
-	    variable widthIndex
-	    variable heightIndex
+	variable widthIndex
+	variable heightIndex
 
 	}
     }
@@ -238,7 +238,12 @@ namespace eval RtWizard {
 	}
 
 	$itk_component(width) clear
-	$itk_component(width) insert 0 -1
+	set initialWidth -1
+	if {[info exists ::RtWizard::wizard_state(width)] &&
+	    $::RtWizard::wizard_state(width) > 0} {
+	    set initialWidth $::RtWizard::wizard_state(width)
+	}
+	$itk_component(width) insert 0 $initialWidth
 
 	itk_component add height {
 	    iwidgets::spinint $szCs.height \
@@ -252,7 +257,12 @@ namespace eval RtWizard {
 	}
 
 	$itk_component(height) clear
-	$itk_component(height) insert 0 -1
+	set initialHeight -1
+	if {[info exists ::RtWizard::wizard_state(scanlines)] &&
+	    $::RtWizard::wizard_state(scanlines) > 0} {
+	    set initialHeight $::RtWizard::wizard_state(scanlines)
+	}
+	$itk_component(height) insert 0 $initialHeight
 
 	#
 	# Build the contents of the right-hand-size
@@ -484,26 +494,32 @@ namespace eval RtWizard {
     }
 
     #
-    # getFrameBuffer - opens a frame buffer and returns its target.
+    # getFrameBuffer - opens a framebuffer endpoint and returns its address.
     #
     ::itcl::body FbPage::getFrameBuffer { width height {screenOnly false} } {
+	#
+	# If the user specified a framebuffer file and it is
+	# not null, return the name. Otherwise, open an on-screen
+	# buffer.
+	#
 	set mode [$itk_component(radBox) get]
 	if {$mode eq "toFile" &&
 	    [string length $::RtWizard::wizard_state(output_filename)] > 0 &&
 	    !$screenOnly} {
 	    return ""
 	}
-
-	if {$::tcl_platform(platform) == "windows"} {
-	    set fb_type "/dev/wglsp"
-	} else {
-	    set fb_type "/dev/oglsp"
+	# On-screen rendering belongs to the active Obol view.  Its framebuffer
+	# bridge accepts the renderer's requested dimensions independently of the
+	# widget size and composites the completed image without creating a second
+	# legacy GL window.  IPC also avoids port allocation races and keeps the
+	# endpoint lifetime tied to the view that owns it.
+	set pane [$::mgedObj gedCmd pane]
+	$::mgedObj gedCmd pane_set_fb_mode $pane 3
+	set address [$::mgedObj gedCmd pane_listen $pane ipc]
+	if {$address eq ""} {
+	    error "unable to open the Obol framebuffer endpoint for pane $pane"
 	}
-	set args [list $width $height $fb_type]
-	if {![info exists ::RtWizard::wizard_state(fbserv_local)]} {
-	    lappend args $::RtWizard::wizard_state(fbserv_port)
-	}
-	return [::brlcad::rtwizard fbserv_start {*}$args]
+	return "ipc:$address"
     }
     #--------------------#
     #  Private Methods   #

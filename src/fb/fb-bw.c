@@ -40,7 +40,7 @@
 #include "bu/exit.h"
 #include "bu/malloc.h"
 #include "vmath.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 int height;
 int width;
@@ -120,7 +120,7 @@ get_args(int argc, char **argv)
 int
 main(int argc, char **argv)
 {
-    struct fb *fbp;
+    imgstream_fb_t *fbp;
     unsigned char *inbuf;
     unsigned char *obuf;
 
@@ -141,27 +141,29 @@ main(int argc, char **argv)
     }
 
     /* Open Display Device */
-    if ((fbp = fb_open(framebuffer, width, height)) == NULL) {
-	fprintf(stderr, "fb_open failed\n");
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)width,
+	    (size_t)height)) == NULL) {
+	fprintf(stderr, "imgstream framebuffer open failed\n");
 	bu_exit(1, NULL);
     }
 
-    inbuf = (unsigned char *)bu_malloc((size_t)width * sizeof(RGBpixel),
+    inbuf = (unsigned char *)bu_malloc((size_t)width * 3,
 	"fb-bw input scanline");
     obuf = (unsigned char *)bu_malloc((size_t)width, "fb-bw output scanline");
 
     /* determine "reasonable" behavior */
-    xin = fb_getwidth(fbp) - scr_xoff;
+    xin = (int)imgstream_fb_width(fbp) - scr_xoff;
     CLAMP(xin, 0, width);
-    yin = fb_getheight(fbp) - scr_yoff;
+    yin = (int)imgstream_fb_height(fbp) - scr_yoff;
     CLAMP(yin, 0, height);
 
     for (y = scr_yoff; y < scr_yoff + yin; y++) {
 	size_t ret;
 	if (inverse) {
-	    (void)fb_read(fbp, scr_xoff, fb_getheight(fbp)-1-y, inbuf, xin);
+	    (void)imgstream_fb_read(fbp, scr_xoff,
+		(int)imgstream_fb_height(fbp)-1-y, inbuf, (size_t)xin);
 	} else {
-	    (void)fb_read(fbp, scr_xoff, y, inbuf, xin);
+	    (void)imgstream_fb_read(fbp, scr_xoff, y, inbuf, (size_t)xin);
 	}
 	for (x = 0; x < xin; x++) {
 	    obuf[x] = (((int)inbuf[3*x+RED]) + ((int)inbuf[3*x+GRN])
@@ -172,7 +174,7 @@ main(int argc, char **argv)
 	    perror("fwrite");
     }
 
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
     bu_free(obuf, "fb-bw output scanline");
     bu_free(inbuf, "fb-bw input scanline");
     return 0;

@@ -30,6 +30,13 @@
 
 __BEGIN_DECLS
 
+struct bg_tess_tol;
+struct bn_tol;
+struct rt_db_internal;
+struct rt_primitive_lod_realization;
+
+RT_EXPORT extern int rt_hf_wireframe_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol);
+
 RT_EXPORT extern int rt_hf_to_dsp(struct rt_db_internal *db_intern);
 
 /** @} */

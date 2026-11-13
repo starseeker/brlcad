@@ -91,6 +91,7 @@ namespace eval RtWizard {
 	    method getStepInfo {}
 
 	    method addType {type token args}
+	    method selectType {token}
 	    method setType {}
 	    method changePicType {}
 	    method getImageType {} {return $imageType}
@@ -362,7 +363,20 @@ namespace eval RtWizard {
 		      $itk_component(picTypes) insert end  [$typeObj getTitle]
 		      $itk_component(picTypes) select 0
 		      updatePreview
-		  }
+	}
+
+	#
+	# selectType - select and activate a picture type by its token.
+	# This supports the command-line -t option when the GUI is requested.
+	#
+	itcl::body ExamplePage::selectType {token} {
+	    if {![info exists typeObjects($token)]} {
+		error "Unknown RtWizard picture type token: $token"
+	    }
+	    set title [$typeObjects($token) getTitle]
+	    $itk_component(picTypes) select $title
+	    setType
+	}
 
 	#
 	# changePicType

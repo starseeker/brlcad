@@ -25,6 +25,7 @@
 #include "bu/app.h"
 #include "raytrace.h"
 #include "rt/calc.h"
+#include "rt/display_bounds.h"
 #include "wdb.h"
 
 
@@ -41,6 +42,8 @@ main(int UNUSED(argc), const char **argv)
     point_t expected_max = { 1.0,  1.0,  1.0};
     point_t rpp_min = {-1.0, -2.0, -3.0};
     point_t rpp_max = { 1.0,  2.0,  3.0};
+
+    mat_t transform = MAT_INIT_IDN;
     mat_t translated;
     mat_t rotated;
     const char *objects[] = {"box.r"};
@@ -71,6 +74,13 @@ main(int UNUSED(argc), const char **argv)
     if (mk_lcomb(wdbp, "test.r", &wm, 1, NULL, NULL, NULL, 0))
 	goto done;
 
+    BU_LIST_INIT(&wm.l);
+    MAT_DELTAS(transform, 5.0, 0.0, 0.0);
+    if (!mk_addmember("test.r", &wm.l, transform, WMOP_UNION))
+	goto done;
+    if (mk_lcomb(wdbp, "shifted.c", &wm, 0, NULL, NULL, NULL, 0))
+	goto done;
+
     dp = db_lookup(dbip, "test.r", LOOKUP_QUIET);
     if (dp == RT_DIR_NULL)
 	goto done;
@@ -84,6 +94,28 @@ main(int UNUSED(argc), const char **argv)
 	goto done;
     if (!VNEAR_EQUAL(bmax, expected_max, BN_TOL_DIST))
 	goto done;
+
+    {
+	const char *paths[1] = {"test.r"};
+	if (rt_display_bounds(NULL, dbip, 1, paths, bmin, bmax) !=
+		BRLCAD_OK)
+	    goto done;
+	if (!VNEAR_EQUAL(bmin, expected_min, BN_TOL_DIST) ||
+	    !VNEAR_EQUAL(bmax, expected_max, BN_TOL_DIST))
+	    goto done;
+    }
+
+    {
+	const char *paths[1] = {"shifted.c/test.r"};
+	point_t shifted_min = {4.0, -1.0, -1.0};
+	point_t shifted_max = {6.0,  1.0,  1.0};
+	if (rt_display_bounds(NULL, dbip, 1, paths, bmin, bmax) !=
+		BRLCAD_OK)
+	    goto done;
+	if (!VNEAR_EQUAL(bmin, shifted_min, BN_TOL_DIST) ||
+	    !VNEAR_EQUAL(bmax, shifted_max, BN_TOL_DIST))
+	    goto done;
+    }
 
     dp = db_lookup(dbip, "left.s", LOOKUP_QUIET);
     if (dp == RT_DIR_NULL || rt_bound_internal(dbip, dp, bmin, bmax))

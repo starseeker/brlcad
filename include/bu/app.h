@@ -265,9 +265,10 @@ typedef enum {
  *
  * @return
  * Full path to the specified resource will be returned.  This will be
- * 'buffer' or, when NULL, a read-only STATIC buffer will be returned
- * that will be the caller's responsibility to bu_strdup() or
- * otherwise save before a subsequent call to bu_dir() returns.
+ * 'buffer' or, when NULL, a read-only thread-local STATIC buffer will be
+ * returned that will be the caller's responsibility to bu_strdup() or
+ * otherwise save before a subsequent call to bu_dir() from the same thread
+ * returns.
  *
  * @code
  *

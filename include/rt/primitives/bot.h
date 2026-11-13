@@ -36,6 +36,7 @@
 #include "rt/soltab.h"
 
 __BEGIN_DECLS
+
 #ifdef USE_OPENCL
 /* largest data members first */
 struct clt_bot_specific {
@@ -105,16 +106,7 @@ RT_EXPORT extern int rt_bot_plot(struct bu_list         *vhead,
 				 struct rt_db_internal  *ip,
 				 const struct bg_tess_tol *ttol,
 				 const struct bn_tol    *tol,
-				 const struct bview *info);
-RT_EXPORT extern int rt_bot_plot_poly(struct bu_list            *vhead,
-				      struct rt_db_internal     *ip,
-				      const struct bg_tess_tol *ttol,
-				      const struct bn_tol       *tol);
-/** Return nonzero if every BoT face corner has a valid texture coordinate. */
-RT_EXPORT extern int rt_bot_has_uvs(const struct rt_bot_internal *bot);
-/** Plot shaded triangles with per-corner UV commands when UVs are valid.
- * Return nonzero if UV commands were emitted. */
-RT_EXPORT extern int rt_bot_plot_poly_uv(struct bu_list *vhead, struct rt_db_internal *ip);
+				 const struct bv_view_info *info);
 RT_EXPORT extern int rt_bot_find_v_nearest_pt2(const struct rt_bot_internal *bot,
 					       const point_t    pt2,
 					       const mat_t      mat);

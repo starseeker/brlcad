@@ -77,10 +77,15 @@
  * We make these defines in this header file so all widgets and applications
  * can share a common, mutually understood convention.
  *
- * QgViewUpdateFlags is a strongly typed Qt flags value.  Public signals and
- * slots carrying these flags should use that type rather than an integer so
- * unrelated hashes, identifiers, and bit fields cannot be connected by
- * accident.
+ * The canonical C++ type for the flag parameter is QgViewUpdateFlags
+ * (a Q_FLAG-decorated enum class defined in qtcad/QgTypes.h).  All
+ * libqtcad signals and slots that carry view-update flags MUST declare
+ * their parameter as QgViewUpdateFlags, not as unsigned long long or int.
+ * The named constants QG_VIEW_REFRESH, QG_VIEW_DRAWN, QG_VIEW_SELECT,
+ * QG_VIEW_MODE, and QG_VIEW_DB are all of type QgViewUpdateFlags and
+ * are also declared in qtcad/QgTypes.h.
+ *
+ * See also qtcad/QgRoles.h for the Qt model-data role constants.
  */
 
 #ifndef QGSIGNALFLAGS_H
@@ -88,12 +93,13 @@
 
 #include "common.h"
 #include "qtcad/QgTypes.h"
+#include "qtcad/QgRoles.h"
 
 #endif // QGSIGNALFLAGS_H
 /*
  * Local Variables:
  * tab-width: 8
- * mode: C++
+ * mode: C
  * indent-tabs-mode: t
  * c-file-style: "stroustrup"
  * End:

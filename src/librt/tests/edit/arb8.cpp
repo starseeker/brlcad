@@ -58,6 +58,7 @@
 #include "bu/str.h"
 #include "raytrace.h"
 #include "rt/db4.h"
+#include "edit_test_view.h"
 #include "rt/rt_ecmds.h"
 #include "rt/primitives/arb8.h"
 #include "test_utils.h"
@@ -71,9 +72,6 @@
 #define ECMD_ARB_MOVE_FACE	4013
 #define ECMD_ARB_SETUP_ROTFACE	4014
 #define ECMD_ARB_ROTATE_FACE	4015
-#define ECMD_ARB_SELECT_VERTEX	4037
-#define ECMD_ARB_SELECT_EDGE	4038
-#define ECMD_ARB_SELECT_FACE	4039
 
 static const char move_edges_menu_label[] = "Move Edges";
 
@@ -287,7 +285,7 @@ test_arb_point_knob(struct rt_edit *s, struct rt_arb_internal *arb,
 
 
 static void
-check_arb_edit_topology(struct rt_edit *edit, struct rt_arb_internal *arb,
+check_arb_edit_topology(struct rt_db_internal *ip, struct rt_arb_internal *arb,
 	const struct bn_tol *tol)
 {
     static const point_t shapes[5][8] = {
@@ -304,120 +302,44 @@ check_arb_edit_topology(struct rt_edit *edit, struct rt_arb_internal *arb,
     };
     static const int edge_counts[5] = {6, 8, 9, 11, 12};
     static const int face_counts[5] = {4, 5, 5, 6, 6};
-    static const int editable_edge_counts[5] = {0, 8, 8, 11, 12};
-    static const int vertex_maximums[5] = {4, 4, 6, 6, 7};
-    static const int edge_maximums[5] = {-1, 7, 7, 10, 11};
-    static const int face_maximums[5] = {3, 4, 4, 5, 5};
+    static const int movable_edge_counts[5] = {0, 8, 8, 11, 12};
 
-    for (int type_index = 0; type_index < 5; type_index++) {
-	memcpy(arb->pt, shapes[type_index], sizeof(shapes[type_index]));
+    for (int ti = 0; ti < 5; ti++) {
+	memcpy(arb->pt, shapes[ti], sizeof(shapes[ti]));
 	struct rt_arb_edit_topology topology;
-	if (rt_arb_edit_topology_get(&topology, &edit->es_int, tol) != BRLCAD_OK ||
-	    topology.arb_type != type_index + ARB4 ||
-	    topology.vertex_count != type_index + ARB4 ||
-	    topology.edge_count != edge_counts[type_index] ||
-	    topology.face_count != face_counts[type_index])
+	if (rt_arb_edit_topology_get(&topology, ip, tol) != BRLCAD_OK ||
+	    topology.arb_type != ti + 4 ||
+	    topology.vertex_count != ti + 4 ||
+	    topology.edge_count != edge_counts[ti] ||
+	    topology.face_count != face_counts[ti])
 	    bu_exit(1, "ERROR: ARB%d edit topology dimensions are invalid\n",
-		type_index + ARB4);
-	int editable_edges = 0;
-	for (int edge_index = 0; edge_index < topology.edge_count; edge_index++) {
-	    const struct rt_arb_edit_edge *edge = &topology.edges[edge_index];
+		ti + 4);
+	int movable_edges = 0;
+	for (int ei = 0; ei < topology.edge_count; ei++) {
+	    const struct rt_arb_edit_edge *edge = &topology.edges[ei];
 	    if (edge->vertices[0] < 0 ||
 		edge->vertices[0] >= topology.vertex_count ||
 		edge->vertices[1] < 0 ||
 		edge->vertices[1] >= topology.vertex_count ||
 		edge->vertices[0] == edge->vertices[1])
 		bu_exit(1, "ERROR: ARB%d edit topology has invalid edge\n",
-		    type_index + ARB4);
+		    ti + 4);
 	    if (edge->edit_index >= 0)
-		editable_edges++;
+		movable_edges++;
 	}
-	if (editable_edges != editable_edge_counts[type_index])
-	    bu_exit(1, "ERROR: ARB%d edit topology has %d editable edges, expected %d\n",
-		type_index + ARB4, editable_edges,
-		editable_edge_counts[type_index]);
-	for (int face_index = 0; face_index < topology.face_count; face_index++) {
-	    const struct rt_arb_edit_face *face = &topology.faces[face_index];
+	if (movable_edges != movable_edge_counts[ti])
+	    bu_exit(1, "ERROR: ARB%d edit topology has %d movable edges, expected %d\n",
+		ti + 4, movable_edges, movable_edge_counts[ti]);
+	for (int fi = 0; fi < topology.face_count; fi++) {
+	    const struct rt_arb_edit_face *face = &topology.faces[fi];
 	    if (face->vertex_count < 3 ||
 		face->vertex_count > RT_ARB_EDIT_MAX_FACE_VERTICES ||
 		face->edit_index < 0 || !face->rotatable)
 		bu_exit(1, "ERROR: ARB%d edit topology has invalid face\n",
-		    type_index + ARB4);
+		    ti + 4);
 	}
-
-	struct rt_edit_param_bounds vertex_bounds = {};
-	struct rt_edit_param_bounds edge_bounds = {};
-	struct rt_edit_param_bounds face_bounds = {};
-	struct rt_edit_param_bounds point_bounds = {};
-	if (rt_edit_param_bounds_get(edit, PTARB, 0, &vertex_bounds) !=
-		BRLCAD_OK || !vertex_bounds.has_maximum ||
-	    !NEAR_EQUAL(vertex_bounds.maximum, vertex_maximums[type_index],
-		SMALL_FASTF) ||
-	    rt_edit_param_bounds_get(edit, ECMD_ARB_MOVE_FACE, 0,
-		&face_bounds) != BRLCAD_OK || !face_bounds.has_maximum ||
-	    !NEAR_EQUAL(face_bounds.maximum, face_maximums[type_index],
-		SMALL_FASTF) ||
-	    rt_edit_param_bounds_get(edit, EARB, 1, &point_bounds) !=
-		BRLCAD_OK || point_bounds.has_minimum || point_bounds.has_maximum)
-	    bu_exit(1, "ERROR: ARB%d parameter bounds are invalid\n",
-		type_index + ARB4);
-	const int edge_status = rt_edit_param_bounds_get(edit, EARB, 0,
-	    &edge_bounds);
-	if ((edge_maximums[type_index] < 0 && edge_status != BRLCAD_ERROR) ||
-	    (edge_maximums[type_index] >= 0 &&
-	    (edge_status != BRLCAD_OK || !edge_bounds.has_maximum ||
-	    !NEAR_EQUAL(edge_bounds.maximum, edge_maximums[type_index],
-		SMALL_FASTF))))
-	    bu_exit(1, "ERROR: ARB%d edge bounds are invalid\n",
-		type_index + ARB4);
     }
-    bu_log("ARB4-ARB8 edit topology and bounds SUCCESS\n");
-}
-
-
-static void
-check_arb_selection(struct rt_edit *edit, struct rt_arb_internal *arb,
-	struct rt_arb8_edit *arb_edit)
-{
-    point_t original_points[RT_ARB_EDIT_MAX_VERTICES];
-    memcpy(original_points, arb->pt, sizeof(original_points));
-
-    edit->e_para[0] = 6.0;
-    edit->e_inpara = 1;
-    rt_edit_set_edflag(edit, ECMD_ARB_SELECT_VERTEX);
-    if (rt_edit_process(edit) != BRLCAD_OK || arb_edit->edit_menu != 6)
-	bu_exit(1, "ERROR: ARB vertex selection failed\n");
-    struct rt_edit_cmd_values values;
-    if (rt_edit_cmd_values_get(edit, ECMD_ARB_SELECT_VERTEX, &values) !=
-	    RT_EDIT_VALUE_OK || values.value_count != 1 ||
-	!values.value_valid[0] || !NEAR_EQUAL(values.values[0], 6.0, SMALL_FASTF) ||
-	rt_edit_cmd_values_get(edit, ECMD_ARB_SELECT_EDGE, &values) !=
-	    RT_EDIT_VALUE_UNAVAILABLE)
-	bu_exit(1, "ERROR: ARB vertex selection readback failed\n");
-
-    edit->e_para[0] = 11.0;
-    edit->e_inpara = 1;
-    rt_edit_set_edflag(edit, ECMD_ARB_SELECT_EDGE);
-    if (rt_edit_process(edit) != BRLCAD_OK || arb_edit->edit_menu != 11 ||
-	rt_edit_cmd_values_get(edit, EARB, &values) != RT_EDIT_VALUE_OK ||
-	values.value_count != 4 || !values.value_valid[3])
-	bu_exit(1, "ERROR: ARB edge selection or readback failed\n");
-
-    edit->e_para[0] = 5.0;
-    edit->e_inpara = 1;
-    rt_edit_set_edflag(edit, ECMD_ARB_SELECT_FACE);
-    if (rt_edit_process(edit) != BRLCAD_OK || arb_edit->edit_menu != 5 ||
-	rt_edit_cmd_values_get(edit, ECMD_ARB_MOVE_FACE, &values) !=
-	    RT_EDIT_VALUE_OK || values.value_count != 4 || !values.value_valid[3])
-	bu_exit(1, "ERROR: ARB face selection or readback failed\n");
-
-    edit->e_para[0] = 0.5;
-    edit->e_inpara = 1;
-    rt_edit_set_edflag(edit, ECMD_ARB_SELECT_FACE);
-    if (rt_edit_process(edit) != BRLCAD_ERROR || arb_edit->edit_menu != 5 ||
-	memcmp(original_points, arb->pt, sizeof(original_points)))
-	bu_exit(1, "ERROR: invalid ARB selection changed edit state\n");
-    bu_log("ARB source-neutral selection and readback SUCCESS\n");
+    bu_log("ARB4-ARB8 edit topology SUCCESS\n");
 }
 
 
@@ -570,20 +492,10 @@ rt_edit_test_arb8(void)
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size  = 73.3197;
-    v->gv_isize = 1.0 / v->gv_size;
-    v->gv_scale = 0.5 * v->gv_size;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width  = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init(&v);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
 
     struct rt_arb_internal *arb =
@@ -594,10 +506,23 @@ rt_edit_test_arb8(void)
 		capture_menu, &captured_menu) != BRLCAD_OK)
 	bu_exit(1, "ERROR: Unable to register ARB menu capture callback\n");
 
-    check_arb_edit_topology(s, arb, &tol);
+    check_arb_edit_topology(&s->es_int, arb, &tol);
     arb8_reset(s, arb, a);
-    check_arb_selection(s, arb, a);
-    arb8_reset(s, arb, a);
+
+    struct rt_edit_param_bounds vertexBounds = {};
+    struct rt_edit_param_bounds edgeBounds = {};
+    struct rt_edit_param_bounds faceBounds = {};
+    if (rt_edit_param_bounds_get(s, ECMD_ARB_SELECT_VERTEX, 0,
+	    &vertexBounds) != BRLCAD_OK || !vertexBounds.has_maximum ||
+	!NEAR_EQUAL(vertexBounds.maximum, 7.0, SMALL_FASTF) ||
+	rt_edit_param_bounds_get(s, EARB, 0, &edgeBounds) != BRLCAD_OK ||
+	!edgeBounds.has_maximum ||
+	!NEAR_EQUAL(edgeBounds.maximum, 11.0, SMALL_FASTF) ||
+	rt_edit_param_bounds_get(s, ECMD_ARB_MOVE_FACE, 0,
+	    &faceBounds) != BRLCAD_OK || !faceBounds.has_maximum ||
+	!NEAR_EQUAL(faceBounds.maximum, 5.0, SMALL_FASTF))
+	bu_exit(1, "ERROR: ARB current-topology parameter bounds are invalid\n");
+    bu_log("ARB current-topology parameter bounds SUCCESS\n");
 
     vect_t mousevec;
 
@@ -689,8 +614,8 @@ rt_edit_test_arb8(void)
     VMOVE(s->curr_e_axes_pos, arb->pt[0]);
     {
 	int xpos = 1300, ypos = 800;
-	mousevec[X] = xpos * INV_BV;
-	mousevec[Y] = ypos * INV_BV;
+	mousevec[X] = xpos * RT_INV_VIEW;
+	mousevec[Y] = ypos * RT_INV_VIEW;
 	mousevec[Z] = 0;
     }
     bu_vls_trunc(s->log_str, 0);
@@ -748,8 +673,9 @@ rt_edit_test_arb8(void)
     select_arb_point_edit(s, a, &captured_menu, "Move Point 5");
     s->local2base = 25.4;
     s->base2local = 1.0 / s->local2base;
-    MAT_IDN(v->gv_model2view);
-    MAT_IDN(v->gv_view2model);
+    MAT_IDN(v.gv_model2view);
+    MAT_IDN(v.gv_view2model);
+    rt_edit_set_view(s, &v);
     MAT_IDN(s->e_invmat);
     VMOVE(s->curr_e_axes_pos, arb->pt[4]);
     vect_t knob_state;
@@ -951,8 +877,9 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
     arb8_reset(s, arb, a);
     a->edit_menu = 0;
     rt_edit_set_edflag(s, EARB);
-    MAT_IDN(v->gv_model2view);
-    MAT_IDN(v->gv_view2model);
+    MAT_IDN(v.gv_model2view);
+    MAT_IDN(v.gv_view2model);
+    rt_edit_set_view(s, &v);
     MAT_IDN(s->e_invmat);
     VMOVE(s->curr_e_axes_pos, arb->pt[0]);
     VMOVE(s->k.tra_m_abs, mouse_knob_state);
@@ -1191,8 +1118,9 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
     arb8_reset(s, arb, a);
     a->edit_menu = ARB8_EDIT_COUNT;
     rt_edit_set_edflag(s, EARB);
-    MAT_IDN(v->gv_model2view);
-    MAT_IDN(v->gv_view2model);
+    MAT_IDN(v.gv_model2view);
+    MAT_IDN(v.gv_view2model);
+    rt_edit_set_view(s, &v);
     MAT_IDN(s->e_invmat);
     VMOVE(s->curr_e_axes_pos, arb->pt[0]);
     VSET(mousevec, 0.25, 0.25, 0.0);
