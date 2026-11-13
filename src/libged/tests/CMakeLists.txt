@@ -6,6 +6,12 @@ brlcad_add_test(NAME ged_terminal_columns COMMAND ged_test_terminal_columns)
 
 brlcad_addexec(ged_test_event test_event.cpp libged TEST)
 brlcad_add_test(NAME ged_test_event COMMAND ged_test_event)
+if(TARGET ged_test_event)
+  add_dependencies(ged_test_event ged_plugins)
+  set_property(TEST ged_test_event APPEND PROPERTY ENVIRONMENT
+    BRLCAD_ROOT=${CMAKE_BINARY_DIR}
+  )
+endif()
 
 brlcad_addexec(ged_test_tops test_tops.c libged TEST)
 if(TARGET ged_test_tops)
