@@ -19,6 +19,8 @@
  */
 /** @file view_info.cpp
  *
+ * IQgToolFactory implementation for the view-info palette tool.
+ * Replaces the legacy qged_plugin_info ABI.
  */
 
 #include <QIcon>
@@ -27,90 +29,71 @@
 
 #include "qtcad/QgKeyVal.h"
 #include "qtcad/QgPluginContext.h"
-#include "qtcad/QgPluginInterfaces.h"
-#include "qtcad/QgToolBase.h"
+#include "qtcad/QgPluginDescriptor.h"
 #include "QgEdCategories.h"
-#include "CADViewModel.h"
+#include "ViewInfoFactory.h"
 
-class ViewInfoTool : public QgToolBase
+/* ------------------------------------------------------------------ */
+/* ViewInfoTool                                                         */
+/* ------------------------------------------------------------------ */
+
+ViewInfoTool::ViewInfoTool(QgPluginContext *ctx, QObject *parent)
+    : QgToolBase(ctx, parent)
 {
-    Q_OBJECT
+}
 
-    public:
-	explicit ViewInfoTool(QgPluginContext *context,
-		QObject *parent = nullptr)
-	    : QgToolBase(context, parent)
-	{
-	}
-
-	QWidget *createWidget() override
-	{
-	    m_model = new CADViewModel(this);
-	    m_model->setContext(context());
-	    m_model->refresh(QG_VIEW_REFRESH);
-
-	    QgKeyValView *view = new QgKeyValView(nullptr, 0);
-	    view->setModel(m_model);
-	    view->setSizePolicy(QSizePolicy::Expanding,
-		    QSizePolicy::Expanding);
-	    view->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-	    return view;
-	}
-
-	QIcon *createIcon() override
-	{
-	    return new QIcon(QPixmap(":info.svg"));
-	}
-
-    public slots:
-	void refresh() override
-	{
-	    if (m_model)
-		m_model->refresh(QG_VIEW_REFRESH);
-	}
-
-	void onViewChanged() override
-	{
-	    refresh();
-	}
-
-    private:
-	CADViewModel *m_model = nullptr;
-};
-
-class ViewInfoFactory : public QObject, public IQgToolFactory
+QWidget *
+ViewInfoTool::createWidget()
 {
-    Q_OBJECT
-    Q_INTERFACES(IQgToolFactory)
-    Q_PLUGIN_METADATA(IID QGTCAD_IID("IQgToolFactory")
-	FILE "view_info.json")
+    m_model = new CADViewModel(this);
+    m_model->setContext(m_ctx);
+    m_model->refresh(0);
 
-    public:
-	QgPluginDescriptor descriptor() const override
-	{
-	    QgPluginDescriptor plugin;
-	    plugin.id = QStringLiteral("org.brlcad.qged.view.info");
-	    plugin.displayName = QStringLiteral("View Info");
-	    plugin.category = QStringLiteral(QGED_CATEGORY_VIEW);
-	    plugin.iconName = QStringLiteral(":info.svg");
-	    plugin.sortKey = 0;
-	    plugin.requiresView = true;
-	    plugin.description = QStringLiteral(
-		    "Displays parameters of the active view.");
-	    plugin.vendor = QStringLiteral("BRL-CAD");
-	    plugin.version = QStringLiteral("1.0");
-	    return plugin;
-	}
+    QgKeyValView *vview = new QgKeyValView(nullptr, 0);
+    vview->setModel(m_model);
+    vview->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    vview->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    return vview;
+}
 
-	QgToolBase *create(QgPluginContext *context,
-		QObject *parent = nullptr) override
-	{
-	    return new ViewInfoTool(context, parent);
-	}
-};
+QIcon *
+ViewInfoTool::createIcon()
+{
+    return new QIcon(QPixmap(":info.svg"));
+}
 
-#include "view_info.moc"
+void
+ViewInfoTool::refresh()
+{
+    if (m_model)
+	m_model->refresh(0);
+}
 
+/* ------------------------------------------------------------------ */
+/* ViewInfoFactory                                                      */
+/* ------------------------------------------------------------------ */
+
+QgPluginDescriptor
+ViewInfoFactory::descriptor() const
+{
+    QgPluginDescriptor d;
+    d.id           = "org.brlcad.qged.view.info";
+    d.displayName  = "View Info";
+    d.category     = QStringLiteral(QGED_CATEGORY_VIEW);
+    d.iconName     = ":info.svg";
+    d.sortKey      = 0;
+    d.requiresView = true;
+    d.description  = "Displays the current view name, size, azimuth, elevation, twist, and center.";
+    d.vendor       = "BRL-CAD";
+    d.version      = "1.0";
+    return d;
+}
+
+QgToolBase *
+ViewInfoFactory::create(QgPluginContext *ctx, QObject *parent)
+{
+    return new ViewInfoTool(ctx, parent);
+}
 
 
 // Local Variables:

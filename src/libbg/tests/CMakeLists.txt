@@ -44,6 +44,12 @@ brlcad_add_test(NAME bg_polygon_sort COMMAND bg_polygon_sort)
 # Temporary testing program
 brlcad_addexec(bgpoly2tri poly2tri.c "${BG_TEST_LIBS}" TEST)
 
+brlcad_addexec(bg_vlist vlist.c "${BG_TEST_LIBS}" TEST)
+brlcad_add_test(NAME bg_vlist_basic COMMAND bg_vlist)
+
+brlcad_addexec(bg_line_layer line_layer.c "${BG_TEST_LIBS}" TEST)
+brlcad_add_test(NAME bg_line_layer_basic COMMAND bg_line_layer)
+
 #  ************ obr.c tests *************
 
 brlcad_addexec(bg_obr obr.c "${BG_TEST_LIBS}" TEST)
@@ -316,12 +322,6 @@ brlcad_addexec(bg_plane_coordinates plane_coordinates.c "${BG_TEST_LIBS}" TEST)
 
 brlcad_add_test(NAME bg_plane_coordinates COMMAND bg_plane_coordinates)
 
-#  ************ pca.c tests ***********
-
-brlcad_addexec(bg_pca pca.c "${BG_TEST_LIBS}" TEST)
-
-brlcad_add_test(NAME bg_pca COMMAND bg_pca)
-
 #  ************ polygon.c tests ***********
 
 brlcad_addexec(bg_polygon polygon.c "${BG_TEST_LIBS}" TEST)
@@ -329,17 +329,8 @@ brlcad_addexec(bg_polygon polygon.c "${BG_TEST_LIBS}" TEST)
 brlcad_add_test(NAME bg_polygon COMMAND bg_polygon)
 
 brlcad_addexec(bg_polygon_triangulate polygon_triangulate.c "${BG_TEST_LIBS}" TEST)
-brlcad_addexec(bg_polygon_triangulate_clean polygon_triangulate_clean.c "${BG_TEST_LIBS}" TEST)
-brlcad_addexec(bg_polygon_triangulate_strict polygon_triangulate_strict.c "${BG_TEST_LIBS}" TEST)
 
 brlcad_add_test(NAME bg_polygon_triangulate	    COMMAND bg_polygon_triangulate)
-brlcad_add_test(NAME bg_polygon_triangulate_clean COMMAND bg_polygon_triangulate_clean)
-brlcad_add_test(NAME bg_polygon_triangulate_strict COMMAND bg_polygon_triangulate_strict)
-
-#  ************ RTree tests *************
-brlcad_addexec(bg_rtree rtree.cpp "${BG_TEST_LIBS}" TEST)
-
-brlcad_add_test(NAME bg_rtree_large_identical_rects COMMAND bg_rtree)
 
 #  ************ chull.c tests ***********
 # 2D Convex Hull tests
@@ -466,6 +457,17 @@ brlcad_add_test(NAME bg_trimesh_split COMMAND bg_trimesh_split_test)
 brlcad_addexec(bg_trimesh_decimate_test trimesh_decimate.cpp "${BG_TEST_LIBS}" TEST)
 
 brlcad_add_test(NAME bg_trimesh_decimate COMMAND bg_trimesh_decimate_test)
+#  ************ trimesh_diff.cpp tests ***********
+
+brlcad_addexec(bg_trimesh_diff trimesh_diff.cpp "${BG_TEST_LIBS}" TEST)
+
+brlcad_add_test(NAME bg_trimesh_diff  COMMAND bg_trimesh_diff)
+
+#  ************ pca.cpp tests ***********
+
+brlcad_addexec(bg_pca pca.cpp "${BG_TEST_LIBS}" TEST)
+
+brlcad_add_test(NAME bg_pca  COMMAND bg_pca)
 
 #  ************ triangle area tests ***********
 
@@ -508,6 +510,12 @@ if(BUILD_TESTING AND TARGET bg_trimesh_repair)
   set_tests_properties(bg_trimesh_repair PROPERTIES TIMEOUT 30)
 endif()
 
+#  ************ trimesh topology tests ***********
+
+brlcad_addexec(bg_trimesh_topology trimesh_topology.cpp "${BG_TEST_LIBS}" TEST)
+
+brlcad_add_test(NAME bg_trimesh_topology  COMMAND bg_trimesh_topology)
+
 #  ************ trimesh_remesh tests ***********
 
 brlcad_addexec(bg_trimesh_remesh trimesh_remesh.cpp "${BG_TEST_LIBS}" TEST)
@@ -529,8 +537,10 @@ cmakefiles(
   plane_dist.c
   plane_isect.c
   plane_pt.c
-  polygon_triangulate_strict.c
-  rtree.cpp
+  pca.cpp
+  trimesh_diff.cpp
+  trimesh_topology.cpp
+  vlist.c
   CMakeLists.txt
 )
 

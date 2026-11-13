@@ -64,8 +64,6 @@
 
 #include "common.h"
 
-#include <limits.h>
-#include <math.h>
 #include <string.h>
 
 #include "bu/malloc.h"
@@ -96,23 +94,6 @@
 #define ECMD_COMB_SET_AIRCODE  12010  /* set aircode  (e_para[0]) */
 #define ECMD_COMB_SET_GIFTMATER 12011 /* set GIFTmater (e_para[0]) */
 #define ECMD_COMB_SET_LOS      12012  /* set los (e_para[0]) */
-
-static int
-comb_integer_param(struct rt_edit *s, int parameter, fastf_t minimum,
-	fastf_t maximum, const char *name, long *value)
-{
-    fastf_t input = s->e_para[parameter];
-    if (input <= (fastf_t)LONG_MIN || input >= (fastf_t)LONG_MAX ||
-	input < minimum || input > maximum || !EQUAL(input, floor(input))) {
-	bu_vls_printf(s->log_str,
-		"ERROR: %s must be an integer in [%g, %g]\n",
-		name, minimum, maximum);
-	return BRLCAD_ERROR;
-    }
-
-    *value = (long)input;
-    return BRLCAD_OK;
-}
 
 /* ------------------------------------------------------------------ */
 /* Per-instance edit state                                              */
@@ -223,11 +204,7 @@ ecmd_comb_add_member(struct rt_edit *s)
 	return BRLCAD_ERROR;
     }
 
-    long op_value;
-    if (comb_integer_param(s, 0, INT_MIN, INT_MAX, "boolean op",
-	    &op_value) != BRLCAD_OK)
-	return BRLCAD_ERROR;
-    int op = (int)op_value;
+    int op = (int)s->e_para[0];
     if (op != OP_UNION && op != OP_INTERSECT && op != OP_SUBTRACT) {
 	bu_vls_printf(s->log_str,
 		"ERROR: ECMD_COMB_ADD_MEMBER: invalid boolean op %d "
@@ -286,11 +263,7 @@ ecmd_comb_del_member(struct rt_edit *s)
 	return BRLCAD_ERROR;
     }
 
-    long target_value;
-    if (comb_integer_param(s, 0, 0.0, INT_MAX, "member index",
-	    &target_value) != BRLCAD_OK)
-	return BRLCAD_ERROR;
-    int target = (int)target_value;
+    int target = (int)s->e_para[0];
 
     /* Pre-validate the index before flattening (comb_flatten NULLs comb->tree) */
     size_t node_count = db_tree_nleaves(comb->tree);
@@ -345,15 +318,8 @@ ecmd_comb_set_op(struct rt_edit *s)
 	return BRLCAD_ERROR;
     }
 
-    long target_value;
-    long op_value;
-    if (comb_integer_param(s, 0, 0.0, INT_MAX, "member index",
-	    &target_value) != BRLCAD_OK ||
-	comb_integer_param(s, 1, INT_MIN, INT_MAX, "boolean op",
-	    &op_value) != BRLCAD_OK)
-	return BRLCAD_ERROR;
-    int target = (int)target_value;
-    int new_op = (int)op_value;
+    int target = (int)s->e_para[0];
+    int new_op = (int)s->e_para[1];
 
     if (new_op != OP_UNION && new_op != OP_INTERSECT && new_op != OP_SUBTRACT) {
 	bu_vls_printf(s->log_str,
@@ -409,11 +375,7 @@ ecmd_comb_set_matrix(struct rt_edit *s)
 	return BRLCAD_ERROR;
     }
 
-    long target_value;
-    if (comb_integer_param(s, 0, 0.0, INT_MAX, "member index",
-	    &target_value) != BRLCAD_OK)
-	return BRLCAD_ERROR;
-    int target = (int)target_value;
+    int target = (int)s->e_para[0];
 
     /* Pre-validate index before flattening */
     size_t node_count_mat = db_tree_nleaves(comb->tree);
@@ -543,11 +505,7 @@ ecmd_comb_set_region(struct rt_edit *s)
 	return BRLCAD_ERROR;
     }
 
-    long flag_value;
-    if (comb_integer_param(s, 0, 0.0, 1.0, "region flag",
-	    &flag_value) != BRLCAD_OK)
-	return BRLCAD_ERROR;
-    char flag = (char)flag_value;
+    char flag = (s->e_para[0] > SMALL_FASTF || s->e_para[0] < -SMALL_FASTF) ? 1 : 0;
     comb->region_flag = flag;
     comb_edit_sync_attributes(s, comb);
     s->e_inpara = 0;
@@ -576,16 +534,10 @@ ecmd_comb_set_color(struct rt_edit *s)
 	    bu_avs_remove(&s->es_int.idb_avs, "color");
 	}
     } else if (s->e_inpara == 3) {
-	long rgb[ELEMENTS_PER_VECT];
-	for (int i = 0; i < ELEMENTS_PER_VECT; ++i) {
-	    if (comb_integer_param(s, i, 0.0, UCHAR_MAX, "color component",
-		    &rgb[i]) != BRLCAD_OK)
-		return BRLCAD_ERROR;
-	}
 	comb->rgb_valid = 1;
-	comb->rgb[0] = (unsigned char)rgb[0];
-	comb->rgb[1] = (unsigned char)rgb[1];
-	comb->rgb[2] = (unsigned char)rgb[2];
+	comb->rgb[0] = (unsigned char)s->e_para[0];
+	comb->rgb[1] = (unsigned char)s->e_para[1];
+	comb->rgb[2] = (unsigned char)s->e_para[2];
     } else {
 	bu_vls_printf(s->log_str,
 		"ERROR: ECMD_COMB_SET_COLOR: e_inpara must be 0 (clear) or 3 (R G B)\n");
@@ -669,10 +621,7 @@ ecmd_comb_set_region_id(struct rt_edit *s)
 	return BRLCAD_ERROR;
     }
 
-    long rid;
-    if (comb_integer_param(s, 0, -(fastf_t)LONG_MAX, (fastf_t)LONG_MAX,
-	    "region_id", &rid) != BRLCAD_OK)
-	return BRLCAD_ERROR;
+    long rid = (long)s->e_para[0];
     comb->region_id = rid;
     comb_edit_sync_attributes(s, comb);
     s->e_inpara = 0;
@@ -696,10 +645,7 @@ ecmd_comb_set_aircode(struct rt_edit *s)
 	return BRLCAD_ERROR;
     }
 
-    long ac;
-    if (comb_integer_param(s, 0, -(fastf_t)LONG_MAX, (fastf_t)LONG_MAX,
-	    "aircode", &ac) != BRLCAD_OK)
-	return BRLCAD_ERROR;
+    long ac = (long)s->e_para[0];
     comb->aircode = ac;
     comb_edit_sync_attributes(s, comb);
     s->e_inpara = 0;
@@ -723,10 +669,7 @@ ecmd_comb_set_giftmater(struct rt_edit *s)
 	return BRLCAD_ERROR;
     }
 
-    long gm;
-    if (comb_integer_param(s, 0, -(fastf_t)LONG_MAX, (fastf_t)LONG_MAX,
-	    "GIFTmater", &gm) != BRLCAD_OK)
-	return BRLCAD_ERROR;
+    long gm = (long)s->e_para[0];
     comb->GIFTmater = gm;
     comb_edit_sync_attributes(s, comb);
     s->e_inpara = 0;
@@ -750,10 +693,7 @@ ecmd_comb_set_los(struct rt_edit *s)
 	return BRLCAD_ERROR;
     }
 
-    long los_val;
-    if (comb_integer_param(s, 0, -(fastf_t)LONG_MAX, (fastf_t)LONG_MAX,
-	    "los", &los_val) != BRLCAD_OK)
-	return BRLCAD_ERROR;
+    long los_val = (long)s->e_para[0];
     comb->los = los_val;
     comb_edit_sync_attributes(s, comb);
     s->e_inpara = 0;
@@ -1070,8 +1010,7 @@ static const struct rt_edit_param_desc comb_set_los_params[] = {
 
 static const struct rt_edit_cmd_desc comb_cmds[] = {
     {
-	ECMD_COMB_ADD_MEMBER,     /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_COMB_ADD_MEMBER),     /* name       */
+	ECMD_COMB_ADD_MEMBER, RT_EDIT_CMD_NAME(ECMD_COMB_ADD_MEMBER),     /* cmd_id       */
 	"Add Member",             /* label        */
 	"tree",                   /* category     */
 	2,                        /* nparam       */
@@ -1081,8 +1020,7 @@ static const struct rt_edit_cmd_desc comb_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_COMB_DEL_MEMBER,     /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_COMB_DEL_MEMBER),     /* name       */
+	ECMD_COMB_DEL_MEMBER, RT_EDIT_CMD_NAME(ECMD_COMB_DEL_MEMBER),     /* cmd_id       */
 	"Delete Member",          /* label        */
 	"tree",                   /* category     */
 	1,                        /* nparam       */
@@ -1092,8 +1030,7 @@ static const struct rt_edit_cmd_desc comb_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_COMB_SET_OP,         /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_COMB_SET_OP),         /* name       */
+	ECMD_COMB_SET_OP, RT_EDIT_CMD_NAME(ECMD_COMB_SET_OP),         /* cmd_id       */
 	"Set Boolean Op",         /* label        */
 	"tree",                   /* category     */
 	2,                        /* nparam       */
@@ -1103,8 +1040,7 @@ static const struct rt_edit_cmd_desc comb_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_COMB_SET_REGION,     /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_COMB_SET_REGION),     /* name       */
+	ECMD_COMB_SET_REGION, RT_EDIT_CMD_NAME(ECMD_COMB_SET_REGION),     /* cmd_id       */
 	"Set Region Flag",        /* label        */
 	"material",               /* category     */
 	1,                        /* nparam       */
@@ -1114,8 +1050,7 @@ static const struct rt_edit_cmd_desc comb_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_COMB_SET_COLOR,      /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_COMB_SET_COLOR),      /* name       */
+	ECMD_COMB_SET_COLOR, RT_EDIT_CMD_NAME(ECMD_COMB_SET_COLOR),      /* cmd_id       */
 	"Set Color",              /* label        */
 	"material",               /* category     */
 	1,                        /* nparam       */
@@ -1125,8 +1060,7 @@ static const struct rt_edit_cmd_desc comb_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_COMB_SET_SHADER,     /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_COMB_SET_SHADER),     /* name       */
+	ECMD_COMB_SET_SHADER, RT_EDIT_CMD_NAME(ECMD_COMB_SET_SHADER),     /* cmd_id       */
 	"Set Shader",             /* label        */
 	"material",               /* category     */
 	1,                        /* nparam       */
@@ -1136,8 +1070,7 @@ static const struct rt_edit_cmd_desc comb_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_COMB_SET_MATERIAL,   /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_COMB_SET_MATERIAL),   /* name       */
+	ECMD_COMB_SET_MATERIAL, RT_EDIT_CMD_NAME(ECMD_COMB_SET_MATERIAL),   /* cmd_id       */
 	"Set Material",           /* label        */
 	"material",               /* category     */
 	1,                        /* nparam       */
@@ -1147,8 +1080,7 @@ static const struct rt_edit_cmd_desc comb_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_COMB_SET_REGION_ID,  /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_COMB_SET_REGION_ID),  /* name       */
+	ECMD_COMB_SET_REGION_ID, RT_EDIT_CMD_NAME(ECMD_COMB_SET_REGION_ID),  /* cmd_id       */
 	"Set Region ID",          /* label        */
 	"material",               /* category     */
 	1,                        /* nparam       */
@@ -1158,8 +1090,7 @@ static const struct rt_edit_cmd_desc comb_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_COMB_SET_AIRCODE,    /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_COMB_SET_AIRCODE),    /* name       */
+	ECMD_COMB_SET_AIRCODE, RT_EDIT_CMD_NAME(ECMD_COMB_SET_AIRCODE),    /* cmd_id       */
 	"Set Aircode",            /* label        */
 	"material",               /* category     */
 	1,                        /* nparam       */
@@ -1169,8 +1100,7 @@ static const struct rt_edit_cmd_desc comb_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_COMB_SET_GIFTMATER,  /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_COMB_SET_GIFTMATER),  /* name       */
+	ECMD_COMB_SET_GIFTMATER, RT_EDIT_CMD_NAME(ECMD_COMB_SET_GIFTMATER),  /* cmd_id       */
 	"Set GIFTmater",          /* label        */
 	"material",               /* category     */
 	1,                        /* nparam       */
@@ -1180,8 +1110,7 @@ static const struct rt_edit_cmd_desc comb_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_COMB_SET_LOS,        /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_COMB_SET_LOS),        /* name       */
+	ECMD_COMB_SET_LOS, RT_EDIT_CMD_NAME(ECMD_COMB_SET_LOS),        /* cmd_id       */
 	"Set LOS",                /* label        */
 	"material",               /* category     */
 	1,                        /* nparam       */
@@ -1231,7 +1160,7 @@ C_DECL int
 rt_edit_comb_get_values(struct rt_edit *s, int cmd_id,
 	struct rt_edit_cmd_values *result)
 {
-    if (!s || !result || !s->es_int.idb_ptr)
+    if (!s || !result)
 	return RT_EDIT_VALUE_ERROR;
     struct rt_comb_internal *comb =
 	(struct rt_comb_internal *)s->es_int.idb_ptr;
@@ -1244,7 +1173,7 @@ rt_edit_comb_get_values(struct rt_edit *s, int cmd_id,
 	    return RT_EDIT_VALUE_OK;
 	case ECMD_COMB_SET_COLOR:
 	    if (comb->rgb_valid) {
-		for (int i = 0; i < ELEMENTS_PER_VECT; ++i)
+		for (int i = 0; i < 3; i++)
 		    rt_edit_cmd_values_set_value(result, i,
 			(fastf_t)comb->rgb[i]);
 	    }

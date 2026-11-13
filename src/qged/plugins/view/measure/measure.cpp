@@ -19,105 +19,108 @@
  */
 /** @file measure.cpp
  *
+ * IQgToolFactory implementation for the view-measure palette tool.
+ * Replaces the legacy qged_plugin_info ABI.
  */
 
+#include <QGroupBox>
+#include <QCheckBox>
 #include <QIcon>
 #include <QPixmap>
 
 #include "qtcad/QgPluginContext.h"
-#include "qtcad/QgPluginInterfaces.h"
-#include "qtcad/QgToolBase.h"
+#include "qtcad/QgPluginDescriptor.h"
 #include "qtcad/QgToolPalette.h"
 #include "qtcad/QgView.h"
 #include "QgEdCategories.h"
-#include "CADViewMeasure.h"
+#include "ViewMeasureFactory.h"
 
-class ViewMeasureTool : public QgToolBase, public IQgViewEventFilter
+/* ------------------------------------------------------------------ */
+/* ViewMeasureTool                                                      */
+/* ------------------------------------------------------------------ */
+
+ViewMeasureTool::ViewMeasureTool(QgPluginContext *ctx, QObject *parent)
+    : QgToolBase(ctx, parent)
 {
-    Q_OBJECT
-    Q_INTERFACES(IQgViewEventFilter)
+}
 
-    public:
-	explicit ViewMeasureTool(QgPluginContext *context,
-		QObject *parent = nullptr)
-	    : QgToolBase(context, parent)
-	{
-	}
-
-	QgToolPaletteElement *paletteElement() override
-	{
-	    QgToolPaletteElement *element = QgToolBase::paletteElement();
-	    if (m_measure && element && !m_measureWired) {
-		connect(m_measure, &CADViewMeasure::view_updated,
-			element, &QgToolPaletteElement::element_view_changed);
-		m_measureWired = true;
-	    }
-	    return element;
-	}
-
-	QWidget *createWidget() override
-	{
-	    m_measure = new CADViewMeasure();
-	    m_measure->setContext(context());
-	    return m_measure;
-	}
-
-	QIcon *createIcon() override
-	{
-	    return new QIcon(QPixmap(":measure.svg"));
-	}
-
-	QObject *viewEventFilter() override { return this; }
-
-	void attachToView(QgView *view) override
-	{
-	    if (m_measure)
-		m_measure->attachToView(view);
-	}
-
-	void detachFromView(QgView *view) override
-	{
-	    if (m_measure)
-		m_measure->detachFromView(view);
-	}
-
-    private:
-	CADViewMeasure *m_measure = nullptr;
-	bool m_measureWired = false;
-};
-
-class ViewMeasureFactory : public QObject, public IQgToolFactory
+/* Override to wire the view_updated -> element_view_changed signal AFTER
+ * the element has been created by the base class. */
+QgToolPaletteElement *
+ViewMeasureTool::paletteElement()
 {
-    Q_OBJECT
-    Q_INTERFACES(IQgToolFactory)
-    Q_PLUGIN_METADATA(IID QGTCAD_IID("IQgToolFactory") FILE "measure.json")
+    QgToolPaletteElement *el = QgToolBase::paletteElement();
+    if (m_measure && el && !m_extra_wired) {
+	QObject::connect(m_measure, &CADViewMeasure::view_updated,
+			 el, &QgToolPaletteElement::element_view_changed);
+	m_extra_wired = true;
+    }
+    return el;
+}
 
-    public:
-	QgPluginDescriptor descriptor() const override
-	{
-	    QgPluginDescriptor plugin;
-	    plugin.id = QStringLiteral("org.brlcad.qged.view.measure");
-	    plugin.displayName = QStringLiteral("View Measure");
-	    plugin.category = QStringLiteral(QGED_CATEGORY_VIEW);
-	    plugin.iconName = QStringLiteral(":measure.svg");
-	    plugin.sortKey = 3;
-	    plugin.requiresView = true;
-	    plugin.description = QStringLiteral(
-		    "Measures distances and angles using 2D or 3D points.");
-	    plugin.vendor = QStringLiteral("BRL-CAD");
-	    plugin.version = QStringLiteral("1.0");
-	    return plugin;
-	}
+QWidget *
+ViewMeasureTool::createWidget()
+{
+    m_measure = new CADViewMeasure();
+    m_measure->setContext(m_ctx);
+    return m_measure;
+}
 
-	QgToolBase *create(QgPluginContext *context,
-		QObject *parent = nullptr) override
-	{
-	    return new ViewMeasureTool(context, parent);
-	}
-};
+QIcon *
+ViewMeasureTool::createIcon()
+{
+    return new QIcon(QPixmap(":measure.svg"));
+}
 
-#include "measure.moc"
+void
+ViewMeasureTool::refresh()
+{
+    /* The measure tool is driven by user mouse events; no explicit
+     * refresh action is needed on view update. */
+}
 
+/* IQgViewEventFilter: install/remove the measure widget as an event
+ * filter on the active view.  The widget's own eventFilter() handles
+ * all mouse-based measurement logic. */
+void
+ViewMeasureTool::attachToView(QgView *view)
+{
+    if (m_measure && view)
+	m_measure->attachToView(view);
+}
+
+void
+ViewMeasureTool::detachFromView(QgView *view)
+{
+    if (m_measure && view)
+	m_measure->detachFromView(view);
+}
+
+/* ------------------------------------------------------------------ */
+/* ViewMeasureFactory                                                   */
+/* ------------------------------------------------------------------ */
+
+QgPluginDescriptor
+ViewMeasureFactory::descriptor() const
+{
+    QgPluginDescriptor d;
+    d.id           = "org.brlcad.qged.view.measure";
+    d.displayName  = "View Measure";
+    d.category     = QStringLiteral(QGED_CATEGORY_VIEW);
+    d.iconName     = ":measure.svg";
+    d.sortKey      = 3;
+    d.requiresView = true;
+    d.description  = "Measure distances and angles in the view using 2D or 3D hit points.";
+    d.vendor       = "BRL-CAD";
+    d.version      = "1.0";
+    return d;
+}
+
+QgToolBase *
+ViewMeasureFactory::create(QgPluginContext *ctx, QObject *parent)
+{
+    return new ViewMeasureTool(ctx, parent);
+}
 
 
 // Local Variables:

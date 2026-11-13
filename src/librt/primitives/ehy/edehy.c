@@ -147,8 +147,7 @@ static const struct rt_edit_param_desc ehy_c_params[] = {
 
 static const struct rt_edit_cmd_desc ehy_cmds[] = {
     {
-	ECMD_EHY_H,           /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_EHY_H),           /* name       */
+	ECMD_EHY_H, RT_EDIT_CMD_NAME(ECMD_EHY_H),           /* cmd_id       */
 	"Set H",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -158,8 +157,7 @@ static const struct rt_edit_cmd_desc ehy_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_EHY_R1,          /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_EHY_R1),          /* name       */
+	ECMD_EHY_R1, RT_EDIT_CMD_NAME(ECMD_EHY_R1),          /* cmd_id       */
 	"Set A",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -169,8 +167,7 @@ static const struct rt_edit_cmd_desc ehy_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_EHY_R2,          /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_EHY_R2),          /* name       */
+	ECMD_EHY_R2, RT_EDIT_CMD_NAME(ECMD_EHY_R2),          /* cmd_id       */
 	"Set B",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -180,8 +177,7 @@ static const struct rt_edit_cmd_desc ehy_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_EHY_C,           /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_EHY_C),           /* name       */
+	ECMD_EHY_C, RT_EDIT_CMD_NAME(ECMD_EHY_C),           /* cmd_id       */
 	"Set c",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -210,7 +206,6 @@ rt_edit_ehy_edit_desc(void)
 {
     return &ehy_prim_desc;
 }
-
 
 C_DECL int
 rt_edit_ehy_get_values(struct rt_edit *s, int cmd_id,

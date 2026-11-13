@@ -1,21 +1,27 @@
 set(
   qtcad_headers
-  QgAccordion.h
   QgAppExecDialog.h
   QgAttributesModel.h
+  QgCanvasBase.h
   QgColorRGB.h
   QgConsole.h
   QgConsoleListener.h
+  display_provider.h
   QgDockWidget.h
   QgFlowLayout.h
+  QgGedEventBatch.h
   QgGL.h
   QgGedEventBatch.h
   QgGeomImport.h
   QgKeyVal.h
   QgMeasureFilter.h
   QgModel.h
+  QgObolExport.h
+  QgObolMeasure.h
+  QgObolWindowHost.h
+  QgObolPick.h
+  QgObolSnap.h
   QgPaletteController.h
-  QgPolyFilter.h
   QgPluginApi.h
   QgPluginCommands.h
   QgPluginContext.h
@@ -23,13 +29,15 @@ set(
   QgPluginInterfaces.h
   QgPluginManager.h
   QgPluginVersion.h
+  QgPolyFilter.h
+  QgPrimitiveEdit.h
   QgQuadView.h
   QgRoles.h
   QgSW.h
   QgSelectFilter.h
   QgSession.h
   QgSignalFlags.h
-  QgSketchFilter.h
+  QgSketchEdit.h
   QgToolBase.h
   QgToolPalette.h
   QgTreeSelectionModel.h
@@ -38,6 +46,7 @@ set(
   QgTypes.h
   QgUtil.h
   QgView.h
+  QgViewFilter.h
   QgViewCtrl.h
   QgWindowExtensionController.h
   defines.h

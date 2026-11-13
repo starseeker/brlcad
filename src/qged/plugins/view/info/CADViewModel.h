@@ -37,14 +37,17 @@ class CADViewModel : public QgKeyValModel
     public:
 	explicit CADViewModel(QObject *parent = 0);
 	~CADViewModel();
-	void setContext(QgPluginContext *context) { m_context = context; }
+
+	/* Supply the host context so refresh() can reach the active view
+	 * without casting qApp to a qged-specific type. */
+	void setContext(QgPluginContext *ctx) { m_ctx = ctx; }
 
     public slots:
 	void refresh(unsigned long long);
 	void update();
 
     private:
-	QgPluginContext *m_context = nullptr;
+	QgPluginContext *m_ctx = nullptr;
 };
 
 #endif /*CADVIEWMODEL_H*/
@@ -58,4 +61,3 @@ class CADViewModel : public QgKeyValModel
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-

@@ -1,0 +1,63 @@
+/**
+ * @defgroup libBObol libBObol (BRL-CAD retained scene and display services)
+ *
+ * libBObol is the typed retained-scene implementation used by drawing-aware
+ * libged commands.  A @ref bobol_display endpoint is the only public render
+ * attachment boundary.  GED owns shared @ref bobol_scene state, while each
+ * endpoint owns one per-view controller and optional native host.
+ *
+ * The C integration vocabulary and ABI tiers are defined in
+ * @ref bobol_c_integration.  libged translates command inputs at its CLI/API
+ * boundary and then invokes these services directly; it does not own a second
+ * draw-session facade or renderer-side reference registry.
+ */
+
+/** @ingroup libBObol
+ * @defgroup bobol_display Display endpoints and hosting
+ *
+ * Endpoint, session, framebuffer, host-factory, window-host, and headless-host
+ * contracts.  Endpoint and host mutation is owner-thread-only.  A host is
+ * borrowed or owned exactly as stated by the endpoint creation/bind flags.
+ */
+
+/** @ingroup libBObol
+ * @defgroup bobol_scene Scene and database sources
+ *
+ * Shared-scene coordination, database source inventory, source-local geometry,
+ * placement, and retained scene groups.  Coin graph mutation is performed on
+ * the scene/controller owner thread.
+ */
+
+/** @ingroup libBObol
+ * @defgroup bobol_lod Level of detail and residency
+ *
+ * Plain-data request/result contracts, cache and residency policy, and the
+ * owner-thread publication of worker results.  Worker callbacks must not
+ * mutate Coin nodes or global Inventor type state.
+ */
+
+/** @ingroup libBObol
+ * @defgroup bobol_features Features, polygons, and selection
+ *
+ * Managed feature, polygon, and selection stores.  Public references are
+ * non-owning values containing owner identity, object id, and generation.
+ * Every use validates all fields; stale values fail without dereferencing
+ * retired storage.
+ */
+
+/** @ingroup libBObol
+ * @defgroup bobol_query Query and interaction
+ *
+ * Picking, snapping, measuring, input routing, view queries, and export.
+ * Model geometry uses BRL-CAD model units; viewport positions use pixels or
+ * the normalized coordinate space explicitly named by the declaration.
+ */
+
+/** @ingroup libBObol
+ * @defgroup bobol_c_integration C integration and ABI
+ *
+ * Stable C entry points use the `bobol_` prefix and opaque handles.  The
+ * installed stable and advanced header tiers are declared by
+ * `include/BObol/api_tiers.cmake`.  Stable C ABI changes require a SOVERSION
+ * change; exported Coin/C++ APIs remain source-supported and experimental.
+ */

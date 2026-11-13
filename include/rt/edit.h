@@ -63,7 +63,7 @@
  * defining the vlist.  Then the instance obj would just hold the matrix and
  * any override info for color, etc.  Need to check how MGED is handling comb
  * instances now, the new drawing layer I think is just creating a new
- * bv_scene_obj for each instance with its own vlist...
+ * scene node for each instance with its own vlist...
  */
 
 #ifndef RT_EDIT_H
@@ -73,20 +73,25 @@
 #include <float.h>
 #include "vmath.h"
 #include "bn/mat.h"
-#include "bn/tol.h"
 #include "bu/parse.h"
 #include "bu/avs.h"
-#include "bv/defines.h"
+#include "bu/ptbl.h"
 #include "rt/defines.h"
 #include "rt/db_internal.h"
 
 __BEGIN_DECLS
 
 struct db_full_path;
+struct bu_data_hash_state;
 
 // Settings used for both solid and matrix edits
 #define RT_EDIT_DEFAULT   -1
 #define RT_EDIT_IDLE       0
+
+/* Clear categories for rt_edit_knobs_reset. */
+#define RT_EDIT_KNOBS_ALL  0
+#define RT_EDIT_KNOBS_RATE 1
+#define RT_EDIT_KNOBS_ABS  2
 
 /**
  * Maximum number of parameters that can be supplied via e_para in a single
@@ -184,6 +189,76 @@ struct db_full_path;
 
 struct rt_edit_map;
 
+/*
+ * View state needed by librt edit operations.
+ *
+ * The gv_* member names intentionally match the legacy view fields used by the
+ * edit implementation.  The owning type is RT-specific, so editing logic does
+ * not store display-scene view pointers.
+ */
+struct rt_edit_view {
+    fastf_t gv_scale;
+    fastf_t gv_base2local;
+    fastf_t gv_local2base;
+
+    char gv_coord;
+    char gv_rotate_about;
+    mat_t gv_rotation;
+    mat_t gv_center;
+    mat_t gv_model2view;
+    mat_t gv_view2model;
+};
+
+struct rt_edit_knobs {
+
+    /* Rate data */
+    vect_t      rot_m;      // rotation - model coords
+    int         rot_m_flag;
+    char        origin_m;
+    void	*rot_m_udata;
+
+    vect_t	rot_o;      // rotation - object coords
+    int		rot_o_flag;
+    char	origin_o;
+    void	*rot_o_udata;
+
+    vect_t      rot_v;      // rotation - view coords
+    int         rot_v_flag;
+    char        origin_v;
+    void	*rot_v_udata;
+
+    fastf_t     sca;        // scale
+    int         sca_flag;
+    void	*sca_udata;
+
+    vect_t      tra_m;      // translation - model coords
+    int         tra_m_flag;
+    void	*tra_m_udata;
+
+    vect_t      tra_v;      // translation - view coords
+    int         tra_v_flag;
+    void	*tra_v_udata;
+
+    /* Absolute data */
+    vect_t      rot_m_abs;       // rotation - model coords
+    vect_t      rot_m_abs_last;
+
+    vect_t      rot_o_abs;       // rotation - object coords
+    vect_t      rot_o_abs_last;
+
+    vect_t      rot_v_abs;       // rotation - view coords
+    vect_t      rot_v_abs_last;
+
+    fastf_t     sca_abs;
+
+    vect_t      tra_m_abs;       // translation - model coords
+    vect_t      tra_m_abs_last;
+
+    vect_t      tra_v_abs;       // translation - view coords
+    vect_t      tra_v_abs_last;
+
+};
+
 struct rt_edit {
 
     struct rt_edit_map *m;
@@ -221,17 +296,21 @@ struct rt_edit {
     // (e.g., "raw_mode" to bypass simplification).
     struct bu_attribute_value_set options;
 
-    /* Edit sessions may outlive the tolerance supplied by their creator. */
+    /* Tolerance for calculations.  Edit sessions may outlive the caller that
+     * creates or reinitializes them, so the session owns a value copy.  Keep
+     * tol as the established read-only access point for primitive handlers. */
     struct bn_tol tol_storage;
     const struct bn_tol *tol;
     struct db_i *dbip;          /**< @brief database instance (for checkpoint/revert) */
 
     // Main view associated with the edit.  This may not be the only view in
-    // which the edit is *visible*, but this should hold the pointer to the
-    // view which will be used to drive any view dependent edit ops.
-    struct bview *vp;
+    // which the edit is *visible*, but it drives view-dependent edit ops.  The
+    // pointer is kept for existing edit code and points at view_storage unless
+    // a specialized caller deliberately supplies another rt_edit_view.
+    struct rt_edit_view view_storage;
+    struct rt_edit_view *vp;
     // Knob based editing data
-    struct bview_knobs k;
+    struct rt_edit_knobs k;
 
     // Current editing operation.  This holds the exact operation being
     // performed (for example, ECMD_TGC_SCALE_A to scale a tgc primitive's
@@ -293,15 +372,18 @@ struct rt_edit {
      * whether and how to reuse any existing wireframe information when drawing
      * editing objects.
      *
-     * To use model_changes to generate appropriate matrices for this purpose,
-     * the pattern looks like the following:
+     * To derive an edit-preview transform from model_changes, applications
+     * can use the following pattern:
      *
      * mat_t model2objview;
-     * struct bview *vp = <current view pointer>;
+     * struct rt_edit_view *vp = <current edit view snapshot>;
      * bn_mat_mul(model2objview, vp->gv_model2view, s->model_changes);
      * ## A second bn_mat_mul might be needed if a perspective matrix is in use
-     * dm_loadmatrix(DMP, model2objview, which_eye);
-     * ## Do the drawing
+     * ## Publish model2objview with the view-local retained edit preview.
+     *
+     * The endpoint controller applies this transform as part of its Obol
+     * scene; edit code must not load a renderer-specific matrix or draw the
+     * preview directly.
      */
     mat_t model_changes;        /* full changes this edit */
 
@@ -323,8 +405,9 @@ struct rt_edit {
     fastf_t e_para[RT_EDIT_MAXPARA]; /* keyboard input parameters; e_para[0..e_inpara-1] are valid */
 
     /* Parallel string-parameter array for RT_EDIT_PARAM_STRING commands.
-     * Use rt_edit_set_str() to write; primitive edit handlers retrieve the
-     * value via the ECMD_GET_FILENAME callback mechanism. */
+     * Use rt_edit_set_str() to write.  Primitive handlers read e_str
+     * directly; an application callback may still be used as a legacy
+     * interactive file chooser when no typed string input was supplied. */
     int  e_nstr;                                     /* number of valid entries in e_str */
     char e_str[RT_EDIT_MAXSTR][RT_EDIT_MAXSTR_LEN];  /* string params; e_str[0..e_nstr-1] are valid */
 
@@ -339,7 +422,7 @@ struct rt_edit {
     double local2base;
 
     // Trigger for view updating
-    int update_views;
+    int view_update_requested;
 
     // vlfree list
     struct bu_list *vlfree;
@@ -369,7 +452,7 @@ struct rt_edit {
 
 /** Create and initialize an rt_edit struct */
 RT_EXPORT extern struct rt_edit *
-rt_edit_create(struct db_full_path *dfp, struct db_i *dbip, struct bn_tol *, struct bview *v);
+rt_edit_create(struct db_full_path *dfp, struct db_i *dbip, struct bn_tol *, const struct rt_edit_view *v);
 
 /** Free a rt_edit struct */
 RT_EXPORT extern void
@@ -411,7 +494,12 @@ rt_edit_reset(struct rt_edit *s);
  */
 RT_EXPORT extern int
 rt_edit_reinit(struct rt_edit *s, struct db_full_path *dfp, struct db_i *dbip,
-               struct bn_tol *tol, struct bview *v);
+               struct bn_tol *tol, const struct rt_edit_view *v);
+
+RT_EXPORT extern int
+rt_edit_reinit_context(struct rt_edit *s, struct db_full_path *dfp,
+		       struct db_i *dbip, struct bn_tol *tol,
+		       const void *view_ctx);
 
 /**
  * Set a dynamic option for this editing session.
@@ -490,8 +578,16 @@ RT_EXPORT extern int
 rt_edit_knob_cmd_process(
 	struct rt_edit *s,
 	vect_t *rvec, int *do_rot, vect_t *tvec, int *do_tran, int *do_sca,
-        struct bview *v, const char *cmd, fastf_t f,
-        char origin, int incr_flag, void *u_data
+	const struct rt_edit_view *v, const char *cmd, fastf_t f,
+	char origin, int incr_flag, void *u_data
+	);
+
+RT_EXPORT extern int
+rt_edit_knob_cmd_process_context(
+	struct rt_edit *s,
+	vect_t *rvec, int *do_rot, vect_t *tvec, int *do_tran, int *do_sca,
+	const void *view_ctx, const char *cmd, fastf_t f,
+	char origin, int incr_flag, void *u_data
 	);
 
 /* Knob operations preserve a primitive-specific edit_flag when edit_mode
@@ -519,23 +615,27 @@ rt_knob_edit_sca(
 	struct rt_edit *s,
 	int matrix_edit);
 
+/* Equivalent to sedit - run editing logic after input data is set in
+ * rt_edit container.  Transient input flags are consumed whether the edit
+ * succeeds or fails; parameter values remain available to the caller.
+ * Returns BRLCAD_ERROR if the primitive edit fails. */
+RT_EXPORT extern int
+rt_edit_process(struct rt_edit *s);
+
 /**
  * Process the current edit and report whether the primitive accepted it.
  *
  * Primitive handlers must validate proposed values before changing their
  * rt_db_internal: BRLCAD_ERROR is a rejection and must leave the primitive
- * unchanged.  This contract deliberately avoids cloning potentially large
- * primitives on every interactive input event.
- *
- * Transient input flags and string storage are consumed whether the edit
- * succeeds or fails; numeric parameter values remain available to the caller.
+ * unchanged.  This contract deliberately avoids cloning potentially very
+ * large primitives on every interactive input event.
  *
  * @return BRLCAD_OK only after a recognized edit completed successfully;
  * BRLCAD_ERROR for a null/invalid edit, a primitive-handler rejection, or an
  * unknown edit flag.  Diagnostic text, when available, remains in s->log_str.
  */
 RT_EXPORT extern int
-rt_edit_process(struct rt_edit *s);
+rt_edit_process_result(struct rt_edit *s);
 
 /**
  * Snap a 2-D UV point to the grid defined in s->snap.
@@ -686,7 +786,7 @@ struct rt_edit_interaction_desc {
     enum rt_edit_selection_domain selection_domain;
     enum rt_edit_coordinate_space coordinate_space;
     enum rt_edit_manipulator_hint manipulator;
-    /** Optional leading parameter roles; omitted entries mean INFER. */
+    /** Optional nparam-entry semantic array; NULL means INFER. */
     const enum rt_edit_param_semantic *parameter_semantics;
     int parameter_semantic_count;
 };
@@ -711,7 +811,8 @@ enum rt_edit_value_status {
  *
  * Numeric and string slots use the same indices as rt_edit_param_desc and
  * rt_edit's e_para/e_str input arrays.  A valid flag distinguishes a current
- * zero or empty string from a parameter that has no meaningful current value.
+ * zero or empty string from a parameter that has no meaningful current value
+ * (for example the name supplied to an "add member" action).
  */
 struct rt_edit_cmd_values {
     fastf_t values[RT_EDIT_MAXPARA];
@@ -751,19 +852,20 @@ rt_edit_cmd_values_get(struct rt_edit *s, int command_id,
  * s->e_para[index].  POINT2/VECTOR2 use two consecutive slots and
  * POINT/VECTOR use three consecutive slots starting at e_para[index].
  * For MATRIX, e_para[0..15] are used.
- * For STRING the value is in s->e_str[index]; prim_field documents the
- * corresponding primitive data field.
+ * For STRING the value is in the primitive-specific edit struct; prim_field
+ * documents which field that is.
  * For COLOR three fastf_t integer values (0-255) are stored in
  * e_para[index], e_para[index+1], e_para[index+2].
  * SCALAR_LIST and INTEGER_LIST consume a variable number of consecutive
  * e_para slots beginning at index.  A list must be the final numeric
- * parameter in a command; nenum states its minimum arity.
+ * parameter in a command; nenum states its minimum arity and the
+ * remaining e_para capacity is its maximum.
  */
 struct rt_edit_param_desc {
     const char  *name;         /**< machine-readable id, e.g. "r1"                  */
     const char  *label;        /**< human-readable widget label, e.g. "Major Radius" */
     int          type;         /**< RT_EDIT_PARAM_* type code                        */
-    int          index;        /**< offset into s->e_para[] or s->e_str[]            */
+    int          index;        /**< offset into s->e_para[] (unused for STRING)      */
     fastf_t      range_min;    /**< RT_EDIT_PARAM_NO_LIMIT = no lower bound          */
     fastf_t      range_max;    /**< RT_EDIT_PARAM_NO_LIMIT = no upper bound          */
     const char  *units;        /**< "length", "angle_deg", "angle_rad",
@@ -773,8 +875,8 @@ struct rt_edit_param_desc {
     const char * const *enum_labels;      /**< human-readable option strings         */
     const int   *enum_ids;                /**< integer value stored in e_para[index] */
     /* RT_EDIT_PARAM_STRING only */
-    const char  *prim_field;   /**< corresponding primitive data field, e.g.
-                                *   "shader" or "dsp_name"                           */
+    const char  *prim_field;   /**< name of the primitive struct field, e.g.
+                                *   "es_shader" or "dsp_name"                        */
 };
 
 /**
@@ -783,7 +885,7 @@ struct rt_edit_param_desc {
  */
 struct rt_edit_cmd_desc {
     int          cmd_id;        /**< ECMD_* constant                                 */
-    const char  *name;          /**< stable symbolic identity                         */
+    const char  *name;          /**< stable machine identity (independent of label)  */
     const char  *label;         /**< human-readable operation label                  */
     const char  *category;      /**< grouping hint: "radius", "geometry",
                                  *   "rotation", "material", "tree", "misc"          */
@@ -839,7 +941,7 @@ RT_EXPORT extern enum rt_edit_control_class
 rt_edit_cmd_control_class(const struct rt_edit_prim_desc *desc,
 	const struct rt_edit_cmd_desc *command);
 
-/** Return command metadata, or NONE/INFER/NONE when no hint is available. */
+/** Return command interaction metadata, or an all-NONE descriptor. */
 RT_EXPORT extern struct rt_edit_interaction_desc
 rt_edit_cmd_interaction(const struct rt_edit_prim_desc *desc,
 	const struct rt_edit_cmd_desc *command);
@@ -849,7 +951,7 @@ RT_EXPORT extern enum rt_edit_param_semantic
 rt_edit_param_semantic_get(const struct rt_edit_prim_desc *desc,
 	const struct rt_edit_cmd_desc *command, int parameter_index);
 
-/** Query static and current-state parameter bounds for an active edit. */
+/** Query static and current-topology parameter bounds for an active edit. */
 RT_EXPORT extern int
 rt_edit_param_bounds_get(const struct rt_edit *edit, int command_id,
 	int parameter_index, struct rt_edit_param_bounds *bounds);
@@ -863,15 +965,18 @@ RT_EXPORT extern int
 rt_edit_prim_desc_to_json(struct bu_vls *out,
                           const struct rt_edit_prim_desc *desc);
 
-/** Validate descriptor identities, arrays, parameter layouts, and metadata. */
+/**
+ * Validate descriptor identity, array bounds, parameter layouts, ranges, and
+ * enum/string metadata.  Appends a diagnostic to @p msg on failure.
+ */
 RT_EXPORT extern int
 rt_edit_prim_desc_validate(struct bu_vls *msg,
-	const struct rt_edit_prim_desc *desc);
+			   const struct rt_edit_prim_desc *desc);
 
-/** Append the stable CLI name for a descriptor command to @p out. */
+/** Append the stable, CLI-suitable name for @p command to @p out. */
 RT_EXPORT extern int
 rt_edit_cmd_name(struct bu_vls *out, const struct rt_edit_prim_desc *desc,
-	const struct rt_edit_cmd_desc *command);
+		 const struct rt_edit_cmd_desc *command);
 
 /**
  * Convenience wrapper: look up the EDOBJ entry for @p prim_type_id and

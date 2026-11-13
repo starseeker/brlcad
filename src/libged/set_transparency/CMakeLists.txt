@@ -1,7 +1,9 @@
 set(PLUGIN_LIBS libged libbu)
+set_source_files_properties(set_transparency.cpp TARGET_DIRECTORY libged
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 ged_plugin_library(ged-set_transparency
-  set_transparency.c
+  set_transparency.cpp
   LIBS ${PLUGIN_LIBS}
 )
 

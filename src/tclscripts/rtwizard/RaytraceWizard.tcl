@@ -231,6 +231,10 @@ namespace eval RaytraceWizard {
 	$fb inform "Support for ghost images loaded." 5
 
 	$w add RtWizard::LinePage lines $::RtWizard::wizard_state(dbFile)
+	set configuredPictureToken ""
+	if {[info exists ::RtWizard::wizard_state(picture_type)]} {
+	    set configuredPictureToken "type[string toupper $::RtWizard::wizard_state(picture_type)]"
+	}
 	$w select "exp"
 	set ::RtWizard::wizard_state(gui_ready) 1
 	$fb inform "rtwizard ready!" 5
@@ -240,6 +244,16 @@ namespace eval RaytraceWizard {
 	#
 	after 1000
 	$fb deactivate
+
+	# A command-line picture type can only be activated after all of its
+	# pages exist.  On Windows, wait until the wizard is mapped as well so
+	# a native rendering child is not left above the rest of the Tk UI.
+	if {[string length $configuredPictureToken] != 0} {
+	    $::exp selectType $configuredPictureToken
+	    $w select "intro"
+	    $w updateRenderMenu
+	    update idletasks
+	}
 
 	#
 	# Go!

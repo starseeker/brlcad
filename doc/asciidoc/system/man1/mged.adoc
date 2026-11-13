@@ -33,18 +33,18 @@ Options that affect per-session appearance (variables, grid, colour) are applied
 
 === Display and Mode
 
-*-a* _type_, *--attach* _type_::
-Specifies a display manager to automatically attach to when starting _MGED_.
+*-a* _host_, *--attach* _host_::
+Specifies an Obol endpoint host to attach when starting _MGED_.
 +
-Without specifying this option, _MGED_ will prompt which display manager to attach during startup: `attach (nu|X|ogl)[nu]?`
+Without specifying this option, _MGED_ starts with the `nu` no-window shell.
 +
-The list of available display managers varies from platform to platform and across releases. Commonly available options include the _nu_ (NULL) display manager (starts without any graphical display), the _X_ display manager (X11 wireframe display), and the _ogl_ display manager (OpenGL wireframe display).
+The graphical host is `tkobol`; `nu` starts without a graphical endpoint.
 
 *-d* _display_, *--display* _display_::
 Specifies which X server to connect to on platforms that have a running X11 server available. This option is an alternative to setting the `DISPLAY` environment variable. You can specify a local or remote display in X11 HOST:PORT format (e.g., `-d :0` or `-d host:0`).
 
-*--dm-type* _type_::
-Sets the display manager type to use (e.g., `ogl`, `X`, `swrast`). This corresponds to the `mged_default(dm_type)` Tcl variable used during GUI initialisation.
+*--host* _host_::
+Sets the Obol GUI host used during GUI initialisation. `tkobol` is the supported GUI host. This corresponds to the `mged_default(host_type)` Tcl variable.
 
 *--geom* _WxH+X+Y_::
 Sets the command window geometry (position and size) in standard X geometry format (e.g., `--geom 800x600+0+0`).
@@ -96,16 +96,10 @@ Sets the line style: `s` for solid, `d` for dashed.
 *--faceplate*, *--no-faceplate*::
 Shows or hides the faceplate overlay.
 
-*--dlist*, *--no-dlist*::
-Enables or disables display lists for wireframe rendering.
-
 === View and Interaction
 
 *--perspective* _#_::
 Sets the perspective angle in degrees. Use `-1` to disable perspective (orthographic view).
-
-*--eye-sep-dist* _#_::
-Sets the stereo eye separation distance in millimeters. Use `0` for monoscopic (non-stereo) rendering.
 
 *--coords* _m|v_::
 Sets the constraint coordinate system: `m` for model space, `v` for view space.
@@ -228,18 +222,20 @@ Command-line options that affect MGED variables (all the long options listed abo
 Often it is convenient to generate a series of _MGED_ commands outside _MGED_ and then submit the command list to _MGED_, which will react as if each command were being manually entered within it. Simply create a file (say, "cmds.txt") with each line being a desired command, and then have _MGED_ execute the list. At the normal shell prompt, execute
 
 
-[source,console]
 ----
+
 $ mged -c tgm.g < cmds.txt
+
 ----
 
 Note that the procedure described above is very useful in rapid prototyping or automated TGM processing without resorting to low-level library programming in C or C++.
 
 For fully non-interactive scripted use, the *--no-rc* flag avoids loading any personal `.mgedrc` that could affect the session:
 
-[source,console]
 ----
+
 $ mged --no-rc -c --use-air --linewidth 2 model.g 'some_command arg'
+
 ----
 
 
@@ -259,10 +255,13 @@ SIGINT aborts the current command.
 The following are run from the operating system command prompt:
 
 .Running the _MGED_ *l* from the operating system command line.
+[example]
 ====
-[source,console]
-----
-$ mged /usr/brlcad/share/brlcad/7.12.2/db/m35.g l component
+user:~**mged /usr/brlcad/share/brlcad/7.12.2/db/m35.g l component**
+
+
+....
+
 Opened in READ ONLY mode
 component:  --
    u bed
@@ -271,34 +270,42 @@ component:  --
    u suspension
    u misc
    u power.train
-----
+
+....
 
 
 
 ====
 
 .Running _MGED_ without a display manager.
+[example]
 ====
-[source,console]
-----
-$ mged -c
+user:~**mged -c**
+
+
+....
+
 BRL-CAD Release 7.13.0  Geometry Editor (MGED)
     Thu, 09 Oct 2008 22:31:41 -0400, Compilation 1
     user@localhost:/usr/brlcad/
 
 attach (nu|X|ogl)[nu]? nu
 mged>
-----
+
+....
 
 
 
 ====
 
 .Running _MGED_ and bypassing the attach prompt by specifying the X11 display manager.
+[example]
 ====
-[source,console]
-----
-$ mged -a X -c
+user:~**mged -a X -c**
+
+
+....
+
 BRL-CAD Release 7.15.0  Geometry Editor (MGED)
     Tue, 22 Sep 2009 12:40:01 -0400, Compilation 1
     user@localhost:/usr/brlcad/
@@ -306,34 +313,29 @@ BRL-CAD Release 7.15.0  Geometry Editor (MGED)
 ATTACHING X (X Window System (X11))
 
 mged>
-----
+
+....
 
 
 
 ====
 
 .Running _MGED_ with a custom background colour and no personal rc file (scripted use).
+[example]
 ====
-[source,console]
-----
-$ mged --no-rc --bg 0 0 64 --use-air -c model.g
-----
+user:~**mged --no-rc --bg 0 0 64 --use-air -c model.g**
 ====
 
 .Setting an MGED variable not exposed as a dedicated option.
+[example]
 ====
-[source,console]
-----
-$ mged --set eye_sep_dist=65 model.g
-----
+user:~**mged --set orig_gui=0 model.g**
 ====
 
 .Setting a grid resource via the rset escape hatch.
+[example]
 ====
-[source,console]
-----
-$ mged --rset "g snap 1" --rset "g rh 10" model.g
-----
+user:~**mged --rset "g snap 1" --rset "g rh 10" model.g**
 ====
 
 

@@ -367,14 +367,21 @@ datum_current_numbers(struct rt_edit *s, int cmd_id, fastf_t *vals)
     }
 }
 
-
 C_DECL int
 rt_edit_datum_get_values(struct rt_edit *s, int cmd_id,
 	struct rt_edit_cmd_values *result)
 {
-    return edit_current_values_from_numbers(s, cmd_id, result,
-	datum_current_numbers);
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    fastf_t values[RT_EDIT_MAXPARA] = {0.0};
+    const int count = datum_current_numbers(s, cmd_id, values);
+    if (count <= 0)
+	return RT_EDIT_VALUE_UNAVAILABLE;
+    for (int i = 0; i < count; i++)
+	rt_edit_cmd_values_set_value(result, i, values[i]);
+    return RT_EDIT_VALUE_OK;
 }
+
 
 /*
  * Local Variables:

@@ -482,11 +482,18 @@ RT_EXPORT extern const short int rt_arb_vertices[5][24];
 #define RT_ARB_EDIT_MAX_FACES 6
 #define RT_ARB_EDIT_MAX_FACE_VERTICES 4
 
-/** One canonical, user-visible ARB vertex. */
+/**
+ * One canonical, user-visible ARB vertex.
+ *
+ * topology_index is the dense index used by the topology edge and face
+ * records.  edit_index is the stored rt_arb_internal point index accepted by
+ * the primitive edit command.  They differ for collapsed ARB encodings such
+ * as the fourth vertex of an ARB4.
+ */
 struct rt_arb_edit_vertex {
-    int topology_index; /**< Dense index used by edge and face records. */
-    int edit_index;     /**< Stored point index accepted by edit commands. */
-    int label;          /**< One-based user-visible vertex label. */
+    int topology_index;
+    int edit_index;
+    int label;
 };
 
 /** One geometric ARB edge and, when non-negative, its move-edge index. */
@@ -504,7 +511,13 @@ struct rt_arb_edit_face {
     int rotatable;
 };
 
-/** Canonical edit topology for one ARB4 through ARB8 instance. */
+/**
+ * Canonical edit topology for one ARB instance.
+ *
+ * All vertex references in edges and faces are dense topology indices, never
+ * raw storage slots.  This is the source-neutral contract editors should use;
+ * clients must not reproduce the historical ARB subtype/menu tables.
+ */
 struct rt_arb_edit_topology {
     int arb_type;
     int vertex_count;
@@ -516,10 +529,10 @@ struct rt_arb_edit_topology {
 };
 
 /**
- * Query legal vertex, edge, and face presentation/edit topology.
+ * Query the legal vertex, edge, and face presentation/edit topology for an
+ * ARB4 through ARB8 instance.
  *
- * Edge and face vertex references are dense topology indices rather than raw
- * storage slots, including for collapsed ARB encodings.
+ * Returns BRLCAD_OK on success and BRLCAD_ERROR for invalid/non-ARB input.
  */
 RT_EXPORT extern int rt_arb_edit_topology_get(
     struct rt_arb_edit_topology *topology,

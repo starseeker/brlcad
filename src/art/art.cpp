@@ -163,7 +163,7 @@
 
 #include "brlcad_ident.h"
 
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 #include "tile.h"
 
 
@@ -199,11 +199,12 @@ static std::set<std::string> art_seen_regions;
 //size_t light_intensity = 30.0;
 const char* global_title_file;
 asf::auto_release_ptr<asr::Project> project_ptr;
-struct fb* fbp = FB_NULL;
+imgstream_fb_t *fbp = NULL;
 
 
 extern "C" {
     FILE* outfp = NULL;
+    int rt_fb_output_enabled = 1;
     extern char* framebuffer;
     extern char* outputfile;
     extern char** objv;
@@ -1141,30 +1142,31 @@ fb_setup() {
 	yy = height;
     }
     bu_semaphore_acquire(BU_SEM_SYSCALL);
-    fbp = fb_open(framebuffer, (int)xx, (int)yy);
+    fbp = imgstream_fb_open(framebuffer, xx, yy);
     bu_semaphore_release(BU_SEM_SYSCALL);
-    if (fbp == FB_NULL) {
+    if (fbp == NULL) {
 	fprintf(stderr, "rt:  can't open frame buffer\n");
 	return 12;
     }
 
     bu_semaphore_acquire(BU_SEM_SYSCALL);
     /* If fb came out smaller than requested, do less work */
-    if ((size_t)fb_getwidth(fbp) < width)
-	width = fb_getwidth(fbp);
-    if ((size_t)fb_getheight(fbp) < height)
-	height = fb_getheight(fbp);
+    if (imgstream_fb_width(fbp) < width)
+	width = imgstream_fb_width(fbp);
+    if (imgstream_fb_height(fbp) < height)
+	height = imgstream_fb_height(fbp);
 
     /* If the fb is lots bigger (>= 2X), zoom up & center */
     if (width > 0 && height > 0) {
-	zoom = (int)(fb_getwidth(fbp) / width);
-	if ((size_t)fb_getheight(fbp) / height < (size_t)zoom)
-	    zoom = (int)(fb_getheight(fbp) / height);
+	zoom = (int)(imgstream_fb_width(fbp) / width);
+	if (imgstream_fb_height(fbp) / height < (size_t)zoom)
+	    zoom = (int)(imgstream_fb_height(fbp) / height);
     }
     else {
 	zoom = 1;
     }
-    (void)fb_view(fbp, (int)(width / 2), (int)(height / 2), (int)zoom, (int)zoom);
+    (void)imgstream_fb_view(fbp, (int)(width / 2), (int)(height / 2),
+	    zoom, zoom);
     bu_semaphore_release(BU_SEM_SYSCALL);
     return 0;
 }
@@ -1542,8 +1544,9 @@ main(int argc, char **argv)
 	 * at the end of an otherwise-successful render.  The project file is only a
 	 * debugging convenience and is not needed to produce the output image. */
 
-        if (fbp != FB_NULL) {
-	    fb_close(fbp);
+        if (fbp != NULL) {
+	    imgstream_fb_close(fbp);
+	    fbp = NULL;
         }
 
         // Make sure to delete the master renderer before the project and the logger / log target.
@@ -1570,8 +1573,9 @@ main(int argc, char **argv)
 	 * at the end of an otherwise-successful render.  The project file is only a
 	 * debugging convenience and is not needed to produce the output image. */
 
-        if (fbp != FB_NULL) {
-	    fb_close(fbp);
+        if (fbp != NULL) {
+	    imgstream_fb_close(fbp);
+	    fbp = NULL;
         }
 
         // Make sure to delete the master renderer before the project and the logger / log target.

@@ -122,8 +122,8 @@ rt_constraint_export5(struct bu_external *ep, const struct rt_db_internal *ip, d
 
     bu_vls_struct_print(&str, rt_constraint_parse, (char *)cip);
 
-    ep->ext_nbytes = bu_vls_strlen(&str);
-    if (ep->ext_nbytes == 0)
+    ep->ext_nbytes = bu_vls_strlen(&str) + 1;
+    if (ep->ext_nbytes <= 1)
 	return -1;
     ep->ext_buf = (uint8_t *)bu_calloc(1, ep->ext_nbytes, "constrnt external");
     bu_strlcpy((char *)ep->ext_buf, bu_vls_addr(&str), ep->ext_nbytes);

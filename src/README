@@ -24,7 +24,6 @@ libbn      - library for basic 2D/3D numerics, vector, matrix, random, etc.
 libbrep    - library for boundary representation (NURBS) geometry
 libbu      - library for basic utility, logging, files, parallelism, etc.
 libbv      - library for basic 3D view management
-libdm      - library for 3D display and 2D framebuffer management
 libfft     - library for fast Fourier transforms
 libged     - library for geometry editing commands, used by mged/archer
 libgcv     - library for geometry conversion

@@ -1,0 +1,53 @@
+BObol drawing: adopted transition direction (2026-09-19)
+
+The implementation is viable but not production-ready. Preserve the useful
+geometry, immutable assets, compact occurrence storage, rendering executors,
+revision identities and policy reducers. Rework the mutation and orchestration
+boundaries that make otherwise ordinary changes require expanding rollback
+and reentrant callback machinery.
+
+The roadmap and finish line are in:
+  doc/notes/obol_simplification_guide.md
+The sole implementation backlog is:
+  doc/notes/libbobol_active_debt.md
+Resume instructions and current qualification limits are in:
+  doc/notes/obol_session_handoff.md
+
+Working rules:
+
+1. Establish a reproducible BRL-CAD + Obol + OSMesa stack first. Record dirty
+   source state, options, headers and actual loaded libraries. A historical
+   passing executable cannot qualify changed source or dependencies.
+2. Inventory supported application mutations and their existing owning APIs.
+   Inventor fields are for detached construction/internal use; do not promise
+   transactional live behavior for every field assignment or connection.
+3. Prepare, validate, commit, then notify. Application observers inspect the
+   committed result and defer subsequent mutations to the owner event loop.
+   Separate precommit failure from observer failure after a successful commit.
+   Migrate real callers before retiring defensive compatibility behavior.
+4. Qualify a complete cold draw / camera change during loading / cancel-close /
+   reopen-redraw workflow. Check geometry and images independently of internal
+   bookkeeping, and measure resource release and terminal convergence.
+5. Apply the demonstrated method to the finite ownership inventory. Remove
+   replaced writers and state in the same change. If a boundary still cannot
+   be explained simply, replace its orchestration while retaining its domain
+   algorithms. No universal controller or permanent parallel implementation.
+6. Close resource, geometry, visual, interaction, client and platform gates;
+   then qualify the exact release candidate. No percentage estimate substitutes
+   for named acceptance evidence.
+
+TLA+ is useful for finite ownership and progress protocols. Maintain explicit
+mappings to production code and regression tests. Models are neither generated
+C++ architecture nor proof of numerical accuracy, performance or native runtime
+behavior. Do not freeze all existing C++ as a prototype and rebuild literally
+from the models.
+
+This transition begins by removing the unsealed viewport direct-field watcher,
+its rollback snapshot and extra retained source reference. Live framebuffer
+updates already have owning host/stream methods and prepared publication.
+Ordinary hide/show and pan/zoom tests now define the behavior to preserve.
+This is a first bounded simplification, not completion of the larger roadmap.
+
+The original analysis and proposed model-led rewrite are preserved in:
+  doc/notes/obol_20260919_rework_proposal.txt
+That file is historical rationale; this file records the adopted direction.

@@ -150,7 +150,6 @@ rt_edit_hyp_edit_desc(void)
     return &hyp_prim_desc;
 }
 
-
 C_DECL int
 rt_edit_hyp_get_values(struct rt_edit *s, int cmd_id,
 	struct rt_edit_cmd_values *result)
@@ -395,7 +394,7 @@ rt_edit_hyp_pscale(struct rt_edit *s)
 	    current = hyp->hyp_b;
 	    break;
 	default:
-	return BRLCAD_ERROR;
+	    return BRLCAD_ERROR;
     }
     if (edit_prepare_length_scale(s, current) != BRLCAD_OK)
 	return BRLCAD_ERROR;

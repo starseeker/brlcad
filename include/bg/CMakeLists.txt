@@ -5,10 +5,12 @@ set(
   chull.h
   clip.h
   defines.h
+  line_layer.h
   lseg.h
   obr.h
   pca.h
   plane.h
+  plot3.h
   polygon.h
   polygon_types.h
   sat.h
@@ -18,6 +20,7 @@ set(
   tri_tri.h
   trimesh.h
   vert_tree.h
+  vlist.h
 )
 brlcad_manage_files(bg_headers ${INCLUDE_DIR}/brlcad/bg REQUIRED libbg)
 

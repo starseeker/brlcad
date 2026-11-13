@@ -60,8 +60,8 @@
  * D will impact BOTH Au[M1]BuCuD and Au[M2]BuCuD. This means that .g comb
  * instances cannot, by themselves, map directly to items in a Qt model.
  *
- * TODO - investigate https://wiki.qt.io/Model_Test to see if it may be
- * useful for this code.
+ * Model invariants are exercised in libqtcad tests via
+ * QAbstractItemModelTester.
  */
 
 #ifndef QGMODEL_H
@@ -69,8 +69,8 @@
 
 #include <cstdint>
 #include <set>
-#include <string>
 #include <vector>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <QAbstractItemModel>
@@ -79,14 +79,16 @@
 
 #include "qtcad/defines.h"
 #include "qtcad/QgRoles.h"
-#include "qtcad/QgSignalFlags.h"
+#include "qtcad/QgSession.h"
+#include "qtcad/QgTypes.h"
 
-class QgSession;
-
-#ifndef Q_MOC_RUN
-#include "raytrace.h"
-#include "ged.h"
-#endif
+/* Forward declarations — the implementation includes the full headers. */
+struct bu_vls;
+struct db_i;
+struct directory;
+struct ged;
+struct ged_event;
+struct ged_event_result;
 
 // QgItems correspond to the actual Qt entries displayed in the view.  If a
 // comb is reused in multiple places in the tree the same comb child instance
@@ -108,16 +110,16 @@ class QgSession;
 // instance is associated with multiple active QgItems elsewhere in the tree.
 // The children array is initially empty even though the comb it corresponds to
 // may have many children.  It is only when the QgItem is opened that the GED
-// database index is queried and new QgItems are created for its children.
-// Because we don't want to collapse all opened/closed state in a subtree if we
-// close a parent QgItem, the children QgItems remain populated through a close
-// to persist that state.
+// database index is queried for its children and new QgItems based on those
+// child records are created.  Because we don't want to collapse all
+// opened/closed state in a
+// subtree if we close a parent QgItem, the children QgItems remain populated
+// through a close to persist that state.
 
 class QTCAD_EXPORT QgModel;
 
-class QTCAD_EXPORT QgItem
-{
-    public:
+class QTCAD_EXPORT QgItem {
+public:
 	explicit QgItem(unsigned long long hash, QgModel *ictx);
 	~QgItem();
 
@@ -129,14 +131,18 @@ class QTCAD_EXPORT QgItem
 	 * combination of the ihash and ctx points to the BRL-CAD specific data
 	 * for this instance.
 	 */
-	/** Return the database instance identity represented by this item. */
-	unsigned long long instanceHash() const { return ihash; }
-	/** Return the model that owns this item. */
-	QgModel *model() const { return mdl; }
+	/* Return the unique instance hash represented by this item. */
+	unsigned long long instanceHash() const
+	{
+		return ihash;
+	}
+	/* Return the model that owns this item. */
+	QgModel *model() const
+	{
+		return mdl;
+	}
 
-	/** Return the instance identities from the root through this item. */
 	std::vector<unsigned long long> path_items() const;
-	/** Return the stable hash for this item's full manifested path. */
 	unsigned long long path_hash() const;
 
 	/* Flag to determine if this QgItem should be viewed as opened or closed -
@@ -151,56 +157,81 @@ class QTCAD_EXPORT QgItem
 	 * involved.  Give we already have some separation between this logic
 	 * and the instance logic which is the real wrapper around the .g
 	 * information, going with the simple approach for now. */
-	/** Return whether a view has marked this hierarchy item open. */
-	bool isOpen() const { return open_itm; }
-	/** Set the cached open state without materializing children. */
-	void setOpen(bool open) { open_itm = open; }
+	/* Return true if this item is currently marked open in the Qt tree. */
+	bool isOpen() const
+	{
+		return open_itm;
+	}
+	/* Set the cached Qt tree open/closed state for this item. */
+	void setOpen(bool open)
+	{
+		open_itm = open;
+	}
 
 	// Qt related elements
-	/** Return this item's manifested parent, or NULL for the root. */
-	QgItem *parent() const;
+	QgItem *parent();
 	int childNumber() const;
-	/** Return a loaded child by row, or NULL if @p n is invalid. */
-	QgItem *child(int n) const;
-	/** Return the number of currently loaded children. */
+	void appendChild(QgItem *C);
+	QgItem *child(int n);
 	int childCount() const;
-	/** Return the currently loaded child-item collection. */
-	const std::vector<QgItem *> &childItems() const { return children; }
-	/** Return the number of children available from the database. */
-	size_t availableChildCount() const { return c_count; }
+	/* Return the currently loaded child-item collection. */
+	const std::vector<QgItem *> &childItems() const
+	{
+		return children;
+	}
+	/* Return the number of children available from the database. */
+	size_t availableChildCount() const
+	{
+		return c_count;
+	}
 	// NOTE - for now this is 1 - the model will have to
 	// incorporate some notion of exposed attributes and
 	// their ordering before that changes
 	int columnCount() const;
-	/** Return the cached display name. */
-	const char *displayName() const { return bu_vls_cstr(&name); }
-	/** Return the cached boolean operation relative to the parent. */
-	db_op_t booleanOperation() const { return op; }
-	/** Return the represented database directory entry. */
-	struct directory *directoryEntry() const { return dp; }
-	/** Return the cached database-type icon. */
-	const QImage &typeIcon() const { return icon; }
+	/* Return the cached display name. */
+	const char *displayName() const
+	{
+		return name_ptr ? bu_vls_cstr(name_ptr) : "";
+	}
+	/* Return the cached boolean operation relative to the parent. */
+	int booleanOperation() const
+	{
+		return op;
+	}
+	/* Return the represented database directory entry. */
+	struct directory *directoryEntry() const
+	{
+		return dp;
+	}
+	/* Return the cached database-type icon. */
+	const QImage &typeIcon() const
+	{
+		return icon;
+	}
 
-    private:
+private:
 	friend class QgModel;
 
-	void appendChild(QgItem *C);
 	unsigned long long ihash = 0;
-	QgModel *mdl = NULL;
-	QgItem *parentItem = NULL;
+	QgModel *mdl = nullptr;
+	QgItem *parentItem = nullptr;
 	std::vector<QgItem *> children;
 	std::unordered_map<QgItem *, int> c_noderow;
 	size_t c_count = 0;
 
 	// Cached data from the instance, so we can keep
 	// displaying while librt does work on the instances.
-	struct bu_vls name = BU_VLS_INIT_ZERO;
-	db_op_t op = DB_OP_UNION;
-	struct directory *dp = NULL;
+	struct bu_vls *name_ptr = nullptr;  /* heap-allocated; init/freed in ctor/dtor */
+	int op = 'u';                       /* matches db_op_t DB_OP_UNION = 'u' */
+	struct directory *dp = nullptr;
 	QImage icon;
 	bool open_itm = false;
+	mutable int draw_state = 0;
+	mutable bool draw_state_valid = false;
+	mutable void *draw_state_view_ctx = nullptr;
 	mutable unsigned long long cached_path_hash = 0;
 	mutable bool path_hash_valid = false;
+	//bool select_state = false;
 };
 
 /* The primary expression in a Qt context of a .g database and its contents.
@@ -241,25 +272,32 @@ class QTCAD_EXPORT QgItem
  * created lazily in response to view requests, working from a seed set created
  * from the top level objects in a database.
  */
-class QTCAD_EXPORT QgModel : public QAbstractItemModel
-{
-    Q_OBJECT
+class QTCAD_EXPORT QgModel : public QAbstractItemModel {
+	Q_OBJECT
+	Q_DISABLE_COPY_MOVE(QgModel)
 
-    public:
-	explicit QgModel(QObject *p = NULL, const char *npath = NULL);
+	friend struct QgModelDrawObserverAccess;
+
+public:
+	explicit QgModel(QObject *p = nullptr, const char *npath = nullptr);
 	~QgModel();
-	QgSession *session() const;
-	struct ged *ged() const;
-	/** Draw the database path represented by @p item. */
-	int draw(QgItem *item);
-	/** Erase the database path represented by @p item. */
-	int erase(QgItem *item);
 
 	// .g Db interface and containers
 	int run_cmd(struct bu_vls *msg, int argc, const char **argv);
-	/* Compatibility alias for code written before QgSession owned the GED
-	 * context.  New code should use ged() or session(). */
-	struct ged *gedp = NULL;
+	int drawPaths(const std::vector<std::string> &paths);
+	int drawnPathState(const char *path) const;
+
+	/* Return the session that owns the GED context for this model. */
+	QgSession *session() const
+	{
+		return m_session;
+	}
+
+	/* Return the GED context backing this model (delegates to session). */
+	struct ged *ged() const
+	{
+		return m_session ? m_session->ged() : nullptr;
+	}
 
 	// Updates to .g models are potentially far-reaching - in principle, a
 	// single GED command execution can change every item in the database.
@@ -267,10 +305,18 @@ class QTCAD_EXPORT QgModel : public QAbstractItemModel
 	// update the model, or upon startup.
 	void g_update(struct db_i *n_dbip);
 
-	/** Set the mode used to derive hierarchy highlighting. */
+	// This is a bit of a cheat in that an interaction mode isn't really
+	// part of the .g state, but we want the tree highlighting logic to
+	// reflect such a state and to have that logic reusable at the library
+	// level it needs to be available in a container readily accessible at
+	// that level.
+	/* Return the current tree/highlight interaction mode. */
+	int interactionMode() const
+	{
+		return interaction_mode;
+	}
+	/* Update the current tree/highlight interaction mode. */
 	void setInteractionMode(int mode);
-	/** Return the mode used to derive hierarchy highlighting. */
-	int interactionMode() const { return interaction_mode; }
 	/** Target an exact GED selection set; NULL or empty selects default. */
 	void setSelectionSetName(const char *set_name);
 	/** Return the exact GED selection set used by this model. */
@@ -287,18 +333,13 @@ class QTCAD_EXPORT QgModel : public QAbstractItemModel
 	QModelIndex NodeIndex(QgItem *node) const;
 	QgItem *getItem(const QModelIndex &index) const;
 
-	enum CADDataRoles {
-	    BoolInternalRole = QgDataRoles::BoolInternalRole,
-	    BoolDisplayRole = QgDataRoles::BoolDisplayRole,
-	    DirectoryInternalRole = QgDataRoles::DirectoryInternalRole,
-	    TypeIconDisplayRole = QgDataRoles::TypeIconDisplayRole,
-	    HighlightDisplayRole = QgDataRoles::HighlightDisplayRole,
-	    DrawnDisplayRole = QgDataRoles::DrawnDisplayRole,
-	    SelectDisplayRole = QgDataRoles::SelectDisplayRole
-	};
-
 	// Return data used for displaying each individual entry
 	QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
+
+	/* Return a slash-separated database path for @p item, using the current
+	 * hierarchy provider.  Empty string indicates the path could not be
+	 * resolved. */
+	std::string item_path(const QgItem *item) const;
 
 	// Get data for labeling column headers (for the moment this is just
 	// the object name label - if/when we add support for attribute display
@@ -308,11 +349,8 @@ class QTCAD_EXPORT QgModel : public QAbstractItemModel
 	// This is 1 until we add support for attribute reporting
 	int columnCount(const QModelIndex &parent = QModelIndex()) const override;
 
-	// The number of available children.  This will correspond to the
-	// number of lines printed by the "l" command to show the immediate
-	// children of a comb (indeed, the tree view of the model can be
-	// thought of in some ways as a graphical version of the "l" command's
-	// textual output.)
+	// The number of currently loaded children.  Additional children may be
+	// available via fetchMore.
 	int rowCount(const QModelIndex &parent = QModelIndex()) const override;
 
 	// These functions tell the model and view that an entry has children
@@ -321,65 +359,126 @@ class QTCAD_EXPORT QgModel : public QAbstractItemModel
 	bool canFetchMore(const QModelIndex &idx) const override;
 	void fetchMore(const QModelIndex &idx) override;
 
-	// A flag for callbacks to set if they alter the database in some way.
-	// Used to determine whether to emit the mdl_changed_db signal once
-	// after a GED command processing call is complete. If emitted, the
-	// interface will know to take certain steps when updating views.
-	int changed_db_flag = 0;
-
-	/* Used by callers to identify which objects need to be redrawn when
-	 * scene views are updated. */
-	std::unordered_set<struct directory *> changed_dp;
-
-	// Convenience container holding all active QgItems
-	std::unordered_set<QgItem *> *items = NULL;
-	/** Return all currently active items owned by this model. */
+	void setChangedDatabaseFlag(int flag)
+	{
+		changed_db_flag = flag;
+	}
+	// Compatibility access to the active and top-level model items.
+	std::unordered_set<QgItem *> *items = nullptr;
+	std::vector<QgItem *> tops_items;
+	/* Return all currently active QgItems owned by this model. */
 	const std::unordered_set<QgItem *> &allItems() const
 	{
-	    static const std::unordered_set<QgItem *> empty_items;
-	    return items ? *items : empty_items;
+		return items ? *items : emptyItems();
 	}
-	/** Return whether @p item is currently owned by this model. */
-	bool hasItem(QgItem *item) const
-	{
-	    return items && item && items->find(item) != items->end();
-	}
-
-	// Sorted QgItem pointers corresponding to the tops instances
-	std::vector<QgItem *> tops_items;
-	/** Return the sorted top-level items. */
-	const std::vector<QgItem *> &topItems() const { return tops_items; }
-
-	/** Return the number of paths in the default semantic selection. */
+	/** Return the number of paths in this model's semantic selection. */
 	size_t selectionCount() const;
-	/** Return whether @p item is in the default semantic selection. */
+	/** Return whether @p item is in this model's semantic selection. */
 	bool itemSelected(const QgItem *item) const;
 	/** Return the mode-dependent highlight state for @p item. */
 	int itemHighlight(const QgItem *item) const;
-	/** Clear the default semantic selection. */
+	/** Clear this model's semantic selection. */
 	void selectionClear();
-	/** Add @p item to the default semantic selection. */
+	/** Add @p item to this model's semantic selection. */
 	void itemSelect(QgItem *item);
-	/** Remove @p item from the default semantic selection. */
+	/** Remove @p item from this model's semantic selection. */
 	void itemDeselect(QgItem *item);
 	/** Finalize selection metadata and return the required view flags. */
 	QgViewUpdateFlags selectionCommit();
-	/** Notify only rows whose selection presentation may have changed. */
 	void notifySelectionItemsChanged();
-	/** Notify loaded rows that their drawn-state role may have changed. */
-	void notifyDrawnItemsChanged();
-	/** Return true while Qt is reconciling model rows or indexes. */
-	bool structureChangeInProgress() const
+	bool hasItem(QgItem *item) const
 	{
-	    return model_structure_change_in_progress;
+		return (items && item && items->find(item) != items->end());
 	}
-	/** Return true when the model presents a flattened object list. */
+	/* Return the sorted QgItems corresponding to top-level instances. */
+	const std::vector<QgItem *> &topItems() const
+	{
+		return tops_items;
+	}
+	struct NotificationStats {
+		uint64_t path_queries = 0;
+		uint64_t path_candidates = 0;
+		uint64_t path_fallback_scans = 0;
+		uint64_t items_notified = 0;
+		uint64_t full_items_notified = 0;
+		uint64_t subtree_items_notified = 0;
+		uint64_t path_notify_us = 0;
+	};
+	struct DrawTimingStats {
+		uint64_t draw_calls = 0;
+		uint64_t successful_draw_calls = 0;
+		uint64_t blank_slate_check_us = 0;
+		uint64_t transaction_us = 0;
+		uint64_t observer_callback_us = 0;
+		uint64_t notify_path_us = 0;
+		uint64_t notify_all_us = 0;
+		uint64_t view_signal_us = 0;
+	};
+	struct FetchMoreStats {
+		uint64_t calls = 0;
+		uint64_t populated_calls = 0;
+		uint64_t inserted_rows = 0;
+		uint64_t inserted_row_ranges = 0;
+		uint64_t max_child_count = 0;
+		uint64_t elapsed_us = 0;
+	};
+	struct HierarchyDeltaStats {
+		uint64_t attempts = 0;
+		uint64_t applied = 0;
+		uint64_t reset_fallbacks = 0;
+		uint64_t db_index_refreshes = 0;
+		uint64_t planned_parents = 0;
+		uint64_t planned_child_rows = 0;
+		uint64_t changed_parents = 0;
+		uint64_t inserted_rows = 0;
+		uint64_t removed_rows = 0;
+		uint64_t moved_rows = 0;
+		uint64_t inserted_row_ranges = 0;
+		uint64_t removed_row_ranges = 0;
+		uint64_t moved_row_ranges = 0;
+		uint64_t elapsed_us = 0;
+	};
+	NotificationStats notificationStats() const
+	{
+		return notification_stats;
+	}
+	DrawTimingStats drawTimingStats() const;
+	FetchMoreStats fetchMoreStats() const
+	{
+		return fetch_more_stats;
+	}
+	void resetNotificationStats()
+	{
+		notification_stats = NotificationStats();
+	}
+	void resetDrawTimingStats();
+	void setDrawTimingStatsEnabled(bool enabled);
+	void resetFetchMoreStats()
+	{
+		fetch_more_stats = FetchMoreStats();
+	}
+	HierarchyDeltaStats hierarchyDeltaStats() const
+	{
+		return hierarchy_delta_stats;
+	}
+	void resetHierarchyDeltaStats()
+	{
+		hierarchy_delta_stats = HierarchyDeltaStats();
+	}
+	/* Return true when the model is presenting a flattened object list. */
 	bool flattenHierarchy() const
 	{
-	    return flatten_hierarchy != 0;
+		return flatten_hierarchy != 0;
+	}
+	/* Return true while Qt model rows or indexes are being rebuilt.  Item
+	 * selection models use this to distinguish Qt's internal bookkeeping
+	 * from a user-requested CAD selection change. */
+	bool structureChangeInProgress() const
+	{
+		return model_reset_in_progress || model_structure_change_in_progress;
 	}
 
-    signals:
+signals:
 	// Emitted if the commands think they may have changed the database
 	// structure in some way.
 	void mdl_changed_db(void *);
@@ -389,10 +488,6 @@ class QTCAD_EXPORT QgModel : public QAbstractItemModel
 	// (it is sometimes extremely difficult to know if a complex command
 	// will alter the view) but if a particular method knows it will
 	// do so, it may emit this signal
-	void view_change(QgViewUpdateFlags);
-
-	// Emit when some model action change will require a view to update
-	// its awareness of what is drawn
 	void view_changed(QgViewUpdateFlags);
 
 	// Let the tree view know it has highlighting work to do it wouldn't
@@ -404,7 +499,7 @@ class QTCAD_EXPORT QgModel : public QAbstractItemModel
 	void opened_item(QgItem *);
 
 
-    public slots:
+public slots:
 	int draw_action();
 	int draw(const char *path);
 	int erase_action();
@@ -413,59 +508,103 @@ class QTCAD_EXPORT QgModel : public QAbstractItemModel
 	void item_collapsed(const QModelIndex &index);
 	void item_expanded(const QModelIndex &index);
 
-    private:
-	static void event_callback(struct ged *gedp,
-		const struct ged_event *events, size_t event_count,
-		const struct ged_event_result *result, void *client_data);
-	void refresh_database();
+private:
 	int NodeRow(QgItem *node) const;
 	QModelIndex index(int row, int column, const QModelIndex &p) const override;
 	QModelIndex parent(const QModelIndex &child) const override;
 	Qt::ItemFlags flags(const QModelIndex &index) const override;
 
-	void item_rebuild(QgItem *item, std::unordered_set<QgItem *> &invalid);
-	void item_register(QgItem *item);
-	void item_unregister(QgItem *item);
-	void item_path_index_insert(QgItem *item);
-	void item_path_index_remove(QgItem *item);
-	void item_path_index_insert_subtree(QgItem *item);
-	void item_path_index_remove_subtree(QgItem *item);
-	void item_path_hash_invalidate_subtree(QgItem *item);
-	void item_indexes_clear();
-	void items_clear();
-	bool item_is_indexed(QgItem *item) const;
-	void item_rows_rebuild(QgItem *item);
-	void item_subtree_delete(QgItem *item);
-	bool item_children_sync(QgItem *item,
-		const std::vector<unsigned long long> &children);
-	bool change_deltas_apply();
-	void items_changed_notify(const std::set<std::string> &names);
+	void item_rebuild(QgItem *item, std::unordered_set<QgItem *> *invalid);
+	void itemIndexInsert(QgItem *item);
+	void itemIndexRemove(QgItem *item);
+	void itemIndexInsertSubtree(QgItem *item);
+	void itemIndexRemoveSubtree(QgItem *item);
+	void invalidateItemPathHashes(QgItem *item);
+	void itemIndexClear();
+	void itemIndexRebuild();
+	bool itemIsIndexed(QgItem *item) const;
+	void deleteItemSubtree(QgItem *item);
+	int applyLoadedHierarchyDeltas(const std::vector<std::string> *candidate_paths = nullptr);
+	void notifyItemsChanged(const QVector<int> &roles);
+	void notifyItemSubtreeChanged(QgItem *item, const QVector<int> &roles,
+				      std::unordered_set<QgItem *> &notified);
+	int notifyPathItemsChanged(const char *path, const QVector<int> &roles,
+				   bool terminal_subtree = true);
+	void notifyDrawnItemsChanged();
+	void notifyDrawnPathChanged(const char *path);
+	void notifyDrawnTransactionChanged(const void *delta_ctx);
+	void flushPendingDrawNotifications();
+	void handleDrawTransactionEvent(const void *delta_ctx);
+	void recordPendingDatabaseEventPaths(const struct ged_event_result *result);
+	void notifyPendingDatabaseEventItemsChanged();
+	void flushPendingDatabaseEventNotifications();
+	void handleDatabaseEvents(const struct ged_event *events,
+				    size_t event_count,
+				    const struct ged_event_result *result);
+	static void eventObserverCallback(struct ged *gedp,
+					  const struct ged_event *events,
+					  size_t event_count,
+					  const struct ged_event_result *result,
+					  void *client_data);
+	static const std::unordered_set<QgItem *> &emptyItems()
+	{
+		static const std::unordered_set<QgItem *> empty_items;
+		return empty_items;
+	}
 	const char *selectionSetKey() const;
 	void selectionBatchBegin();
+	unsigned long long itemObjectId(const QgItem *item) const;
 
-	QgItem *rootItem;
+	// A flag for callbacks to set if they alter the database in some way.
+	// Used to determine whether to emit the mdl_changed_db signal once
+	// after a GED command processing call is complete. If emitted, the
+	// interface will know to take certain steps when updating views.
+	int changed_db_flag = 0;
+
+	int interaction_mode = 0;
+
 	std::unordered_map<unsigned long long, std::unordered_set<QgItem *>> items_by_instance_hash;
 	std::unordered_map<unsigned long long, std::unordered_set<QgItem *>> items_by_object_id;
 	std::unordered_map<unsigned long long, std::unordered_set<QgItem *>> items_by_path_hash;
-	std::unordered_map<struct directory *, std::unordered_set<QgItem *>> items_by_directory;
-	std::unordered_map<QgItem *, unsigned long long> item_object_ids;
+	std::unordered_map<const QgItem *, unsigned long long> item_object_ids;
 	std::unordered_map<QgItem *, unsigned long long> item_path_hashes;
-	std::unordered_set<unsigned long long> selected_path_hashes;
-	std::unordered_set<unsigned long long> active_parent_path_hashes;
-	std::unordered_set<unsigned long long> immediate_parent_object_ids;
-	std::unordered_set<unsigned long long> grand_parent_object_ids;
-	QgSession *m_session = NULL;
-	struct db_i *model_dbip = NULL;
-	uintptr_t event_observer = 0;
-	uintptr_t scene_observer = 0;
-	int interaction_mode = 0;
+	std::unordered_set<unsigned long long> selection_selected_path_hashes;
+	std::unordered_set<unsigned long long> selection_active_parent_path_hashes;
+	std::unordered_set<unsigned long long> selection_immediate_parent_object_ids;
+	std::unordered_set<unsigned long long> selection_grand_parent_object_ids;
 	std::string selection_set_name;
 	bool selection_batch_open = false;
-	bool model_structure_change_in_progress = false;
+	NotificationStats notification_stats;
+	DrawTimingStats draw_timing_stats;
+	bool draw_timing_stats_enabled = false;
+	FetchMoreStats fetch_more_stats;
+	HierarchyDeltaStats hierarchy_delta_stats;
+
+	// Toggle for whether or not the model should be viewed using a tops
+	// listing or the full object listing as the "seed" set
 	int flatten_hierarchy = 0;
+	bool model_reset_in_progress = false;
+	bool model_structure_change_in_progress = false;
+
+	QgSession *m_session = nullptr;
+	QgItem *rootItem;
+	struct db_i *model_dbip = nullptr;
+	uintptr_t draw_observer_token = 0;
+	uintptr_t event_observer_token = 0;
+	uint64_t draw_observer_event_count = 0;
+	uint64_t event_observer_event_count = 0;
+	int draw_observer_defer_depth = 0;
+	int event_observer_defer_depth = 0;
 	bool command_running = false;
-	bool database_refresh_in_progress = false;
-	bool database_event_pending = false;
+	int pending_draw_event_all = 0;
+	int pending_draw_event_view_only = 0;
+	std::vector<std::string> pending_draw_event_paths;
+	int pending_db_event_notify = 0;
+	int pending_db_event_model_reset = 0;
+	int pending_db_event_force_reset = 0;
+	int pending_db_event_metadata_only = 0;
+	int pending_db_event_all = 0;
+	std::vector<std::string> pending_db_event_paths;
 };
 
 #endif //QGMODEL_H
@@ -478,4 +617,3 @@ class QTCAD_EXPORT QgModel : public QAbstractItemModel
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

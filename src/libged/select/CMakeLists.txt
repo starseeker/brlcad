@@ -1,7 +1,7 @@
 set(PLUGIN_LIBS libged libbu)
 
 set(SELECT_SRCS
-  select.c
+  select.cpp
   select2.cpp
 )
 

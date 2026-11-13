@@ -40,7 +40,7 @@ set(
   libged
   librt
   libnmg
-  libdm
+  libimgstream
   liboptical
   libicv
   ${Appleseed_LIBRARIES}

@@ -147,8 +147,7 @@ static const struct rt_edit_param_desc ell_abc_params[] = {
 
 static const struct rt_edit_cmd_desc ell_cmds[] = {
     {
-	ECMD_ELL_SCALE_A,     /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_ELL_SCALE_A),     /* name       */
+	ECMD_ELL_SCALE_A, RT_EDIT_CMD_NAME(ECMD_ELL_SCALE_A),     /* cmd_id       */
 	"Set A",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -158,8 +157,7 @@ static const struct rt_edit_cmd_desc ell_cmds[] = {
 	"ell"                 /* req_types */
     },
     {
-	ECMD_ELL_SCALE_B,     /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_ELL_SCALE_B),     /* name       */
+	ECMD_ELL_SCALE_B, RT_EDIT_CMD_NAME(ECMD_ELL_SCALE_B),     /* cmd_id       */
 	"Set B",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -169,8 +167,7 @@ static const struct rt_edit_cmd_desc ell_cmds[] = {
 	"ell"                 /* req_types */
     },
     {
-	ECMD_ELL_SCALE_C,     /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_ELL_SCALE_C),     /* name       */
+	ECMD_ELL_SCALE_C, RT_EDIT_CMD_NAME(ECMD_ELL_SCALE_C),     /* cmd_id       */
 	"Set C",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -180,8 +177,7 @@ static const struct rt_edit_cmd_desc ell_cmds[] = {
 	"ell"                 /* req_types */
     },
     {
-	ECMD_ELL_SCALE_ABC,   /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_ELL_SCALE_ABC),   /* name       */
+	ECMD_ELL_SCALE_ABC, RT_EDIT_CMD_NAME(ECMD_ELL_SCALE_ABC),   /* cmd_id       */
 	"Set A,B,C",          /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -189,15 +185,6 @@ static const struct rt_edit_cmd_desc ell_cmds[] = {
 	1,                    /* interactive  */
 	40,                   /* display_order */
 	"ell,sph"             /* req_types */
-    }
-};
-
-static const struct rt_edit_opt_desc ell_opts[] = {
-    {
-	"type",
-	"Geometry Type",
-	"Force treatment as a specific ellipsoid type (ell or sph)",
-	RT_EDIT_PARAM_STRING
     }
 };
 
@@ -218,6 +205,15 @@ static const struct rt_edit_interaction_desc ell_interactions[] = {
 _Static_assert(sizeof(ell_interactions) / sizeof(ell_interactions[0]) ==
     sizeof(ell_cmds) / sizeof(ell_cmds[0]), "ell command interactions");
 
+static const struct rt_edit_opt_desc ell_opts[] = {
+    {
+	"type",
+	"Geometry Type",
+	"Force treatment as a specific ellipsoid type (ell or sph)",
+	RT_EDIT_PARAM_STRING
+    }
+};
+
 static const struct rt_edit_prim_desc ell_prim_desc = {
     "ell",                /* prim_type    */
     "Ellipsoid",          /* prim_label   */
@@ -237,33 +233,38 @@ rt_edit_ell_edit_desc(void)
     return &ell_prim_desc;
 }
 
-static int
-ell_current_numbers(struct rt_edit *s, int cmd_id, fastf_t *vals)
+C_DECL int
+rt_edit_ell_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
 {
     struct rt_ell_internal *ell;
 
-    if (!s || !vals)
-	return -1;
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
 
     ell = (struct rt_ell_internal *)s->es_int.idb_ptr;
     RT_ELL_CK_MAGIC(ell);
 
-    switch (cmd_id) {
+	switch (cmd_id) {
 	case ECMD_ELL_SCALE_A:
-	    vals[0] = MAGNITUDE(ell->a) * s->base2local;
-	    return 1;
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(ell->a) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_ELL_SCALE_B:
-	    vals[0] = MAGNITUDE(ell->b) * s->base2local;
-	    return 1;
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(ell->b) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_ELL_SCALE_C:
-	    vals[0] = MAGNITUDE(ell->c) * s->base2local;
-	    return 1;
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(ell->c) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_ELL_SCALE_ABC:
 	    /* Return the current A magnitude as the uniform scale value. */
-	    vals[0] = MAGNITUDE(ell->a) * s->base2local;
-	    return 1;
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(ell->a) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	default:
-	    return 0;
+	    return RT_EDIT_VALUE_UNAVAILABLE;
     }
 }
 
@@ -483,14 +484,6 @@ rt_edit_ell_repair(struct bu_vls *log_str, struct rt_db_internal *ip, const stru
     }
 
     return repaired > 0 ? 0 : -1;
-}
-
-C_DECL int
-rt_edit_ell_get_values(struct rt_edit *s, int cmd_id,
-	struct rt_edit_cmd_values *result)
-{
-    return edit_current_values_from_numbers(s, cmd_id, result,
-	ell_current_numbers);
 }
 
 /*

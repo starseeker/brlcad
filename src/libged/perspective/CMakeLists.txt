@@ -1,7 +1,7 @@
 set(PLUGIN_LIBS libged libbu)
 
 ged_plugin_library(ged-perspective
-  perspective.c
+  perspective.cpp
   LIBS ${PLUGIN_LIBS}
 )
 

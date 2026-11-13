@@ -43,7 +43,8 @@
 #include "vmath.h"
 #include "bn.h"
 #include "raytrace.h"
-#include "bv/plot3.h"
+#include "bg/plot3.h"
+#include "rt/vlist.h"
 
 #include "optical.h"
 #include "optical/plastic.h"
@@ -857,9 +858,9 @@ rt_plot_solid(
 		 (int)(255*regp->reg_mater.ma_color[2]));
     }
 
-    bv_vlist_to_uplot(fp, &vhead);
+    rt_vlist_to_uplot(fp, &vhead);
 
-    BV_FREE_VLIST(vlfree, &vhead);
+    RT_FREE_VLIST(vlfree, &vhead);
     return 0;			/* OK */
 }
 

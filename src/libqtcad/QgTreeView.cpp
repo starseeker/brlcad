@@ -33,346 +33,373 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QUrl>
-#include "ged/scene.h"
 #include "qtcad/QgModel.h"
-#include "qtcad/QgRoles.h"
 #include "qtcad/QgTreeSelectionModel.h"
 #include "qtcad/QgTreeView.h"
 #include "qtcad/QgSignalFlags.h"
 
+#include "raytrace.h"
+
+static bool
+qg_tree_row_background(const QgTreeView *tree,
+		       const QStyleOptionViewItem &option,
+		       const QModelIndex &index,
+		       QBrush *background)
+{
+	if (!tree || !background)
+		return false;
+
+	const int selected =
+		index.data(QgDataRoles::SelectDisplayRole).toInt();
+	const int highlighted =
+		index.data(QgDataRoles::HighlightDisplayRole).toInt();
+	if (selected) {
+		/* CAD selection remains important while the canvas has focus.  Use
+		 * the active highlight group rather than allowing an inactive
+		 * palette to make a selected row nearly indistinguishable. */
+		*background = option.palette.brush(QPalette::Active,
+			QPalette::Highlight);
+		return true;
+	}
+	if (highlighted == 1 && !tree->isExpanded(index)) {
+		*background = QBrush(QColor(220, 200, 30));
+		return true;
+	}
+	if (highlighted == 2) {
+		*background = QBrush(QColor(10, 10, 50));
+		return true;
+	}
+	if (highlighted == 3) {
+		*background = QBrush(QColor(10, 10, 150));
+		return true;
+	}
+	return false;
+}
+
 void gObjDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
-    int aflag = 0;
-    if (!cadtreeview)
-	return;
+	int aflag = 0;
+	if (!cadtreeview)
+		return;
 
-    int sflag = index.data(QgDataRoles::SelectDisplayRole).toInt();
-    if (sflag == 1) {
-	painter->fillRect(option.rect, option.palette.highlight());
-	goto text_string;
-    }
-
-    aflag = index.data(QgDataRoles::HighlightDisplayRole).toInt();
-    if (aflag == 1) {
-	painter->fillRect(option.rect, QBrush(QColor(220, 200, 30)));
-	goto text_string;
-    }
-    if (aflag == 2) {
-	painter->fillRect(option.rect, QBrush(QColor(10, 10, 50)));
-	goto text_string;
-    }
-    if (aflag == 3) {
-	painter->fillRect(option.rect, QBrush(QColor(10, 10, 150)));
-	goto text_string;
-    }
-
-
-text_string:
-    QString text = index.data().toString();
-    int bool_op = index.data(QgDataRoles::BoolInternalRole).toInt();
-    switch (bool_op) {
+	int sflag = index.data(QgDataRoles::SelectDisplayRole).toInt();
+	aflag = index.data(QgDataRoles::HighlightDisplayRole).toInt();
+	QBrush background;
+	if (qg_tree_row_background(cadtreeview, option, index, &background))
+		painter->fillRect(option.rect, background);
+	QString text = index.data().toString();
+	int bool_op = index.data(QgDataRoles::BoolInternalRole).toInt();
+	switch (bool_op) {
 	case DB_OP_INTERSECT:
-	    text.prepend("  + ");
-	    break;
+		text.prepend("  + ");
+		break;
 	case DB_OP_SUBTRACT:
-	    text.prepend("  - ");
-	    break;
-    }
-    text.prepend(" ");
-
-    // rect with width proportional to value
-    //QRect rect(option.rect.adjusted(4,4,-4,-4));
-
-    // draw the value bar
-    //painter->fillRect(rect, QBrush(QColor("steelblue")));
-    //
-    // draw text label
-
-    QImage type_icon = index.data(QgDataRoles::TypeIconDisplayRole).value<QImage>().scaledToHeight(option.rect.height()-2);
-    QRect image_rect = type_icon.rect();
-    image_rect.moveTo(option.rect.topLeft());
-    image_rect.translate(0, 1);
-    painter->drawImage(image_rect, type_icon);
-
-    QRect text_rect(type_icon.rect().topRight(), option.rect.bottomRight());
-#if 0
-    QFont f = option.font;
-    f.setItalic(true);
-    painter->setFont(f);
-#endif
-    QPen tpen = painter->pen();
-    int drawn_state = index.data(QgDataRoles::DrawnDisplayRole).toInt();
-    if (drawn_state == 1) {
-	if (sflag) {
-	    painter->setPen(QColor(0, 70, 0));
-	} else {
-	    painter->setPen(QColor(0, 200, 0));
+		text.prepend("  - ");
+		break;
 	}
-    }
-    if (drawn_state == 2)
-	painter->setPen(QColor(150, 70, 200));
-    text_rect.moveTo(image_rect.topRight());
-    painter->drawText(text_rect, text, QTextOption(Qt::AlignLeft));
-    painter->setPen(tpen);
+	text.prepend(" ");
+
+	// rect with width proportional to value
+	//QRect rect(option.rect.adjusted(4,4,-4,-4));
+
+	// draw the value bar
+	//painter->fillRect(rect, QBrush(QColor("steelblue")));
+	//
+	// draw text label
+
+	QImage type_icon = index.data(QgDataRoles::TypeIconDisplayRole).value<QImage>().scaledToHeight(option.rect.height()-2);
+	QRect image_rect = type_icon.rect();
+	image_rect.moveTo(option.rect.topLeft());
+	image_rect.translate(0, 1);
+	painter->drawImage(image_rect, type_icon);
+
+	QRect text_rect(type_icon.rect().topRight(), option.rect.bottomRight());
+#if 0
+	QFont f = option.font;
+	f.setItalic(true);
+	painter->setFont(f);
+#endif
+	QPen tpen = painter->pen();
+	int drawn_state = index.data(QgDataRoles::DrawnDisplayRole).toInt();
+	if (sflag)
+		painter->setPen(option.palette.color(QPalette::Active,
+			QPalette::HighlightedText));
+	else if (aflag == 1)
+		painter->setPen(QColor(20, 20, 20));
+	else if (aflag == 2 || aflag == 3)
+		painter->setPen(QColor(245, 245, 245));
+	else if (drawn_state == 1)
+		painter->setPen(QColor(0, 200, 0));
+	else if (drawn_state == 2)
+		painter->setPen(QColor(150, 70, 200));
+	text_rect.moveTo(image_rect.topRight());
+	painter->drawText(text_rect, text, QTextOption(Qt::AlignLeft));
+	painter->setPen(tpen);
 }
 
 QSize gObjDelegate::sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
-    QSize name_size = option.fontMetrics.size(Qt::TextSingleLine, index.data().toString());
-    QSize bool_size;
-    int bool_op = index.data(QgDataRoles::BoolInternalRole).toInt();
-    switch (bool_op) {
+	QSize name_size = option.fontMetrics.size(Qt::TextSingleLine, index.data().toString());
+	QSize bool_size;
+	int bool_op = index.data(QgDataRoles::BoolInternalRole).toInt();
+	switch (bool_op) {
 	case DB_OP_UNION:
-	    bool_size = option.fontMetrics.size(Qt::TextSingleLine, " ");
-	    break;
+		bool_size = option.fontMetrics.size(Qt::TextSingleLine, " ");
+		break;
 	case DB_OP_INTERSECT:
-	    bool_size = option.fontMetrics.size(Qt::TextSingleLine, "   + ");
-	    break;
+		bool_size = option.fontMetrics.size(Qt::TextSingleLine, "   + ");
+		break;
 	case DB_OP_SUBTRACT:
-	    bool_size = option.fontMetrics.size(Qt::TextSingleLine, "   - ");
-	    break;
-    }
-    int item_width = name_size.rwidth() + bool_size.rwidth() + 18;
-    int item_height = name_size.rheight();
-    return QSize(item_width, item_height);
+		bool_size = option.fontMetrics.size(Qt::TextSingleLine, "   - ");
+		break;
+	}
+	int item_width = name_size.rwidth() + bool_size.rwidth() + 18;
+	int item_height = name_size.rheight();
+	return QSize(item_width, item_height);
 }
 
 
 QgTreeView::QgTreeView(QWidget *pparent, QgModel *treemodel) :
-    QTreeView(pparent), m_model(treemodel)
+	QTreeView(pparent), m_model(treemodel)
 {
-    this->setContextMenuPolicy(Qt::CustomContextMenu);
+	this->setContextMenuPolicy(Qt::CustomContextMenu);
 
-    // Optimization: https://stackoverflow.com/a/31356930/2037687
-    this->setUniformRowHeights(true);
+	// Optimization: https://stackoverflow.com/a/31356930/2037687
+	this->setUniformRowHeights(true);
 
-    // We use double click to control drawing - don't want the tree to expand
-    // and contract at the same time.  To open or close combs, use arrows to
-    // the left of the text and icon.
-    setExpandsOnDoubleClick(false);
+	// We use double click to control drawing - don't want the tree to expand
+	// and contract at the same time.  To open or close combs, use arrows to
+	// the left of the text and icon.
+	setExpandsOnDoubleClick(false);
 
-    // Set model
-    setModel(treemodel);
+	// Set model
+	setModel(treemodel);
 
-    // Set custom selection model
-    QgTreeSelectionModel *sm = new QgTreeSelectionModel(treemodel, this, this);
-    this->setSelectionModel(sm);
-    // Allow for multiple selection
-    this->setSelectionMode(ExtendedSelection);
+	// Set custom selection model
+	QgTreeSelectionModel *sm = new QgTreeSelectionModel(treemodel, this, this);
+	this->setSelectionModel(sm);
+	// Allow for multiple selection
+	this->setSelectionMode(ExtendedSelection);
 
-    setItemDelegate(new gObjDelegate(this));
+	setItemDelegate(new gObjDelegate(this));
 
-    header()->setSectionResizeMode(0, QHeaderView::Stretch);
-    header()->setStretchLastSection(true);
-    QObject::connect(this, &QgTreeView::expanded, this, &QgTreeView::tree_column_size);
-    QObject::connect(this, &QgTreeView::collapsed, this, &QgTreeView::tree_column_size);
-    //QObject::connect(this, &QgTreeView::clicked, sm, &QgTreeSelectionModel::update_selected_node_relationships);
-    QObject::connect(this, &QgTreeView::customContextMenuRequested, (QgTreeView *)this, &QgTreeView::context_menu);
-    QObject::connect(this, &QgTreeView::doubleClicked, (QgTreeView *)this, &QgTreeView::do_draw_toggle);
+	/* The hierarchy may contain millions of loaded rows.  ResizeToContents
+	 * asks Qt to measure every row again after dataChanged notifications;
+	 * selection and draw-state changes then become dominated by repeated
+	 * text shaping even though item labels did not change.  The single
+	 * hierarchy column should simply occupy the available viewport. */
+	header()->setSectionResizeMode(0, QHeaderView::Stretch);
+	header()->setStretchLastSection(true);
+	QObject::connect(this, &QgTreeView::expanded, this, &QgTreeView::tree_column_size);
+	QObject::connect(this, &QgTreeView::collapsed, this, &QgTreeView::tree_column_size);
+	//QObject::connect(this, &QgTreeView::clicked, sm, &QgTreeSelectionModel::update_selected_node_relationships);
+	QObject::connect(this, &QgTreeView::customContextMenuRequested, (QgTreeView *)this, &QgTreeView::context_menu);
+	QObject::connect(this, &QgTreeView::doubleClicked, (QgTreeView *)this, &QgTreeView::do_draw_toggle);
 }
 
 void
-QgTreeView::drawBranches(QPainter* painter, const QRect& rrect, const QModelIndex& index) const
+QgTreeView::drawBranches(QPainter *painter, const QRect &rect,
+			 const QModelIndex &index) const
 {
-    int selected_state = index.data(QgDataRoles::SelectDisplayRole).toInt();
-    if (selected_state) {
-	painter->fillRect(rrect, palette().highlight());
-    } else {
-	int aflag = index.data(QgDataRoles::HighlightDisplayRole).toInt();
-	if (!(QgTreeView *)this->isExpanded(index) && aflag == 1) {
-	    painter->fillRect(rrect, QBrush(QColor(220, 200, 30)));
-	}
-	if (aflag == 2) {
-	    painter->fillRect(rrect, QBrush(QColor(10, 10, 50)));
-	}
-	if (aflag == 3) {
-	    painter->fillRect(rrect, QBrush(QColor(10, 10, 150)));
-	}
-    }
-    QTreeView::drawBranches(painter, rrect, index);
+	QStyleOptionViewItem option;
+	option.initFrom(this);
+	option.rect = rect;
+	QBrush background;
+	if (qg_tree_row_background(this, option, index, &background))
+		painter->fillRect(rect, background);
+	QTreeView::drawBranches(painter, rect, index);
 }
 
 void QgTreeView::header_state()
 {
-    //header()->setStretchLastSection(true);
-    //int header_length = header()->length();
-    //header()->setSectionResizeMode(0, QHeaderView::Fixed);
-    //resizeColumnToContents(0);
-    //int column_width = columnWidth(0);
+	//header()->setStretchLastSection(true);
+	//int header_length = header()->length();
+	//header()->setSectionResizeMode(0, QHeaderView::Fixed);
+	//resizeColumnToContents(0);
+	//int column_width = columnWidth(0);
 
-    // TODO - when the dock widget is resized, there is a missing
-    // update somewhere - the scrollbar doesn't appear until the tree
-    // is selected...
+	// TODO - when the dock widget is resized, there is a missing
+	// update somewhere - the scrollbar doesn't appear until the tree
+	// is selected...
 
-    header()->setSectionResizeMode(0, QHeaderView::Stretch);
-    header()->setStretchLastSection(false);
-    if (header()->count() == 1) {
+	header()->setSectionResizeMode(0, QHeaderView::Stretch);
 	header()->setStretchLastSection(false);
-    } else {
-	header()->setStretchLastSection(true);
-    }
-    header()->setMaximumHeight(1);
+	if (header()->count() == 1) {
+		header()->setStretchLastSection(false);
+	}
+	else {
+		header()->setStretchLastSection(true);
+	}
+	header()->setMaximumHeight(1);
 }
 
-void QgTreeView::resizeEvent(QResizeEvent *event)
+void QgTreeView::resizeEvent(QResizeEvent *e)
 {
-    QTreeView::resizeEvent(event);
-    header_state();
+	QTreeView::resizeEvent(e);
+	header_state();
 }
 
 void QgTreeView::mousePressEvent(QMouseEvent *e)
 {
-    if (e->button() == Qt::RightButton && e->type() == QEvent::MouseButtonPress) {
-	// We want the context menu, but NOT the selection
-	// behavior
-	e->accept();
-	return;
-    }
+	if (e->button() == Qt::RightButton && e->type() == QEvent::MouseButtonPress) {
+		// We want the context menu, but NOT the selection
+		// behavior
+		e->accept();
+		return;
+	}
 
-    // Otherwise, do the normal event handling
-    QTreeView::mousePressEvent(e);
+	// Otherwise, do the normal event handling
+	QTreeView::mousePressEvent(e);
 }
 
 void QgTreeView::tree_column_size(const QModelIndex &)
 {
-    QTCAD_SLOT("QgTreeView::tree_column_size", 1);
-    header_state();
+	QTCAD_SLOT("QgTreeView::tree_column_size", 1);
+	header_state();
 }
 
 void QgTreeView::context_menu(const QPoint &point)
 {
-    QTCAD_SLOT("QgTreeView::context_menu", 1);
-    QModelIndex index = indexAt(point);
-    QgItem *cnode = static_cast<QgItem *>(index.internalPointer());
+	QTCAD_SLOT("QgTreeView::context_menu", 1);
+	QModelIndex index = indexAt(point);
+	QgItem *cnode = static_cast<QgItem *>(index.internalPointer());
 
 
-    QAction* draw_action = new QAction("Draw", NULL);
-    // https://stackoverflow.com/a/28647342/2037687
-    QVariant draw_action_v;
+	QAction* draw_action = new QAction("Draw", nullptr);
+	// https://stackoverflow.com/a/28647342/2037687
+	QVariant draw_action_v;
 #if QT_VERSION < QT_VERSION_CHECK(5, 12, 0)
-    draw_action_v = qVariantFromValue((void *)cnode);
+	draw_action_v = qVariantFromValue((void *)cnode);
 #else
-    draw_action_v = QVariant::fromValue((void *)cnode);
+	draw_action_v = QVariant::fromValue((void *)cnode);
 #endif
-    draw_action->setData(draw_action_v);
-    connect(draw_action, &QAction::triggered, m_model, &QgModel::draw_action);
+	draw_action->setData(draw_action_v);
+	connect(draw_action, &QAction::triggered, m_model, &QgModel::draw_action);
 
 
-    QAction* erase_action = new QAction("Erase", NULL);
-    QVariant erase_action_v;
+	QAction* erase_action = new QAction("Erase", nullptr);
+	QVariant erase_action_v;
 #if QT_VERSION < QT_VERSION_CHECK(5, 12, 0)
-    erase_action_v = qVariantFromValue((void *)cnode);
+	erase_action_v = qVariantFromValue((void *)cnode);
 #else
-    erase_action_v = QVariant::fromValue((void *)cnode);
+	erase_action_v = QVariant::fromValue((void *)cnode);
 #endif
-    erase_action->setData(erase_action_v);
-    connect(erase_action, &QAction::triggered, m_model, &QgModel::erase_action);
+	erase_action->setData(erase_action_v);
+	connect(erase_action, &QAction::triggered, m_model, &QgModel::erase_action);
 
 
-    QMenu *menu = new QMenu("Object Actions", NULL);
-    menu->addAction(draw_action);
-    menu->addAction(erase_action);
-    menu->exec(mapToGlobal(point));
-    delete menu;
+	QMenu *menu = new QMenu("Object Actions", nullptr);
+	menu->addAction(draw_action);
+	menu->addAction(erase_action);
+	menu->exec(mapToGlobal(point));
+	delete menu;
 }
 
 void
 QgTreeView::do_draw_toggle(const QModelIndex &index)
 {
-    QTCAD_SLOT("QgTreeView::do_draw_toggle", 1);
-    QgItem *cnode = static_cast<QgItem *>(index.internalPointer());
+	QTCAD_SLOT("QgTreeView::do_draw_toggle", 1);
+	QgItem *cnode = static_cast<QgItem *>(index.internalPointer());
 
-    int state = index.data(QgDataRoles::DrawnDisplayRole).toInt();
-    if (state == GED_SCENE_PATH_NOT_DRAWN)
-	(void)m_model->draw(cnode);
-    if (state == GED_SCENE_PATH_DRAWN ||
-	state == GED_SCENE_PATH_PARTIALLY_DRAWN)
-	(void)m_model->erase(cnode);
+	if (!m_model->ged())
+		return;
+
+	std::string path = m_model->item_path(cnode);
+	if (path.empty())
+		return;
+
+	if (!m_model->drawnPathState(path.c_str()))
+		m_model->draw(path.c_str());
+	else
+		m_model->erase(path.c_str());
 }
 
 void
 QgTreeView::redo_expansions(void *)
 {
-    QTCAD_SLOT("QgTreeView::redo_expansions", 1);
-    const std::unordered_set<QgItem *> &items = m_model->allItems();
-    for (QgItem *itm : items) {
-	QModelIndex idx = m_model->NodeIndex(itm);
-	if (itm->isOpen() && !isExpanded(idx)) {
-	    setExpanded(idx, true);
+	QTCAD_SLOT("QgTreeView::redo_expansions", 1);
+	const auto &items = m_model->allItems();
+	auto i_it = items.begin();
+	for (i_it = items.begin(); i_it != items.end(); i_it++) {
+		QgItem *itm = *i_it;
+		QModelIndex idx = m_model->NodeIndex(itm);
+		if (itm->isOpen() && !isExpanded(idx)) {
+			setExpanded(idx, true);
+		}
 	}
-    }
 }
 
 
 void
 QgTreeView::redo_highlights()
 {
-    QTCAD_SLOT("QgTreeView::redo_highlights", 1);
-    if (m_model)
-	m_model->notifySelectionItemsChanged();
+	QTCAD_SLOT("QgTreeView::redo_highlights", 1);
+	// GED's path selection is durable; invalidate only model rows whose
+	// selection/highlight roles may have changed.
+	if (m_model)
+		m_model->notifySelectionItemsChanged();
 }
 
 #if 0
 void QgTreeView::expand_path(QString path)
 {
-    int i = 0;
+	int i = 0;
 #if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
-    QStringList path_items = path.split("/", QString::SkipEmptyParts);
+	QStringList path_items = path.split("/", QString::SkipEmptyParts);
 #else
-    QStringList path_items = path.split("/", Qt::SkipEmptyParts);
+	QStringList path_items = path.split("/", Qt::SkipEmptyParts);
 #endif
-    QgItem *r = m_model->root();
-    while (i < path_items.size()) {
+	QgItem *r = m_model->root();
+	while (i < path_items.size()) {
 
-	for (int j = 0; j < r->childCount(); j++) {
-	    QgItem *c = r->child(j);
-	    gInstance *g = c->instance();
-	    if (!g)
-		continue;
-	    if (QString::fromStdString(g->dp_name) != path_items.at(i)) {
-		continue;
-	    }
-	    QModelIndex path_component = m_model->NodeIndex(c);
-	    if (i == path_items.size() - 1) {
-		selectionModel()->clearSelection();
-		selectionModel()->select(path_component, QItemSelectionModel::Select | QItemSelectionModel::Rows);
-		emit (clicked(path_component));
-	    } else {
-		expand(path_component);
-		r = c;
-	    }
-	    break;
+		for (int j = 0; j < r->childCount(); j++) {
+			QgItem *c = r->child(j);
+			gInstance *g = c->instance();
+			if (!g)
+				continue;
+			if (QString::fromStdString(g->dp_name) != path_items.at(i)) {
+				continue;
+			}
+			QModelIndex path_component = m_model->NodeIndex(c);
+			if (i == path_items.size() - 1) {
+				selectionModel()->clearSelection();
+				selectionModel()->select(path_component, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+				emit (clicked(path_component));
+			}
+			else {
+				expand(path_component);
+				r = c;
+			}
+			break;
+		}
+		i++;
 	}
-	i++;
-    }
 }
 
 void QgTreeView::expand_link(const QUrl &link)
 {
-    expand_path(link.path());
+	expand_path(link.path());
 }
 #endif
 
 
 void QgTreeView::qgitem_select_sync(QgItem *)
 {
-    QTCAD_SLOT("QgTreeView::qgitem_select_sync", 1);
-    if (m_model)
-	m_model->notifySelectionItemsChanged();
+	QTCAD_SLOT("QgTreeView::qgitem_select_sync", 1);
+	if (m_model)
+		m_model->notifySelectionItemsChanged();
 }
 
 void QgTreeView::do_view_update(QgViewUpdateFlags flags)
 {
-    QTCAD_SLOT("QgTreeView::do_view_update", 1);
-    if (!m_model)
-	return;
+	QTCAD_SLOT("QgTreeView::do_view_update", 1);
 
-    if (!flags || (flags & (QG_VIEW_SELECT | QG_VIEW_MODE | QG_VIEW_DB)))
-	m_model->notifySelectionItemsChanged();
-    if (!flags || (flags & (QG_VIEW_DRAWN | QG_VIEW_DB)))
-	m_model->notifyDrawnItemsChanged();
-    if (!flags || (flags & QG_VIEW_REFRESH))
-	viewport()->update();
+	if (m_model && (flags & QG_VIEW_SELECT))
+		m_model->notifySelectionItemsChanged();
+
+	if (!flags || (flags & (QG_VIEW_REFRESH | QG_VIEW_DRAWN |
+		    QG_VIEW_MODE | QG_VIEW_DB)))
+		viewport()->update();
 }
 
 // Local Variables:
@@ -383,4 +410,3 @@ void QgTreeView::do_view_update(QgViewUpdateFlags flags)
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

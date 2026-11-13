@@ -32,16 +32,16 @@
 #include <QAction>
 #include <QDockWidget>
 #include <QFileDialog>
+#include <QHash>
 #include <QHeaderView>
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
 #include <QObject>
-#include <QSettings>
+#include <QSet>
 #include <QStatusBar>
 #include <QTreeView>
 
-#include "ged.h"
 #include "qtcad/QgAttributesModel.h"
 #include "qtcad/QgConsole.h"
 #include "qtcad/QgDockWidget.h"
@@ -51,10 +51,11 @@
 #include "qtcad/QgView.h"
 #include "qtcad/QgViewCtrl.h"
 
+#include "QgEdCategories.h"
+
 class QgPaletteController;
 class QgToolPalette;
 class QgWindowExtensionController;
-
 class QgEdMainWindow : public QMainWindow
 {
     Q_OBJECT
@@ -72,7 +73,6 @@ class QgEdMainWindow : public QMainWindow
 
 	// Get the currently active view of the quad/central display widget
 	QgView * CurrentDisplay();
-	struct bview * CurrentView();
 
 	// Checkpoint display state (used for subsequent diff)
 	void DisplayCheckpoint();
@@ -86,16 +86,25 @@ class QgEdMainWindow : public QMainWindow
 	// Clear visual window changes indicating a raytrace has begun
 	void IndicateRaytraceDone();
 
+	// Determine the logical palette category ("qged.view" or "qged.object")
+	// for the palette widget that contains the supplied global screen
+	// position.  Returns an empty QString when the point is over neither.
+	QString ActivePaletteCategory(QPoint &gpos);
+
 	// Determine interaction mode based on selected palettes and the supplied point
 	int InteractionMode(QPoint &gpos);
+
+	// Forward the currently-active QgView to both palette controllers.
+	// Called from QgEdApp::do_quad_view_change when the user activates a
+	// different view in the quad-view layout.
 	void setActiveView(QgView *view);
 
-	// Utility wrapper for the closeEvent to save windowing dimensions
-	void closeEvent(QCloseEvent* e);
+	// Save the operator's windowing dimensions during an ordinary close.
+	void closeEvent(QCloseEvent *event) override;
 
     public slots:
 	//void save_image();
-	void do_dm_init();
+	void do_endpoint_init();
         void close();
 	// Put central display into Quad mode
 	void QuadDisplay();
@@ -129,8 +138,13 @@ class QgEdMainWindow : public QMainWindow
 	QgAttributesModel *userpropmodel = NULL;
 	QgToolPalette *oc = NULL;
 	QgToolPalette *vc = NULL;
-	QgPaletteController *oc_ctrl = NULL;
+
+	/* Palette controllers wiring the new Qt-plugin path to vc/oc.
+	 * Created in CreateWidgets(), populated in ConnectWidgets().
+	 * Keep NULL until then to avoid dangling use during construction. */
 	QgPaletteController *vc_ctrl = NULL;
+	QgPaletteController *oc_ctrl = NULL;
+
 	QgTreeView *treeview = NULL;
 
 	// Action for toggling treeview's ls or tree view
@@ -158,4 +172,3 @@ class QgEdMainWindow : public QMainWindow
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

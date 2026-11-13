@@ -25,27 +25,27 @@
 
 #include <QTimer>
 #include <QMessageBox>
+#include <QSettings>
 #include "qtcad/QgPaletteController.h"
-#include "qtcad/QgSession.h"
 #include "qtcad/QgToolPalette.h"
 #include "qtcad/QgViewCtrl.h"
 #include "qtcad/QgTreeSelectionModel.h"
 #include "qtcad/QgWindowExtensionController.h"
+#include "QgEdCategories.h"
 #include "QgEdMainWindow.h"
 #include "QgEdApp.h"
-#include "QgEdCategories.h"
 
 static int
-qged_dm_during_clbk(int ac, const char **av, void *u1, void *u2)
+qged_display_during_clbk(int ac, const char **av, void *u1, void *u2)
 {
     (void)u1;
     (void)u2;
     if (ac < 2 || !av)
         return BRLCAD_OK;
 
-    const char *dbg = getenv("GED_DM_DURING_DEBUG");
+    const char *dbg = getenv("GED_DISPLAY_DURING_DEBUG");
     if (dbg && BU_STR_EQUAL(dbg, "1")) {
-        bu_log("qged dm during callback: ");
+        bu_log("qged display during callback: ");
         for (int i = 0; i < ac; i++) {
             bu_log("%s%s", av[i], (i + 1 < ac) ? " " : "\n");
         }
@@ -55,8 +55,11 @@ qged_dm_during_clbk(int ac, const char **av, void *u1, void *u2)
         return BRLCAD_OK;
 
     QgEdApp *ap = (QgEdApp *)qApp;
-    if (ap)
+    if (ap) {
+	if (ap->pluginNotifier())
+	    emit ap->pluginNotifier()->settingsChanged();
         emit ap->view_update(QG_VIEW_REFRESH);
+    }
 
     return BRLCAD_OK;
 }
@@ -65,13 +68,6 @@ QgEdMainWindow::QgEdMainWindow(QgViewType canvas_type, int quad_view)
 {
     QgEdApp *ap = (QgEdApp *)qApp;
     ap->w = this;
-
-#ifdef BRLCAD_OPENGL
-    // Define the surface format for OpenGL drawing
-    QSurfaceFormat format;
-    format.setDepthBufferSize(16);
-    QSurfaceFormat::setDefaultFormat(format);
-#endif
 
     // This solves the disappearing menubar problem on Ubuntu + fluxbox -
     // suspect Unity's "global toolbar" settings are being used even when
@@ -114,22 +110,24 @@ QgEdMainWindow::CreateWidgets(QgViewType canvas_type)
     // Define a widget to hold the main view and its associated
     // view control toolbar
     cw = new QWidget(this);
+    cw->setProperty("qgTestId", QStringLiteral("cad-central"));
 
     // The core of the interface is the CAD view widget, which is capable
     // of either a single display or showing 4 views in a grid arrangement
     // (the "quad" view).  By default it displays a single view, unless
     // overridden by a user option.
-    c4 = new QgQuadView(cw, gedp, canvas_type);
+    c4 = new QgQuadView(cw, m->session(), canvas_type);
     if (!c4) {
 	QMessageBox *msgbox = new QMessageBox();
 	msgbox->setText("Fatal error: unable to create QgQuadView widget");
 	msgbox->exec();
 	bu_exit(EXIT_FAILURE, "Unable to create QgQuadView widget\n");
     }
+    c4->setProperty("qgTestId", QStringLiteral("cad-quad"));
     c4->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
 
     // Define a graphical toolbar with control widgets
-    vcw = new QgViewCtrl(cw, gedp);
+    vcw = new QgViewCtrl(cw, m->session());
     vcw->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
 
     // Having set up the central widget's components, we now define dockable
@@ -142,15 +140,25 @@ QgEdMainWindow::CreateWidgets(QgViewType canvas_type)
     vcd->setObjectName("View_Controls");
     vcd->setWidget(vc);
     oc = new QgToolPalette(this);
+    /* Merely selecting a database object must not enter an edit mode.  In
+     * particular, materializing a BoT edit surface can be proportional to
+     * millions of vertices.  Object tools become active only when the user
+     * explicitly selects one. */
     oc->setAlwaysSelected(0);
     ocd = new QDockWidget("Object Editing", this);
     ocd->setObjectName("Object_Editing");
     ocd->setWidget(oc);
 
+    // Create palette controllers for the two qged palette categories.
+    // Ownership is via Qt parentage (parent = this).  populate() is
+    // called once in ConnectWidgets() after the plugin manager has been
+    // fully wired.  Active view is set in ConnectWidgets() too.
     vc_ctrl = new QgPaletteController(vc, ap->pluginManager(),
-	QStringLiteral(QGED_CATEGORY_VIEW), ap->pluginContext(), this);
+				      QStringLiteral(QGED_CATEGORY_VIEW),
+				      ap->pluginContext(), this);
     oc_ctrl = new QgPaletteController(oc, ap->pluginManager(),
-	QStringLiteral(QGED_CATEGORY_OBJECT), ap->pluginContext(), this);
+				      QStringLiteral(QGED_CATEGORY_OBJECT),
+				      ap->pluginContext(), this);
 
     // Command console
     console = new QgConsole(console_dock);
@@ -166,6 +174,7 @@ QgEdMainWindow::CreateWidgets(QgViewType canvas_type)
 
     /* Geometry Tree */
     treeview = new QgTreeView(tree_dock, ap->mdl);
+    treeview->setProperty("qgTestId", QStringLiteral("hierarchy-tree"));
     tree_dock = new QgDockWidget("Hierarchy", this);
     tree_dock->setObjectName("Hierarchy");
     tree_dock->setWidget(treeview);
@@ -217,7 +226,6 @@ QgEdMainWindow::LocateWidgets()
 
     // Dock the widgets and constrain their allowed placements
     addDockWidget(Qt::BottomDockWidgetArea, console_dock);
-    console_dock->setAllowedAreas(Qt::BottomDockWidgetArea);
     vm_panels->addAction(console_dock->toggleViewAction());
 
     addDockWidget(Qt::RightDockWidgetArea, vcd);
@@ -247,9 +255,8 @@ QgEdMainWindow::ConnectWidgets()
     QgEdApp *ap = (QgEdApp *)qApp;
     QgModel *m = ap->mdl;
 
-    // Route model-originated view changes through the shared session.
-    QObject::connect(m->session(), &QgSession::view_changed,
-	ap, &QgEdApp::do_view_changed);
+    // If the model does something that it things should trigger a view update, let the app know
+    QObject::connect(m, &QgModel::view_changed, ap, &QgEdApp::do_view_changed);
 
     // Make the fundamental connection that allows the view to update in
     // response to commands or widgets taking actions that will impact the
@@ -264,7 +271,7 @@ QgEdMainWindow::ConnectWidgets()
     QObject::connect(c4, &QgQuadView::changed, ap, &QgEdApp::do_quad_view_change);
     // Some of the dm initialization has to be delayed - make the connections so we can
     // do the work after widget initialization is complete.
-    QObject::connect(c4, &QgQuadView::init_done, this, &QgEdMainWindow::do_dm_init);
+    QObject::connect(c4, &QgQuadView::init_done, this, &QgEdMainWindow::do_endpoint_init);
 
 
     // Graphical toolbar
@@ -273,14 +280,34 @@ QgEdMainWindow::ConnectWidgets()
     // Make the connection so the view control can change the mouse mode of the Quad View
     QObject::connect(vcw, &QgViewCtrl::lmouse_mode, c4, &QgQuadView::set_lmouse_move_default);
 
-    // Palette selections update application-level view dimensions.  Tool
-    // activation and view event filters are owned by QgPaletteController.
-    QObject::connect(vc, &QgToolPalette::palette_element_selected, ap, &QgEdApp::element_selected);
-    QObject::connect(oc, &QgToolPalette::palette_element_selected, ap, &QgEdApp::element_selected);
+    // Cross-palette deselection: only one palette should appear "active"
+    // (highlighted tool button) at a time.
+    //
+    // Selecting a tool deactivates and deselects the opposite palette.
+    QObject::connect(vc, &QgToolPalette::palette_element_selected,
+		     this, [this](QgToolPaletteElement *element) {
+			 if (element)
+			     oc->clearSelection();
+		     });
+    QObject::connect(oc, &QgToolPalette::palette_element_selected,
+		     this, [this](QgToolPaletteElement *element) {
+			 if (element)
+			     vc->clearSelection();
+		     });
+    QObject::connect(vc, &QgToolPalette::palette_element_selected,
+		     ap, &QgEdApp::element_selected);
+    QObject::connect(oc, &QgToolPalette::palette_element_selected,
+		     ap, &QgEdApp::element_selected);
 
-    QgView *active_view = c4->curr_view();
-    vc_ctrl->setActiveView(active_view);
-    oc_ctrl->setActiveView(active_view);
+    // Set initial active view on both controllers so that any immediately
+    // populated Qt plugin tools can attach their view event filters.
+    QgView *init_view = c4->get();
+    if (init_view) {
+	vc_ctrl->setActiveView(init_view);
+	oc_ctrl->setActiveView(init_view);
+    }
+
+    // Populate both controllers from the discovered Qt plugins.
     vc_ctrl->populate();
     oc_ctrl->populate();
 
@@ -330,15 +357,6 @@ QgEdMainWindow::ConnectWidgets()
 }
 
 void
-QgEdMainWindow::setActiveView(QgView *view)
-{
-    if (vc_ctrl)
-	vc_ctrl->setActiveView(view);
-    if (oc_ctrl)
-	oc_ctrl->setActiveView(view);
-}
-
-void
 QgEdMainWindow::SetupMenu()
 {
     QMenu *file_menu = menuBar()->addMenu("File");
@@ -373,35 +391,33 @@ QgEdMainWindow::SetupMenu()
     view_menu->addAction(vm_treeview_mode_toggle);
     vm_panels = view_menu->addMenu("Panels");
 
-    tm_dialogs = menuBar()->addMenu("Tools");
+    QMenu *tools_menu = menuBar()->addMenu("Tools");
+    tm_dialogs = tools_menu->addMenu("Dialogs");
     tm_dialogs->setEnabled(false);
-    tm_dialogs->menuAction()->setVisible(false);
 
     menuBar()->addSeparator();
 
     menuBar()->addMenu("Help");
 }
 
-
-
 // These commands can only be successfully executed after the QgQuadView widget
 // initialization is *fully* complete.  Consequently, these steps are separated
 // out from the main constructor.
 void
-QgEdMainWindow::do_dm_init()
+QgEdMainWindow::do_endpoint_init()
 {
-    QTCAD_SLOT("QgEdMainWindow::do_dm_init", 1);
+    QTCAD_SLOT("QgEdMainWindow::do_endpoint_init", 1);
     QgEdApp *ap = (QgEdApp *)qApp;
     QgModel *m = ap->mdl;
     struct ged *gedp = m->ged();
 
-    (void)ged_clbk_set(gedp, "dm", BU_CLBK_DURING, qged_dm_during_clbk, NULL);
+    (void)ged_clbk_set(gedp, "dm", BU_CLBK_DURING, qged_display_during_clbk, NULL);
 
     ///////////////////////////////////////////////////////////////////////////
     // DEBUG - turn on some of the bells and whistles by default, since they
     // won't normally be tested in other ways.  We need fully set up views and
-    // dm contexts for these commands to work, and that setup (especially for
-    // dm) can be delayed, so we put these invocations in a slot that is
+    // endpoint contexts for these commands to work, and that setup can be
+    // delayed, so we put these invocations in a slot that is
     // specifically triggered once the underlying widgets have informed us that
     // they're ready to go.
     const char *av[5] = {NULL};
@@ -410,12 +426,6 @@ QgEdMainWindow::do_dm_init()
     av[2] = "110/110/110";
     av[3] = "0/0/50";
     ged_exec_dm(gedp, 4, (const char **)av);
-
-    av[0] = "view";
-    av[1] = "lod";
-    av[2] = "mesh";
-    av[3] = "1";
-    ged_exec_view(gedp, 4, (const char **)av);
 
     emit ap->view_update(QG_VIEW_REFRESH);
     ///////////////////////////////////////////////////////////////////////////
@@ -431,21 +441,22 @@ QgEdMainWindow::isValid3D()
 void
 QgEdMainWindow::close()
 {
-    closeEvent(NULL);
     QMainWindow::close();
 }
 
 void
-QgEdMainWindow::closeEvent(QCloseEvent* e)
+QgEdMainWindow::closeEvent(QCloseEvent *event)
 {
-    QSettings settings("BRL-CAD", "QGED");
-    // https://bugreports.qt.io/browse/QTBUG-16252?focusedCommentId=250562&page=com.atlassian.jira.plugin.system.issuetabpanels%3Acomment-tabpanel#comment-250562
-    settings.setValue("geometry", QVariant(geometry()));
-    settings.setValue("windowState", saveState());
-    bu_log("mainwindow write settings\n");
-    if (!e)
+    QgEdApp *app = qobject_cast<QgEdApp *>(QCoreApplication::instance());
+    if (!app || !app->isTestMode()) {
+	QSettings settings("BRL-CAD", "QGED");
+	// https://bugreports.qt.io/browse/QTBUG-16252
+	settings.setValue("geometry", QVariant(geometry()));
+	settings.setValue("windowState", saveState());
+    }
+    if (!event)
 	return;
-    QMainWindow::closeEvent(e);
+    QMainWindow::closeEvent(event);
 }
 
 /* We base conditionals on whether the target widget w is active.  Usually the
@@ -475,12 +486,6 @@ QgView *
 QgEdMainWindow::CurrentDisplay()
 {
     return c4->get();
-}
-
-struct bview *
-QgEdMainWindow::CurrentView()
-{
-    return c4->view();
 }
 
 void
@@ -519,27 +524,43 @@ QgEdMainWindow::IndicateRaytraceDone()
     vcw->raytrace_done();
 }
 
-int
-QgEdMainWindow::InteractionMode(QPoint &gpos)
+QString
+QgEdMainWindow::ActivePaletteCategory(QPoint &gpos)
 {
     if (vc) {
-	QWidget *vcp = vc;
-	QRect lrect = vcp->geometry();
-	QPoint mpos = vcp->mapFromGlobal(gpos);
-	if (lrect.contains(mpos)) {
-	    return 0;
-	}
+	QRect lrect = vc->geometry();
+	QPoint mpos = vc->mapFromGlobal(gpos);
+	if (lrect.contains(mpos))
+	    return QStringLiteral(QGED_CATEGORY_VIEW);
     }
 
     if (oc) {
-	QWidget *ocp = oc;
-	QRect lrect = ocp->geometry();
-	QPoint mpos = ocp->mapFromGlobal(gpos);
-	if (lrect.contains(mpos)) {
-	    return 2;
-	}
+	QRect lrect = oc->geometry();
+	QPoint mpos = oc->mapFromGlobal(gpos);
+	if (lrect.contains(mpos))
+	    return QStringLiteral(QGED_CATEGORY_OBJECT);
     }
 
+    return QString();
+}
+
+void
+QgEdMainWindow::setActiveView(QgView *view)
+{
+    if (vc_ctrl)
+	vc_ctrl->setActiveView(view);
+    if (oc_ctrl)
+	oc_ctrl->setActiveView(view);
+}
+
+int
+QgEdMainWindow::InteractionMode(QPoint &gpos)
+{
+    QString cat = ActivePaletteCategory(gpos);
+    if (cat == QStringLiteral(QGED_CATEGORY_VIEW))
+	return 0;
+    if (cat == QStringLiteral(QGED_CATEGORY_OBJECT))
+	return 2;
     return -1;
 }
 

@@ -130,8 +130,7 @@ static const struct rt_edit_param_desc rpc_r_params[] = {
 
 static const struct rt_edit_cmd_desc rpc_cmds[] = {
     {
-	ECMD_RPC_B,           /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_RPC_B),           /* name       */
+	ECMD_RPC_B, RT_EDIT_CMD_NAME(ECMD_RPC_B),           /* cmd_id       */
 	"Set B",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -141,8 +140,7 @@ static const struct rt_edit_cmd_desc rpc_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_RPC_H,           /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_RPC_H),           /* name       */
+	ECMD_RPC_H, RT_EDIT_CMD_NAME(ECMD_RPC_H),           /* cmd_id       */
 	"Set H",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -152,8 +150,7 @@ static const struct rt_edit_cmd_desc rpc_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_RPC_R,           /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_RPC_R),           /* name       */
+	ECMD_RPC_R, RT_EDIT_CMD_NAME(ECMD_RPC_R),           /* cmd_id       */
 	"Set r",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -182,7 +179,6 @@ rt_edit_rpc_edit_desc(void)
 {
     return &rpc_prim_desc;
 }
-
 
 C_DECL int
 rt_edit_rpc_get_values(struct rt_edit *s, int cmd_id,

@@ -1,5 +1,7 @@
 if(BRLCAD_ENABLE_TCL)
-  set(TCL_ENABLE_TK ${BRLCAD_ENABLE_TK})
+  if(BRLCAD_ENABLE_TK)
+    set(TCL_ENABLE_TK ON)
+  endif(BRLCAD_ENABLE_TK)
   find_package_tcl(REQUIRED)
 
   function(tclcad_package_version result package_name)
@@ -33,7 +35,7 @@ set(
   command_io.cpp
   commands.c
   cmdhist.c
-  dm.c
+  tkobol_init.c
   eval.c
   fb.c
   fbserv.c
@@ -52,22 +54,69 @@ set(
   view/lines.c
   view/refresh.c
   view/util.c
+  view_data.c
   wrapper.c
 )
 
-cmakefiles(${LIBTCLCAD_SRCS})
 if(BRLCAD_ENABLE_TCL AND BRLCAD_ENABLE_TK AND TK_LIBRARY)
   brlcad_find_package(LITEHTML REQUIRED)
 endif()
 add_subdirectory(tklitehtml)
 list(APPEND LIBTCLCAD_SRCS ${TKLITEHTML_SOURCES})
 
+set(TCLCAD_TKOBOL_HOST OFF)
+set(TCLCAD_TKOBOL_DEFINITIONS)
+set(TCLCAD_TKOBOL_PLATFORM_DEFINITION)
+if(BRLCAD_ENABLE_TK AND BRLCAD_ENABLE_OPENGL)
+  find_package(OpenGL)
+  if("${TK_WINDOWING_SYSTEM}" STREQUAL "x11")
+    find_package(X11)
+    if(OPENGL_FOUND AND X11_FOUND)
+      set(TCLCAD_TKOBOL_HOST ON)
+      set(TCLCAD_TKOBOL_DEFINITIONS TOGL_X11 TOGL_USE_OVERLAY=0)
+      set(TCLCAD_TKOBOL_PLATFORM_DEFINITION TKOBOL_X11)
+    endif()
+  elseif(WIN32)
+    if(OPENGL_FOUND)
+      set(TCLCAD_TKOBOL_HOST ON)
+      set(TCLCAD_TKOBOL_DEFINITIONS TOGL_WGL TOGL_USE_OVERLAY=0)
+      set(TCLCAD_TKOBOL_PLATFORM_DEFINITION TKOBOL_WGL)
+    endif()
+  endif()
+  if(TCLCAD_TKOBOL_HOST)
+    set(TCLCAD_TKOBOL_HOST ON)
+    list(APPEND LIBTCLCAD_SRCS
+      tkobol/tk-obol-host.cpp
+      tkobol/display-provider.cpp
+      tkobol/vendor/togl/togl.c
+    )
+    set_property(
+      SOURCE tkobol/tk-obol-host.cpp
+      APPEND
+      PROPERTY COMPILE_DEFINITIONS ${TCLCAD_TKOBOL_PLATFORM_DEFINITION}
+    )
+    if(WIN32)
+      list(APPEND LIBTCLCAD_SRCS tkobol/vendor/togl/toglFont.c)
+      set_property(
+        SOURCE tkobol/vendor/togl/toglFont.c
+        APPEND
+        PROPERTY COMPILE_DEFINITIONS TOGL_WGL
+      )
+    endif()
+    set_property(
+      SOURCE tkobol/vendor/togl/togl.c
+      APPEND
+      PROPERTY COMPILE_DEFINITIONS ${TCLCAD_TKOBOL_DEFINITIONS}
+    )
+  endif(TCLCAD_TKOBOL_HOST)
+endif(BRLCAD_ENABLE_TK AND BRLCAD_ENABLE_OPENGL)
+
 if(BRLCAD_ENABLE_TCL)
   # Include directories needed by libtclcad users
   set(TCLCAD_INCLUDE_DIRS ${TCL_INCLUDE_PATH})
-  if(BRLCAD_ENABLE_TK AND TK_INCLUDE_PATH)
+  if(TK_INCLUDE_PATH)
     set(TCLCAD_INCLUDE_DIRS ${TCLCAD_INCLUDE_DIRS} ${TK_INCLUDE_PATH} ${BRLCAD_X11_INCLUDE_DIRS})
-  endif(BRLCAD_ENABLE_TK AND TK_INCLUDE_PATH)
+  endif(TK_INCLUDE_PATH)
 
   # Include directories only needed by the implementation
   set(TCLCAD_LOCAL_INCLUDE_DIRS ${PNG_INCLUDE_DIRS} ${TKLITEHTML_INCLUDE_DIR})
@@ -81,18 +130,18 @@ if(BRLCAD_ENABLE_TCL)
   if(TKLITEHTML_SOURCES)
     list(APPEND TCLCAD_PRIVATE_LIBS LITEHTML::LITEHTML)
   endif()
-  if(BRLCAD_ENABLE_TK AND TK_LIBRARY)
+  if(TCLCAD_TKOBOL_HOST)
+    list(APPEND TCLCAD_PRIVATE_LIBS libBObol ${OPENGL_LIBRARIES})
+  endif()
+  if(TK_LIBRARY)
     set(TCLCAD_PUBLIC_LIBS ${TCLCAD_PUBLIC_LIBS} TK::TK)
-  endif(BRLCAD_ENABLE_TK AND TK_LIBRARY)
+  endif(TK_LIBRARY)
 
   brlcad_addlib(libtclcad "${LIBTCLCAD_SRCS}" "${TCLCAD_INCLUDE_DIRS}" "${TCLCAD_LOCAL_INCLUDE_DIRS}"
     PUBLIC_LIBS ${TCLCAD_PUBLIC_LIBS}
     PRIVATE_LIBS ${TCLCAD_PRIVATE_LIBS}
-    # refresh.c defines DM_WITH_RT before including dm/view.h to expose
-    # dm_draw_viewobjs; when batched after draw.c the DM_VIEW_H guard fires
-    # without DM_WITH_RT set and the declaration is lost.
-    # bu.c and dm.c both define a non-static register_cmds function.
-    UNITY_BUILD_SKIP view/refresh.c bu.c dm.c ${TKLITEHTML_SOURCES}
+    # refresh.c has an incompatible Unity include-order requirement.
+    UNITY_BUILD_SKIP view/refresh.c bu.c ${TKLITEHTML_SOURCES}
     # The full static library link is too large for some testing environments -
     # disable this test
     NO_STATIC_LINK_TEST
@@ -111,12 +160,21 @@ if(BRLCAD_ENABLE_TCL)
     if(IWIDGETS_VERSION)
       target_compile_definitions(${pt} PRIVATE IWIDGETS_VERSION=\"${IWIDGETS_VERSION}\")
     endif(IWIDGETS_VERSION)
-    if(BRLCAD_ENABLE_TK AND TK_LIBRARY)
+    if(TK_LIBRARY)
       target_compile_definitions(${pt} PRIVATE HAVE_TK)
-    endif(BRLCAD_ENABLE_TK AND TK_LIBRARY)
+    endif(TK_LIBRARY)
+    if(TCLCAD_TKOBOL_HOST)
+      target_compile_definitions(${pt} PRIVATE HAVE_TKOBOL_HOST)
+    endif()
   endforeach(pt ${ptargets})
 
   set_target_properties(libtclcad PROPERTIES VERSION 20.0.1 SOVERSION 20)
+  if(TCLCAD_TKOBOL_HOST)
+    # The public libtclcad provider API is the explicit, minimal toolkit edge
+    # for standalone callers.  It is not a separate provider library.
+    set_property(TARGET libtclcad PROPERTY
+      TCLCAD_OBOL_DISPLAY_PROVIDER_AVAILABLE TRUE)
+  endif(TCLCAD_TKOBOL_HOST)
   if(TARGET itcl_pkgIndex)
     add_dependencies(libtclcad itcl_pkgIndex)
   endif(TARGET itcl_pkgIndex)
@@ -131,8 +189,19 @@ endif(BRLCAD_ENABLE_TCL)
 add_subdirectory(tests)
 
 cmakefiles(
+  ${LIBTCLCAD_SRCS}
+  draw_view_move_helpers.h
   tclcad_private.h
   view/view.h
+  tkobol/tk-obol-host.cpp
+  tkobol/display-provider.cpp
+  tkobol/vendor/togl/LICENSE
+  tkobol/vendor/togl/README.brlcad
+  tkobol/vendor/togl/Tcl3D_License.txt
+  tkobol/vendor/togl/togl.c
+  tkobol/vendor/togl/togl.h
+  tkobol/vendor/togl/toglFont.c
+  tkobol/vendor/togl/toglFont.h
   CMakeLists.txt
 )
 

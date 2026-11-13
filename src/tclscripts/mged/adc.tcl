@@ -34,7 +34,7 @@ proc init_adc_control { id } {
 	return
     }
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
     set top .$id.adc_control
 
     if [winfo exists $top] {
@@ -350,7 +350,7 @@ proc adc_load { id } {
 	return
     }
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
 
     set mged_adc_control($id,draw) [adc draw]
     set mged_adc_control($id,dst) [format "%.4f" [adc dst]]
@@ -389,7 +389,7 @@ proc convert_coords { id } {
 	return
     }
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
 
     switch $mged_adc_control($id,coords) {
 	model {

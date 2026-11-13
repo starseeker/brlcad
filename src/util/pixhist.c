@@ -33,9 +33,10 @@
 
 #include "bu/app.h"
 #include "bu/color.h"
+#include "bu/getopt.h"
 #include "bu/log.h"
 #include "bu/str.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 #define IBUFSIZE 3*2048		/* Max read size in rgb pixels */
@@ -46,7 +47,7 @@ long bin_g[256];
 long bin_b[256];
 int verbose = 0;
 
-struct fb *fbp;
+imgstream_fb_t *fbp;
 
 static long max;
 static double scalefactor;
@@ -58,32 +59,34 @@ int
 main(int argc, char **argv)
 {
     int i;
+    int c;
+    const char *framebuffer = NULL;
 
     bu_setprogname(argv[0]);
 
     setmode(fileno(stdin), O_BINARY);
     setmode(fileno(stdout), O_BINARY);
 
-    /* check for verbose flag */
-    if (argc > 1 && BU_STR_EQUAL(argv[1], "-v")) {
-	verbose++;
-	argv++;
-	argc--;
+    while ((c = bu_getopt(argc, argv, "F:vh?")) != -1) {
+	switch (c) {
+	    case 'F': framebuffer = bu_optarg; break;
+	    case 'v': verbose++; break;
+	    default: bu_exit(1, "Usage: pixhist [-F framebuffer] [-v] [file.pix]\n");
+	}
     }
 
     /* look for optional input file */
-    if (argc > 1) {
-	if ((fp = fopen(argv[1], "rb")) == 0) {
-	    bu_exit(1, "pixhist: can't open \"%s\"\n", argv[1]);
+    if (bu_optind < argc) {
+	if ((fp = fopen(argv[bu_optind], "rb")) == 0) {
+	    bu_exit(1, "pixhist: can't open \"%s\"\n", argv[bu_optind]);
 	}
-	argv++;
-	argc--;
+	bu_optind++;
     } else
 	fp = stdin;
 
     /* check usage */
-    if (argc > 1 || isatty(fileno(fp))) {
-	bu_exit(1, "Usage: pixhist [-v] [file.pix]\n");
+    if (bu_optind < argc || isatty(fileno(fp))) {
+	bu_exit(1, "Usage: pixhist [-F framebuffer] [-v] [file.pix]\n");
     }
 
     while ((i = fread(&ibuf[0], sizeof(*ibuf), sizeof(ibuf), fp)) > 0) {
@@ -110,7 +113,7 @@ main(int argc, char **argv)
     /* Display the max? */
     bu_log("Max bin count=%ld.  %g count/pixel\n", max, scalefactor);
 
-    if ((fbp = fb_open(NULL, 512, 512)) == NULL) {
+    if ((fbp = imgstream_fb_open(framebuffer, 512, 512)) == NULL) {
 	bu_exit(12, "fb_open failed\n");
     }
 
@@ -138,13 +141,13 @@ main(int argc, char **argv)
 	for (; j < 512; j++) line[j*3+BLU] = 0;
 	if (level > npix) npix = level;
 
-	fb_write(fbp, 0, 2*i, line, npix);
-	fb_write(fbp, 0, 2*i+1, line, npix);
+	imgstream_fb_write(fbp, 0, 2*i, line, (size_t)npix);
+	imgstream_fb_write(fbp, 0, 2*i+1, line, (size_t)npix);
 	if (verbose)
 	    bu_log("%3d: %10ld %10ld %10ld (%ld)\n",
 		   i, bin_r[i], bin_g[i], bin_b[i], npix);
     }
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
     return 0;
 }
 

@@ -213,11 +213,11 @@ db_mater_color_region(struct db_i *dbip, register struct region *regp)
 	    regp->reg_regionid >= mp->mt_low) {
 	    regp->reg_mater.ma_color_valid = 1;
 	    regp->reg_mater.ma_color[0] =
-		(((double)mp->mt_r)+0.5) / 255.0;
+		((double)mp->mt_r) / 255.0;
 	    regp->reg_mater.ma_color[1] =
-		(((double)mp->mt_g)+0.5) / 255.0;
+		((double)mp->mt_g) / 255.0;
 	    regp->reg_mater.ma_color[2] =
-		(((double)mp->mt_b)+0.5) / 255.0;
+		((double)mp->mt_b) / 255.0;
 	    return;
 	}
     }
@@ -230,11 +230,11 @@ db_mater_color_region(struct db_i *dbip, register struct region *regp)
 	    regp->reg_regionid >= mp->mt_low) {
 	    regp->reg_mater.ma_color_valid = 1;
 	    regp->reg_mater.ma_color[0] =
-		(((double)mp->mt_r)+0.5) / 255.0;
+		((double)mp->mt_r) / 255.0;
 	    regp->reg_mater.ma_color[1] =
-		(((double)mp->mt_g)+0.5) / 255.0;
+		((double)mp->mt_g) / 255.0;
 	    regp->reg_mater.ma_color[2] =
-		(((double)mp->mt_b)+0.5) / 255.0;
+		((double)mp->mt_b) / 255.0;
 	    return;
 	}
     }
@@ -470,11 +470,11 @@ rt_region_color_map(struct region *regp)
 	    regp->reg_regionid >= mp->mt_low) {
 	    regp->reg_mater.ma_color_valid = 1;
 	    regp->reg_mater.ma_color[0] =
-		(((double)mp->mt_r)+0.5) / 255.0;
+		((double)mp->mt_r) / 255.0;
 	    regp->reg_mater.ma_color[1] =
-		(((double)mp->mt_g)+0.5) / 255.0;
+		((double)mp->mt_g) / 255.0;
 	    regp->reg_mater.ma_color[2] =
-		(((double)mp->mt_b)+0.5) / 255.0;
+		((double)mp->mt_b) / 255.0;
 	    return;
 	}
     }

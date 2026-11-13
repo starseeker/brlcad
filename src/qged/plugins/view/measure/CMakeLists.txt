@@ -11,9 +11,9 @@ if(BRLCAD_ENABLE_QT)
   )
 endif(BRLCAD_ENABLE_QT)
 
-set(measure_srcs measure.cpp CADViewMeasure.cpp measure.json)
+set(measure_srcs measure.cpp CADViewMeasure.cpp)
 
-set(measure_moc_hdrs CADViewMeasure.h)
+set(measure_moc_hdrs CADViewMeasure.h ViewMeasureFactory.h)
 
 if(BRLCAD_ENABLE_QT)
   if(Qt6Widgets_FOUND)
@@ -24,7 +24,6 @@ if(BRLCAD_ENABLE_QT)
     qt5_add_resources(icon_qrc icon.qrc)
   endif(Qt6Widgets_FOUND)
   qged_plugin(qged_measure SHARED ${measure_srcs} ${measure_moc_srcs} ${icon_qrc})
-  set_target_properties(qged_measure PROPERTIES AUTOMOC ON)
   if(Qt6Widgets_FOUND)
     target_link_libraries(
       qged_measure
@@ -46,13 +45,12 @@ if(BRLCAD_ENABLE_QT)
   endif(Qt6Widgets_FOUND)
   set_property(TARGET qged_measure APPEND PROPERTY COMPILE_DEFINITIONS BRLCADBUILD HAVE_CONFIG_H)
   validate_style(qged_measure measure.cpp)
-  plugin_setup(qged_measure qged-qt)
+  plugin_setup(qged_measure qged)
 
   distclean(
     icon.qrc.depends
     moc_CADViewMeasure.cpp_parameters
-    "${CMAKE_BINARY_DIR}/${LIBEXEC_DIR}/qged-qt/qged_measure.exp"
-    "${CMAKE_BINARY_DIR}/${LIBEXEC_DIR}/qged-qt/qged_measure.pdb"
+    moc_ViewMeasureFactory.cpp_parameters
   )
 endif(BRLCAD_ENABLE_QT)
 

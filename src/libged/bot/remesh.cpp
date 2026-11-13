@@ -42,6 +42,7 @@
 #include "rt/wdb.h"
 #include "ged/commands.h"
 #include "ged/database.h"
+#include "ged/event.h"
 #include "ged/objects.h"
 #include "../ged_private.h"
 #include "./ged_bot.h"
@@ -353,6 +354,8 @@ _bot_cmd_remesh(void *bs, int argc, const char **argv)
 	    return BRLCAD_ERROR;
 	}
 
+	(void)ged_event_notify_object_added(gedp, rname, NULL);
+
 	rt_db_free_internal(&intern);
 	bu_vls_printf(gedp->ged_result_str, "Remesh complete\n");
 	return BRLCAD_OK;
@@ -367,6 +370,12 @@ _bot_cmd_remesh(void *bs, int argc, const char **argv)
     }
 
     GED_DB_PUT_INTERN(gedp, dp_output, gb->intern, BRLCAD_ERROR);
+
+    if (BU_STR_EQUAL(input_bot_name, bu_vls_cstr(&output_bot_name))) {
+	(void)ged_event_notify_object_modified(gedp, bu_vls_cstr(&output_bot_name), 1, NULL);
+    } else {
+	(void)ged_event_notify_object_added(gedp, bu_vls_cstr(&output_bot_name), NULL);
+    }
 
     bu_vls_free(&output_bot_name);
 

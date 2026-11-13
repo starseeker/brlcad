@@ -29,12 +29,12 @@
 
 class QgTreeView;
 
-class QTCAD_EXPORT QgTreeSelectionModel : public QItemSelectionModel
-{
-    Q_OBJECT
-    Q_DISABLE_COPY_MOVE(QgTreeSelectionModel)
+class QTCAD_EXPORT QgTreeSelectionModel : public QItemSelectionModel {
+	Q_OBJECT
+	Q_DISABLE_COPY_MOVE(QgTreeSelectionModel)
 
-    public:
+
+public:
 
 	QgTreeSelectionModel(QAbstractItemModel *model, QObject *parent, QgTreeView *tree_view) :
 	    QItemSelectionModel(model, parent), m_tree_view(tree_view) {}
@@ -42,13 +42,14 @@ class QTCAD_EXPORT QgTreeSelectionModel : public QItemSelectionModel
 	    QItemSelectionModel(model), m_tree_view(tree_view) {}
 
 	void clear_all();
+
 	QgTreeView *treeView() const { return m_tree_view; }
 
-    public slots:
+public slots:
 	void select(const QItemSelection &selection, QItemSelectionModel::SelectionFlags flags) override;
 	void select(const QModelIndex &index, QItemSelectionModel::SelectionFlags flags) override;
 
-    private:
+private:
 	QgTreeView *m_tree_view = nullptr;
 };
 
@@ -62,4 +63,3 @@ class QTCAD_EXPORT QgTreeSelectionModel : public QItemSelectionModel
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

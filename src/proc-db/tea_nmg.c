@@ -34,6 +34,8 @@
 #include "bu/getopt.h"
 #include "vmath.h"		/* BRL-CAD Vector macros */
 #include "nmg.h"
+#include "nmg/plot.h"
+#include "bg/vlist.h"
 #include "raytrace.h"
 #include "wdb.h"
 
@@ -232,7 +234,7 @@ main(int argc, char **argv)
 	bu_log("Cannot open plot3 file: %s\n", uplot_name);
 	perror("teapot_nmg");
     } else {
-	bv_vlist_to_uplot(fp, &vhead);
+	bg_vlist_to_uplot(fp, &vhead);
     }
 
     bu_log(" done.\n");

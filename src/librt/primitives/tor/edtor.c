@@ -118,8 +118,7 @@ static const struct rt_edit_param_desc tor_r2_params[] = {
 
 static const struct rt_edit_cmd_desc tor_cmds[] = {
     {
-	ECMD_TOR_R1,          /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_TOR_R1),          /* name       */
+	ECMD_TOR_R1, RT_EDIT_CMD_NAME(ECMD_TOR_R1),          /* cmd_id       */
 	"Set Radius 1",       /* label        */
 	"radius",             /* category     */
 	1,                    /* nparam       */
@@ -129,8 +128,7 @@ static const struct rt_edit_cmd_desc tor_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_TOR_R2,          /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_TOR_R2),          /* name       */
+	ECMD_TOR_R2, RT_EDIT_CMD_NAME(ECMD_TOR_R2),          /* cmd_id       */
 	"Set Radius 2",       /* label        */
 	"radius",             /* category     */
 	1,                    /* nparam       */
@@ -160,26 +158,29 @@ rt_edit_tor_edit_desc(void)
     return &tor_prim_desc;
 }
 
-static int
-tor_current_numbers(struct rt_edit *s, int cmd_id, fastf_t *vals)
+C_DECL int
+rt_edit_tor_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
 {
     struct rt_tor_internal *tor;
 
-    if (!s || !vals)
-	return -1;
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
 
     tor = (struct rt_tor_internal *)s->es_int.idb_ptr;
     RT_TOR_CK_MAGIC(tor);
 
-    switch (cmd_id) {
+	switch (cmd_id) {
 	case ECMD_TOR_R1:
-	    vals[0] = tor->r_a * s->base2local;
-	    return 1;
+	    rt_edit_cmd_values_set_value(result, 0,
+		tor->r_a * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	case ECMD_TOR_R2:
-	    vals[0] = tor->r_h * s->base2local;
-	    return 1;
+	    rt_edit_cmd_values_set_value(result, 0,
+		tor->r_h * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 	default:
-	    return 0;
+	    return RT_EDIT_VALUE_UNAVAILABLE;
     }
 }
 
@@ -338,14 +339,6 @@ rt_edit_tor_edit_xy(
     }
 }
 
-
-C_DECL int
-rt_edit_tor_get_values(struct rt_edit *s, int cmd_id,
-	struct rt_edit_cmd_values *result)
-{
-    return edit_current_values_from_numbers(s, cmd_id, result,
-	tor_current_numbers);
-}
 
 /*
  * Local Variables:

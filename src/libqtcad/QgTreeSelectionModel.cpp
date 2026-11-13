@@ -22,111 +22,152 @@
  */
 
 #include "common.h"
+#include <algorithm>
+#include <queue>
 #include <unordered_set>
+#include <stack>
+#include <vector>
 #include <QGuiApplication>
 #include "qtcad/QgUtil.h"
 #include "qtcad/QgModel.h"
 #include "qtcad/QgTreeSelectionModel.h"
-#include "qtcad/QgTreeView.h"
 #include "qtcad/QgSignalFlags.h"
 
-static void
-qg_selection_commit(QgTreeView *tree_view, QgModel *model)
-{
-    if (!tree_view || !model)
-	return;
+#include "ged/selection.h"
 
-    QgViewUpdateFlags flags = model->selectionCommit();
-    emit tree_view->view_changed(flags);
+static void
+qg_commit_selection_change(QgTreeView *tree_view, QgModel *model)
+{
+	if (!tree_view || !model || !model->ged())
+		return;
+
+	/* All path mutations in one Qt selection request are complete before
+	 * deriving ancestor/descendant metadata or touching retained
+	 * presentation.  Large range selections therefore pay for exactly one
+	 * hierarchy recompute, one sparse selection commit, and one indexed row
+	 * notification pass. */
+	ged_selection_recompute(model->ged(), nullptr);
+	(void)ged_selection_batch_end(model->ged());
+
+	QgViewUpdateFlags flags = QG_VIEW_SELECT | QG_VIEW_REFRESH;
+
+	emit tree_view->view_changed(flags);
+	model->notifySelectionItemsChanged();
 }
 
 void
 QgTreeSelectionModel::clear_all()
 {
-    QgModel *model = m_tree_view ? m_tree_view->cadModel() : nullptr;
-    if (!model)
-	return;
+	QgModel *m = m_tree_view->cadModel();
 
-    model->selectionClear();
-    qg_selection_commit(m_tree_view, model);
+	ged_selection_clear(m->ged(), nullptr);
 }
 
 void
 QgTreeSelectionModel::select(const QItemSelection &selection, QItemSelectionModel::SelectionFlags flags)
 {
-    QTCAD_SLOT("QgTreeSelectionModel::select QItemSelection", 1);
-    QgModel *model = m_tree_view ? m_tree_view->cadModel() : nullptr;
-    if (!model || model->structureChangeInProgress()) {
-	QItemSelectionModel::select(selection, flags);
-	return;
-    }
-
-    QModelIndexList indexes = selection.indexes();
-    std::unordered_set<QgItem *> visited;
-    for (const QModelIndex &index : indexes) {
-	QgItem *snode = static_cast<QgItem *>(index.internalPointer());
-	if (!snode || !visited.insert(snode).second)
-	    continue;
-
-	// If we are selecting an already selected node, clear it
-	if (flags & QItemSelectionModel::Select && model->itemSelected(snode)) {
-	    if (!(QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier))) {
-		if (flags & QItemSelectionModel::Clear && model->selectionCount() > 1) {
-		    model->selectionClear();
-		    model->itemSelect(snode);
-		} else {
-		    model->itemDeselect(snode);
-		}
-	    }
-	} else {
-	    if (flags & QItemSelectionModel::Clear)
-		model->selectionClear();
-
-	    model->itemSelect(snode);
+	QTCAD_SLOT("QgTreeSelectionModel::select QItemSelection", 1);
+	QgModel *m = m_tree_view->cadModel();
+	/* QItemSelectionModel adjusts its private ranges while the source model is
+	 * being reset or rows are changing.  Those maintenance calls are not CAD
+	 * selection requests and must not clear or redraw the GED scene. */
+	if (m->structureChangeInProgress()) {
+		QItemSelectionModel::select(selection, flags);
+		return;
 	}
-    }
+	struct ged *gedp = m->ged();
+	(void)ged_selection_batch_begin(gedp);
 
-    qg_selection_commit(m_tree_view, model);
+	QModelIndexList dl = selection.indexes();
+	std::unordered_set<QgItem *> visited;
+	for (long int i = 0; i < dl.size(); i++) {
+		QgItem *snode = static_cast<QgItem *>(dl.at(i).internalPointer());
+		/* QItemSelection::indexes() can contain one index per column for
+		 * the same tree item.  A CAD path is a row identity, so never
+		 * repeat its hash lookup and mutation. */
+		if (!snode || !visited.insert(snode).second)
+			continue;
+
+		// If we are selecting an already selected node, clear it
+		if (flags & QItemSelectionModel::Select &&
+			ged_selection_is_path_selected(gedp, nullptr, snode->path_hash())) {
+			if (!(QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier))) {
+				if (flags & QItemSelectionModel::Clear &&
+					ged_selection_count(gedp, nullptr) > 1) {
+					ged_selection_clear(gedp, nullptr);
+					std::vector<unsigned long long> path_hashes = snode->path_items();
+					ged_selection_select_path_ids(gedp, nullptr,
+						path_hashes.data(), path_hashes.size(), 0);
+				}
+				else {
+					std::vector<unsigned long long> path_hashes = snode->path_items();
+					ged_selection_deselect_path_ids(gedp, nullptr,
+						path_hashes.data(), path_hashes.size(), 0);
+				}
+			}
+		}
+		else {
+			if (flags & QItemSelectionModel::Clear)
+				ged_selection_clear(gedp, nullptr);
+
+			std::vector<unsigned long long> path_hashes = snode->path_items();
+			ged_selection_select_path_ids(gedp, nullptr,
+				path_hashes.data(), path_hashes.size(), 0);
+		}
+	}
+
+	qg_commit_selection_change(m_tree_view, m);
 }
 
 void
 QgTreeSelectionModel::select(const QModelIndex &index, QItemSelectionModel::SelectionFlags flags)
 {
-    QTCAD_SLOT("QgTreeSelectionModel::select QModelIndex", 1);
-    QgModel *model = m_tree_view ? m_tree_view->cadModel() : nullptr;
-    if (!model || model->structureChangeInProgress()) {
-	QItemSelectionModel::select(index, flags);
-	return;
-    }
+	QTCAD_SLOT("QgTreeSelectionModel::select QModelIndex", 1);
+	QgModel *m = m_tree_view->cadModel();
+	/* See the QItemSelection overload above. */
+	if (m->structureChangeInProgress()) {
+		QItemSelectionModel::select(index, flags);
+		return;
+	}
+	struct ged *gedp = m->ged();
+	(void)ged_selection_batch_begin(gedp);
 
-    if (flags & QItemSelectionModel::Clear)
-	model->selectionClear();
+	if (flags & QItemSelectionModel::Clear)
+		ged_selection_clear(gedp, nullptr);
 
-    QgItem *snode = static_cast<QgItem *>(index.internalPointer());
-    if (!snode) {
-	model->selectionClear();
-	qg_selection_commit(m_tree_view, model);
-	return;
-    }
-
-    if (!(flags & QItemSelectionModel::Deselect)) {
-
-	// If we are selecting an already selected node, clear it
-	if (flags & QItemSelectionModel::Select && model->itemSelected(snode)) {
-	    model->itemDeselect(snode);
-	    qg_selection_commit(m_tree_view, model);
-	    return;
+	QgItem *snode = static_cast<QgItem *>(index.internalPointer());
+	if (!snode) {
+		ged_selection_clear(gedp, nullptr);
+		qg_commit_selection_change(m_tree_view, m);
+		return;
 	}
 
-	model->itemSelect(snode);
+	if (!(flags & QItemSelectionModel::Deselect)) {
 
-    } else {
+		// If we are selecting an already selected node, clear it
+		if (flags & QItemSelectionModel::Select &&
+			ged_selection_is_path_selected(gedp, nullptr, snode->path_hash())) {
+			std::vector<unsigned long long> path_hashes = snode->path_items();
+			ged_selection_deselect_path_ids(gedp, nullptr,
+				path_hashes.data(), path_hashes.size(), 0);
+			qg_commit_selection_change(m_tree_view, m);
+			return;
+		}
 
-	model->itemDeselect(snode);
+		std::vector<unsigned long long> path_hashes = snode->path_items();
+		ged_selection_select_path_ids(gedp, nullptr,
+			path_hashes.data(), path_hashes.size(), 0);
 
-    }
+	}
+	else {
 
-    qg_selection_commit(m_tree_view, model);
+		std::vector<unsigned long long> path_hashes = snode->path_items();
+		ged_selection_deselect_path_ids(gedp, nullptr,
+			path_hashes.data(), path_hashes.size(), 0);
+
+	}
+
+	qg_commit_selection_change(m_tree_view, m);
 }
 
 // Local Variables:
@@ -137,4 +178,3 @@ QgTreeSelectionModel::select(const QModelIndex &index, QItemSelectionModel::Sele
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

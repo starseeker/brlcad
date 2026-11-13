@@ -124,7 +124,6 @@ rt_edit_cline_edit_desc(void)
     return &cline_prim_desc;
 }
 
-
 C_DECL int
 rt_edit_cline_get_values(struct rt_edit *s, int cmd_id,
 	struct rt_edit_cmd_values *result)

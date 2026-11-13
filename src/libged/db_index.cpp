@@ -36,9 +36,13 @@
 #include <unordered_set>
 #include <vector>
 
+#include "BObol/BDrawCache.h"
+#include "BObol/BLodRealization.h"
+#include "BObol/BMeshLodCache.h"
 #include "bu/hash.h"
-#include "ged/event.h"
 #include "raytrace.h"
+#include "rt/db_discovery.h"
+#include "rt/view.h"
 #include "ged/db_index.h"
 
 #include "./ged_private.h"
@@ -82,8 +86,6 @@ struct ged_db_index_tree_leaf {
 
 struct ged_db_index {
     struct ged *gedp = nullptr;
-    struct db_i *dbip = nullptr;
-    ged_event_observer_token event_observer = 0;
     uint64_t revision = 0;
     /* Change notification and index dirtiness are deliberately separate.
      * Clients consume pending_flags to update their own derived state, while
@@ -494,7 +496,6 @@ ged_db_index_rebuild(struct ged_db_index *index)
     index->tops_cache_valid = false;
     index->standard_tops_cache.clear();
     index->cyclic_tops_cache.clear();
-    index->dbip = index->gedp->dbip;
 
     struct directory *dp = RT_DIR_NULL;
     FOR_ALL_DIRECTORY_START(dp, index->gedp->dbip) {
@@ -515,14 +516,95 @@ ged_db_index_rebuild(struct ged_db_index *index)
 }
 
 
+int
+ged_db_index_adopt_discovery(struct ged *gedp,
+	const struct rt_db_hierarchy *hierarchy)
+{
+    struct ged_db_index *index = ged_db_index_state(gedp);
+    if (!index || !gedp || !gedp->dbip || !hierarchy)
+	return 0;
+
+    index->records.clear();
+    index->children.clear();
+    index->child_names.clear();
+    index->parents.clear();
+    index->names.clear();
+    index->tops_cache_valid = false;
+    index->standard_tops_cache.clear();
+    index->cyclic_tops_cache.clear();
+
+    const size_t arc_count = rt_db_hierarchy_arc_count(hierarchy);
+    index->records.reserve(arc_count + 1);
+    index->names.reserve(arc_count + 1);
+    index->parents.reserve(arc_count + 1);
+
+    struct directory *dp = RT_DIR_NULL;
+    FOR_ALL_DIRECTORY_START(dp, gedp->dbip) {
+	ged_db_index_add_object(index, dp);
+    } FOR_ALL_DIRECTORY_END;
+
+    struct directory *instance_parent = RT_DIR_NULL;
+    std::unordered_map<ged_db_index_id, unsigned long long> instance_counts;
+    std::unordered_map<ged_db_index_id, size_t> parent_counts;
+    std::unordered_map<ged_db_index_id, size_t> child_use_counts;
+    parent_counts.reserve(std::min<size_t>(arc_count, 16384));
+    child_use_counts.reserve(arc_count + 1);
+    for (size_t i = 0; i < arc_count; ++i) {
+	struct rt_db_hierarchy_arc arc;
+	if (!rt_db_hierarchy_arc_get(hierarchy, i, &arc) ||
+	    !arc.parent || !(arc.parent->d_flags & RT_DIR_COMB) ||
+	    !arc.parent->d_namep || !arc.child_name)
+	    continue;
+	parent_counts[ged_db_index_name_hash(arc.parent->d_namep)]++;
+	child_use_counts[ged_db_index_name_hash(arc.child_name)]++;
+    }
+    index->children.reserve(parent_counts.size());
+    index->child_names.reserve(parent_counts.size());
+    for (const auto &entry : parent_counts) {
+	index->children[entry.first].reserve(entry.second);
+	index->child_names[entry.first].reserve(entry.second);
+    }
+    for (const auto &entry : child_use_counts)
+	index->parents[entry.first].reserve(entry.second);
+
+    for (size_t i = 0; i < arc_count; ++i) {
+	struct rt_db_hierarchy_arc arc;
+	if (!rt_db_hierarchy_arc_get(hierarchy, i, &arc) ||
+	    !arc.parent || !(arc.parent->d_flags & RT_DIR_COMB) ||
+	    !arc.parent->d_namep || !arc.child_name)
+	    continue;
+	if (instance_parent != arc.parent) {
+	    instance_parent = arc.parent;
+	    instance_counts.clear();
+	}
+	const ged_db_index_id parent_id =
+	    ged_db_index_name_hash(arc.parent->d_namep);
+	const ged_db_index_id child_object_id =
+	    ged_db_index_name_hash(arc.child_name);
+	const unsigned long long count = ++instance_counts[child_object_id];
+	int operation = OP_UNION;
+	if (arc.operation == DB_OP_SUBTRACT)
+	    operation = OP_SUBTRACT;
+	else if (arc.operation == DB_OP_INTERSECT)
+	    operation = OP_INTERSECT;
+	ged_db_index_add_child(index, parent_id, arc.child_name, operation,
+	    count, arc.matrix_valid != 0, arc.matrix, arc.child);
+    }
+
+    ged_db_index_add_removed_names(index);
+    index->revision++;
+    index->needs_rebuild = 0;
+    index->pending_flags = 0;
+    return 1;
+}
+
+
 static struct ged_db_index *
 ged_db_index_ready(struct ged *gedp)
 {
     struct ged_db_index *index = ged_db_index_state(gedp);
     if (!index)
 	return nullptr;
-    if (index->dbip != gedp->dbip)
-	index->needs_rebuild = 1;
     if (!index->revision || index->needs_rebuild)
 	ged_db_index_rebuild(index);
     return index;
@@ -533,6 +615,75 @@ static std::vector<std::vector<ged_db_index_id>>
 ged_db_index_affected_paths(struct ged_db_index *index,
 			    ged_db_index_id object_id,
 			    size_t max_depth);
+
+static std::unordered_set<std::string>
+ged_db_index_affected_full_path_cache_keys(struct ged_db_index *index,
+	ged_db_index_id object_id);
+
+
+static void
+ged_db_index_note_lod_name_change(struct ged *gedp,
+				  const std::string &name,
+				  int invalidate_mesh_lod)
+{
+    if (!gedp || !gedp->dbip || name.empty())
+	return;
+
+    (void)bobol_draw_proxy_cache_invalidate(gedp->dbip, name.c_str(),
+	    BOBOL_LOD_PROXY_AABB, NULL);
+    (void)bobol_draw_proxy_cache_invalidate(gedp->dbip, name.c_str(),
+	    BOBOL_LOD_PROXY_OBB, NULL);
+    (void)bobol_draw_metadata_cache_invalidate(gedp->dbip, name.c_str(), NULL);
+    (void)bobol_draw_path_metadata_cache_invalidate(gedp->dbip,
+	    name.c_str(), NULL);
+    if (invalidate_mesh_lod)
+	(void)bobol_mesh_lod_cache_invalidate(gedp->dbip, name.c_str(), NULL);
+}
+
+
+static void
+ged_db_index_note_lod_change(struct ged *gedp, const char *name)
+{
+    if (!gedp || !gedp->dbip || !name || !name[0])
+	return;
+
+    /* Structural manifests are draw-root snapshots.  An edit anywhere in
+     * this database can change one, so retain no stale hierarchy records. */
+    (void)bobol_draw_manifest_cache_invalidate_database(gedp->dbip);
+
+    std::unordered_set<std::string> affected_names;
+    affected_names.insert(std::string(name));
+
+    (void)bobol_draw_path_metadata_cache_invalidate_object(gedp->dbip,
+	    name, NULL);
+
+    struct ged_db_index *index = ged_db_index_state(gedp);
+    if (index && index->revision) {
+	ged_db_index_id object_id = ged_db_index_name_hash(name);
+	std::vector<std::vector<ged_db_index_id>> affected_paths =
+	    ged_db_index_affected_paths(index, object_id, 0);
+	std::unordered_set<std::string> affected_path_keys =
+	    ged_db_index_affected_full_path_cache_keys(index, object_id);
+	for (const std::vector<ged_db_index_id> &path : affected_paths) {
+	    for (ged_db_index_id path_id : path) {
+		ged_db_index_id canonical_id =
+		    ged_db_index_canonical_object_id(index, path_id);
+		auto record_it = index->records.find(canonical_id);
+		if (record_it != index->records.end() &&
+		    !record_it->second.name.empty())
+		    affected_names.insert(record_it->second.name);
+	    }
+	}
+	for (const std::string &affected_path_key : affected_path_keys)
+	    (void)bobol_draw_path_metadata_cache_invalidate(gedp->dbip,
+		affected_path_key.c_str(), NULL);
+    }
+
+    for (const std::string &affected_name : affected_names)
+	ged_db_index_note_lod_name_change(gedp, affected_name,
+					  affected_name == name);
+}
+
 
 static void
 ged_db_index_cycle_dfs(struct ged_db_index *index,
@@ -773,50 +924,119 @@ ged_db_index_affected_paths(struct ged_db_index *index,
 }
 
 
-static void
-ged_db_index_event_callback(struct ged *gedp,
-	const struct ged_event *events, size_t event_count,
-	const struct ged_event_result *UNUSED(result), void *client_data)
+static int
+ged_db_index_path_cache_key(struct ged_db_index *index,
+			    const std::vector<ged_db_index_id> &path,
+			    std::string &key)
 {
-    struct ged_db_index *index = static_cast<struct ged_db_index *>(client_data);
-    for (size_t i = 0; i < event_count; ++i) {
-	const struct ged_event &event = events[i];
-	switch (event.kind) {
-	    case GED_EVENT_OBJECT_REMOVED:
-		(void)ged_db_index_note_object_name_change(gedp, event.name,
-		    GED_DB_INDEX_OBJECT_REMOVED);
-		break;
-	    case GED_EVENT_OBJECT_RENAMED:
-		(void)ged_db_index_note_object_name_change(gedp, event.name,
-		    GED_DB_INDEX_OBJECT_REMOVED);
-		(void)ged_db_index_note_object_name_change(gedp, event.new_name,
-		    GED_DB_INDEX_OBJECT_ADDED);
-		break;
-	    case GED_EVENT_OBJECT_ADDED:
-		(void)ged_db_index_note_object_name_change(gedp, event.name,
-		    GED_DB_INDEX_OBJECT_ADDED);
-		break;
-	    case GED_EVENT_COMB_INSTANCE_REMOVED:
-	    case GED_EVENT_OBJECT_REFERENCES_REMOVED:
-		(void)ged_db_index_note_object_name_change(gedp,
-		    event.parent_name, GED_DB_INDEX_OBJECT_CHANGED);
-		break;
-	    case GED_EVENT_NONE:
-		break;
-	    case GED_EVENT_BATCH_REBUILD:
-	    case GED_EVENT_DATABASE_METADATA_CHANGED:
-		index->needs_rebuild = 1;
-		index->pending_flags |= GED_DB_INDEX_REFRESH_DB_CHANGE;
-		break;
-	    default:
-		if (!ged_db_index_note_object_name_change(gedp, event.name,
-		    GED_DB_INDEX_OBJECT_CHANGED)) {
-		    index->needs_rebuild = 1;
-		    index->pending_flags |= GED_DB_INDEX_REFRESH_DB_CHANGE;
-		}
-		break;
+    key.clear();
+    if (!index || path.empty())
+	return 0;
+
+    for (ged_db_index_id id : path) {
+	ged_db_index_id canonical_id =
+	    ged_db_index_canonical_object_id(index, id);
+	auto record_it = index->records.find(canonical_id);
+	if (record_it == index->records.end() ||
+	    record_it->second.name.empty())
+	    return 0;
+	if (!key.empty())
+	    key.append("/");
+	key.append(record_it->second.name);
+    }
+
+    return !key.empty();
+}
+
+
+static void
+ged_db_index_collect_descendant_paths(
+    struct ged_db_index *index,
+    ged_db_index_id object_id,
+    std::vector<ged_db_index_id> &stack,
+    std::vector<std::vector<ged_db_index_id>> &paths)
+{
+    if (!index || !object_id)
+	return;
+
+    object_id = ged_db_index_canonical_object_id(index, object_id);
+    if (!object_id)
+	return;
+
+    if (std::find(stack.begin(), stack.end(), object_id) != stack.end())
+	return;
+
+    paths.push_back({object_id});
+
+    auto child_it = index->children.find(object_id);
+    if (child_it == index->children.end() || child_it->second.empty())
+	return;
+
+    stack.push_back(object_id);
+    for (const ged_db_index_child_native &child : child_it->second) {
+	ged_db_index_id child_object_id =
+	    ged_db_index_canonical_object_id(index, child.id);
+	if (!child_object_id)
+	    continue;
+	std::vector<std::vector<ged_db_index_id>> child_paths;
+	ged_db_index_collect_descendant_paths(index, child_object_id,
+					     stack, child_paths);
+	for (const std::vector<ged_db_index_id> &child_path : child_paths) {
+	    if (child_path.empty())
+		continue;
+	    std::vector<ged_db_index_id> path;
+	    path.reserve(child_path.size() + 1);
+	    path.push_back(object_id);
+	    path.insert(path.end(), child_path.begin(), child_path.end());
+	    paths.push_back(path);
 	}
     }
+    stack.pop_back();
+}
+
+
+static std::vector<std::vector<ged_db_index_id>>
+ged_db_index_descendant_paths(struct ged_db_index *index,
+			      ged_db_index_id object_id)
+{
+    std::vector<std::vector<ged_db_index_id>> paths;
+    std::vector<ged_db_index_id> stack;
+    ged_db_index_collect_descendant_paths(index, object_id, stack, paths);
+    return paths;
+}
+
+
+static std::unordered_set<std::string>
+ged_db_index_affected_full_path_cache_keys(struct ged_db_index *index,
+	ged_db_index_id object_id)
+{
+    std::unordered_set<std::string> keys;
+    if (!index || !object_id)
+	return keys;
+
+    std::vector<std::vector<ged_db_index_id>> prefixes =
+	ged_db_index_affected_paths(index, object_id, 0);
+    std::vector<std::vector<ged_db_index_id>> suffixes =
+	ged_db_index_descendant_paths(index, object_id);
+    if (prefixes.empty() || suffixes.empty())
+	return keys;
+
+    for (const std::vector<ged_db_index_id> &prefix : prefixes) {
+	if (prefix.empty())
+	    continue;
+	for (const std::vector<ged_db_index_id> &suffix : suffixes) {
+	    std::vector<ged_db_index_id> full_path = prefix;
+	    if (suffix.size() > 1)
+		full_path.insert(full_path.end(), suffix.begin() + 1,
+				 suffix.end());
+
+	    std::string key;
+	    if (ged_db_index_path_cache_key(index, full_path, key))
+		keys.insert(key);
+	}
+    }
+
+    return keys;
 }
 
 
@@ -825,8 +1045,6 @@ ged_db_index_create(struct ged *gedp)
 {
     struct ged_db_index *index = new ged_db_index;
     index->gedp = gedp;
-    index->event_observer = ged_event_observer_add(gedp,
-	GED_EVENT_OBSERVER_INTERNAL, ged_db_index_event_callback, index);
     return index;
 }
 
@@ -834,8 +1052,6 @@ ged_db_index_create(struct ged *gedp)
 void
 ged_db_index_destroy(struct ged_db_index *index)
 {
-    if (index && index->gedp && index->event_observer)
-	ged_event_observer_remove(index->gedp, index->event_observer);
     delete index;
 }
 
@@ -900,6 +1116,7 @@ ged_db_index_note_object_change(struct ged *gedp,
     if (!index)
 	return 0;
 
+    ged_db_index_note_lod_change(gedp, dp->d_namep);
     index->needs_rebuild = 1;
     index->pending_flags |= GED_DB_INDEX_REFRESH_DB_CHANGE;
 
@@ -936,6 +1153,7 @@ ged_db_index_note_object_name_change(struct ged *gedp,
 	ged_db_index_id id = ged_db_index_name_hash(name);
 	if (!id)
 	    return 0;
+	ged_db_index_note_lod_change(gedp, name);
 	index->removed_names[id] = std::string(name);
 	index->needs_rebuild = 1;
 	index->pending_flags |= GED_DB_INDEX_REFRESH_DB_CHANGE;

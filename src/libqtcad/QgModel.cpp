@@ -33,26 +33,36 @@
  * which means instance changes have potentially global impacts on the QgItems
  * hierarchy and it must be fully checked for validity (and repaired as
  * appropriate) after each cycle.  A validity check would be something like:
- * 1) check the hash of the QgItem against the GED database index to see if it is
- * still valid.  If not, it must be either removed or replaced
+ * 1) check the hash of the QgItem against the GED database index to see if it
+ * is still valid.  If not, it must be either removed or replaced
  */
 
 #include "common.h"
 
 #include <algorithm>
-#include <cctype>
-#include <memory>
+#include <cstring>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <thread>
 #include <QAction>
+#include <QCoreApplication>
+#include <QEventLoop>
 #include <QFileInfo>
+#include <QMetaObject>
+#include <QThread>
+#include <QVector>
 
 #include "bu/env.h"
+#include "bu/hash.h"
 #include "bu/sort.h"
-#include "ged/database.h"
+#include "bu/datetime.h"
+#include "bu/vls.h"
 #include "ged/db_index.h"
+#include "ged/display_obol_private.h"
+#include "ged/draw.h"
+#include "ged/event.h"
 #include "ged/scene.h"
 #include "ged/selection.h"
 #include "raytrace.h"
@@ -63,1147 +73,558 @@
 #include "qtcad/QgSession.h"
 #include "qtcad/QgUtil.h"
 #include "qtcad/QgSignalFlags.h"
-#include "../librt/librt_private.h"
 
-using QgDbChangeSet = std::unique_ptr<struct ged_db_change_set,
-    decltype(&ged_db_change_set_destroy)>;
+/* Validate the character constant stored in QgItem::op matches the enum. */
+static_assert(DB_OP_UNION == 'u', "DB_OP_UNION enum value changed; update QgItem::op default in QgModel.h");
 
-static QgDbChangeSet
-qg_db_changes(struct ged *gedp)
-{
-    return QgDbChangeSet(ged_db_change_set_create(gedp, 0),
-	ged_db_change_set_destroy);
-}
-
-static void
-qg_db_change_names(std::set<std::string> &names,
-    const struct ged_db_change_set *changes,
-    enum ged_db_change_object_kind kind)
-{
-    const size_t count = ged_db_change_set_object_count(changes, kind);
-    for (size_t i = 0; i < count; i++) {
-	const char *name = ged_db_change_set_object_at(changes, kind, i);
-	if (name)
-	    names.insert(name);
-    }
-}
-
-struct QgItem_cmp {
-    inline bool operator() (const QgItem *i1, const QgItem *i2)
-    {
-	if (!i1 && !i2)
-	    return false;
-	if (!i1 && i2)
-	    return true;
-	if (i1 && !i2)
-	    return false;
-	if (!i1->instanceHash() && !i2->instanceHash())
-	    return false;
-	if (!i1->instanceHash() && i2->instanceHash())
-	    return true;
-	if (i1->instanceHash() && !i2->instanceHash())
-	    return false;
-
-	struct directory *inst1 = i1->directoryEntry();
-	struct directory *inst2 = i2->directoryEntry();
-
-	if (!inst1 && !inst2)
-	    return false;
-	if (!inst1 && inst2)
-	    return true;
-	if (inst1 && !inst2)
-	    return false;
-
-	const char *n1 = inst1->d_namep;
-	const char *n2 = inst2->d_namep;
-	if (alphanum_impl(n1, n2, NULL) < 0)
-	    return true;
-
-	return false;
-    }
+struct QgModelDrawObserverAccess {
+	static void callback(struct ged *gedp,
+			     const struct ged_scene_delta *delta,
+			     void *client_data);
 };
 
-static bool
-qg_index_children(struct ged *gedp, unsigned long long parent_id,
-	std::vector<unsigned long long> &children,
-	std::unordered_map<unsigned long long, db_op_t> *operations = NULL)
+static int
+qgmodel_ged_owner_dispatch(void *client_data, ged_exec_owner_task_t task,
+	void *task_data)
 {
-    children.clear();
-    if (operations)
-	operations->clear();
+	QgModel *model = static_cast<QgModel *>(client_data);
+	if (!model || !task)
+		return BRLCAD_ERROR;
+	if (QThread::currentThread() == model->thread())
+		return task(task_data);
 
-    struct ged_db_index_record parent;
-    if (!ged_db_index_record_get(gedp, parent_id, &parent))
-	return false;
-
-    children.reserve(parent.child_count);
-    for (size_t row = 0; row < parent.child_count; row++) {
-	struct ged_db_index_child child;
-	if (!ged_db_index_child_at(gedp, parent_id, row, &child)) {
-	    children.clear();
-	    if (operations)
-		operations->clear();
-	    return false;
-	}
-	children.push_back(child.record.id);
-	if (operations)
-	    (*operations)[child.record.id] =
-		static_cast<db_op_t>(child.bool_op);
-    }
-    return true;
-}
-
-static std::vector<unsigned long long>
-qg_index_tops(struct ged *gedp)
-{
-    const size_t count = ged_db_index_tops(gedp, 1, NULL, 0);
-    std::vector<unsigned long long> tops(count);
-    if (count && ged_db_index_tops(gedp, 1, tops.data(), tops.size()) !=
-	    count)
-	tops.clear();
-    return tops;
+	int ret = BRLCAD_ERROR;
+	bool invoked = QMetaObject::invokeMethod(model, [&]() {
+		ret = task(task_data);
+	}, Qt::BlockingQueuedConnection);
+	return invoked ? ret : BRLCAD_ERROR;
 }
 
 static void
-qgmodel_mark_invalid_subtree(std::unordered_set<QgItem *> &invalid,
-	QgItem *item)
+qgmodel_append_unique_path(std::vector<std::string> &paths, const char *path)
 {
-    if (!item || !invalid.insert(item).second)
-	return;
+	if (!path || !path[0])
+		return;
+	std::string spath(path);
+	if (std::find(paths.begin(), paths.end(), spath) == paths.end())
+		paths.push_back(spath);
+}
 
-    for (QgItem *child : item->childItems())
-	qgmodel_mark_invalid_subtree(invalid, child);
+static std::string
+qgmodel_parent_path(const char *path)
+{
+	if (!path || !path[0])
+		return std::string();
+
+	std::string parent(path);
+	while (!parent.empty() && parent.back() == '/')
+		parent.pop_back();
+	if (parent.empty())
+		return std::string();
+
+	size_t slash = parent.rfind('/');
+	if (slash == std::string::npos)
+		return std::string();
+
+	parent.erase(slash);
+	while (!parent.empty() && parent.back() == '/')
+		parent.pop_back();
+	return parent;
 }
 
 static bool
-qgmodel_item_matches_name(const QgItem *item, const std::string &name)
+qgmodel_path_has_queued_ancestor(const std::vector<std::string> &paths,
+				 const std::string &path)
 {
-    if (!item)
+	std::string parent = qgmodel_parent_path(path.c_str());
+	while (!parent.empty()) {
+		if (std::find(paths.begin(), paths.end(), parent) !=
+			paths.end())
+			return true;
+		parent = qgmodel_parent_path(parent.c_str());
+	}
 	return false;
+}
 
-    std::string item_name = item->displayName();
-    if (item_name == name)
-	return true;
-    if (item_name.size() <= name.size() + 1 ||
-	item_name.compare(0, name.size(), name) ||
-	item_name[name.size()] != '@')
-	return false;
-    return std::all_of(item_name.begin() + name.size() + 1,
-	item_name.end(), [](unsigned char c) { return std::isdigit(c); });
+static struct ged_view_context *
+qgmodel_active_view_context(const QgModel *model)
+{
+	QgSession *session = model ? model->session() : nullptr;
+	return session ? ged_view_context_from_bv(session->activeViewContext()) : nullptr;
+}
+
+static enum ged_scene_status
+qgmodel_apply_scene_draw(struct ged *gedp,
+			 const struct ged_scene_draw_request *request,
+			 int *changed)
+{
+	struct ged_scene_result *result = ged_scene_result_create();
+	if (!result)
+		return GED_SCENE_ERROR;
+	enum ged_scene_status status = ged_scene_draw(gedp, request, result);
+	if (changed)
+		*changed = ged_scene_result_changed(result);
+	ged_scene_result_destroy(result);
+	return status;
+}
+
+static enum ged_scene_status
+qgmodel_apply_scene_erase(struct ged *gedp,
+			  const struct ged_scene_erase_request *request,
+			  int *changed)
+{
+	struct ged_scene_result *result = ged_scene_result_create();
+	if (!result)
+		return GED_SCENE_ERROR;
+	enum ged_scene_status status = ged_scene_erase(gedp, request, result);
+	if (changed)
+		*changed = ged_scene_result_changed(result);
+	ged_scene_result_destroy(result);
+	return status;
 }
 
 static int
-qgmodel_item_path(struct bu_vls *path, QgItem *item)
+qgmodel_event_affects_hierarchy(enum ged_event_kind kind)
 {
-    if (!path || !item || !item->model())
-	return 0;
-    std::vector<unsigned long long> ids = item->path_items();
-    return ged_db_index_path_print(item->model()->ged(), path, ids.data(),
-	ids.size(), 0, 0);
+	switch (kind) {
+	case GED_EVENT_OBJECT_ADDED:
+	case GED_EVENT_OBJECT_REMOVED:
+	case GED_EVENT_OBJECT_RENAMED:
+	case GED_EVENT_COMB_TREE_CHANGED:
+	case GED_EVENT_COMB_INSTANCE_REMOVED:
+	case GED_EVENT_OBJECT_REFERENCES_REMOVED:
+	case GED_EVENT_BATCH_REBUILD:
+		return 1;
+	case GED_EVENT_NONE:
+	case GED_EVENT_OBJECT_MODIFIED:
+	case GED_EVENT_OBJECT_VISIBILITY_CHANGED:
+	case GED_EVENT_ATTRIBUTE_CHANGED:
+	case GED_EVENT_MATERIAL_CHANGED:
+	case GED_EVENT_DATABASE_METADATA_CHANGED:
+	default:
+		return 0;
+	}
+}
+
+static int
+qgmodel_event_requires_model_reset(enum ged_event_kind kind)
+{
+	switch (kind) {
+	case GED_EVENT_BATCH_REBUILD:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+static bool
+qgmodel_index_id_less(struct ged *gedp,
+		      unsigned long long id1,
+		      unsigned long long id2)
+{
+	struct ged_db_index_record rec1;
+	struct ged_db_index_record rec2;
+	int have1 = ged_db_index_record_get(gedp, id1, &rec1);
+	int have2 = ged_db_index_record_get(gedp, id2, &rec2);
+
+	if (!have1 && !have2)
+		return id1 < id2;
+	if (!have1)
+		return true;
+	if (!have2)
+		return false;
+
+	const char *n1 = rec1.name ? rec1.name : "";
+	const char *n2 = rec2.name ? rec2.name : "";
+	int acmp = alphanum_impl(n1, n2, nullptr);
+	if (acmp != 0)
+		return acmp < 0;
+	return id1 < id2;
+}
+
+struct QgItem_cmp {
+	inline bool operator() (const QgItem *i1, const QgItem *i2)
+	{
+		if (!i1 && !i2)
+			return false;
+		if (!i1 && i2)
+			return true;
+		if (i1 && !i2)
+			return false;
+		if (!i1->instanceHash() && !i2->instanceHash())
+			return false;
+		if (!i1->instanceHash() && i2->instanceHash())
+			return true;
+		if (i1->instanceHash() && !i2->instanceHash())
+			return false;
+
+		struct ged_db_index_record rec1;
+		struct ged_db_index_record rec2;
+		int have1 = ged_db_index_record_get(i1->model()->ged(), i1->instanceHash(), &rec1);
+		int have2 = ged_db_index_record_get(i2->model()->ged(), i2->instanceHash(), &rec2);
+
+		if (!have1 && !have2)
+			return false;
+		if (!have1 && have2)
+			return true;
+		if (have1 && !have2)
+			return false;
+
+		const char *n1 = rec1.name ? rec1.name : "";
+		const char *n2 = rec2.name ? rec2.name : "";
+		if (alphanum_impl(n1, n2, nullptr) < 0)
+			return true;
+
+		return false;
+	}
+};
+
+static void
+qgmodel_mark_invalid_subtree(std::unordered_set<QgItem *> &invalid, QgItem *item)
+{
+	if (!item || invalid.find(item) != invalid.end())
+		return;
+
+	invalid.insert(item);
+	for (QgItem *child : item->childItems())
+		qgmodel_mark_invalid_subtree(invalid, child);
 }
 
 QgItem::QgItem(unsigned long long hash, QgModel *ictx)
 {
-    mdl = ictx;
-    ihash = hash;
-    parentItem = NULL;
-    if (!mdl || !mdl->ged())
-	return;
+	mdl = ictx;
+	ihash = hash;
+	parentItem = nullptr;
 
-    struct ged_db_index_record record;
-    if (!ged_db_index_record_get(mdl->ged(), ihash, &record))
-	return;
+	// Allocate the name buffer
+	name_ptr = new struct bu_vls;
+	bu_vls_init(name_ptr);
 
-    if (record.name)
-	bu_vls_sprintf(&name, "%s", record.name);
-    c_count = record.child_count;
-    dp = record.dp;
-    icon = QgIcon(dp, ictx->ged()->dbip);
+	if (!mdl || !mdl->ged())
+		return;
+
+	struct ged_db_index_record rec;
+	if (!ged_db_index_record_get(mdl->ged(), ihash, &rec))
+		return;
+
+	// Local item information
+	if (rec.name)
+		bu_vls_sprintf(name_ptr, "%s", rec.name);
+	c_count = rec.child_count;
+	dp = rec.dp;
+	/* Use session icon provider so the same image data is shared across
+	 * all items of the same visual type. */
+	icon = ictx->session()->icon(dp);
 }
 
 QgItem::~QgItem()
 {
-    bu_vls_free(&name);
+	bu_vls_free(name_ptr);
+	delete name_ptr;
 }
 
 void
 QgItem::open()
 {
-    if (!mdl)
-	return;
-    setOpen(true);
-    QModelIndex ind = mdl->NodeIndex(this);
-    mdl->fetchMore(ind);
+	if (!mdl)
+		return;
+	open_itm = true;
+	QModelIndex ind = mdl->NodeIndex(this);
+	mdl->fetchMore(ind);
 }
 
 
 void
 QgItem::close()
 {
-    setOpen(false);
+	open_itm = false;
 }
 
 void
 QgItem::appendChild(QgItem *c)
 {
-    children.push_back(c);
+	children.push_back(c);
 }
 
 QgItem *
-QgItem::child(int n) const
+QgItem::child(int n)
 {
-    if (n < 0 || n >= (int)children.size())
-	return NULL;
+	if (n < 0 || n >= (int)children.size())
+		return nullptr;
 
-    return children[n];
+	return children[n];
 }
 
 int
 QgItem::childCount() const
 {
-    return children.size();
+	return children.size();
 }
 
 int
 QgItem::columnCount() const
 {
-    return 1;
+	return 1;
 }
 
 QgItem *
-QgItem::parent() const
+QgItem::parent()
 {
-    return parentItem;
+	return parentItem;
 }
 
 int
 QgItem::childNumber() const
 {
-    if (parentItem) {
-	for (size_t i = 0; i < parentItem->children.size(); i++) {
-	    if (parentItem->children[i] == this)
-		return i;
+	if (parentItem) {
+		auto row_it = parentItem->c_noderow.find(const_cast<QgItem *>(this));
+		if (row_it != parentItem->c_noderow.end())
+			return row_it->second;
+		for (size_t i = 0; i < parentItem->children.size(); i++) {
+			if (parentItem->children[i] == this)
+				return i;
+		}
+		bu_log("WARNING - invalid parent/child inquiry\n");
 	}
-	bu_log("WARNING - invalid parent/child inquiry\n");
-    }
 
-    return 0;
+	return 0;
 }
 
 std::vector<unsigned long long>
 QgItem::path_items() const
 {
-    std::vector<unsigned long long> pitems;
-    const QgItem *citem = this;
-    pitems.push_back(this->ihash);
-    while (citem->parent()) {
-	citem = citem->parent();
-	if (citem->ihash)
-	    pitems.push_back(citem->ihash);
-    }
-    std::reverse(pitems.begin(), pitems.end());
-    return pitems;
+	std::vector<unsigned long long> pitems;
+	const QgItem *citem = this;
+	pitems.push_back(this->ihash);
+	while (citem->parentItem) {
+		citem = citem->parentItem;
+		if (citem->ihash)
+			pitems.push_back(citem->ihash);
+	}
+	std::reverse(pitems.begin(), pitems.end());
+	return pitems;
 }
 
 unsigned long long
 QgItem::path_hash() const
 {
-    if (path_hash_valid)
+	if (path_hash_valid)
+		return cached_path_hash;
+	std::vector<unsigned long long> pitems = path_items();
+	cached_path_hash = ged_db_index_path_hash(mdl->ged(), pitems.data(),
+		pitems.size(), 0);
+	path_hash_valid = true;
 	return cached_path_hash;
-
-    std::vector<unsigned long long> pitems = path_items();
-    cached_path_hash = ged_db_index_path_hash(mdl->ged(), pitems.data(),
-	pitems.size(), 0);
-    path_hash_valid = true;
-    return cached_path_hash;
 }
-
-void
-QgModel::event_callback(struct ged *gedp,
-	const struct ged_event *UNUSED(events), size_t UNUSED(event_count),
-	const struct ged_event_result *UNUSED(result), void *client_data)
-{
-    QgModel *mdl = static_cast<QgModel *>(client_data);
-    if (!mdl || !gedp)
-	return;
-    mdl->changed_db_flag = 1;
-    mdl->database_event_pending = true;
-    if (!mdl->command_running)
-	mdl->refresh_database();
-}
-
-extern "C" void
-qgmodel_scene_callback(struct ged *UNUSED(gedp),
-	const struct ged_scene_delta *delta, void *client_data)
-{
-    QgModel *mdl = static_cast<QgModel *>(client_data);
-    if (ged_scene_delta_view(delta) == mdl->ged()->ged_gvp)
-	mdl->notifyDrawnItemsChanged();
-}
-
 
 QgModel::QgModel(QObject *p, const char *npath)
-: QAbstractItemModel(p)
+	: QAbstractItemModel(p)
 {
-    // There are commands such as open that we want to work even without
-    // a database instance opened - rather than using ged_open to create
-    // a gedp, be sure one is always available - callers should use the
-    // libged "open" command to open a .g file.
-    m_session = new QgSession(this);
-    gedp = m_session->ged();
-    QObject::connect(this, &QgModel::view_change,
-	m_session, &QgSession::notifyViewChanged);
-    event_observer = ged_event_observer_add(ged(),
-	GED_EVENT_OBSERVER_POST_RECONCILE, event_callback, this);
-    scene_observer = ged_scene_observer_add(ged(), qgmodel_scene_callback,
-	this);
-    bu_setenv("DM_SWRAST", "1", 1);
+	// The session is the sole owner of the GED context for this model.
+	m_session = new QgSession(this);
+	QObject::connect(this, &QgModel::view_changed,
+		m_session, &QgSession::notifyViewChanged);
+	struct ged *gedp = m_session->ged();
+	if (QCoreApplication::instance())
+		ged_exec_owner_dispatch_set(gedp, qgmodel_ged_owner_dispatch, this);
 
-    // Set up the root item
-    rootItem = new QgItem(0, this);
-    rootItem->mdl = this;
+	// Set up the root item
+	rootItem = new QgItem(0, this);
+	rootItem->mdl = this;
 
-    items = new std::unordered_set<QgItem *>;
-    items->clear();
+	items = new std::unordered_set<QgItem *>;
+	items->clear();
+	itemIndexClear();
 
+	draw_observer_token = ged_scene_observer_add(gedp,
+		&QgModelDrawObserverAccess::callback, this);
+	event_observer_token = ged_event_observer_add(gedp,
+		GED_EVENT_OBSERVER_POST_RECONCILE,
+		&QgModel::eventObserverCallback, this);
 
-    // If there's no path, at least for the moment we have nothing to model.
-    // In the future we may want to consider setting up a default environment
-    // backed by a temp file...
-    if (!npath)
-	return;
+	// If there's no path, at least for the moment we have nothing to model.
+	// In the future we may want to consider setting up a default environment
+	// backed by a temp file...
+	if (!npath)
+		return;
 
-    if (npath) {
-	int ac = 2;
-	const char *av[3];
-	av[0] = "open";
-	av[1] = npath;
-	av[2] = NULL;
-	run_cmd(ged()->ged_result_str, ac, (const char **)av);
-    }
+	if (npath) {
+		int ac = 2;
+		const char *av[3];
+		av[0] = "open";
+		av[1] = npath;
+		av[2] = nullptr;
+		run_cmd(gedp->ged_result_str, ac, (const char **)av);
+	}
 }
 
 QgModel::~QgModel()
 {
-    if (selection_batch_open)
-	(void)ged_selection_batch_end(ged());
-    if (event_observer)
-	ged_event_observer_remove(ged(), event_observer);
-    if (scene_observer)
-	ged_scene_observer_remove(ged(), scene_observer);
-    items_clear();
-    delete items;
-    items = NULL;
-    delete rootItem;
-    rootItem = NULL;
-}
+	if (selection_batch_open && ged()) {
+		(void)ged_selection_recompute(ged(), selectionSetKey());
+		(void)ged_selection_batch_end(ged());
+		selection_batch_open = false;
+	}
+	if (m_session && m_session->ged())
+		ged_exec_owner_dispatch_set(m_session->ged(), nullptr, nullptr);
+	if (m_session && m_session->ged() && draw_observer_token) {
+		ged_scene_observer_remove(m_session->ged(),
+			draw_observer_token);
+		draw_observer_token = 0;
+	}
+	if (m_session && m_session->ged() && event_observer_token) {
+		ged_event_observer_remove(m_session->ged(), event_observer_token);
+		event_observer_token = 0;
+	}
 
-QgSession *
-QgModel::session() const
-{
-    return m_session;
-}
+	if (items) {
+		for (QgItem *item : *items) {
+			if (item && item != rootItem)
+				delete item;
+		}
+		items->clear();
+		delete items;
+		items = nullptr;
+	}
+	itemIndexClear();
 
-struct ged *
-QgModel::ged() const
-{
-    return m_session ? m_session->ged() : NULL;
+	/* m_session is parented to this QObject and will be deleted automatically;
+	 * it owns the GED context. */
+	delete rootItem;
+	rootItem = nullptr;
 }
 
 const char *
 QgModel::selectionSetKey() const
 {
-    return selection_set_name.empty() ? NULL : selection_set_name.c_str();
+	return selection_set_name.empty() ? nullptr : selection_set_name.c_str();
 }
-
 
 void
 QgModel::selectionBatchBegin()
 {
-    if (!selection_batch_open && ged_selection_batch_begin(ged()))
-	selection_batch_open = true;
+	if (!selection_batch_open && ged_selection_batch_begin(ged()))
+		selection_batch_open = true;
 }
-
 
 void
 QgModel::setSelectionSetName(const char *set_name)
 {
-    std::string new_name = set_name ? set_name : "";
-    if (new_name == selection_set_name)
-	return;
+	std::string new_name = set_name ? set_name : "";
+	if (new_name == selection_set_name)
+		return;
 
-    if (selection_batch_open) {
-	(void)ged_selection_recompute(ged(), selectionSetKey());
-	(void)ged_selection_batch_end(ged());
-	selection_batch_open = false;
-    }
+	if (selection_batch_open) {
+		(void)ged_selection_recompute(ged(), selectionSetKey());
+		(void)ged_selection_batch_end(ged());
+		selection_batch_open = false;
+	}
 
-    selection_set_name = new_name;
-    notifySelectionItemsChanged();
+	selection_set_name = new_name;
+	notifySelectionItemsChanged();
 }
 
 size_t
 QgModel::selectionCount() const
 {
-    return ged_selection_count(ged(), selectionSetKey());
+	return ged_selection_count(ged(), selectionSetKey());
 }
 
 bool
 QgModel::itemSelected(const QgItem *item) const
 {
-    return item && ged_selection_is_path_selected(ged(), selectionSetKey(),
-	item->path_hash());
+	return item && ged_selection_is_path_selected(ged(), selectionSetKey(),
+		item->path_hash());
 }
 
 int
 QgModel::itemHighlight(const QgItem *item) const
 {
-    if (!item)
-	return 0;
+	if (!item)
+		return 0;
 
-    struct ged_db_index_record record;
-    ged_db_index_id object_id = item->instanceHash();
-    if (ged_db_index_record_get(ged(), object_id, &record))
-	object_id = record.object_id;
+	ged_db_index_id object_id = itemObjectId(item);
 
-    switch (interaction_mode) {
+	switch (interaction_mode) {
 	case 0:
-	    return (!item->isOpen() &&
-		ged_selection_is_path_active_parent(ged(), selectionSetKey(),
-		    item->path_hash())) ? 1 : 0;
+		return (!item->open_itm &&
+			selection_active_parent_path_hashes.find(item->path_hash()) !=
+			selection_active_parent_path_hashes.end()) ? 1 : 0;
 	case 1:
-	    return ged_selection_is_object_parent(ged(), selectionSetKey(),
-		object_id) ? 2 : 0;
+		return (selection_immediate_parent_object_ids.find(object_id) !=
+			selection_immediate_parent_object_ids.end() ||
+			selection_grand_parent_object_ids.find(object_id) !=
+			selection_grand_parent_object_ids.end()) ? 2 : 0;
 	case 2:
-	    if (ged_selection_is_object_immediate_parent(ged(),
-		    selectionSetKey(), object_id))
-		return 3;
-	    return ged_selection_is_object_grand_parent(ged(),
-		selectionSetKey(), object_id) ? 2 : 0;
+		if (selection_immediate_parent_object_ids.find(object_id) !=
+			selection_immediate_parent_object_ids.end())
+			return 3;
+		return selection_grand_parent_object_ids.find(object_id) !=
+			selection_grand_parent_object_ids.end() ? 2 : 0;
 	default:
-	    return 0;
-    }
+		return 0;
+	}
 }
 
 void
 QgModel::selectionClear()
 {
-    selectionBatchBegin();
-    (void)ged_selection_clear(ged(), selectionSetKey());
+	selectionBatchBegin();
+	(void)ged_selection_clear(ged(), selectionSetKey());
 }
 
 void
 QgModel::itemSelect(QgItem *item)
 {
-    if (!hasItem(item))
-	return;
+	if (!hasItem(item))
+		return;
 
-    selectionBatchBegin();
-    std::vector<unsigned long long> path = item->path_items();
-    (void)ged_selection_select_path_ids(ged(), selectionSetKey(), path.data(),
-	path.size(), 0);
+	selectionBatchBegin();
+	std::vector<unsigned long long> path = item->path_items();
+	(void)ged_selection_select_path_ids(ged(), selectionSetKey(), path.data(),
+		path.size(), 0);
 }
 
 void
 QgModel::itemDeselect(QgItem *item)
 {
-    if (!hasItem(item))
-	return;
+	if (!hasItem(item))
+		return;
 
-    selectionBatchBegin();
-    std::vector<unsigned long long> path = item->path_items();
-    (void)ged_selection_deselect_path_ids(ged(), selectionSetKey(),
-	path.data(), path.size(), 0);
+	selectionBatchBegin();
+	std::vector<unsigned long long> path = item->path_items();
+	(void)ged_selection_deselect_path_ids(ged(), selectionSetKey(), path.data(),
+		path.size(), 0);
 }
 
 QgViewUpdateFlags
 QgModel::selectionCommit()
 {
-    (void)ged_selection_recompute(ged(), selectionSetKey());
-    if (selection_batch_open) {
-	(void)ged_selection_batch_end(ged());
-	selection_batch_open = false;
-    }
-    notifySelectionItemsChanged();
-    return QG_VIEW_SELECT | QG_VIEW_REFRESH;
+	(void)ged_selection_recompute(ged(), selectionSetKey());
+	if (selection_batch_open) {
+		(void)ged_selection_batch_end(ged());
+		selection_batch_open = false;
+	}
+	notifySelectionItemsChanged();
+	return QG_VIEW_SELECT | QG_VIEW_REFRESH;
+}
+
+QgModel::DrawTimingStats
+QgModel::drawTimingStats() const
+{
+	return draw_timing_stats;
 }
 
 void
-QgModel::notifySelectionItemsChanged()
+QgModel::resetDrawTimingStats()
 {
-    using HashSet = std::unordered_set<unsigned long long>;
-    HashSet old_selected = std::move(selected_path_hashes);
-    HashSet old_active_parents = std::move(active_parent_path_hashes);
-    HashSet old_immediate_parents =
-	std::move(immediate_parent_object_ids);
-    HashSet old_grand_parents = std::move(grand_parent_object_ids);
-
-    selected_path_hashes.clear();
-    active_parent_path_hashes.clear();
-    immediate_parent_object_ids.clear();
-    grand_parent_object_ids.clear();
-
-    auto load_hashes = [this](enum ged_selection_hash_kind kind) {
-	HashSet hashes;
-	size_t count = ged_selection_hashes(ged(), selectionSetKey(), kind,
-	    NULL, 0);
-	std::vector<ged_db_index_id> values(count);
-	if (count)
-	    (void)ged_selection_hashes(ged(), selectionSetKey(), kind,
-		values.data(), values.size());
-	hashes.insert(values.begin(), values.end());
-	return hashes;
-    };
-    selected_path_hashes = load_hashes(GED_SELECTION_HASH_SELECTED_PATH);
-    active_parent_path_hashes =
-	load_hashes(GED_SELECTION_HASH_ACTIVE_PARENT_PATH);
-    immediate_parent_object_ids =
-	load_hashes(GED_SELECTION_HASH_IMMEDIATE_PARENT_OBJECT);
-    grand_parent_object_ids =
-	load_hashes(GED_SELECTION_HASH_GRAND_PARENT_OBJECT);
-
-    QVector<int> roles;
-    roles << QgDataRoles::SelectDisplayRole
-	<< QgDataRoles::HighlightDisplayRole;
-    std::unordered_set<QgItem *> notified;
-    auto notify_item = [this, &roles, &notified](QgItem *item) {
-	if (!item || !notified.insert(item).second)
-	    return;
-	QModelIndex index = NodeIndex(item);
-	if (index.isValid())
-	    emit dataChanged(index, index, roles);
-    };
-    auto notify_paths = [this, &notify_item](const HashSet &hashes) {
-	for (unsigned long long hash : hashes) {
-	    auto item_it = items_by_path_hash.find(hash);
-	    if (item_it == items_by_path_hash.end())
-		continue;
-	    for (QgItem *item : item_it->second)
-		notify_item(item);
-	}
-    };
-    auto notify_objects = [this, &notify_item](const HashSet &hashes) {
-	for (unsigned long long object_id : hashes) {
-	    auto object_it = items_by_object_id.find(object_id);
-	    if (object_it == items_by_object_id.end())
-		continue;
-	    for (QgItem *item : object_it->second)
-		notify_item(item);
-	}
-    };
-
-    notify_paths(old_selected);
-    notify_paths(selected_path_hashes);
-    notify_paths(old_active_parents);
-    notify_paths(active_parent_path_hashes);
-    notify_objects(old_immediate_parents);
-    notify_objects(immediate_parent_object_ids);
-    notify_objects(old_grand_parents);
-    notify_objects(grand_parent_object_ids);
+	draw_timing_stats = DrawTimingStats();
 }
 
 void
-QgModel::notifyDrawnItemsChanged()
+QgModel::setDrawTimingStatsEnabled(bool enabled)
 {
-    QVector<int> roles;
-    roles << QgDataRoles::DrawnDisplayRole;
-    for (QgItem *item : allItems()) {
-	QModelIndex index = NodeIndex(item);
-	if (index.isValid())
-	    emit dataChanged(index, index, roles);
-    }
-}
-
-void
-QgModel::setInteractionMode(int mode)
-{
-    if (interaction_mode == mode)
-	return;
-    interaction_mode = mode;
-    notifySelectionItemsChanged();
-}
-
-void
-QgModel::item_register(QgItem *item)
-{
-    if (!item || item == rootItem || !items)
-	return;
-
-    if (!items->insert(item).second)
-	return;
-
-    items_by_instance_hash[item->ihash].insert(item);
-    struct ged_db_index_record record = {};
-    unsigned long long object_id = item->ihash;
-    if (ged() && ged_db_index_record_get(ged(), item->ihash, &record))
-	object_id = record.object_id;
-    items_by_object_id[object_id].insert(item);
-    item_object_ids[item] = object_id;
-    if (item->dp)
-	items_by_directory[item->dp].insert(item);
-    item_path_index_insert(item);
-}
-
-void
-QgModel::item_path_index_insert(QgItem *item)
-{
-    if (!item || item == rootItem)
-	return;
-
-    unsigned long long path_hash = item->path_hash();
-    if (path_hash) {
-	items_by_path_hash[path_hash].insert(item);
-	item_path_hashes[item] = path_hash;
-    }
-}
-
-void
-QgModel::item_unregister(QgItem *item)
-{
-    if (!item || item == rootItem || !items)
-	return;
-
-    auto instance_it = items_by_instance_hash.find(item->ihash);
-    if (instance_it != items_by_instance_hash.end()) {
-	instance_it->second.erase(item);
-	if (instance_it->second.empty())
-	    items_by_instance_hash.erase(instance_it);
-    }
-
-    auto object_id_it = item_object_ids.find(item);
-    if (object_id_it != item_object_ids.end()) {
-	auto object_it = items_by_object_id.find(object_id_it->second);
-	if (object_it != items_by_object_id.end()) {
-	    object_it->second.erase(item);
-	    if (object_it->second.empty())
-		items_by_object_id.erase(object_it);
-	}
-	item_object_ids.erase(object_id_it);
-    }
-
-    if (item->dp) {
-	auto directory_it = items_by_directory.find(item->dp);
-	if (directory_it != items_by_directory.end()) {
-	    directory_it->second.erase(item);
-	    if (directory_it->second.empty())
-		items_by_directory.erase(directory_it);
-	}
-    }
-    item_path_index_remove(item);
-
-    items->erase(item);
-}
-
-void
-QgModel::item_path_index_remove(QgItem *item)
-{
-    if (!item || item == rootItem)
-	return;
-
-    auto item_path_it = item_path_hashes.find(item);
-    if (item_path_it == item_path_hashes.end())
-	return;
-    auto path_it = items_by_path_hash.find(item_path_it->second);
-    if (path_it != items_by_path_hash.end()) {
-	path_it->second.erase(item);
-	if (path_it->second.empty())
-	    items_by_path_hash.erase(path_it);
-    }
-    item_path_hashes.erase(item_path_it);
-}
-
-void
-QgModel::item_path_index_insert_subtree(QgItem *item)
-{
-    if (!item || item == rootItem)
-	return;
-
-    item_path_index_insert(item);
-    for (QgItem *child : item->children)
-	item_path_index_insert_subtree(child);
-}
-
-void
-QgModel::item_path_index_remove_subtree(QgItem *item)
-{
-    if (!item || item == rootItem)
-	return;
-
-    for (QgItem *child : item->children)
-	item_path_index_remove_subtree(child);
-    item_path_index_remove(item);
-}
-
-void
-QgModel::item_path_hash_invalidate_subtree(QgItem *item)
-{
-    if (!item)
-	return;
-
-    item->cached_path_hash = 0;
-    item->path_hash_valid = false;
-    for (QgItem *child : item->children)
-	item_path_hash_invalidate_subtree(child);
-}
-
-void
-QgModel::item_indexes_clear()
-{
-    items_by_instance_hash.clear();
-    items_by_object_id.clear();
-    items_by_path_hash.clear();
-    items_by_directory.clear();
-    item_object_ids.clear();
-    item_path_hashes.clear();
-}
-
-void
-QgModel::items_clear()
-{
-    if (!items)
-	return;
-
-    for (QgItem *item : *items)
-	delete item;
-
-    items->clear();
-    item_indexes_clear();
-    tops_items.clear();
-    if (rootItem) {
-	rootItem->children.clear();
-	rootItem->c_noderow.clear();
-	rootItem->c_count = 0;
-    }
-}
-
-bool
-QgModel::item_is_indexed(QgItem *item) const
-{
-    if (!item || !items || items->find(item) == items->end())
-	return false;
-
-    auto instance_it = items_by_instance_hash.find(item->ihash);
-    if (instance_it == items_by_instance_hash.end() ||
-	instance_it->second.find(item) == instance_it->second.end())
-	return false;
-
-    auto object_id_it = item_object_ids.find(item);
-    if (object_id_it == item_object_ids.end())
-	return false;
-    auto object_it = items_by_object_id.find(object_id_it->second);
-    if (object_it == items_by_object_id.end() ||
-	object_it->second.find(item) == object_it->second.end())
-	return false;
-
-    auto item_path_it = item_path_hashes.find(item);
-    if (item_path_it == item_path_hashes.end())
-	return false;
-    unsigned long long path_hash = item_path_it->second;
-    auto path_it = items_by_path_hash.find(path_hash);
-    return path_hash && path_it != items_by_path_hash.end() &&
-	path_it->second.find(item) != path_it->second.end();
-}
-
-void
-QgModel::item_rows_rebuild(QgItem *item)
-{
-    if (!item)
-	return;
-
-    item->c_noderow.clear();
-    for (size_t i = 0; i < item->children.size(); i++)
-	item->c_noderow[item->children[i]] = (int)i;
-    item->c_count = item->children.size();
-}
-
-void
-QgModel::item_subtree_delete(QgItem *item)
-{
-    if (!item || item == rootItem)
-	return;
-
-    std::vector<QgItem *> children = item->children;
-    for (QgItem *child : children)
-	item_subtree_delete(child);
-
-    item_unregister(item);
-    delete item;
-}
-
-bool
-QgModel::item_children_sync(QgItem *item,
-	const std::vector<unsigned long long> &children)
-{
-    if (!item)
-	return false;
-
-    std::unordered_map<unsigned long long, db_op_t> operations;
-    if (item != rootItem) {
-	std::vector<unsigned long long> indexed_children;
-	if (!qg_index_children(ged(), item->ihash, indexed_children,
-		&operations) || indexed_children != children)
-	    return false;
-    }
-    if (item != rootItem && item->children.empty() && !item->open_itm) {
-	item->c_count = children.size();
-	return true;
-    }
-
-    QModelIndex parent_index = NodeIndex(item);
-    for (size_t row = 0; row < children.size(); row++) {
-	unsigned long long child_hash = children[row];
-	if (row < item->children.size() &&
-		item->children[row]->ihash == child_hash) {
-	    item->children[row]->op = item == rootItem ? DB_OP_UNION :
-		operations[child_hash];
-	    continue;
-	}
-
-	size_t source_row = row;
-	while (source_row < item->children.size() &&
-		item->children[source_row]->ihash != child_hash)
-	    source_row++;
-
-	if (source_row < item->children.size()) {
-	    model_structure_change_in_progress = true;
-	    if (!beginMoveRows(parent_index, (int)source_row, (int)source_row,
-		    parent_index, (int)row)) {
-		model_structure_change_in_progress = false;
-		return false;
-	    }
-	    QgItem *child = item->children[source_row];
-	    item->children.erase(item->children.begin() + source_row);
-	    item->children.insert(item->children.begin() + row, child);
-	    child->op = item == rootItem ? DB_OP_UNION :
-		operations[child_hash];
-	    item_rows_rebuild(item);
-	    endMoveRows();
-	    model_structure_change_in_progress = false;
-	    continue;
-	}
-
-	QgItem *child = new QgItem(child_hash, this);
-	child->parentItem = item;
-	child->op = item == rootItem ? DB_OP_UNION : operations[child_hash];
-	model_structure_change_in_progress = true;
-	beginInsertRows(parent_index, (int)row, (int)row);
-	item->children.insert(item->children.begin() + row, child);
-	item_register(child);
-	item_rows_rebuild(item);
-	endInsertRows();
-	model_structure_change_in_progress = false;
-    }
-
-    while (item->children.size() > children.size()) {
-	int row = (int)item->children.size() - 1;
-	QgItem *child = item->children[row];
-	model_structure_change_in_progress = true;
-	beginRemoveRows(parent_index, row, row);
-	item->children.pop_back();
-	item_rows_rebuild(item);
-	item_subtree_delete(child);
-	endRemoveRows();
-	model_structure_change_in_progress = false;
-    }
-
-    item_rows_rebuild(item);
-    if (item == rootItem)
-	tops_items = rootItem->children;
-    return true;
-}
-
-void
-QgModel::items_changed_notify(const std::set<std::string> &names)
-{
-    for (const std::string &name : names) {
-	std::unordered_set<QgItem *> changed_items;
-	struct directory *dp = db_lookup(ged()->dbip, name.c_str(), LOOKUP_QUIET);
-	if (dp) {
-	    auto directory_it = items_by_directory.find(dp);
-	    if (directory_it != items_by_directory.end())
-		changed_items = directory_it->second;
-	}
-	if (changed_items.empty()) {
-	    for (QgItem *item : *items) {
-		if (qgmodel_item_matches_name(item, name))
-		    changed_items.insert(item);
-	    }
-	}
-	for (QgItem *item : changed_items) {
-	    if (!item_is_indexed(item))
-		continue;
-	    item->icon = QgIcon(item->dp, ged()->dbip);
-	    QModelIndex index = NodeIndex(item);
-	    if (index.isValid())
-		emit dataChanged(index, index);
-	}
-    }
-}
-
-bool
-QgModel::change_deltas_apply()
-{
-    QgDbChangeSet changes = qg_db_changes(ged());
-    if (!changes || !ged_db_change_set_revision(changes.get()))
-	return false;
-
-    const unsigned int flags = ged_db_change_set_flags(changes.get());
-    if (flags & GED_DB_CHANGE_REBUILD)
-	return false;
-
-    std::set<std::string> added;
-    std::set<std::string> modified;
-    std::set<std::string> removed;
-    std::set<std::string> renamed;
-    std::set<std::string> paths;
-    qg_db_change_names(added, changes.get(), GED_DB_CHANGE_OBJECT_ADDED);
-    qg_db_change_names(modified, changes.get(),
-	GED_DB_CHANGE_OBJECT_MODIFIED);
-    qg_db_change_names(removed, changes.get(), GED_DB_CHANGE_OBJECT_REMOVED);
-    const size_t rename_count =
-	ged_db_change_set_rename_count(changes.get());
-    for (size_t i = 0; i < rename_count; i++) {
-	const char *old_name = ged_db_change_set_rename_old_at(changes.get(), i);
-	const char *new_name = ged_db_change_set_rename_new_at(changes.get(), i);
-	if (old_name)
-	    renamed.insert(old_name);
-	if (new_name)
-	    renamed.insert(new_name);
-    }
-    const size_t path_count = ged_db_change_set_path_count(changes.get());
-    for (size_t i = 0; i < path_count; i++) {
-	const char *path = ged_db_change_set_path_at(changes.get(), i);
-	if (path)
-	    paths.insert(path);
-    }
-
-    const bool structural = (flags & GED_DB_CHANGE_STRUCTURAL) ||
-	rename_count;
-    if (structural && added.empty() && modified.empty() &&
-	    removed.empty() && renamed.empty() && paths.empty())
-	return false;
-
-    std::unordered_set<QgItem *> parent_candidates;
-    if (structural)
-	parent_candidates.insert(rootItem);
-
-    for (size_t i = 0; i < rename_count; i++) {
-	const char *old_name = ged_db_change_set_rename_old_at(changes.get(), i);
-	if (!old_name)
-	    continue;
-	for (QgItem *item : *items) {
-	    if (qgmodel_item_matches_name(item, old_name) && item->parent())
-		parent_candidates.insert(item->parent());
-	}
-    }
-
-    for (const std::string &name : modified) {
-	if (renamed.find(name) != renamed.end())
-	    continue;
-	struct directory *dp = db_lookup(ged()->dbip, name.c_str(), LOOKUP_QUIET);
-	if (dp) {
-	    auto directory_it = items_by_directory.find(dp);
-	    if (directory_it != items_by_directory.end()) {
-		for (QgItem *item : directory_it->second) {
-		    // librt's legacy rename notification reports the renamed
-		    // directory as modified.  Its pointer identity is unchanged,
-		    // but its name-derived instance hash is not.  Do not partially
-		    // reconcile that ambiguous identity transition.
-		    if (!qgmodel_item_matches_name(item, name))
-			return false;
-		    parent_candidates.insert(item);
-		}
-	    }
-	}
-	if (!dp || items_by_directory.find(dp) == items_by_directory.end()) {
-	    for (QgItem *item : *items) {
-		if (qgmodel_item_matches_name(item, name))
-		    parent_candidates.insert(item);
-	    }
-	}
-    }
-
-    for (const std::string &name : removed) {
-	for (QgItem *item : *items) {
-	    if (qgmodel_item_matches_name(item, name) && item->parent())
-		parent_candidates.insert(item->parent());
-	}
-    }
-
-    for (const std::string &path : paths) {
-	const size_t path_len = ged_db_index_path_resolve(ged(), path.c_str(),
-	    NULL, 0);
-	std::vector<unsigned long long> path_items(path_len);
-	if (!path_len || ged_db_index_path_resolve(ged(), path.c_str(),
-		path_items.data(), path_items.size()) != path_len)
-	    continue;
-	unsigned long long path_hash = ged_db_index_path_hash(ged(),
-	    path_items.data(), path_items.size(), 0);
-	auto path_it = items_by_path_hash.find(path_hash);
-	if (path_it == items_by_path_hash.end())
-	    continue;
-	for (QgItem *item : path_it->second) {
-	    parent_candidates.insert(item);
-	    if (item->parent())
-		parent_candidates.insert(item->parent());
-	}
-    }
-
-    (void)ged_db_change_reconcile(ged());
-    if (!structural) {
-	items_changed_notify(modified);
-	return true;
-    }
-
-    std::vector<QgItem *> parents;
-    for (QgItem *parent : parent_candidates) {
-	if (parent && parent != rootItem)
-	    parents.push_back(parent);
-    }
-    parents.push_back(rootItem);
-
-    std::unordered_map<QgItem *, std::vector<unsigned long long>>
-	desired_children;
-    std::unordered_map<QgItem *,
-	std::unordered_map<unsigned long long, db_op_t>> desired_operations;
-    for (QgItem *parent : parents) {
-	if (parent != rootItem && items->find(parent) == items->end())
-	    continue;
-
-	std::vector<unsigned long long> children;
-	if (parent == rootItem) {
-	    children = qg_index_tops(ged());
-	    std::sort(children.begin(), children.end(),
-		[this](unsigned long long left, unsigned long long right) {
-		    struct ged_db_index_record left_record;
-		    struct ged_db_index_record right_record;
-		    if (!ged_db_index_record_get(ged(), left, &left_record) ||
-			    !ged_db_index_record_get(ged(), right,
-				&right_record) || !left_record.name ||
-			    !right_record.name)
-			return left < right;
-		    return alphanum_impl(left_record.name, right_record.name,
-			NULL) < 0;
-		});
-	} else {
-	    if (!qg_index_children(ged(), parent->ihash, children,
-		    &desired_operations[parent]))
-		return false;
-	}
-	desired_children[parent] = std::move(children);
-    }
-
-    struct CrossParentRemoval {
-	QgItem *parent = NULL;
-	QgItem *item = NULL;
-    };
-    struct CrossParentInsertion {
-	QgItem *parent = NULL;
-	int row = -1;
-    };
-    std::unordered_map<unsigned long long,
-	std::vector<CrossParentRemoval>> removals;
-    std::unordered_map<unsigned long long,
-	std::vector<CrossParentInsertion>> insertions;
-
-    for (const auto &plan : desired_children) {
-	QgItem *parent = plan.first;
-	if (!parent || parent == rootItem ||
-		(parent->children.empty() && !parent->open_itm))
-	    continue;
-
-	std::unordered_map<unsigned long long, size_t> old_counts;
-	std::unordered_map<unsigned long long, size_t> new_counts;
-	for (QgItem *child : parent->children) {
-	    if (child)
-		old_counts[child->ihash]++;
-	}
-	for (unsigned long long child_hash : plan.second)
-	    new_counts[child_hash]++;
-
-	for (QgItem *child : parent->children) {
-	    if (!child || old_counts[child->ihash] != 1 ||
-		    new_counts[child->ihash] != 0)
-		continue;
-	    removals[child->ihash].push_back({parent, child});
-	}
-	for (size_t row = 0; row < plan.second.size(); row++) {
-	    unsigned long long child_hash = plan.second[row];
-	    if (new_counts[child_hash] != 1 || old_counts[child_hash] != 0)
-		continue;
-	    insertions[child_hash].push_back({parent, (int)row});
-	}
-    }
-
-    for (const auto &removal_entry : removals) {
-	auto insertion_it = insertions.find(removal_entry.first);
-	if (removal_entry.second.size() != 1 ||
-		insertion_it == insertions.end() ||
-		insertion_it->second.size() != 1)
-	    continue;
-
-	const CrossParentRemoval &removal = removal_entry.second[0];
-	const CrossParentInsertion &insertion = insertion_it->second[0];
-	if (!removal.parent || !removal.item || !insertion.parent ||
-		removal.parent == insertion.parent)
-	    continue;
-
-	bool creates_cycle = false;
-	for (QgItem *ancestor = insertion.parent; ancestor;
-		ancestor = ancestor->parent()) {
-	    if (ancestor == removal.item) {
-		creates_cycle = true;
-		break;
-	    }
-	}
-	if (creates_cycle)
-	    continue;
-
-	auto source_it = std::find(removal.parent->children.begin(),
-	    removal.parent->children.end(), removal.item);
-	if (source_it == removal.parent->children.end())
-	    return false;
-	int source_row = (int)std::distance(removal.parent->children.begin(),
-	    source_it);
-	int destination_row = std::min(insertion.row,
-	    (int)insertion.parent->children.size());
-	QModelIndex source_index = NodeIndex(removal.parent);
-	QModelIndex destination_index = NodeIndex(insertion.parent);
-
-	model_structure_change_in_progress = true;
-	if (!beginMoveRows(source_index, source_row, source_row,
-		destination_index, destination_row)) {
-	    model_structure_change_in_progress = false;
-	    return false;
-	}
-	item_path_index_remove_subtree(removal.item);
-	removal.parent->children.erase(source_it);
-	removal.item->parentItem = insertion.parent;
-	item_path_hash_invalidate_subtree(removal.item);
-	auto operation_it = desired_operations[insertion.parent].find(
-	    removal.item->ihash);
-	if (operation_it != desired_operations[insertion.parent].end())
-	    removal.item->op = operation_it->second;
-	insertion.parent->children.insert(
-	    insertion.parent->children.begin() + destination_row,
-	    removal.item);
-	item_rows_rebuild(removal.parent);
-	item_rows_rebuild(insertion.parent);
-	item_path_index_insert_subtree(removal.item);
-	endMoveRows();
-	model_structure_change_in_progress = false;
-    }
-
-    for (QgItem *parent : parents) {
-	auto desired_it = desired_children.find(parent);
-	if (desired_it == desired_children.end())
-	    continue;
-	if (!item_children_sync(parent, desired_it->second))
-	    return false;
-    }
-
-    items_changed_notify(modified);
-    return true;
+	draw_timing_stats_enabled = enabled;
 }
 
 // Note - this is a private method and must be run from within g_update's
@@ -1212,361 +633,1367 @@ QgModel::change_deltas_apply()
 // invalid QgItem is defined at that level - we don't want to re-create it
 // here.)
 void
-QgModel::item_rebuild(QgItem *item, std::unordered_set<QgItem *> &invalid)
+QgModel::item_rebuild(QgItem *item, std::unordered_set<QgItem *> *invalid)
 {
-    // Top level is a special case and is handled separately
-    if (item == rootItem) {
-	return;
-    }
-
-    std::vector<unsigned long long> child_ids;
-    std::unordered_map<unsigned long long, db_op_t> operations;
-    if (!qg_index_children(ged(), item->ihash, child_ids, &operations)) {
-	for (QgItem *old_child : item->children)
-	    qgmodel_mark_invalid_subtree(invalid, old_child);
-	item->children.clear();
-	item->c_noderow.clear();
-	item->c_count = 0;
-	return;
-    }
-
-    if (child_ids.empty()) {
-	for (QgItem *old_child : item->children)
-	    qgmodel_mark_invalid_subtree(invalid, old_child);
-	item->children.clear();
-	item->c_noderow.clear();
-	item->c_count = 0;
-	return;
-    }
-
-    // If we have no cached children, update only the child count - fetchMore
-    // will populate it if and when it is expanded, and there will be no
-    // QgItems we need to reuse.  However, an edit operation may have
-    // invalidated the original c_count stored when the item was created.
-    if (!item->children.size()) {
-	item->c_count = child_ids.size();
-	return;
-    }
-
-    std::unordered_map<unsigned long long, QgItem *> oc;
-    for (size_t i = 0; i < item->children.size(); i++) {
-	QgItem *qii = item->children[i];
-	oc[qii->ihash] = qii;
-    }
-
-    // Iterate the instance's array of child hashes, building up the
-    // corresponding QgItems array using either the stored QgItems from the
-    // previous state or new items.
-    std::vector<QgItem *> nc;
-    for (unsigned long long child_id : child_ids) {
-	// For each new child, look up its instance in the original data to see
-	// if we have a corresponding QgItem available.
-	auto old_child = oc.find(child_id);
-	if (old_child != oc.end()) {
-	    // We have a viable QgItem from the previous state - reuse it
-	    old_child->second->op = operations[child_id];
-	    nc.push_back(old_child->second);
-	} else {
-	    // Previous tree did not have an appropriate QgItem -
-	    // make a new one
-	    QgItem *nitem = new QgItem(child_id, this);
-	    nitem->parentItem = item;
-	    nitem->op = operations[child_id];
-	    nc.push_back(nitem);
-	    item_register(nitem);
+	// Top level is a special case and is handled separately
+	if (item == rootItem) {
+		return;
 	}
-    }
-    item->c_count = nc.size();
 
-    // If anything changed since the last time children was built, we need to
-    // replace children's contents with the new vector.  This is being run
-    // inside g_update's beginRebuildModel block, so we don't need to try and
-    // manage individual rows here.
-    if (nc != item->children) {
-	std::unordered_set<QgItem *> reused(nc.begin(), nc.end());
-	for (QgItem *old_child : item->children) {
-	    if (reused.find(old_child) == reused.end())
-		qgmodel_mark_invalid_subtree(invalid, old_child);
+	unsigned long long chash = item->ihash;
+	struct ged *gedp = m_session->ged();
+	struct ged_db_index_record rec;
+	if (!ged_db_index_record_get(gedp, chash, &rec)) {
+		if (invalid) {
+			for (QgItem *old_child : item->children)
+				qgmodel_mark_invalid_subtree(*invalid, old_child);
+		}
+		item->children.clear();
+		item->c_noderow.clear();
+		item->c_count = 0;
+		return;
 	}
-	item->children = nc;
-	// define a map for quick QgItem * -> index lookups
-	item->c_noderow.clear();
-	for (size_t i = 0; i < nc.size(); i++) {
-	    item->c_noderow[nc[i]] = i;
+
+	if (rec.child_count == 0) {
+		if (invalid) {
+			for (QgItem *old_child : item->children)
+				qgmodel_mark_invalid_subtree(*invalid, old_child);
+		}
+		item->children.clear();
+		item->c_noderow.clear();
+		item->c_count = 0;
+		return;
 	}
-    }
+
+	// If we have no cached children, update only the child count - fetchMore
+	// will populate it if and when it is expanded, and there will be no
+	// QgItems we need to reuse.  However, an edit operation may have
+	// invalidated the original c_count stored when the item was created.
+	if (!item->children.size()) {
+		item->c_count = rec.child_count;
+		return;
+	}
+
+	std::unordered_map<unsigned long long, QgItem *> oc;
+	for (size_t i = 0; i < item->children.size(); i++) {
+		QgItem *qii = item->children[i];
+		oc[qii->ihash] = qii;
+	}
+
+	// Iterate the instance's array of child hashes, building up the
+	// corresponding QgItems array using either the stored QgItems from the
+	// previous state or new items.
+	std::vector<QgItem *> nc;
+	for (size_t row = 0; row < rec.child_count; row++) {
+		struct ged_db_index_child child;
+		if (!ged_db_index_child_at(gedp, chash, row, &child))
+			continue;
+		// For each new child, look up its instance in the original data to see
+		// if we have a corresponding QgItem available.
+		if (oc.find(child.record.id) != oc.end()) {
+			// We have a viable QgItem from the previous state - reuse it
+			nc.push_back(oc[child.record.id]);
+		}
+		else {
+			// Previous tree did not have an appropriate QgItem -
+			// make a new one
+			QgItem *nitem = new QgItem(child.record.id, this);
+			nitem->parentItem = item;
+			nitem->op = child.bool_op;
+			nc.push_back(nitem);
+			items->insert(nitem);
+		}
+	}
+	item->c_count = nc.size();
+
+	// If anything changed since the last time children was built, we need to
+	// replace children's contents with the new vector.  This is being run
+	// inside g_update's beginRebuildModel block, so we don't need to try and
+	// manage individual rows here.
+	if (nc != item->children) {
+		if (invalid) {
+			std::unordered_set<QgItem *> reused(nc.begin(), nc.end());
+			for (QgItem *old_child : item->children) {
+				if (reused.find(old_child) == reused.end())
+					qgmodel_mark_invalid_subtree(*invalid, old_child);
+			}
+		}
+		item->children = nc;
+		// define a map for quick QgItem * -> index lookups
+		item->c_noderow.clear();
+		for (size_t i = 0; i < nc.size(); i++) {
+			item->c_noderow[nc[i]] = i;
+		}
+	}
 }
 
 void
 QgModel::g_update(struct db_i *n_dbip)
 {
-    if (!n_dbip) {
-	// if we have no dbip, clear out everything
-	model_structure_change_in_progress = true;
-	beginResetModel();
-	items_clear();
-	emit mdl_changed_db((void *)ged());
-	m_session->notifyDbChanged(nullptr);
-	emit view_change(QG_VIEW_DRAWN);
+	struct ged *gedp = m_session->ged();
+
+	if (!n_dbip) {
+		// if we have no dbip, clear out everything
+		model_reset_in_progress = true;
+		beginResetModel();
+		std::unordered_set<QgItem *>::iterator s_it;
+		for (s_it = items->begin(); s_it != items->end(); s_it++) {
+			QgItem *itm = *s_it;
+			delete itm;
+		}
+		items->clear();
+		itemIndexClear();
+		tops_items.clear();
+		rootItem->children.clear();
+		rootItem->c_noderow.clear();
+		rootItem->c_count = 0;
+		emit mdl_changed_db((void *)gedp);
+		m_session->notifyDbChanged(nullptr);
+		emit view_changed(QG_VIEW_DRAWN);
+		changed_db_flag = 0;
+		endResetModel();
+		model_reset_in_progress = false;
+		return;
+	}
+
+	// If we have a dbip and the changed flag is set, figure out what's different
+	if (changed_db_flag) {
+		model_reset_in_progress = true;
+		beginResetModel();
+
+		// Step 1 - make sure our instances are current - i.e. they match the
+		// .g database state
+		ged_db_index_refresh(gedp);
+
+		// Clear out any QgItems with invalid info.  We need to be fairly
+		// aggressive here - first we find all the existing invalid ones, and
+		// then we invalidate all their children recursively - any item with an
+		// invalid parent is invalid.
+		std::unordered_set<QgItem *> invalid;
+		std::unordered_set<QgItem *>::iterator s_it;
+		for (s_it = items->begin(); s_it != items->end(); s_it++) {
+			QgItem *itm = *s_it;
+			struct ged_db_index_record item_rec;
+			if (!ged_db_index_record_get(gedp, itm->ihash, &item_rec)) {
+				qgmodel_mark_invalid_subtree(invalid, itm);
+				continue;
+			}
+			if (!itm->dp && item_rec.dp)
+				qgmodel_mark_invalid_subtree(invalid, itm);
+		}
+
+		std::vector<QgItem *> item_snapshot(items->begin(), items->end());
+		for (QgItem *i_itm : item_snapshot) {
+			if (!i_itm || items->find(i_itm) == items->end())
+				continue;
+			if (invalid.find(i_itm) != invalid.end())
+				continue;
+			// Remove any invalid QgItem references from the children arrays
+			std::vector<QgItem *> vchildren;
+			for (size_t i = 0; i < i_itm->children.size(); i++) {
+				QgItem *itm = i_itm->children[i];
+				if (invalid.find(itm) == invalid.end()) {
+					// Valid - keep it
+					vchildren.push_back(itm);
+				}
+			}
+			i_itm->children = vchildren;
+			// Child QgItem pointers are now all valid - rebuild full children
+			// array to match current .g state
+			item_rebuild(i_itm, &invalid);
+		}
+
+		// Validate existing tops QgItems based on the tops data.
+		size_t tops_count = ged_db_index_tops(gedp, 1, nullptr, 0);
+		std::vector<unsigned long long> tops(tops_count);
+		if (tops_count)
+			ged_db_index_tops(gedp, 1, tops.data(), tops.size());
+		std::unordered_set<unsigned long long> tset(tops.begin(), tops.end());
+		std::unordered_map<unsigned long long, QgItem *> vtops_items;
+		for (size_t i = 0; i < tops_items.size(); i++) {
+			QgItem *titem = tops_items[i];
+			if (tset.find(titem->ihash) != tset.end()) {
+				// Still a tops item
+				vtops_items[titem->ihash] = titem;
+			}
+		}
+
+		// Using tops_instances, construct a new tops vector.  Reuse any still valid
+		// QgItems, and make new ones
+		std::vector<QgItem *> ntops_items;
+
+		for (size_t i = 0; i < tops.size(); i++) {
+			std::unordered_map<unsigned long long, QgItem *>::iterator v_it;
+			v_it = vtops_items.find(tops[i]);
+			if (v_it != vtops_items.end()) {
+				ntops_items.push_back(v_it->second);
+			}
+			else {
+				QgItem *nitem = new QgItem(tops[i], this);
+				nitem->parentItem = rootItem;
+				nitem->op = DB_OP_UNION;
+				ntops_items.push_back(nitem);
+				items->insert(nitem);
+			}
+		}
+
+		// Set the new tops items as children of the rootItem.
+		std::sort(ntops_items.begin(), ntops_items.end(), QgItem_cmp());
+		std::unordered_set<QgItem *> reused_tops(ntops_items.begin(), ntops_items.end());
+		for (QgItem *old_top : tops_items) {
+			if (reused_tops.find(old_top) == reused_tops.end())
+				qgmodel_mark_invalid_subtree(invalid, old_top);
+		}
+		tops_items = ntops_items;
+		rootItem->children.clear();
+		for (size_t i = 0; i < tops_items.size(); i++) {
+			rootItem->appendChild(tops_items[i]);
+		}
+		rootItem->c_noderow.clear();
+		for (size_t i = 0; i < tops_items.size(); i++) {
+			rootItem->c_noderow[tops_items[i]] = i;
+		}
+
+		// Finally, delete the invalid QgItems
+		std::unordered_set<QgItem *>::iterator iv_it;
+		for (iv_it = invalid.begin(); iv_it != invalid.end(); iv_it++) {
+			QgItem *iv_itm = *iv_it;
+			items->erase(iv_itm);
+			delete iv_itm;
+		}
+		itemIndexRebuild();
+
+		endResetModel();
+		model_reset_in_progress = false;
+	}
+
+	// If we did change something, we need to let the application know
+	if (changed_db_flag) {
+		emit mdl_changed_db((void *)gedp);
+		/* Fan out via session so subscribers (e.g. QgAttributesModel) that
+		 * connected directly to the session are also notified. */
+		m_session->notifyDbChanged(gedp->dbip);
+		emit check_highlights();
+	}
+
+	// Reset flag - we're in sync now
 	changed_db_flag = 0;
-	endResetModel();
-	model_structure_change_in_progress = false;
-	notifySelectionItemsChanged();
-	return;
-    }
-
-    QgDbChangeSet changes = qg_db_changes(ged());
-    uint64_t change_revision = ged_db_change_set_revision(changes.get());
-    if (change_revision)
-	changed_db_flag = 1;
-
-    bool deltas_applied = false;
-    if (changed_db_flag)
-	deltas_applied = change_deltas_apply();
-
-    // If we have a dbip and the changed flag is set, figure out what's different
-    if (changed_db_flag && !deltas_applied) {
-	model_structure_change_in_progress = true;
-	beginResetModel();
-
-	// Step 1 - make sure our instances are current - i.e. they match the
-	// .g database state
-	(void)ged_db_change_reconcile(ged());
-
-	std::vector<unsigned long long> tops = qg_index_tops(ged());
-	std::unordered_set<unsigned long long> top_hashes(tops.begin(), tops.end());
-
-	// Clear out any QgItems with invalid info.  We need to be fairly
-	// aggressive here - first we find all the existing invalid ones, and
-	// then we invalidate all their children recursively - any item with an
-	// invalid parent is invalid.
-	std::queue<QgItem *> to_clear;
-	std::unordered_set<QgItem *> invalid;
-	std::unordered_set<QgItem *>::iterator s_it;
-	for (QgItem *top_item : tops_items) {
-	    if (top_hashes.find(top_item->ihash) == top_hashes.end())
-		to_clear.push(top_item);
-	}
-	for (s_it = items->begin(); s_it != items->end(); s_it++) {
-	    QgItem *itm = *s_it;
-	    struct ged_db_index_record record;
-	    if (!ged_db_index_record_get(ged(), itm->ihash, &record)) {
-		to_clear.push(itm);
-		continue;
-	    }
-	    if (!itm->dp && record.dp)
-		to_clear.push(itm);
-	}
-	while (!to_clear.empty()) {
-	    QgItem *i_itm = to_clear.front();
-	    to_clear.pop();
-	    invalid.insert(i_itm);
-	    for (size_t i = 0; i < i_itm->children.size(); i++)
-		to_clear.push(i_itm->children[i]);
-	}
-
-	for (s_it = items->begin(); s_it != items->end(); s_it++) {
-	    if (invalid.find(*s_it) != invalid.end())
-		continue;
-	    QgItem *i_itm = *s_it;
-	    // Remove any invalid QgItem references from the children arrays
-	    std::vector<QgItem *> vchildren;
-	    for (size_t i = 0; i < i_itm->children.size(); i++) {
-		QgItem *itm = i_itm->children[i];
-		if (invalid.find(itm) == invalid.end()) {
-		    // Valid - keep it
-		    vchildren.push_back(itm);
-		}
-	    }
-	    i_itm->children = vchildren;
-	    // Child QgItem pointers are now all valid - rebuild full children
-	    // array to match current .g state
-	    item_rebuild(i_itm, invalid);
-	}
-
-	// Validate existing tops QgItems based on the tops data.
-	// Using tops_instances, construct a new tops vector.  Reuse any still valid
-	// QgItems, and make new ones 
-	std::vector<QgItem *> ntops_items;
-
-	for (size_t i = 0; i < tops.size(); i++) {
-	    QgItem *top_item = NULL;
-	    auto instance_it = items_by_instance_hash.find(tops[i]);
-	    if (instance_it != items_by_instance_hash.end()) {
-		for (QgItem *candidate : instance_it->second) {
-		    if (candidate->parentItem == rootItem &&
-			invalid.find(candidate) == invalid.end()) {
-			top_item = candidate;
-			break;
-		    }
-		}
-	    }
-	    if (!top_item) {
-		QgItem *nitem = new QgItem(tops[i], this);
-		nitem->parentItem = rootItem;
-		nitem->op = DB_OP_UNION;
-		item_register(nitem);
-		top_item = nitem;
-	    }
-	    ntops_items.push_back(top_item);
-	}
-
-	// Set the new tops items as children of the rootItem.
-	std::sort(ntops_items.begin(), ntops_items.end(), QgItem_cmp());
-	tops_items = ntops_items;
-	rootItem->children.clear();
-	for (size_t i = 0; i < tops_items.size(); i++) {
-	    rootItem->appendChild(tops_items[i]);
-	}
-	rootItem->c_noderow.clear();
-	for (size_t i = 0; i < tops_items.size(); i++) {
-	    rootItem->c_noderow[tops_items[i]] = i;
-	}
-
-	// Finally, delete the invalid QgItems
-	std::unordered_set<QgItem *>::iterator iv_it;
-	for (iv_it = invalid.begin(); iv_it != invalid.end(); iv_it++) {
-	    QgItem *iv_itm = *iv_it;
-	    item_unregister(iv_itm);
-	    delete iv_itm;
-	}
-
-	endResetModel();
-	model_structure_change_in_progress = false;
-    }
-
-    // If we did change something, we need to let the application know
-    if (changed_db_flag) {
-	(void)ged_selection_recompute(ged(), selectionSetKey());
-	notifySelectionItemsChanged();
-	emit mdl_changed_db((void *)ged());
-	m_session->notifyDbChanged(n_dbip);
-	emit check_highlights();
-    }
-
-    if (change_revision)
-	(void)ged_db_change_acknowledge(ged(), change_revision);
-
-    // Reset flag - we're in sync now
-    changed_db_flag = 0;
 }
 
 int
 QgModel::NodeRow(QgItem *node) const
 {
-    QgItem *np = node->parent();
-    if (!np)
-	return -1;
-    if (np->c_noderow.find(node) == np->c_noderow.end())
-	return -1;
-    return np->c_noderow[node];
+	QgItem *np = node->parent();
+	if (!np)
+		return -1;
+	if (np->c_noderow.find(node) == np->c_noderow.end())
+		return -1;
+	return np->c_noderow[node];
 }
 
 
 QModelIndex
 QgModel::NodeIndex(QgItem *node) const
 {
-    if (node == rootItem)
-	return QModelIndex();
-    if (!item_is_indexed(node))
-	return QModelIndex();
-    int nr = NodeRow(node);
-    if (nr == -1)
-	return QModelIndex();
-    return createIndex(nr, 0, node);
+	if (node == rootItem)
+		return QModelIndex();
+	if (!itemIsIndexed(node))
+		return QModelIndex();
+	int nr = NodeRow(node);
+	if (nr == -1)
+		return QModelIndex();
+	return createIndex(nr, 0, node);
+}
+
+
+void
+QgModel::itemIndexInsert(QgItem *item)
+{
+	if (!item || item == rootItem)
+		return;
+
+	items_by_instance_hash[item->ihash].insert(item);
+	struct ged_db_index_record record = {};
+	unsigned long long object_id = item->ihash;
+	if (ged_db_index_record_get(ged(), item->ihash, &record))
+		object_id = record.object_id;
+	items_by_object_id[object_id].insert(item);
+	item_object_ids[item] = object_id;
+
+	unsigned long long phash = item->path_hash();
+	if (phash) {
+		items_by_path_hash[phash].insert(item);
+		item_path_hashes[item] = phash;
+	}
+}
+
+
+void
+QgModel::itemIndexRemove(QgItem *item)
+{
+	if (!item || item == rootItem)
+		return;
+
+	auto iit = items_by_instance_hash.find(item->ihash);
+	if (iit != items_by_instance_hash.end()) {
+		iit->second.erase(item);
+		if (iit->second.empty())
+			items_by_instance_hash.erase(iit);
+	}
+	auto object_id_it = item_object_ids.find(item);
+	if (object_id_it != item_object_ids.end()) {
+		auto oit = items_by_object_id.find(object_id_it->second);
+		if (oit != items_by_object_id.end()) {
+			oit->second.erase(item);
+			if (oit->second.empty())
+				items_by_object_id.erase(oit);
+		}
+		item_object_ids.erase(object_id_it);
+	}
+
+	auto item_path_it = item_path_hashes.find(item);
+	if (item_path_it != item_path_hashes.end()) {
+		unsigned long long phash = item_path_it->second;
+		auto pit = items_by_path_hash.find(phash);
+		if (pit != items_by_path_hash.end()) {
+			pit->second.erase(item);
+			if (pit->second.empty())
+				items_by_path_hash.erase(pit);
+		}
+		item_path_hashes.erase(item_path_it);
+	}
+}
+
+
+void
+QgModel::itemIndexInsertSubtree(QgItem *item)
+{
+	if (!item || item == rootItem)
+		return;
+
+	itemIndexInsert(item);
+	for (QgItem *child : item->children)
+		itemIndexInsertSubtree(child);
+}
+
+
+void
+QgModel::itemIndexRemoveSubtree(QgItem *item)
+{
+	if (!item || item == rootItem)
+		return;
+
+	for (QgItem *child : item->children)
+		itemIndexRemoveSubtree(child);
+	itemIndexRemove(item);
+}
+
+
+void
+QgModel::invalidateItemPathHashes(QgItem *item)
+{
+	if (!item)
+		return;
+	item->cached_path_hash = 0;
+	item->path_hash_valid = false;
+	for (QgItem *child : item->children)
+		invalidateItemPathHashes(child);
+}
+
+
+void
+QgModel::itemIndexClear()
+{
+	items_by_instance_hash.clear();
+	items_by_object_id.clear();
+	items_by_path_hash.clear();
+	item_object_ids.clear();
+	item_path_hashes.clear();
+}
+
+
+unsigned long long
+QgModel::itemObjectId(const QgItem *item) const
+{
+	if (!item)
+		return 0;
+	auto object_id_it = item_object_ids.find(item);
+	return object_id_it == item_object_ids.end() ? item->ihash :
+		object_id_it->second;
+}
+
+
+void
+QgModel::itemIndexRebuild()
+{
+	itemIndexClear();
+	if (!items)
+		return;
+
+	for (QgItem *item : *items)
+		itemIndexInsert(item);
+}
+
+
+bool
+QgModel::itemIsIndexed(QgItem *item) const
+{
+	if (!item || !items || items->find(item) == items->end())
+		return false;
+
+	auto instance_it = items_by_instance_hash.find(item->ihash);
+	if (instance_it == items_by_instance_hash.end() ||
+		instance_it->second.find(item) == instance_it->second.end())
+		return false;
+
+	auto item_path_it = item_path_hashes.find(item);
+	if (item_path_it == item_path_hashes.end())
+		return false;
+	auto path_it = items_by_path_hash.find(item_path_it->second);
+	return path_it != items_by_path_hash.end() &&
+		path_it->second.find(item) != path_it->second.end();
+}
+
+
+void
+QgModel::deleteItemSubtree(QgItem *item)
+{
+	if (!item || item == rootItem)
+		return;
+
+	std::vector<QgItem *> children = item->children;
+	for (QgItem *child : children)
+		deleteItemSubtree(child);
+
+	itemIndexRemove(item);
+	if (items)
+		items->erase(item);
+	delete item;
+}
+
+
+int
+QgModel::applyLoadedHierarchyDeltas(const std::vector<std::string> *candidate_paths)
+{
+	if (!m_session || !m_session->ged() || !rootItem || !items)
+		return 0;
+
+	struct ged *gedp = m_session->ged();
+	int64_t start_us = bu_gettime();
+	hierarchy_delta_stats.attempts++;
+	auto finish_delta = [this, start_us](int applied) {
+		int64_t elapsed_us = bu_gettime() - start_us;
+		if (elapsed_us > 0)
+			hierarchy_delta_stats.elapsed_us +=
+				(uint64_t)elapsed_us;
+		if (applied)
+			hierarchy_delta_stats.applied++;
+		return applied;
+	};
+
+	if (!ged_db_index_refresh(gedp))
+		return finish_delta(0);
+	hierarchy_delta_stats.db_index_refreshes++;
+
+	struct ChildEntry {
+		unsigned long long id = 0;
+		int op = DB_OP_UNION;
+	};
+	struct ParentPlan {
+		QgItem *parent = nullptr;
+		std::vector<ChildEntry> children;
+	};
+	struct CrossMoveRemoval {
+		QgItem *parent = nullptr;
+		QgItem *item = nullptr;
+	};
+	struct CrossMoveInsertion {
+		QgItem *parent = nullptr;
+		int row = -1;
+		int op = DB_OP_UNION;
+	};
+	struct CrossParentMove {
+		unsigned long long id = 0;
+		QgItem *source_parent = nullptr;
+		QgItem *dest_parent = nullptr;
+		QgItem *item = nullptr;
+		int dest_row = -1;
+		int op = DB_OP_UNION;
+	};
+
+	auto rebuild_child_rows = [](QgItem *parent) {
+		if (!parent)
+			return;
+		parent->c_noderow.clear();
+		for (size_t i = 0; i < parent->children.size(); i++)
+			parent->c_noderow[parent->children[i]] = (int)i;
+	};
+
+	auto plan_child_counts = [](const std::vector<ChildEntry> &entries,
+		std::unordered_map<unsigned long long, size_t> &counts) {
+		counts.clear();
+		for (const ChildEntry &entry : entries) {
+			if (!entry.id)
+				return false;
+			counts[entry.id]++;
+		}
+		return true;
+	};
+
+	auto loaded_child_counts = [](QgItem *parent,
+		std::unordered_map<unsigned long long, size_t> &counts) {
+		counts.clear();
+		if (!parent)
+			return false;
+		for (QgItem *child : parent->children) {
+			if (!child || !child->ihash)
+				return false;
+			counts[child->ihash]++;
+		}
+		return true;
+	};
+
+	auto parent_rows_materialized = [this](QgItem *parent) {
+		return parent == rootItem || !parent->children.empty() ||
+			parent->open_itm;
+	};
+
+	auto common_id_sequence = [](const std::vector<unsigned long long> &ids,
+		const std::unordered_map<unsigned long long, size_t> &other_counts) {
+		std::unordered_map<unsigned long long, size_t> emitted;
+		std::vector<unsigned long long> common;
+		for (unsigned long long id : ids) {
+			auto oit = other_counts.find(id);
+			if (oit == other_counts.end())
+				continue;
+			size_t &count = emitted[id];
+			if (count >= oit->second)
+				continue;
+			common.push_back(id);
+			count++;
+		}
+		return common;
+	};
+
+	auto build_plan = [this, gedp](QgItem *parent, ParentPlan &plan) {
+		if (!parent)
+			return false;
+
+		plan.parent = parent;
+		plan.children.clear();
+
+		if (parent == rootItem) {
+			size_t tops_count = ged_db_index_tops(gedp, 1, nullptr, 0);
+			std::vector<unsigned long long> tops(tops_count);
+			if (tops_count)
+				ged_db_index_tops(gedp, 1, tops.data(), tops.size());
+			std::sort(tops.begin(), tops.end(),
+				[gedp](unsigned long long id1,
+				       unsigned long long id2) {
+					return qgmodel_index_id_less(gedp, id1, id2);
+				});
+			for (unsigned long long id : tops) {
+				ChildEntry entry;
+				entry.id = id;
+				entry.op = DB_OP_UNION;
+				plan.children.push_back(entry);
+			}
+			return true;
+		}
+
+		struct ged_db_index_record rec;
+		if (!ged_db_index_record_get(gedp, parent->ihash, &rec))
+			return false;
+
+		for (size_t row = 0; row < rec.child_count; row++) {
+			struct ged_db_index_child child;
+			if (!ged_db_index_child_at(gedp, parent->ihash, row,
+				&child))
+				return false;
+			ChildEntry entry;
+			entry.id = child.record.id;
+			entry.op = child.bool_op;
+			plan.children.push_back(entry);
+		}
+		return true;
+	};
+
+	auto common_order_supported = [&plan_child_counts,
+		&loaded_child_counts, &common_id_sequence,
+		&parent_rows_materialized](QgItem *parent,
+			const ParentPlan &plan) {
+		if (!parent)
+			return false;
+		if (!parent_rows_materialized(parent))
+			return false;
+
+		std::unordered_map<unsigned long long, size_t> new_counts;
+		std::unordered_map<unsigned long long, size_t> old_counts;
+		if (!plan_child_counts(plan.children, new_counts) ||
+			!loaded_child_counts(parent, old_counts))
+			return false;
+
+		std::vector<unsigned long long> old_ids;
+		old_ids.reserve(parent->children.size());
+		for (QgItem *child : parent->children)
+			old_ids.push_back(child->ihash);
+
+		std::vector<unsigned long long> new_ids;
+		new_ids.reserve(plan.children.size());
+		for (const ChildEntry &entry : plan.children) {
+			new_ids.push_back(entry.id);
+		}
+
+		std::vector<unsigned long long> old_common =
+			common_id_sequence(old_ids, new_counts);
+		std::vector<unsigned long long> new_common =
+			common_id_sequence(new_ids, old_counts);
+
+		return old_common == new_common;
+	};
+
+	auto unique_plan_supported = [&plan_child_counts,
+		&loaded_child_counts, &parent_rows_materialized](QgItem *parent,
+			const ParentPlan &plan) {
+		if (!parent)
+			return false;
+		if (!parent_rows_materialized(parent))
+			return false;
+
+		std::unordered_map<unsigned long long, size_t> new_counts;
+		std::unordered_map<unsigned long long, size_t> old_counts;
+		if (!plan_child_counts(plan.children, new_counts) ||
+			!loaded_child_counts(parent, old_counts))
+			return false;
+		if (new_counts.size() != plan.children.size() ||
+			old_counts.size() != parent->children.size())
+			return false;
+		return true;
+	};
+
+	auto plan_changes_rows = [&parent_rows_materialized](QgItem *parent,
+		const ParentPlan &plan) {
+		if (!parent)
+			return false;
+		if (!parent_rows_materialized(parent))
+			return false;
+		if (parent->children.size() != plan.children.size())
+			return true;
+		for (size_t i = 0; i < plan.children.size(); i++) {
+			if (parent->children[i]->ihash != plan.children[i].id)
+				return true;
+			if (parent->children[i]->op != plan.children[i].op)
+				return true;
+		}
+		return false;
+	};
+
+	auto child_row = [](QgItem *parent, QgItem *child) {
+		if (!parent || !child)
+			return -1;
+		auto row_it = parent->c_noderow.find(child);
+		if (row_it != parent->c_noderow.end())
+			return row_it->second;
+		for (size_t row = 0; row < parent->children.size(); row++) {
+			if (parent->children[row] == child)
+				return (int)row;
+		}
+		return -1;
+	};
+
+	auto item_is_ancestor = [](QgItem *ancestor, QgItem *item) {
+		if (!ancestor || !item)
+			return false;
+		for (QgItem *curr = item; curr; curr = curr->parentItem) {
+			if (curr == ancestor)
+				return true;
+		}
+		return false;
+	};
+
+	auto plan_cross_parent_moves = [&unique_plan_supported,
+		&item_is_ancestor](
+		const std::vector<ParentPlan> &plans,
+		std::vector<CrossParentMove> &moves) {
+		std::unordered_map<unsigned long long,
+			std::vector<CrossMoveRemoval>> removals;
+		std::unordered_map<unsigned long long,
+			std::vector<CrossMoveInsertion>> insertions;
+
+		moves.clear();
+		for (const ParentPlan &plan : plans) {
+			QgItem *parent = plan.parent;
+			if (!unique_plan_supported(parent, plan))
+				continue;
+
+			std::unordered_map<unsigned long long, int> old_rows;
+			for (size_t row = 0; row < parent->children.size(); row++) {
+				QgItem *child = parent->children[row];
+				if (child)
+					old_rows[child->ihash] = (int)row;
+			}
+
+			std::unordered_map<unsigned long long, int> new_rows;
+			std::unordered_map<unsigned long long, int> new_ops;
+			for (size_t row = 0; row < plan.children.size(); row++) {
+				const ChildEntry &entry = plan.children[row];
+				new_rows[entry.id] = (int)row;
+				new_ops[entry.id] = entry.op;
+			}
+
+			for (size_t row = 0; row < parent->children.size(); row++) {
+				QgItem *child = parent->children[row];
+				if (!child || new_rows.find(child->ihash) !=
+					new_rows.end())
+					continue;
+				CrossMoveRemoval removal;
+				removal.parent = parent;
+				removal.item = child;
+				removals[child->ihash].push_back(removal);
+			}
+
+			for (const ChildEntry &entry : plan.children) {
+				if (old_rows.find(entry.id) != old_rows.end())
+					continue;
+				CrossMoveInsertion insertion;
+				insertion.parent = parent;
+				insertion.row = new_rows[entry.id];
+				insertion.op = new_ops[entry.id];
+				insertions[entry.id].push_back(insertion);
+			}
+		}
+
+		for (const auto &rit : removals) {
+			auto iit = insertions.find(rit.first);
+			if (iit == insertions.end())
+				continue;
+			if (rit.second.size() != 1 || iit->second.size() != 1)
+				continue;
+			const CrossMoveRemoval &removal = rit.second[0];
+			const CrossMoveInsertion &insertion = iit->second[0];
+			if (!removal.parent || !insertion.parent || !removal.item ||
+				removal.parent == insertion.parent)
+				continue;
+			if (removal.parent == removal.parent->mdl->rootItem ||
+				insertion.parent == insertion.parent->mdl->rootItem)
+				continue;
+			if (item_is_ancestor(removal.item, insertion.parent))
+				continue;
+			CrossParentMove move;
+			move.id = rit.first;
+			move.source_parent = removal.parent;
+			move.dest_parent = insertion.parent;
+			move.item = removal.item;
+			move.dest_row = insertion.row;
+			move.op = insertion.op;
+			moves.push_back(move);
+		}
+
+		std::sort(moves.begin(), moves.end(),
+			[](const CrossParentMove &a,
+			   const CrossParentMove &b) {
+				if (a.id != b.id)
+					return a.id < b.id;
+				return a.dest_row < b.dest_row;
+			});
+	};
+
+	auto apply_cross_parent_moves = [this, &child_row,
+		&item_is_ancestor, &rebuild_child_rows](
+			const std::vector<CrossParentMove> &moves) {
+		for (const CrossParentMove &move : moves) {
+			QgItem *source_parent = move.source_parent;
+			QgItem *dest_parent = move.dest_parent;
+			QgItem *item = move.item;
+			if (!source_parent || !dest_parent || !item ||
+				source_parent == dest_parent)
+				continue;
+			if ((source_parent != rootItem &&
+				items->find(source_parent) == items->end()) ||
+				(dest_parent != rootItem &&
+				items->find(dest_parent) == items->end()) ||
+				items->find(item) == items->end())
+				return false;
+			if (item->parentItem != source_parent)
+				continue;
+			if (item_is_ancestor(item, dest_parent))
+				continue;
+
+			int source_row = child_row(source_parent, item);
+			if (source_row < 0)
+				return false;
+			int dest_row = move.dest_row;
+			if (dest_row < 0)
+				return false;
+			if (dest_row > (int)dest_parent->children.size())
+				dest_row = (int)dest_parent->children.size();
+
+			QModelIndex source_idx = (source_parent == rootItem) ?
+				QModelIndex() : NodeIndex(source_parent);
+			QModelIndex dest_idx = (dest_parent == rootItem) ?
+				QModelIndex() : NodeIndex(dest_parent);
+
+			model_structure_change_in_progress = true;
+			if (!beginMoveRows(source_idx, source_row, source_row,
+				dest_idx, dest_row)) {
+				model_structure_change_in_progress = false;
+				return false;
+			}
+			itemIndexRemoveSubtree(item);
+			source_parent->children.erase(
+				source_parent->children.begin() + source_row);
+			source_parent->c_count = source_parent->children.size();
+			item->parentItem = dest_parent;
+			invalidateItemPathHashes(item);
+			item->op = move.op;
+			dest_parent->children.insert(dest_parent->children.begin() +
+				dest_row, item);
+			dest_parent->c_count = dest_parent->children.size();
+			rebuild_child_rows(source_parent);
+			rebuild_child_rows(dest_parent);
+			itemIndexInsertSubtree(item);
+			endMoveRows();
+			model_structure_change_in_progress = false;
+			hierarchy_delta_stats.moved_rows++;
+			hierarchy_delta_stats.moved_row_ranges++;
+		}
+
+		return true;
+	};
+
+	auto apply_plan = [this, &rebuild_child_rows,
+		&plan_child_counts](const ParentPlan &plan) {
+		QgItem *parent = plan.parent;
+		if (!parent)
+			return false;
+
+		std::unordered_map<unsigned long long, size_t> keep_counts;
+		if (!plan_child_counts(plan.children, keep_counts))
+			return false;
+
+		QModelIndex parent_idx = (parent == rootItem) ?
+			QModelIndex() : NodeIndex(parent);
+
+		std::vector<int> rows_to_remove;
+		for (size_t row = 0; row < parent->children.size(); row++) {
+			QgItem *child = parent->children[(size_t)row];
+			if (!child)
+				return false;
+
+			auto kit = keep_counts.find(child->ihash);
+			if (kit != keep_counts.end() && kit->second > 0) {
+				kit->second--;
+				continue;
+			}
+
+			rows_to_remove.push_back((int)row);
+		}
+
+		for (auto rit = rows_to_remove.rbegin();
+			rit != rows_to_remove.rend();) {
+			int last_row = *rit;
+			int first_row = last_row;
+			++rit;
+			while (rit != rows_to_remove.rend() &&
+				*rit == first_row - 1) {
+				first_row = *rit;
+				++rit;
+			}
+
+			std::vector<QgItem *> removed_children;
+			removed_children.reserve((size_t)(last_row - first_row + 1));
+			for (int row = first_row; row <= last_row; row++) {
+				QgItem *child = parent->children[(size_t)row];
+				if (!child)
+					return false;
+				removed_children.push_back(child);
+			}
+
+			model_structure_change_in_progress = true;
+			beginRemoveRows(parent_idx, first_row, last_row);
+			parent->children.erase(parent->children.begin() + first_row,
+				parent->children.begin() + last_row + 1);
+			rebuild_child_rows(parent);
+			parent->c_count = parent->children.size();
+			endRemoveRows();
+			model_structure_change_in_progress = false;
+			hierarchy_delta_stats.removed_rows +=
+				(uint64_t)removed_children.size();
+			hierarchy_delta_stats.removed_row_ranges++;
+			for (QgItem *child : removed_children)
+				deleteItemSubtree(child);
+		}
+
+		for (size_t row = 0; row < plan.children.size(); row++) {
+			const ChildEntry &entry = plan.children[row];
+			if (row < parent->children.size() &&
+				parent->children[row] &&
+				parent->children[row]->ihash == entry.id) {
+				parent->children[row]->op = entry.op;
+				continue;
+			}
+
+			size_t insert_first = row;
+			size_t insert_last = row;
+			while (insert_last < plan.children.size()) {
+				if (row < parent->children.size() &&
+					parent->children[row] &&
+					parent->children[row]->ihash ==
+					plan.children[insert_last].id)
+					break;
+				insert_last++;
+			}
+			if (insert_last == insert_first)
+				return false;
+
+			std::vector<QgItem *> new_items;
+			new_items.reserve(insert_last - insert_first);
+			for (size_t insert_row = insert_first;
+				insert_row < insert_last; insert_row++) {
+				const ChildEntry &insert_entry =
+					plan.children[insert_row];
+				QgItem *nitem = new QgItem(insert_entry.id, this);
+				nitem->parentItem = parent;
+				nitem->op = insert_entry.op;
+				new_items.push_back(nitem);
+			}
+
+			model_structure_change_in_progress = true;
+			beginInsertRows(parent_idx, (int)insert_first,
+				(int)insert_last - 1);
+			parent->children.insert(parent->children.begin() +
+				(ptrdiff_t)insert_first, new_items.begin(),
+				new_items.end());
+			parent->c_count = parent->children.size();
+			rebuild_child_rows(parent);
+			for (QgItem *nitem : new_items) {
+				items->insert(nitem);
+				itemIndexInsert(nitem);
+			}
+			endInsertRows();
+			model_structure_change_in_progress = false;
+			hierarchy_delta_stats.inserted_rows +=
+				(uint64_t)new_items.size();
+			hierarchy_delta_stats.inserted_row_ranges++;
+			row = insert_last - 1;
+		}
+
+		parent->c_count = plan.children.size();
+		rebuild_child_rows(parent);
+		return true;
+	};
+
+	auto apply_unique_plan = [this, &rebuild_child_rows](
+		const ParentPlan &plan) {
+		QgItem *parent = plan.parent;
+		if (!parent)
+			return false;
+
+		QModelIndex parent_idx = (parent == rootItem) ?
+			QModelIndex() : NodeIndex(parent);
+
+		std::unordered_set<unsigned long long> wanted;
+		wanted.reserve(plan.children.size());
+		for (const ChildEntry &entry : plan.children) {
+			if (!entry.id || wanted.find(entry.id) != wanted.end())
+				return false;
+			wanted.insert(entry.id);
+		}
+
+		std::vector<int> rows_to_remove;
+		for (size_t row = 0; row < parent->children.size(); row++) {
+			QgItem *child = parent->children[row];
+			if (!child || !child->ihash)
+				return false;
+			if (wanted.find(child->ihash) == wanted.end())
+				rows_to_remove.push_back((int)row);
+		}
+
+		for (auto rit = rows_to_remove.rbegin();
+			rit != rows_to_remove.rend();) {
+			int last_row = *rit;
+			int first_row = last_row;
+			++rit;
+			while (rit != rows_to_remove.rend() &&
+				*rit == first_row - 1) {
+				first_row = *rit;
+				++rit;
+			}
+
+			std::vector<QgItem *> removed_children;
+			removed_children.reserve((size_t)(last_row - first_row + 1));
+			for (int row = first_row; row <= last_row; row++) {
+				QgItem *child = parent->children[(size_t)row];
+				if (!child)
+					return false;
+				removed_children.push_back(child);
+			}
+
+			model_structure_change_in_progress = true;
+			beginRemoveRows(parent_idx, first_row, last_row);
+			parent->children.erase(parent->children.begin() + first_row,
+				parent->children.begin() + last_row + 1);
+			parent->c_count = parent->children.size();
+			rebuild_child_rows(parent);
+			endRemoveRows();
+			model_structure_change_in_progress = false;
+			hierarchy_delta_stats.removed_rows +=
+				(uint64_t)removed_children.size();
+			hierarchy_delta_stats.removed_row_ranges++;
+			for (QgItem *child : removed_children)
+				deleteItemSubtree(child);
+		}
+
+		for (size_t row = 0; row < plan.children.size(); row++) {
+			const ChildEntry &entry = plan.children[row];
+			if (row < parent->children.size() &&
+				parent->children[row] &&
+				parent->children[row]->ihash == entry.id) {
+				parent->children[row]->op = entry.op;
+				continue;
+			}
+
+			size_t source_row = row;
+			while (source_row < parent->children.size()) {
+				QgItem *candidate = parent->children[source_row];
+				if (candidate && candidate->ihash == entry.id)
+					break;
+				source_row++;
+			}
+
+			if (source_row < parent->children.size()) {
+				model_structure_change_in_progress = true;
+				if (!beginMoveRows(parent_idx, (int)source_row,
+					(int)source_row, parent_idx, (int)row)) {
+					model_structure_change_in_progress = false;
+					return false;
+				}
+				QgItem *moved = parent->children[source_row];
+				parent->children.erase(parent->children.begin() +
+					(ptrdiff_t)source_row);
+				parent->children.insert(parent->children.begin() +
+					(ptrdiff_t)row, moved);
+				parent->children[row]->op = entry.op;
+				parent->c_count = parent->children.size();
+				rebuild_child_rows(parent);
+				endMoveRows();
+				model_structure_change_in_progress = false;
+				hierarchy_delta_stats.moved_rows++;
+				hierarchy_delta_stats.moved_row_ranges++;
+				continue;
+			}
+
+			size_t insert_first = row;
+			size_t insert_last = row;
+			while (insert_last < plan.children.size()) {
+				size_t search_row = row;
+				while (search_row < parent->children.size()) {
+					QgItem *candidate =
+						parent->children[search_row];
+					if (candidate &&
+						candidate->ihash ==
+						plan.children[insert_last].id)
+						break;
+					search_row++;
+				}
+				if (search_row < parent->children.size())
+					break;
+				insert_last++;
+			}
+			if (insert_last == insert_first)
+				return false;
+
+			std::vector<QgItem *> new_items;
+			new_items.reserve(insert_last - insert_first);
+			for (size_t insert_row = insert_first;
+				insert_row < insert_last; insert_row++) {
+				const ChildEntry &insert_entry =
+					plan.children[insert_row];
+				QgItem *nitem = new QgItem(insert_entry.id, this);
+				nitem->parentItem = parent;
+				nitem->op = insert_entry.op;
+				new_items.push_back(nitem);
+			}
+
+			model_structure_change_in_progress = true;
+			beginInsertRows(parent_idx, (int)insert_first,
+				(int)insert_last - 1);
+			parent->children.insert(parent->children.begin() +
+				(ptrdiff_t)insert_first, new_items.begin(),
+				new_items.end());
+			parent->c_count = parent->children.size();
+			rebuild_child_rows(parent);
+			for (QgItem *nitem : new_items) {
+				items->insert(nitem);
+				itemIndexInsert(nitem);
+			}
+			endInsertRows();
+			model_structure_change_in_progress = false;
+			hierarchy_delta_stats.inserted_rows +=
+				(uint64_t)new_items.size();
+			hierarchy_delta_stats.inserted_row_ranges++;
+			row = insert_last - 1;
+		}
+
+		parent->c_count = plan.children.size();
+		rebuild_child_rows(parent);
+		return true;
+	};
+
+	std::vector<QgItem *> parents;
+	std::unordered_set<QgItem *> parent_seen;
+	auto add_parent_candidate = [&parents, &parent_seen,
+		&parent_rows_materialized](QgItem *parent) {
+		if (!parent || !parent_rows_materialized(parent))
+			return;
+		if (parent_seen.insert(parent).second)
+			parents.push_back(parent);
+	};
+	add_parent_candidate(rootItem);
+
+	auto add_matching_path_prefix = [this, gedp, &add_parent_candidate](
+		const std::vector<unsigned long long> &ids, size_t prefix_len) {
+		if (!prefix_len || prefix_len > ids.size())
+			return;
+		unsigned long long phash = ged_db_index_path_hash(gedp,
+			ids.data(), ids.size(), prefix_len);
+		if (!phash)
+			return;
+		auto bit = items_by_path_hash.find(phash);
+		if (bit == items_by_path_hash.end())
+			return;
+		for (QgItem *item : bit->second) {
+			if (!item)
+				continue;
+			std::vector<unsigned long long> item_ids =
+				item->path_items();
+			if (item_ids.size() != prefix_len)
+				continue;
+			if (!std::equal(item_ids.begin(), item_ids.end(),
+				ids.begin()))
+				continue;
+			add_parent_candidate(item);
+		}
+	};
+
+	auto add_path_candidates = [gedp, &add_matching_path_prefix](
+		const char *path) {
+		if (!path || !path[0])
+			return;
+		size_t path_len = ged_db_index_path_resolve(gedp, path,
+			nullptr, 0);
+		if (!path_len)
+			return;
+		std::vector<unsigned long long> ids(path_len);
+		if (ged_db_index_path_resolve(gedp, path, ids.data(),
+			ids.size()) != path_len || ids.empty())
+			return;
+		for (size_t prefix_len = 1; prefix_len <= ids.size();
+			prefix_len++)
+			add_matching_path_prefix(ids, prefix_len);
+	};
+
+	int use_targeted_parents = candidate_paths && !candidate_paths->empty();
+	if (use_targeted_parents) {
+		for (const std::string &path : *candidate_paths) {
+			add_path_candidates(path.c_str());
+			std::string parent = qgmodel_parent_path(path.c_str());
+			while (!parent.empty()) {
+				add_path_candidates(parent.c_str());
+				parent = qgmodel_parent_path(parent.c_str());
+			}
+		}
+
+		/* If the hints did not resolve to any loaded/open branch, fall
+		 * back to the broad loaded-parent plan to preserve correctness
+		 * for older or low-level event publishers with incomplete names. */
+		if (parents.size() <= 1)
+			use_targeted_parents = 0;
+	}
+
+	if (!use_targeted_parents) {
+		std::vector<QgItem *> snapshot(items->begin(), items->end());
+		for (QgItem *item : snapshot) {
+			if (!item || items->find(item) == items->end())
+				continue;
+			add_parent_candidate(item);
+		}
+	}
+	hierarchy_delta_stats.planned_parents += parents.size();
+
+	std::vector<ParentPlan> plans;
+	plans.reserve(parents.size());
+	for (QgItem *parent : parents) {
+		ParentPlan plan;
+		if (!build_plan(parent, plan))
+			return finish_delta(0);
+		hierarchy_delta_stats.planned_child_rows +=
+			plan.children.size();
+		if (!common_order_supported(parent, plan) &&
+			!unique_plan_supported(parent, plan))
+			return finish_delta(0);
+		plans.push_back(plan);
+	}
+
+	int changed_parent_count = 0;
+	for (const ParentPlan &plan : plans) {
+		if (plan_changes_rows(plan.parent, plan))
+			changed_parent_count++;
+	}
+	hierarchy_delta_stats.changed_parents += changed_parent_count;
+	if (!changed_parent_count)
+		return finish_delta(1);
+
+	std::vector<CrossParentMove> cross_parent_moves;
+	plan_cross_parent_moves(plans, cross_parent_moves);
+	if (!apply_cross_parent_moves(cross_parent_moves))
+		return finish_delta(0);
+
+	for (const ParentPlan &plan : plans) {
+		if (!plan_changes_rows(plan.parent, plan))
+			continue;
+		if (!plan.parent || (plan.parent != rootItem &&
+			items->find(plan.parent) == items->end()))
+			continue;
+		if (unique_plan_supported(plan.parent, plan)) {
+			if (!apply_unique_plan(plan))
+				return finish_delta(0);
+			continue;
+		}
+		if (common_order_supported(plan.parent, plan)) {
+			if (!apply_plan(plan))
+				return finish_delta(0);
+			continue;
+		}
+		return finish_delta(0);
+	}
+
+	std::vector<QgItem *> ccount_update_items;
+	if (use_targeted_parents) {
+		ccount_update_items.reserve(parents.size());
+		for (QgItem *parent : parents)
+			ccount_update_items.push_back(parent);
+	} else {
+		ccount_update_items.assign(items->begin(), items->end());
+	}
+	for (QgItem *item : ccount_update_items) {
+		if (!item || !item->children.empty())
+			continue;
+		struct ged_db_index_record rec;
+		if (ged_db_index_record_get(gedp, item->ihash, &rec))
+			item->c_count = rec.child_count;
+	}
+
+	tops_items = rootItem->children;
+	return finish_delta(1);
 }
 
 
 bool
 QgModel::hasChildren(const QModelIndex &idx) const
 {
-    if (idx.column() > 0)
-	return false;
+	if (idx.column() > 0)
+		return false;
 
-    if (!idx.isValid())
-	return rootItem && rootItem->childCount() > 0;
+	if (!idx.isValid())
+		return rootItem && rootItem->childCount() > 0;
 
-    QgItem *item = static_cast<QgItem*>(idx.internalPointer());
-    if (!item || item == rootItem)
-	return false;
+	QgItem *item = static_cast<QgItem*>(idx.internalPointer());
+	if (!item || item == rootItem)
+		return false;
 
-    if (item->childCount() > 0)
-	return true;
+	if (item->childCount() > 0)
+		return true;
 
-    return ged_db_index_child_count(ged(), item->ihash) > 0;
+	return ged_db_index_child_count(m_session->ged(), item->ihash) > 0;
 }
 
 bool
 QgModel::canFetchMore(const QModelIndex &idx) const
 {
-    if (model_structure_change_in_progress)
-	return false;
+	if (model_reset_in_progress || model_structure_change_in_progress)
+		return false;
 
-    if (!idx.isValid())
-	return false;
+	if (!idx.isValid())
+		return false;
 
-    QgItem *item = static_cast<QgItem*>(idx.internalPointer());
-    if (item == rootItem)
-       	return false;
+	QgItem *item = static_cast<QgItem*>(idx.internalPointer());
+	if (item == rootItem)
+		return false;
 
-    if (item->children.size())
-	return false;
+	if (item->children.size())
+		return false;
 
-    // If there are children to be fetched, we can fetch them
-    return ged_db_index_child_count(ged(), item->ihash) > 0;
+	// If there are children to be fetched, we can fetch them
+	return ged_db_index_child_count(m_session->ged(), item->ihash) > 0;
 }
 
 void
 QgModel::fetchMore(const QModelIndex &idx)
 {
-    if (model_structure_change_in_progress)
-	return;
+	if (model_reset_in_progress || model_structure_change_in_progress)
+		return;
 
-    if (!idx.isValid())
-	return;
+	if (!idx.isValid())
+		return;
 
-    QgItem *item = static_cast<QgItem*>(idx.internalPointer());
+	QgItem *item = static_cast<QgItem*>(idx.internalPointer());
 
-    if (UNLIKELY(item == rootItem)) {
-	return;
-    }
+	if (UNLIKELY(item == rootItem)) {
+		return;
+	}
 
-    // If we're already populated, don't need to do it again
-    if (item->children.size())
-	return;
+	int64_t start_us = bu_gettime();
+	fetch_more_stats.calls++;
 
-    size_t child_count = ged_db_index_child_count(ged(), item->ihash);
-    if (!child_count)
-	return;
+	// If we're already populated, don't need to do it again
+	if (item->children.size())
+		return;
 
-    std::vector<QgItem *> nc;
-    for (size_t row = 0; row < child_count; row++) {
-	struct ged_db_index_child child;
-	if (!ged_db_index_child_at(ged(), item->ihash, row, &child))
-	    continue;
-	QgItem *nitem = new QgItem(child.record.id, this);
-	nitem->parentItem = item;
-	nitem->op = static_cast<db_op_t>(child.bool_op);
-	nc.push_back(nitem);
-	item_register(nitem);
-    }
+	unsigned long long chash = item->ihash;
+	size_t child_count = ged_db_index_child_count(m_session->ged(), chash);
+	if (!child_count) {
+		// TODO - invalid hash
+		return;
+	}
 
-    if (nc.empty())
-	return;
+	std::vector<QgItem *> nc;
+	for (size_t row = 0; row < child_count; row++) {
+		struct ged_db_index_child child;
+		if (!ged_db_index_child_at(m_session->ged(), chash, row, &child))
+			continue;
+		QgItem *nitem = new QgItem(child.record.id, this);
+		nitem->parentItem = item;
+		nitem->op = child.bool_op;
+		nc.push_back(nitem);
+		items->insert(nitem);
+		itemIndexInsert(nitem);
+	}
 
-    // All done - let the Qt model know
-    model_structure_change_in_progress = true;
-    beginInsertRows(idx, 0, nc.size() - 1);
-    item->children = nc;
-    // define a map for quick QgItem * -> index lookups
-    item->c_noderow.clear();
-    for (size_t i = 0; i < nc.size(); i++) {
-	item->c_noderow[nc[i]] = i;
-    }
-    endInsertRows();
-    model_structure_change_in_progress = false;
-    emit check_highlights();
-    emit item->mdl->opened_item(item);
+	if (nc.empty())
+		return;
+
+	// All done - let the Qt model know
+	model_structure_change_in_progress = true;
+	beginInsertRows(idx, 0, nc.size() - 1);
+	item->children = nc;
+	// define a map for quick QgItem * -> index lookups
+	item->c_noderow.clear();
+	for (size_t i = 0; i < nc.size(); i++) {
+		item->c_noderow[nc[i]] = i;
+	}
+	endInsertRows();
+	model_structure_change_in_progress = false;
+	fetch_more_stats.populated_calls++;
+	fetch_more_stats.inserted_rows += (uint64_t)nc.size();
+	fetch_more_stats.inserted_row_ranges++;
+	if ((uint64_t)nc.size() > fetch_more_stats.max_child_count)
+		fetch_more_stats.max_child_count = (uint64_t)nc.size();
+	int64_t elapsed_us = bu_gettime() - start_us;
+	if (elapsed_us > 0)
+		fetch_more_stats.elapsed_us += (uint64_t)elapsed_us;
+	emit check_highlights();
+	emit item->mdl->opened_item(item);
 }
 
 
@@ -1577,192 +2004,861 @@ QgModel::fetchMore(const QModelIndex &idx)
 QgItem *
 QgModel::root()
 {
-    return rootItem;
+	return rootItem;
 }
 
 QgItem *
 QgModel::getItem(const QModelIndex &index) const
 {
-    if (index.isValid()) {
-        QgItem *item = static_cast<QgItem*>(index.internalPointer());
-        if (item)
-            return item;
-    }
-    return rootItem;
+	if (index.isValid()) {
+		QgItem *item = static_cast<QgItem*>(index.internalPointer());
+		if (item)
+			return item;
+	}
+	return rootItem;
 }
 
 QModelIndex
 QgModel::index(int row, int column, const QModelIndex &parent_idx) const
 {
-    if (parent_idx.isValid() && parent_idx.column() != 0)
+	if (parent_idx.isValid() && parent_idx.column() != 0)
+		return QModelIndex();
+
+	QgItem *parentItem = getItem(parent_idx);
+	if (!parentItem)
+		return QModelIndex();
+
+	QgItem *childItem = parentItem->child(row);
+	if (childItem)
+		return createIndex(row, column, childItem);
+
 	return QModelIndex();
-
-    QgItem *parentItem = getItem(parent_idx);
-    if (!parentItem)
-	return QModelIndex();
-
-    QgItem *childItem = parentItem->child(row);
-    if (childItem)
-	return createIndex(row, column, childItem);
-
-    return QModelIndex();
 }
 
 QModelIndex
 QgModel::parent(const QModelIndex &index) const
 {
-    if (!index.isValid())
-	return QModelIndex();
+	if (!index.isValid())
+		return QModelIndex();
 
-    QgItem *childItem = getItem(index);
-    QgItem *parentItem = childItem ? childItem->parent() : nullptr;
+	QgItem *childItem = getItem(index);
+	QgItem *parentItem = childItem ? childItem->parent() : nullptr;
 
-    if (parentItem == rootItem || !parentItem)
-	return QModelIndex();
+	if (parentItem == rootItem || !parentItem)
+		return QModelIndex();
 
-    return createIndex(parentItem->childNumber(), 0, parentItem);
+	int parent_row = NodeRow(parentItem);
+	if (parent_row < 0)
+		return QModelIndex();
+
+	return createIndex(parent_row, 0, parentItem);
 }
 
 Qt::ItemFlags
 QgModel::flags(const QModelIndex &index) const
 {
-    if (!index.isValid())
-	return Qt::NoItemFlags;
+	if (!index.isValid())
+		return Qt::NoItemFlags;
 
-    Qt::ItemFlags flags = QAbstractItemModel::flags(index);
+	Qt::ItemFlags flags = QAbstractItemModel::flags(index);
 
-    // flags |= Qt::ItemIsEditable;
+	// flags |= Qt::ItemIsEditable;
 
-    return flags;
+	return flags;
 }
 
 QVariant
 QgModel::data(const QModelIndex &index, int role) const
 {
-    if (!index.isValid())
+	if (!index.isValid())
+		return QVariant();
+	QgItem *qi= getItem(index);
+	struct ged *gedp = m_session->ged();
+	if (role == Qt::DisplayRole)
+		return QVariant(bu_vls_cstr(qi->name_ptr));
+	if (role == BoolInternalRole)
+		return QVariant(qi->op);
+	if (role == DirectoryInternalRole)
+		return QVariant::fromValue((void *)(qi->dp));
+	if (role == DrawnDisplayRole) {
+		struct ged_view_context *view_ctx = qgmodel_active_view_context(this);
+		if (qi->draw_state_valid && qi->draw_state_view_ctx == view_ctx)
+			return QVariant(qi->draw_state);
+		std::string path = item_path(qi);
+		qi->draw_state = (gedp && view_ctx) ?
+			ged_scene_path_state_get(gedp, view_ctx, path.c_str(),
+			    GED_SCENE_DRAW_DEFAULT) : GED_SCENE_PATH_NOT_DRAWN;
+		qi->draw_state_view_ctx = view_ctx;
+		qi->draw_state_valid = true;
+		return QVariant(qi->draw_state);
+	}
+	if (role == SelectDisplayRole) {
+		return QVariant(selection_selected_path_hashes.find(qi->path_hash()) !=
+			selection_selected_path_hashes.end());
+	}
+
+	if (role == TypeIconDisplayRole)
+		return QVariant(qi->icon);
+
+	if (role == HighlightDisplayRole)
+		return QVariant(itemHighlight(qi));
+
 	return QVariant();
-    QgItem *qi= getItem(index);
-    if (role == Qt::DisplayRole)
-	return QVariant(qi->displayName());
-    if (role == QgDataRoles::BoolInternalRole)
-	return QVariant(qi->booleanOperation());
-    if (role == QgDataRoles::DirectoryInternalRole)
-	return QVariant::fromValue((void *)(qi->directoryEntry()));
-    if (role == QgDataRoles::DrawnDisplayRole) {
-	std::vector<unsigned long long> path = qi->path_items();
-	return QVariant(ged_scene_path_state_ids(ged(), ged()->ged_gvp,
-	    path.data(), path.size(), GED_SCENE_DRAW_DEFAULT));
-    }
-    if (role == QgDataRoles::SelectDisplayRole)
-	return QVariant(itemSelected(qi));
+}
 
-    if (role == QgDataRoles::TypeIconDisplayRole)
-	return QVariant(qi->typeIcon());
+std::string
+QgModel::item_path(const QgItem *item) const
+{
+	if (!item || !m_session || !m_session->ged())
+		return std::string();
 
-    if (role == QgDataRoles::HighlightDisplayRole)
-	return QVariant(itemHighlight(qi));
+	std::vector<unsigned long long> path_hashes = item->path_items();
+	if (path_hashes.empty())
+		return std::string();
 
-    return QVariant();
+	struct bu_vls path_str = BU_VLS_INIT_ZERO;
+	if (!ged_db_index_path_print(m_session->ged(), &path_str,
+		path_hashes.data(), path_hashes.size(), 0, 0)) {
+		bu_vls_free(&path_str);
+		return std::string();
+	}
+	std::string ret = bu_vls_cstr(&path_str);
+	bu_vls_free(&path_str);
+	return ret;
+}
+
+
+void
+QgModel::notifyItemsChanged(const QVector<int> &roles)
+{
+	if (!items)
+		return;
+
+	/* A dataChanged signal may cover a contiguous range as long as its
+	 * endpoints have the same parent.  Emitting one signal per item is
+	 * particularly damaging with QTreeView: column geometry and delegate
+	 * size hints may be recomputed after every signal, turning a whole-model
+	 * invalidation into quadratic work. */
+	std::unordered_set<QgItem *> changed_parents;
+	for (QgItem *item : *items) {
+		if (!item)
+			continue;
+		if (roles.contains(DrawnDisplayRole))
+			item->draw_state_valid = false;
+		QModelIndex idx = NodeIndex(item);
+		if (idx.isValid()) {
+			notification_stats.items_notified++;
+			notification_stats.full_items_notified++;
+			changed_parents.insert(item->parent());
+		}
+	}
+
+	for (QgItem *parent_item : changed_parents) {
+		if (!parent_item || parent_item->childItems().empty())
+			continue;
+		const std::vector<QgItem *> &children =
+			parent_item->childItems();
+		QModelIndex first = NodeIndex(children.front());
+		QModelIndex last = NodeIndex(children.back());
+		if (first.isValid() && last.isValid())
+			emit dataChanged(first, last, roles);
+	}
+}
+
+
+void
+QgModel::notifyItemSubtreeChanged(QgItem *item, const QVector<int> &roles,
+				  std::unordered_set<QgItem *> &notified)
+{
+	if (!item)
+		return;
+
+	if (item == rootItem) {
+		for (QgItem *child : rootItem->childItems())
+			notifyItemSubtreeChanged(child, roles, notified);
+		return;
+	}
+
+	if (notified.find(item) == notified.end()) {
+		if (roles.contains(DrawnDisplayRole))
+			item->draw_state_valid = false;
+		QModelIndex idx = NodeIndex(item);
+		if (idx.isValid()) {
+			emit dataChanged(idx, idx, roles);
+			notification_stats.items_notified++;
+			notification_stats.subtree_items_notified++;
+		}
+		notified.insert(item);
+	}
+
+	for (QgItem *child : item->childItems())
+		notifyItemSubtreeChanged(child, roles, notified);
+}
+
+
+int
+QgModel::notifyPathItemsChanged(const char *path, const QVector<int> &roles,
+				bool terminal_subtree)
+{
+	int64_t start_us = bu_gettime();
+	auto finish_notify = [this, start_us](int changed) {
+		int64_t elapsed_us = bu_gettime() - start_us;
+		if (elapsed_us > 0)
+			notification_stats.path_notify_us +=
+				(uint64_t)elapsed_us;
+		return changed;
+	};
+
+	if (!items || !path || !path[0] || !m_session || !m_session->ged())
+		return finish_notify(0);
+
+	struct ged *gedp = m_session->ged();
+	auto notify_resolved_ids = [this, &roles, gedp](
+		const std::vector<unsigned long long> &ids,
+		bool notify_terminal_subtree) {
+		int changed = 0;
+		std::unordered_set<QgItem *> notified;
+		for (size_t prefix_len = 1; prefix_len <= ids.size();
+			prefix_len++) {
+			unsigned long long phash = ged_db_index_path_hash(gedp,
+				ids.data(), ids.size(), prefix_len);
+			if (!phash)
+				continue;
+
+			notification_stats.path_queries++;
+			auto bit = items_by_path_hash.find(phash);
+			if (bit == items_by_path_hash.end())
+				continue;
+
+			notification_stats.path_candidates += bit->second.size();
+			for (QgItem *item : bit->second) {
+				if (!item)
+					continue;
+				std::vector<unsigned long long> candidate_path =
+					item->path_items();
+				if (candidate_path.size() != prefix_len)
+					continue;
+				if (!std::equal(candidate_path.begin(),
+					candidate_path.end(), ids.begin()))
+					continue;
+
+				if (prefix_len == ids.size() &&
+					notify_terminal_subtree) {
+					size_t before = notified.size();
+					notifyItemSubtreeChanged(item, roles,
+						notified);
+					changed += (int)(notified.size() -
+						before);
+				} else if (notified.find(item) == notified.end()) {
+					if (roles.contains(DrawnDisplayRole))
+						item->draw_state_valid = false;
+					QModelIndex idx = NodeIndex(item);
+					if (idx.isValid()) {
+						emit dataChanged(idx, idx, roles);
+						notification_stats.items_notified++;
+						notified.insert(item);
+						changed++;
+					}
+				}
+			}
+		}
+
+		return changed;
+	};
+
+	size_t path_len = ged_db_index_path_resolve(gedp, path, nullptr, 0);
+	if (!path_len) {
+		std::string parent = qgmodel_parent_path(path);
+		while (!parent.empty()) {
+			size_t parent_len = ged_db_index_path_resolve(gedp,
+				parent.c_str(), nullptr, 0);
+			if (parent_len) {
+				std::vector<unsigned long long> parent_ids(
+					parent_len);
+				if (ged_db_index_path_resolve(gedp,
+					parent.c_str(), parent_ids.data(),
+					parent_ids.size()) == parent_len &&
+					!parent_ids.empty())
+					return finish_notify(notify_resolved_ids(
+						parent_ids, false));
+			}
+			parent = qgmodel_parent_path(parent.c_str());
+		}
+		return finish_notify(0);
+	}
+
+	std::vector<unsigned long long> ids(path_len);
+	if (ged_db_index_path_resolve(gedp, path, ids.data(), ids.size()) !=
+		path_len || ids.empty())
+		return finish_notify(0);
+
+	return finish_notify(notify_resolved_ids(ids, terminal_subtree));
+}
+
+
+void
+QgModel::notifyDrawnItemsChanged()
+{
+	QVector<int> roles;
+	roles << DrawnDisplayRole;
+	bool timing_enabled = draw_timing_stats_enabled;
+	int64_t start_us = timing_enabled ? bu_gettime() : 0;
+	notifyItemsChanged(roles);
+	if (timing_enabled)
+		draw_timing_stats.notify_all_us +=
+			(uint64_t)(bu_gettime() - start_us);
+}
+
+
+void
+QgModel::notifySelectionItemsChanged()
+{
+	QVector<int> roles;
+	roles << SelectDisplayRole << HighlightDisplayRole;
+
+	struct ged *gedp = m_session ? m_session->ged() : nullptr;
+	using HashSet = std::unordered_set<unsigned long long>;
+	const HashSet old_selected = std::move(selection_selected_path_hashes);
+	const HashSet old_active_parents =
+		std::move(selection_active_parent_path_hashes);
+	const HashSet old_immediate_parents =
+		std::move(selection_immediate_parent_object_ids);
+	const HashSet old_grand_parents =
+		std::move(selection_grand_parent_object_ids);
+
+	const auto load_hashes = [this, gedp](enum ged_selection_hash_kind kind) {
+		HashSet ret;
+		if (!gedp)
+			return ret;
+		const size_t count = ged_selection_hashes(gedp, selectionSetKey(), kind,
+			nullptr, 0);
+		std::vector<ged_db_index_id> values(count);
+		if (count)
+			(void)ged_selection_hashes(gedp, selectionSetKey(), kind,
+				values.data(), values.size());
+		ret.insert(values.begin(), values.end());
+		return ret;
+	};
+	selection_selected_path_hashes =
+		load_hashes(GED_SELECTION_HASH_SELECTED_PATH);
+	selection_active_parent_path_hashes =
+		load_hashes(GED_SELECTION_HASH_ACTIVE_PARENT_PATH);
+	selection_immediate_parent_object_ids =
+		load_hashes(GED_SELECTION_HASH_IMMEDIATE_PARENT_OBJECT);
+	selection_grand_parent_object_ids =
+		load_hashes(GED_SELECTION_HASH_GRAND_PARENT_OBJECT);
+
+	std::unordered_set<QgItem *> notified;
+	const auto notify_item = [this, &roles, &notified](QgItem *item) {
+		if (!item || !notified.insert(item).second)
+			return;
+		QModelIndex idx = NodeIndex(item);
+		if (!idx.isValid())
+			return;
+		emit dataChanged(idx, idx, roles);
+		notification_stats.items_notified++;
+	};
+
+	const auto notify_path_hashes = [this, &notify_item](const HashSet &hashes) {
+		for (unsigned long long path_hash : hashes) {
+			notification_stats.path_queries++;
+			auto path_it = items_by_path_hash.find(path_hash);
+			if (path_it != items_by_path_hash.end()) {
+				notification_stats.path_candidates += path_it->second.size();
+				for (QgItem *item : path_it->second)
+					notify_item(item);
+			}
+		}
+	};
+	const auto notify_object_ids = [this, &notify_item](const HashSet &ids) {
+		for (unsigned long long object_id : ids) {
+			notification_stats.path_queries++;
+			auto object_it = items_by_object_id.find(object_id);
+			if (object_it != items_by_object_id.end()) {
+				notification_stats.path_candidates +=
+					object_it->second.size();
+				for (QgItem *item : object_it->second)
+					notify_item(item);
+			}
+		}
+	};
+
+	/* Notify both sides of the state transition.  Hash-index lookups touch only
+	 * loaded rows and avoid resolving every selected string path in the paint
+	 * path.  Including all four relations also makes mode changes exact. */
+	notify_path_hashes(old_selected);
+	notify_path_hashes(selection_selected_path_hashes);
+	notify_path_hashes(old_active_parents);
+	notify_path_hashes(selection_active_parent_path_hashes);
+	notify_object_ids(old_immediate_parents);
+	notify_object_ids(selection_immediate_parent_object_ids);
+	notify_object_ids(old_grand_parents);
+	notify_object_ids(selection_grand_parent_object_ids);
+
+}
+
+
+void
+QgModel::setInteractionMode(int mode)
+{
+	if (interaction_mode == mode)
+		return;
+	interaction_mode = mode;
+	notifySelectionItemsChanged();
+}
+
+
+void
+QgModel::notifyDrawnPathChanged(const char *path)
+{
+	QVector<int> roles;
+	roles << DrawnDisplayRole;
+	bool timing_enabled = draw_timing_stats_enabled;
+	int64_t start_us = timing_enabled ? bu_gettime() : 0;
+	notifyPathItemsChanged(path, roles);
+	if (timing_enabled)
+		draw_timing_stats.notify_path_us +=
+			(uint64_t)(bu_gettime() - start_us);
+}
+
+
+void
+QgModel::notifyDrawnTransactionChanged(
+	const void *delta_ctx)
+{
+	const struct ged_scene_delta *delta =
+		static_cast<const struct ged_scene_delta *>(delta_ctx);
+	const size_t path_count = ged_scene_delta_path_count(delta);
+	if (!path_count) {
+		notifyDrawnItemsChanged();
+		return;
+	}
+
+	for (size_t i = 0; i < path_count; i++) {
+		const char *path = ged_scene_delta_path_at(delta, i);
+		if (path && path[0])
+			notifyDrawnPathChanged(path);
+	}
+}
+
+
+void
+QgModel::flushPendingDrawNotifications()
+{
+	if (pending_draw_event_all ||
+		(!pending_draw_event_view_only && pending_draw_event_paths.empty())) {
+		notifyDrawnItemsChanged();
+	} else if (!pending_draw_event_paths.empty()) {
+		for (const std::string &path : pending_draw_event_paths)
+			notifyDrawnPathChanged(path.c_str());
+	}
+
+	pending_draw_event_paths.clear();
+	pending_draw_event_all = 0;
+	pending_draw_event_view_only = 0;
+}
+
+
+void
+QgModel::handleDrawTransactionEvent(
+	const void *delta_ctx)
+{
+	const struct ged_scene_delta *delta =
+		static_cast<const struct ged_scene_delta *>(delta_ctx);
+	draw_observer_event_count++;
+
+	if (ged_scene_delta_kind(delta) == GED_SCENE_DELTA_STYLE) {
+		/* A style-only scene delta cannot change DrawnDisplayRole.  Database
+		 * observers issue the precise row-role notifications for material and
+		 * attribute changes; treating a named material refresh as a draw-path
+		 * change needlessly repaints every loaded descendant. */
+		pending_draw_event_view_only = 1;
+		return;
+	}
+
+	if (draw_observer_defer_depth > 0) {
+		int recorded = 0;
+		const size_t path_count = ged_scene_delta_path_count(delta);
+		for (size_t i = 0; i < path_count; i++) {
+			const char *path = ged_scene_delta_path_at(delta, i);
+			if (path && path[0]) {
+				qgmodel_append_unique_path(pending_draw_event_paths, path);
+				recorded = 1;
+			}
+		}
+		if (!recorded)
+			pending_draw_event_all = 1;
+		return;
+	}
+
+	notifyDrawnTransactionChanged(delta);
+}
+
+
+void
+QgModel::recordPendingDatabaseEventPaths(const struct ged_event_result *result)
+{
+	const size_t path_count = ged_event_result_path_count(result);
+	for (size_t i = 0; i < path_count; i++)
+		qgmodel_append_unique_path(pending_db_event_paths,
+			ged_event_result_path_at(result, i));
+}
+
+
+void
+QgModel::notifyPendingDatabaseEventItemsChanged()
+{
+	QVector<int> roles;
+	roles << Qt::DisplayRole << BoolInternalRole << DirectoryInternalRole
+	      << DrawnDisplayRole << SelectDisplayRole << TypeIconDisplayRole
+	      << HighlightDisplayRole;
+
+	if (pending_db_event_all || pending_db_event_paths.empty()) {
+		notifyItemsChanged(roles);
+	} else {
+		std::vector<std::string> notify_paths;
+		notify_paths.reserve(pending_db_event_paths.size());
+		for (const std::string &path : pending_db_event_paths) {
+			if (qgmodel_path_has_queued_ancestor(
+					pending_db_event_paths, path))
+				continue;
+			notify_paths.push_back(path);
+		}
+		for (const std::string &path : notify_paths)
+			notifyPathItemsChanged(path.c_str(), roles, false);
+	}
+
+	pending_db_event_paths.clear();
+	pending_db_event_metadata_only = 0;
+	pending_db_event_all = 0;
+}
+
+
+void
+QgModel::flushPendingDatabaseEventNotifications()
+{
+	if (!pending_db_event_notify && !pending_db_event_model_reset)
+		return;
+
+	struct ged *gedp = m_session ? m_session->ged() : nullptr;
+	if (!gedp) {
+		pending_db_event_notify = 0;
+		pending_db_event_model_reset = 0;
+		pending_db_event_force_reset = 0;
+		pending_db_event_metadata_only = 0;
+		pending_db_event_paths.clear();
+		pending_db_event_all = 0;
+		return;
+	}
+
+	if (pending_db_event_model_reset) {
+		int applied_delta = !pending_db_event_force_reset &&
+			applyLoadedHierarchyDeltas(&pending_db_event_paths);
+		if (!applied_delta && !pending_db_event_force_reset &&
+			!pending_db_event_paths.empty())
+			applied_delta = applyLoadedHierarchyDeltas();
+		pending_db_event_notify = 0;
+		pending_db_event_model_reset = 0;
+		pending_db_event_force_reset = 0;
+		pending_db_event_metadata_only = 0;
+		if (applied_delta) {
+			notifyPendingDatabaseEventItemsChanged();
+			emit mdl_changed_db((void *)gedp);
+			if (m_session)
+				m_session->notifyDbChanged(gedp->dbip);
+			emit check_highlights();
+		} else {
+			hierarchy_delta_stats.reset_fallbacks++;
+			changed_db_flag = 1;
+			pending_db_event_paths.clear();
+			pending_db_event_all = 0;
+			pending_db_event_metadata_only = 0;
+			g_update(gedp->dbip);
+		}
+		return;
+	}
+
+	pending_db_event_notify = 0;
+	pending_db_event_model_reset = 0;
+	pending_db_event_force_reset = 0;
+	int metadata_only = pending_db_event_metadata_only;
+	pending_db_event_metadata_only = 0;
+	if (metadata_only) {
+		pending_db_event_paths.clear();
+		pending_db_event_all = 0;
+	} else {
+		notifyPendingDatabaseEventItemsChanged();
+	}
+	emit mdl_changed_db((void *)gedp);
+	if (m_session)
+		m_session->notifyDbChanged(gedp->dbip);
+	emit check_highlights();
+}
+
+
+void
+QgModel::handleDatabaseEvents(const struct ged_event *events,
+				size_t event_count,
+				const struct ged_event_result *result)
+{
+	event_observer_event_count++;
+
+	if (events && event_count) {
+		int metadata_only = 1;
+		pending_db_event_notify = 1;
+		recordPendingDatabaseEventPaths(result);
+		for (size_t i = 0; i < event_count; i++) {
+			if (events[i].kind != GED_EVENT_DATABASE_METADATA_CHANGED)
+				metadata_only = 0;
+			if (qgmodel_event_affects_hierarchy(events[i].kind))
+				pending_db_event_model_reset = 1;
+			if (qgmodel_event_requires_model_reset(events[i].kind))
+				pending_db_event_force_reset = 1;
+			if (events[i].kind == GED_EVENT_MATERIAL_CHANGED &&
+			    !events[i].name && !events[i].path)
+				pending_db_event_all = 1;
+			qgmodel_append_unique_path(pending_db_event_paths,
+				events[i].name);
+			qgmodel_append_unique_path(pending_db_event_paths,
+				events[i].path);
+			qgmodel_append_unique_path(pending_db_event_paths,
+				events[i].new_name);
+			qgmodel_append_unique_path(pending_db_event_paths,
+				events[i].parent_name);
+			qgmodel_append_unique_path(pending_db_event_paths,
+				events[i].child_name);
+		}
+		/* Database events carry precise affected names, and structural
+		 * combination changes take the grouped hierarchy-delta path above.
+		 * Invalidating every loaded descendant for a non-structural object or
+		 * material change is unnecessary and turns one edit into an O(scene)
+		 * repaint on large trees. */
+		if (metadata_only && !pending_db_event_model_reset &&
+			pending_db_event_paths.empty() &&
+			!pending_db_event_all)
+			pending_db_event_metadata_only = 1;
+		else
+			pending_db_event_metadata_only = 0;
+	}
+
+	if (event_observer_defer_depth > 0)
+		return;
+
+	flushPendingDatabaseEventNotifications();
+}
+
+
+void
+QgModelDrawObserverAccess::callback(struct ged *gedp,
+				    const struct ged_scene_delta *delta,
+				    void *client_data)
+{
+	(void)gedp;
+
+	QgModel *model = (QgModel *)client_data;
+	if (model) {
+		bool timing_enabled = model->draw_timing_stats_enabled;
+		int64_t start_us = timing_enabled ?
+			bu_gettime() : 0;
+		model->handleDrawTransactionEvent(delta);
+		if (timing_enabled)
+			model->draw_timing_stats.observer_callback_us +=
+				(uint64_t)(bu_gettime() - start_us);
+	}
+}
+
+
+void
+QgModel::eventObserverCallback(struct ged *gedp,
+			       const struct ged_event *events,
+			       size_t event_count,
+			       const struct ged_event_result *result,
+			       void *client_data)
+{
+	(void)gedp;
+
+	QgModel *model = (QgModel *)client_data;
+	if (model)
+	model->handleDatabaseEvents(events, event_count, result);
 }
 
 QVariant
 QgModel::headerData(int section, Qt::Orientation UNUSED(orientation), int role) const
 {
-    // Until we add more columns for attributes, there is only one thing to return here
-    if (role != Qt::DisplayRole)
+	// Until we add more columns for attributes, there is only one thing to return here
+	if (role != Qt::DisplayRole)
+		return QVariant();
+	if (section == 0)
+		return QString("Object Names");
 	return QVariant();
-    if (section == 0)
-	return QString("Object Names");
-    return QVariant();
 }
 
 int
 QgModel::rowCount(const QModelIndex &p) const
 {
-    QgItem *pItem;
-    if (p.column() > 0)
-	return 0;
+	QgItem *pItem;
+	if (p.column() > 0)
+		return 0;
 
-    if (!p.isValid())
-	pItem = rootItem;
-    else
-	pItem = static_cast<QgItem*>(p.internalPointer());
+	if (!p.isValid())
+		pItem = rootItem;
+	else
+		pItem = static_cast<QgItem*>(p.internalPointer());
 
-    return pItem->childCount();
+	return pItem->childCount();
 }
 
 int
 QgModel::columnCount(const QModelIndex &p) const
 {
-    if (p.isValid())
-        return static_cast<QgItem*>(p.internalPointer())->columnCount();
-    return rootItem->columnCount();
+	if (p.isValid())
+		return static_cast<QgItem*>(p.internalPointer())->columnCount();
+	return rootItem->columnCount();
 }
 
 ///////////////////////////////////////////////////////////////////////
 //                  .g Centric Methods
 ///////////////////////////////////////////////////////////////////////
-void
-QgModel::refresh_database()
-{
-    if (database_refresh_in_progress) {
-	database_event_pending = true;
-	return;
-    }
-
-    do {
-	database_event_pending = false;
-	database_refresh_in_progress = true;
-	g_update(ged()->dbip);
-	database_refresh_in_progress = false;
-    } while (database_event_pending);
-}
-
 int
 QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 {
-    struct ged *gedp = ged();
-    model_dbip = gedp->dbip;
-
-    changed_dp.clear();
-
-    if (!ged_cmd_exists(argv[0])) {
-	const char *ccmd = NULL;
-	int edist = ged_cmd_lookup(&ccmd, argv[0]);
-	if (edist) {
-	    if (msg)
-		bu_vls_sprintf(msg, "Command %s not found, did you mean %s (edit distance %d)?\n", argv[0],   ccmd, edist);
+	struct ged *gedp = m_session->ged();
+	if (command_running) {
+		if (msg)
+			bu_vls_sprintf(msg, "A GED command is already running\n");
+		return BRLCAD_ERROR;
 	}
-	return BRLCAD_ERROR;
-    }
+	model_dbip = gedp->dbip;
+	uint64_t draw_rev_before = ged_scene_revision(gedp);
+	uint64_t draw_event_count_before = draw_observer_event_count;
+	uint64_t db_event_count_before = event_observer_event_count;
 
-    command_running = true;
-    int ret = ged_exec(gedp, argc, argv);
-    command_running = false;
+	pending_draw_event_paths.clear();
+	pending_draw_event_all = 0;
+	pending_draw_event_view_only = 0;
+	pending_db_event_notify = 0;
+	pending_db_event_model_reset = 0;
+	pending_db_event_force_reset = 0;
+	pending_db_event_metadata_only = 0;
+	pending_db_event_paths.clear();
+	pending_db_event_all = 0;
 
-    // If this is one of the GED commands supporting incremental input, this
-    // return code means we need more input from the application before any
-    // command can be run - no need to do the remainder of the logic below.
+	if (!ged_cmd_exists(argv[0])) {
+		const char *ccmd = nullptr;
+		int edist = ged_cmd_lookup(&ccmd, argv[0]);
+		if (edist) {
+			if (msg)
+				bu_vls_sprintf(msg, "Command %s not found, did you mean %s (edit distance %d)?\n", argv[0],   ccmd, edist);
+		}
+		return BRLCAD_ERROR;
+	}
 
-    if (ret & GED_MORE) {
-	if (database_event_pending)
-	    refresh_database();
+	draw_observer_defer_depth++;
+	event_observer_defer_depth++;
+	command_running = true;
+	int ret = BRLCAD_ERROR;
+	if (ged_exec_owner_dispatch_configured(gedp) &&
+		QThread::currentThread() == thread()) {
+		struct ged_view_context *foreground_view =
+			ged_view_active_ctx(gedp);
+		bobol_display_endpoint_t *foreground_endpoint =
+			foreground_view ? ged_view_context_obol_endpoint_get(
+			    foreground_view) : nullptr;
+		const int foreground_deferred = foreground_endpoint ?
+			bobol_display_endpoint_foreground_activity_begin(
+			    foreground_endpoint) : 0;
+		QEventLoop command_loop;
+		std::thread command_worker([&]() {
+			ret = ged_exec(gedp, argc, argv);
+			QMetaObject::invokeMethod(&command_loop, "quit",
+				Qt::QueuedConnection);
+		});
+		command_loop.exec();
+		command_worker.join();
+		struct ged_view_context *current_view =
+			ged_view_active_ctx(gedp);
+		if (foreground_deferred && current_view &&
+			ged_view_context_obol_endpoint_get(current_view) ==
+			foreground_endpoint)
+			(void)bobol_display_endpoint_foreground_activity_end(
+			    foreground_endpoint);
+	} else {
+		ret = ged_exec(gedp, argc, argv);
+	}
+	command_running = false;
+	/* View and database observers below may synchronously issue their own GED
+	 * commands (for example, a faceplate refreshing its state).  Preserve this
+	 * command's result before those notifications can reuse ged_result_str.
+	 * Callers use run_cmd for command readback as well as mutation, so returning
+	 * a later observer's output is a correctness error rather than cosmetic
+	 * logging noise. */
+	struct bu_vls command_result = BU_VLS_INIT_ZERO;
+	bu_vls_printf(&command_result, "%s", bu_vls_cstr(gedp->ged_result_str));
+	event_observer_defer_depth--;
+	draw_observer_defer_depth--;
+
+	// If this is one of the GED commands supporting incremental input, this
+	// return code means we need more input from the application before any
+	// command can be run - no need to do the remainder of the logic below.
+	if (ret & GED_MORE) {
+		if (event_observer_event_count != db_event_count_before)
+			flushPendingDatabaseEventNotifications();
+		if (draw_observer_event_count != draw_event_count_before) {
+			flushPendingDrawNotifications();
+			emit view_changed(QG_VIEW_DRAWN);
+		} else {
+			pending_draw_event_paths.clear();
+			pending_draw_event_all = 0;
+			pending_draw_event_view_only = 0;
+		}
+		pending_db_event_notify = 0;
+		pending_db_event_model_reset = 0;
+		pending_db_event_force_reset = 0;
+		pending_db_event_metadata_only = 0;
+		pending_db_event_paths.clear();
+		pending_db_event_all = 0;
+		if (msg)
+		    bu_vls_printf(msg, "%s", bu_vls_cstr(&command_result));
+		bu_vls_free(&command_result);
+		return ret;
+	}
+
+	// If we have a new .g file, set the changed flag
+	int dbip_changed = (model_dbip != gedp->dbip);
+	if (dbip_changed)
+		changed_db_flag = 1;
+
+	if (dbip_changed) {
+		pending_db_event_notify = 0;
+		pending_db_event_model_reset = 0;
+		pending_db_event_force_reset = 0;
+		pending_db_event_metadata_only = 0;
+		pending_db_event_paths.clear();
+		pending_db_event_all = 0;
+		g_update(gedp->dbip);
+	} else if (pending_db_event_notify || pending_db_event_model_reset) {
+		flushPendingDatabaseEventNotifications();
+	} else {
+		g_update(gedp->dbip);
+	}
+
+	uint64_t draw_rev_after = ged_scene_revision(gedp);
+	if (draw_rev_after != draw_rev_before ||
+		draw_observer_event_count != draw_event_count_before) {
+		if (draw_observer_event_count != draw_event_count_before)
+			flushPendingDrawNotifications();
+		else
+			notifyDrawnItemsChanged();
+		emit view_changed(QG_VIEW_DRAWN);
+	}
+
+	model_dbip = gedp->dbip;
+
+	if (msg)
+		bu_vls_printf(msg, "%s", bu_vls_cstr(&command_result));
+	bu_vls_free(&command_result);
+
 	return ret;
-    }
-
-    // If we have a new .g file, set the changed flag
-    if (model_dbip != gedp->dbip)
-	changed_db_flag = 1;
-
-    // Assuming we're not doing a full rebuild, trigger the post-cmd updates
-    refresh_database();
-
-    model_dbip = gedp->dbip;
-
-    if (msg && gedp)
-	bu_vls_printf(msg, "%s", bu_vls_cstr(gedp->ged_result_str));
-
-    return ret;
 }
 
 // Normally the model won't define methods for specific GED commands, but there
@@ -1770,123 +2866,194 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 // are potentially triggered from QActions.  TODO - it might be better to have
 // these live in the selection proxy model...
 int
+QgModel::drawnPathState(const char *path) const
+{
+	QTCAD_SLOT("QgModel::drawnPathState", 1);
+	if (!path || !path[0])
+		return 0;
+
+	struct ged *gedp = m_session ? m_session->ged() : NULL;
+	struct ged_view_context *view_ctx = qgmodel_active_view_context(this);
+	return (gedp && view_ctx) ? ged_scene_path_state_get(gedp, view_ctx,
+		path, GED_SCENE_DRAW_DEFAULT) : GED_SCENE_PATH_NOT_DRAWN;
+}
+
+int
 QgModel::draw_action()
 {
-    QTCAD_SLOT("QgModel::draw_action", 1);
-    // https://stackoverflow.com/a/28647342/2037687
-    QAction *a = qobject_cast<QAction *>(sender());
-    QVariant v = a->data();
-    QgItem *cnode  = (QgItem *) v.value<void *>();
-    if (!cnode)
-	return BRLCAD_ERROR;
-    return draw(cnode);
+	QTCAD_SLOT("QgModel::draw_action", 1);
+	// https://stackoverflow.com/a/28647342/2037687
+	QAction *a = qobject_cast<QAction *>(sender());
+	QVariant v = a->data();
+	QgItem *cnode  = (QgItem *) v.value<void *>();
+	if (!cnode)
+		return BRLCAD_ERROR;
+	std::string path_str = item_path(cnode);
+	if (path_str.empty())
+		return BRLCAD_ERROR;
+	int ret = draw(path_str.c_str());
+	return ret;
+}
+
+int
+QgModel::drawPaths(const std::vector<std::string> &paths)
+{
+	QTCAD_SLOT("QgModel::drawPaths", 1);
+	struct ged *gedp = m_session ? m_session->ged() : NULL;
+	struct ged_view_context *view_ctx = qgmodel_active_view_context(this);
+	if (!gedp || !view_ctx || paths.empty())
+		return BRLCAD_ERROR;
+
+	std::vector<const char *> draw_paths;
+	draw_paths.reserve(paths.size());
+	for (const std::string &path : paths) {
+		if (!path.empty())
+			draw_paths.push_back(path.c_str());
+	}
+	if (draw_paths.empty())
+		return BRLCAD_ERROR;
+
+	bool timing_enabled = draw_timing_stats_enabled;
+	if (timing_enabled)
+		draw_timing_stats.draw_calls++;
+	int64_t blank_slate_start_us = timing_enabled ?
+		bu_gettime() : 0;
+	int blank_slate = !ged_scene_has_paths(gedp, view_ctx,
+		GED_SCENE_DRAW_DEFAULT);
+	if (timing_enabled)
+		draw_timing_stats.blank_slate_check_us +=
+			(uint64_t)(bu_gettime() - blank_slate_start_us);
+
+	uint64_t draw_rev_before = ged_scene_revision(gedp);
+	uint64_t draw_event_count_before = draw_observer_event_count;
+	int manage_draw_notifications = (draw_observer_defer_depth == 0);
+	if (manage_draw_notifications) {
+		pending_draw_event_paths.clear();
+		pending_draw_event_all = 0;
+		pending_draw_event_view_only = 0;
+	}
+	draw_observer_defer_depth++;
+	int64_t transaction_start_us = timing_enabled ?
+		bu_gettime() : 0;
+	struct ged_scene_draw_request request;
+	ged_scene_draw_request_init(&request);
+	request.view = view_ctx;
+	request.paths = draw_paths.data();
+	request.path_count = draw_paths.size();
+	request.autoview = blank_slate ? 1 : 0;
+	int result_changed = 0;
+	enum ged_scene_status status = qgmodel_apply_scene_draw(gedp,
+		&request, &result_changed);
+	if (timing_enabled)
+		draw_timing_stats.transaction_us +=
+			(uint64_t)(bu_gettime() - transaction_start_us);
+	draw_observer_defer_depth--;
+
+	uint64_t draw_rev_after = ged_scene_revision(gedp);
+	int draw_events_seen = (draw_observer_event_count !=
+		draw_event_count_before);
+	int draw_changed = (result_changed || draw_events_seen ||
+		draw_rev_after != draw_rev_before);
+	if (manage_draw_notifications && draw_changed) {
+		if (draw_events_seen)
+			flushPendingDrawNotifications();
+		else
+			notifyDrawnItemsChanged();
+		int64_t view_signal_start_us = timing_enabled ?
+			bu_gettime() : 0;
+		emit view_changed(QG_VIEW_DRAWN);
+		if (timing_enabled)
+			draw_timing_stats.view_signal_us +=
+				(uint64_t)(bu_gettime() - view_signal_start_us);
+	}
+	if (status != GED_SCENE_OK) {
+		return BRLCAD_ERROR;
+	}
+	if (timing_enabled)
+		draw_timing_stats.successful_draw_calls++;
+	return BRLCAD_OK;
 }
 
 int
 QgModel::draw(const char *inst_path)
 {
-    QTCAD_SLOT("QgModel::draw", 1);
-    const char *paths[] = {inst_path};
-    struct ged_scene_draw_request request;
-    ged_scene_draw_request_init(&request);
-    request.view = ged()->ged_gvp;
-    request.paths = paths;
-    request.path_count = 1;
-    request.autoview = 1;
-    struct ged_scene_result *result = ged_scene_result_create();
-    if (!result)
-	return BRLCAD_ERROR;
-    enum ged_scene_status status = ged_scene_draw(ged(), &request, result);
-    int changed = ged_scene_result_changed(result);
-    ged_scene_result_destroy(result);
-    if (status == GED_SCENE_OK && changed)
-	emit view_change(QG_VIEW_DRAWN);
-    return status == GED_SCENE_OK ? BRLCAD_OK : BRLCAD_ERROR;
-}
-
-int
-QgModel::draw(QgItem *item)
-{
-    if (!item || item->model() != this)
-	return BRLCAD_ERROR;
-    struct bu_vls path_str = BU_VLS_INIT_ZERO;
-    int valid = qgmodel_item_path(&path_str, item);
-    int ret = valid ? draw(bu_vls_cstr(&path_str)) : BRLCAD_ERROR;
-    bu_vls_free(&path_str);
-    return ret;
+	QTCAD_SLOT("QgModel::draw", 1);
+	if (!inst_path || !inst_path[0])
+		return BRLCAD_ERROR;
+	std::vector<std::string> paths;
+	paths.emplace_back(inst_path);
+	return drawPaths(paths);
 }
 
 int
 QgModel::erase_action()
 {
-    QTCAD_SLOT("QgModel::erase_action", 1);
-    // https://stackoverflow.com/a/28647342/2037687
-    QAction *a = qobject_cast<QAction *>(sender());
-    QVariant v = a->data();
-    QgItem *cnode  = (QgItem *) v.value<void *>();
-    if (!cnode)
-	return BRLCAD_ERROR;
-    return erase(cnode);
+	QTCAD_SLOT("QgModel::erase_action", 1);
+	// https://stackoverflow.com/a/28647342/2037687
+	QAction *a = qobject_cast<QAction *>(sender());
+	QVariant v = a->data();
+	QgItem *cnode  = (QgItem *) v.value<void *>();
+	if (!cnode)
+		return BRLCAD_ERROR;
+	std::string path_str = item_path(cnode);
+	if (path_str.empty())
+		return BRLCAD_ERROR;
+	int ret = erase(path_str.c_str());
+	return ret;
 }
 
 int
 QgModel::erase(const char *inst_path)
 {
-    QTCAD_SLOT("QgModel::erase", 1);
-    struct ged_scene_erase_request request;
-    ged_scene_erase_request_init(&request);
-    request.view = ged()->ged_gvp;
-    request.path = inst_path;
-    struct ged_scene_result *result = ged_scene_result_create();
-    if (!result)
-	return BRLCAD_ERROR;
-    enum ged_scene_status status = ged_scene_erase(ged(), &request, result);
-    int changed = ged_scene_result_changed(result);
-    ged_scene_result_destroy(result);
-    if (status == GED_SCENE_OK && changed)
-	emit view_change(QG_VIEW_DRAWN);
-    return status == GED_SCENE_OK ? BRLCAD_OK : BRLCAD_ERROR;
-}
+	QTCAD_SLOT("QgModel::erase", 1);
+	struct ged *gedp = m_session ? m_session->ged() : NULL;
+	struct ged_view_context *view_ctx = qgmodel_active_view_context(this);
+	if (!gedp || !view_ctx || !inst_path || !inst_path[0])
+		return BRLCAD_ERROR;
 
-int
-QgModel::erase(QgItem *item)
-{
-    if (!item || item->model() != this)
-	return BRLCAD_ERROR;
-    struct bu_vls path_str = BU_VLS_INIT_ZERO;
-    int valid = qgmodel_item_path(&path_str, item);
-    int ret = valid ? erase(bu_vls_cstr(&path_str)) : BRLCAD_ERROR;
-    bu_vls_free(&path_str);
-    return ret;
+	struct ged_scene_erase_request request;
+	ged_scene_erase_request_init(&request);
+	request.view = view_ctx;
+	request.path = inst_path;
+	int changed = 0;
+	enum ged_scene_status status = qgmodel_apply_scene_erase(gedp,
+		&request, &changed);
+	if (status != GED_SCENE_OK)
+		return BRLCAD_ERROR;
+
+	if (changed) {
+		emit view_changed(QG_VIEW_DRAWN);
+	}
+	return BRLCAD_OK;
 }
 
 void
 QgModel::toggle_hierarchy()
 {
-    QTCAD_SLOT("QgModel::toggle_hierarchy", 1);
-    struct ged *gedp = ged();
-    if (!gedp || !gedp->dbip)
-	return;
+	QTCAD_SLOT("QgModel::toggle_hierarchy", 1);
+	struct ged *gedp = m_session->ged();
+	if (!gedp || !gedp->dbip)
+		return;
 
-    flatten_hierarchy = !flatten_hierarchy;
-    changed_db_flag = 1;
-    g_update(gedp->dbip);
+	flatten_hierarchy = !flatten_hierarchy;
+	changed_db_flag = 1;
+	g_update(gedp->dbip);
 }
 
 void
 QgModel::item_collapsed(const QModelIndex &index)
 {
-    QTCAD_SLOT("QgModel::item_collapsed", 1);
-    QgItem *itm = getItem(index);
-    itm->setOpen(false);
+	QTCAD_SLOT("QgModel::item_collapsed", 1);
+	QgItem *itm = getItem(index);
+	itm->open_itm = false;
 }
 
 void
 QgModel::item_expanded(const QModelIndex &index)
 {
-    QTCAD_SLOT("QgModel::item_expanded", 1);
-    QgItem *itm = getItem(index);
-    itm->setOpen(true);
+	QTCAD_SLOT("QgModel::item_expanded", 1);
+	QgItem *itm = getItem(index);
+	itm->open_itm = true;
 }
 
 // Local Variables:
@@ -1897,4 +3064,3 @@ QgModel::item_expanded(const QModelIndex &index)
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

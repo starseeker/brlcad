@@ -19,103 +19,91 @@
  */
 /** @file view_settings.cpp
  *
+ * IQgToolFactory implementation for the view-settings palette tool.
+ * Replaces the legacy qged_plugin_info ABI.
  */
 
+#include <QGroupBox>
+#include <QCheckBox>
 #include <QIcon>
 #include <QPixmap>
 
 #include "qtcad/QgPluginContext.h"
-#include "qtcad/QgPluginInterfaces.h"
-#include "qtcad/QgToolBase.h"
+#include "qtcad/QgPluginDescriptor.h"
 #include "qtcad/QgToolPalette.h"
 #include "QgEdCategories.h"
-#include "CADViewSettings.h"
+#include "ViewSettingsFactory.h"
 
-class ViewSettingsTool : public QgToolBase
+/* ------------------------------------------------------------------ */
+/* ViewSettingsTool                                                     */
+/* ------------------------------------------------------------------ */
+
+ViewSettingsTool::ViewSettingsTool(QgPluginContext *ctx, QObject *parent)
+    : QgToolBase(ctx, parent)
 {
-    Q_OBJECT
+}
 
-    public:
-	explicit ViewSettingsTool(QgPluginContext *context,
-		QObject *parent = nullptr)
-	    : QgToolBase(context, parent)
-	{
-	}
-
-	QgToolPaletteElement *paletteElement() override
-	{
-	    QgToolPaletteElement *element = QgToolBase::paletteElement();
-	    if (m_settings && element && !m_settingsWired) {
-		connect(m_settings, &CADViewSettings::settings_changed,
-			element, &QgToolPaletteElement::element_view_changed);
-		m_settingsWired = true;
-	    }
-	    return element;
-	}
-
-	QWidget *createWidget() override
-	{
-	    m_settings = new CADViewSettings();
-	    m_settings->setContext(context());
-	    m_settings->checkbox_refresh(QG_VIEW_REFRESH);
-	    return m_settings;
-	}
-
-	QIcon *createIcon() override
-	{
-	    return new QIcon(QPixmap(":settings.svg"));
-	}
-
-    public slots:
-	void refresh() override
-	{
-	    if (m_settings)
-		m_settings->checkbox_refresh(QG_VIEW_REFRESH);
-	}
-
-	void onViewChanged() override
-	{
-	    refresh();
-	}
-
-    private:
-	CADViewSettings *m_settings = nullptr;
-	bool m_settingsWired = false;
-};
-
-class ViewSettingsFactory : public QObject, public IQgToolFactory
+/* Override to wire the settings->element_view_changed signal AFTER the
+ * element has been created by the base class.  Calling paletteElement()
+ * from inside createWidget() would be re-entrant and must be avoided. */
+QgToolPaletteElement *
+ViewSettingsTool::paletteElement()
 {
-    Q_OBJECT
-    Q_INTERFACES(IQgToolFactory)
-    Q_PLUGIN_METADATA(IID QGTCAD_IID("IQgToolFactory")
-	FILE "view_settings.json")
+    QgToolPaletteElement *el = QgToolBase::paletteElement();
+    if (m_settings && el && !m_extra_wired) {
+	QObject::connect(m_settings, &CADViewSettings::settings_changed,
+			 el, &QgToolPaletteElement::element_view_changed);
+	m_extra_wired = true;
+    }
+    return el;
+}
 
-    public:
-	QgPluginDescriptor descriptor() const override
-	{
-	    QgPluginDescriptor plugin;
-	    plugin.id = QStringLiteral("org.brlcad.qged.view.settings");
-	    plugin.displayName = QStringLiteral("View Settings");
-	    plugin.category = QStringLiteral(QGED_CATEGORY_VIEW);
-	    plugin.iconName = QStringLiteral(":settings.svg");
-	    plugin.sortKey = 1;
-	    plugin.requiresView = true;
-	    plugin.description = QStringLiteral(
-		    "Controls faceplate and view parameter display settings.");
-	    plugin.vendor = QStringLiteral("BRL-CAD");
-	    plugin.version = QStringLiteral("1.0");
-	    return plugin;
-	}
+QWidget *
+ViewSettingsTool::createWidget()
+{
+    m_settings = new CADViewSettings();
+    m_settings->setContext(m_ctx);
+    return m_settings;
+}
 
-	QgToolBase *create(QgPluginContext *context,
-		QObject *parent = nullptr) override
-	{
-	    return new ViewSettingsTool(context, parent);
-	}
-};
+QIcon *
+ViewSettingsTool::createIcon()
+{
+    return new QIcon(QPixmap(":settings.svg"));
+}
 
-#include "view_settings.moc"
+void
+ViewSettingsTool::refresh()
+{
+    if (m_settings)
+	m_settings->checkbox_refresh(0);
+}
 
+/* ------------------------------------------------------------------ */
+/* ViewSettingsFactory                                                  */
+/* ------------------------------------------------------------------ */
+
+QgPluginDescriptor
+ViewSettingsFactory::descriptor() const
+{
+    QgPluginDescriptor d;
+    d.id           = "org.brlcad.qged.view.settings";
+    d.displayName  = "View Settings";
+    d.category     = QStringLiteral(QGED_CATEGORY_VIEW);
+    d.iconName     = ":settings.svg";
+    d.sortKey      = 1;
+    d.requiresView = true;
+    d.description  = "Controls faceplate elements: adaptive plotting, ADC, center dot, grid, axes, scale, framebuffer mode, and view parameter display.";
+    d.vendor       = "BRL-CAD";
+    d.version      = "1.0";
+    return d;
+}
+
+QgToolBase *
+ViewSettingsFactory::create(QgPluginContext *ctx, QObject *parent)
+{
+    return new ViewSettingsTool(ctx, parent);
+}
 
 
 // Local Variables:

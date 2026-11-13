@@ -5,6 +5,15 @@ cmake_bin=$1
 src_dir=$2
 bin_dir=$3
 
+# CTest passes native drive-letter paths.  Git's MSYS shell treats those as
+# relative paths for utilities such as mkdir, so normalize them before doing
+# any shell-side filesystem work.  Native programs still accept the resulting
+# /c/... paths through MSYS argument conversion.
+if command -v cygpath >/dev/null 2>&1; then
+  src_dir=`cygpath -u "$src_dir"`
+  bin_dir=`cygpath -u "$bin_dir"`
+fi
+
 test_dir="$bin_dir/changes-rules-test"
 rm -rf "$test_dir"
 mkdir -p "$test_dir"

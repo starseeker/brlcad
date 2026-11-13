@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -36,11 +38,15 @@ int
 ged_model2grid_lu_core(struct ged *gedp, int argc, const char *argv[])
 {
     fastf_t f;
+    fastf_t view_scale;
+    mat_t model2view;
     point_t view_pt;
     point_t model_pt = VINIT_ZERO;
     point_t mo_view_pt;           /* model origin in view space */
     point_t diff;
     double scan[3];
+    struct ged_view_context *view_ctx = NULL;
+    const struct bv *view = NULL;
     static const char *usage = "x y z";
     double l2bval = (gedp->dbip) ? gedp->dbip->dbi_local2base : 1.0;
     double b2lval = (gedp->dbip) ? gedp->dbip->dbi_base2local : 1.0;
@@ -55,7 +61,11 @@ ged_model2grid_lu_core(struct ged *gedp, int argc, const char *argv[])
     if (argc != 4)
 	goto bad;
 
-    MAT4X3PNT(mo_view_pt, gedp->ged_gvp->gv_model2view, model_pt);
+    view_ctx = ged_view_active_ctx(gedp);
+    view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_model2view_get(model2view, view);
+    view_scale = bv_scale_get(view);
+    MAT4X3PNT(mo_view_pt, model2view, model_pt);
 
     if (sscanf(argv[1], "%lf", &scan[X]) != 1 ||
 	sscanf(argv[2], "%lf", &scan[Y]) != 1 ||
@@ -63,9 +73,9 @@ ged_model2grid_lu_core(struct ged *gedp, int argc, const char *argv[])
 	goto bad;
 
     VSCALE(model_pt, scan, l2bval);
-    MAT4X3PNT(view_pt, gedp->ged_gvp->gv_model2view, model_pt);
+    MAT4X3PNT(view_pt, model2view, model_pt);
     VSUB2(diff, view_pt, mo_view_pt);
-    f = gedp->ged_gvp->gv_scale * b2lval;
+    f = view_scale * b2lval;
     VSCALE(diff, diff, f);
     bu_vls_printf(gedp->ged_result_str, "%.15e %.15e", diff[X], diff[Y]);
 

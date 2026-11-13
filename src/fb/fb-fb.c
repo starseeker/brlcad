@@ -33,7 +33,7 @@
 #include "bu/getopt.h"
 #include "bu/log.h"
 #include "bu/malloc.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 static int verbose;
@@ -97,7 +97,7 @@ int
 main(int argc, char **argv)
 {
     int y;
-    struct fb *in_fbp, *out_fbp;
+    imgstream_fb_t *in_fbp, *out_fbp;
     int n, m;
     int height;
 
@@ -116,20 +116,21 @@ main(int argc, char **argv)
     if (verbose)
 	fprintf(stderr, "fb-fb: infb=%s, outfb=%s\n", in_fb_name, out_fb_name);
 
-    if ((in_fbp = fb_open(in_fb_name, 0, 0)) == NULL) {
+    if ((in_fbp = imgstream_fb_open(in_fb_name, 0, 0)) == NULL) {
 	if (in_fb_name)
 	    fprintf(stderr, "fb-fb: unable to open input '%s'\n", in_fb_name);
 	bu_exit(12, NULL);
     }
 
     /* Get the screen size we were given */
-    scr_width = fb_getwidth(in_fbp);
-    scr_height = fb_getheight(in_fbp);
+    scr_width = (int)imgstream_fb_width(in_fbp);
+    scr_height = (int)imgstream_fb_height(in_fbp);
 
     if (verbose)
 	fprintf(stderr, "fb-fb: width=%d height=%d\n", scr_width, scr_height);
 
-    if ((out_fbp = fb_open(out_fb_name, scr_width, scr_height)) == FB_NULL) {
+    if ((out_fbp = imgstream_fb_open(out_fb_name, (size_t)scr_width,
+	    (size_t)scr_height)) == NULL) {
 	if (out_fb_name)
 	    fprintf(stderr, "fb-fb: unable to open output '%s'\n", out_fb_name);
 	bu_exit(12, NULL);
@@ -137,8 +138,8 @@ main(int argc, char **argv)
 
     scanpix = scr_width;			/* # pixels on scanline */
     streamline = 64;			/* # scanlines per block */
-    scanbytes = scanpix * streamline * sizeof(RGBpixel);
-    if ((scanline = (unsigned char *)malloc(scanbytes)) == RGBPIXEL_NULL) {
+    scanbytes = scanpix * streamline * 3;
+    if ((scanline = (unsigned char *)malloc(scanbytes)) == NULL) {
 	fprintf(stderr,
 		"fb-fb:  malloc(%d) failure for scanline buffer\n",
 		scanbytes);
@@ -151,7 +152,7 @@ main(int argc, char **argv)
 	    streamline = scr_height-y;
 	if (verbose)
 	    fprintf(stderr, "fb-fb: y=%d, nlines=%d\n", y, streamline);
-	n = fb_readrect(in_fbp, 0, y, scr_width, streamline,
+	n = imgstream_fb_readrect(in_fbp, 0, y, scr_width, streamline,
 			scanline);
 	if (n <= 0) break;
 	height = streamline;
@@ -159,15 +160,15 @@ main(int argc, char **argv)
 	    height = (n+scr_width-1)/scr_width;
 	    if (height <= 0) break;
 	}
-	m = fb_writerect(out_fbp, 0, y, scr_width, height,
+	m = imgstream_fb_writerect(out_fbp, 0, y, scr_width, height,
 			 scanline);
 	if (m != scr_width*height)
 	    fprintf(stderr,
 		    "fb-fb: fb_writerect(x=0, y=%d, w=%d, h=%d) failure, ret=%d, s/b=%d\n",
 		    y, scr_width, height, m, scanbytes);
     }
-    fb_close(in_fbp);
-    fb_close(out_fbp);
+    imgstream_fb_close(in_fbp);
+    imgstream_fb_close(out_fbp);
     if (scanline)
 	bu_free(scanline, "scanline");
     return 0;

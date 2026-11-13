@@ -325,6 +325,27 @@ function(brlcad_ext_append_plief_report_log outvar logfile label output)
   set(${outvar} "${_brlcad_ext_rpath_change_count}" PARENT_SCOPE)
 endfunction(brlcad_ext_append_plief_report_log)
 
+# Remove orphaned CMake package fragments only from package directories owned
+# by the current external install, before find_package can consume them.
+function(prune_stale_cmake_package_metadata root file_list)
+  set(_package_dirs)
+  foreach(_file IN LISTS ${file_list})
+    if("${_file}" MATCHES "/cmake/.+\\.cmake$")
+      get_filename_component(_package_dir "${_file}" DIRECTORY)
+      list(APPEND _package_dirs "${_package_dir}")
+    endif()
+  endforeach()
+  list(REMOVE_DUPLICATES _package_dirs)
+  foreach(_package_dir IN LISTS _package_dirs)
+    file(GLOB _metadata_files RELATIVE "${root}" "${root}/${_package_dir}/*.cmake")
+    foreach(_metadata IN LISTS _metadata_files)
+      list(FIND ${file_list} "${_metadata}" _metadata_current)
+      if(_metadata_current EQUAL -1)
+        file(REMOVE "${root}/${_metadata}")
+      endif()
+    endforeach()
+  endforeach()
+endfunction()
 
 # Since the checking process can be long, we want some sort of
 # feedback indicating we're progressing.
@@ -1365,6 +1386,7 @@ endfunction()
   foreach(ep ${EXCLUDED_PATTERNS})
     list(FILTER TP_FILES EXCLUDE REGEX ${ep})
   endforeach(ep ${EXCLUDED_PATTERNS})
+  prune_stale_cmake_package_metadata("${CMAKE_BINARY_DIR}" TP_FILES)
 
   # For the very first pass we bulk copy the contents of the
   # BRLCAD_EXT_INSTALL_DIR tree into our own directory.  For some of the

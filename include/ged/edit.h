@@ -27,11 +27,11 @@
 #include "vmath.h"
 #include "ged/defines.h"
 
-struct bu_vls;
 struct ged;
+struct ged_view_context;
+struct bu_vls;
 struct rt_db_internal;
 struct rt_edit_cmd_values;
-struct rt_edit_param_bounds;
 struct rt_edit_prim_desc;
 
 /** Opaque, generation-checked reference to one active edit session. */
@@ -91,6 +91,7 @@ enum ged_edit_session_invalidation_reason {
     GED_EDIT_INVALIDATION_SOURCE_RENAMED,
     GED_EDIT_INVALIDATION_SOURCE_REMOVED,
     GED_EDIT_INVALIDATION_PATH_REMOVED,
+    GED_EDIT_INVALIDATION_DATABASE_REBUILT,
     GED_EDIT_INVALIDATION_DATABASE_CLOSED
 };
 
@@ -102,7 +103,7 @@ struct ged_edit_session_event {
     const char *replacement_path; /**< Borrowed renamed path, or NULL. */
     enum ged_edit_session_invalidation_reason invalidation_reason;
     uint64_t revision;      /**< Monotonic within this session. */
-    int command_id;         /**< Librt edit command, or zero if inapplicable. */
+    int command_id;         /**< Librt edit command, or zero when not applicable. */
 };
 
 /** Lightweight current-state information for an active session. */
@@ -122,6 +123,7 @@ struct ged_edit_command_input {
     size_t value_count;
     const char *const *strings; /**< Indexed string parameters. */
     size_t string_count;
+    struct ged_view_context *view; /**< Optional view for view-dependent input. */
 };
 
 typedef uint64_t ged_edit_observer_token;

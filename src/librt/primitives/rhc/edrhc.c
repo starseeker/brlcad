@@ -147,8 +147,7 @@ static const struct rt_edit_param_desc rhc_c_params[] = {
 
 static const struct rt_edit_cmd_desc rhc_cmds[] = {
     {
-	ECMD_RHC_B,           /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_RHC_B),           /* name       */
+	ECMD_RHC_B, RT_EDIT_CMD_NAME(ECMD_RHC_B),           /* cmd_id       */
 	"Set B",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -158,8 +157,7 @@ static const struct rt_edit_cmd_desc rhc_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_RHC_H,           /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_RHC_H),           /* name       */
+	ECMD_RHC_H, RT_EDIT_CMD_NAME(ECMD_RHC_H),           /* cmd_id       */
 	"Set H",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -169,8 +167,7 @@ static const struct rt_edit_cmd_desc rhc_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_RHC_R,           /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_RHC_R),           /* name       */
+	ECMD_RHC_R, RT_EDIT_CMD_NAME(ECMD_RHC_R),           /* cmd_id       */
 	"Set r",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -180,8 +177,7 @@ static const struct rt_edit_cmd_desc rhc_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_RHC_C,           /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_RHC_C),           /* name       */
+	ECMD_RHC_C, RT_EDIT_CMD_NAME(ECMD_RHC_C),           /* cmd_id       */
 	"Set c",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -210,7 +206,6 @@ rt_edit_rhc_edit_desc(void)
 {
     return &rhc_prim_desc;
 }
-
 
 C_DECL int
 rt_edit_rhc_get_values(struct rt_edit *s, int cmd_id,

@@ -1,0 +1,34 @@
+Togl and Tcl3D Togl license notices
+
+The following vendored files combine original Togl code with Tcl3D Togl
+updates.  The font parsing files also contain code derived from Tk.
+
+file:/src/libtclcad/tkobol/vendor/togl/togl.c
+file:/src/libtclcad/tkobol/vendor/togl/togl.h
+file:/src/libtclcad/tkobol/vendor/togl/toglFont.c
+file:/src/libtclcad/tkobol/vendor/togl/toglFont.h
+
+Original Togl copyright:
+
+This software is copyrighted by Brian Paul (brian@mesa3d.org) and Benjamin
+Bederson (bederson@cs.umd.edu).  The authors grant permission to use, copy,
+modify, distribute, and license this software and its documentation for any
+purpose, provided that existing copyright notices are retained.  No written
+agreement, license, or royalty fee is required for these uses.
+
+THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND.  IN NO EVENT
+SHALL THE AUTHORS OR DISTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, SPECIAL,
+INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF ITS USE.
+
+Tcl3D Togl modifications:
+
+Copyright (c) 2005-2025, Paul Obermeier.  Redistribution and use in source and
+binary forms, with or without modification, are permitted provided that the
+copyright notice, conditions, and disclaimer are retained.  Neither the name
+of Paul Obermeier nor contributors may endorse derived products without prior
+written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES ARE DISCLAIMED.  IN NO EVENT SHALL THE
+COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES.

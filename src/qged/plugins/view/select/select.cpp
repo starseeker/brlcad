@@ -19,119 +19,110 @@
  */
 /** @file select.cpp
  *
+ * IQgToolFactory implementation for the view-select palette tool.
+ * Replaces the legacy qged_plugin_info ABI.
  */
 
+#include <QGroupBox>
+#include <QCheckBox>
 #include <QIcon>
 #include <QPixmap>
+#include <QtGlobal>
 
 #include "qtcad/QgPluginContext.h"
-#include "qtcad/QgPluginInterfaces.h"
-#include "qtcad/QgToolBase.h"
+#include "qtcad/QgPluginDescriptor.h"
 #include "qtcad/QgToolPalette.h"
 #include "qtcad/QgView.h"
 #include "QgEdCategories.h"
-#include "CADViewSelector.h"
+#include "ViewSelectFactory.h"
 
-class ViewSelectTool : public QgToolBase, public IQgViewEventFilter
+/* ------------------------------------------------------------------ */
+/* ViewSelectTool                                                       */
+/* ------------------------------------------------------------------ */
+
+ViewSelectTool::ViewSelectTool(QgPluginContext *ctx, QObject *parent)
+    : QgToolBase(ctx, parent)
 {
-    Q_OBJECT
-    Q_INTERFACES(IQgViewEventFilter)
+}
 
-    public:
-	explicit ViewSelectTool(QgPluginContext *context,
-		QObject *parent = nullptr)
-	    : QgToolBase(context, parent)
-	{
-	}
-
-	QgToolPaletteElement *paletteElement() override
-	{
-	    QgToolPaletteElement *element = QgToolBase::paletteElement();
-	    if (m_selector && element && !m_selectorWired) {
-		connect(m_selector, &CADViewSelector::view_changed,
-			element, &QgToolPaletteElement::element_view_changed);
-		m_selectorWired = true;
-	    }
-	    return element;
-	}
-
-	QWidget *createWidget() override
-	{
-	    m_selector = new CADViewSelector();
-	    m_selector->setContext(context());
-	    m_selector->do_view_update(QG_VIEW_REFRESH);
-	    return m_selector;
-	}
-
-	QIcon *createIcon() override
-	{
-	    return new QIcon(QPixmap(":selective-tool.svg"));
-	}
-
-	QObject *viewEventFilter() override { return this; }
-
-	void attachToView(QgView *view) override
-	{
-	    if (m_selector)
-		m_selector->attachToView(view);
-	}
-
-	void detachFromView(QgView *view) override
-	{
-	    if (m_selector)
-		m_selector->detachFromView(view);
-	}
-
-    public slots:
-	void refresh() override
-	{
-	    if (m_selector)
-		m_selector->do_view_update(QG_VIEW_REFRESH);
-	}
-
-	void onViewChanged() override
-	{
-	    refresh();
-	}
-
-    private:
-	CADViewSelector *m_selector = nullptr;
-	bool m_selectorWired = false;
-};
-
-class ViewSelectFactory : public QObject, public IQgToolFactory
+/* Override to wire the view_changed -> element_view_changed signal AFTER
+ * the element has been created by the base class. */
+QgToolPaletteElement *
+ViewSelectTool::paletteElement()
 {
-    Q_OBJECT
-    Q_INTERFACES(IQgToolFactory)
-    Q_PLUGIN_METADATA(IID QGTCAD_IID("IQgToolFactory") FILE "select.json")
+    QgToolPaletteElement *el = QgToolBase::paletteElement();
+    if (m_selector && el && !m_extra_wired) {
+	QObject::connect(m_selector, &CADViewSelector::view_changed,
+			 el, &QgToolPaletteElement::element_view_changed);
+	m_extra_wired = true;
+    }
+    return el;
+}
 
-    public:
-	QgPluginDescriptor descriptor() const override
-	{
-	    QgPluginDescriptor plugin;
-	    plugin.id = QStringLiteral("org.brlcad.qged.view.select");
-	    plugin.displayName = QStringLiteral("View Select");
-	    plugin.category = QStringLiteral(QGED_CATEGORY_VIEW);
-	    plugin.iconName = QStringLiteral(":selective-tool.svg");
-	    plugin.sortKey = 2;
-	    plugin.requiresOpenDb = true;
-	    plugin.requiresView = true;
-	    plugin.description = QStringLiteral(
-		    "Selects, draws, or erases geometry using view gestures.");
-	    plugin.vendor = QStringLiteral("BRL-CAD");
-	    plugin.version = QStringLiteral("1.0");
-	    return plugin;
-	}
+QWidget *
+ViewSelectTool::createWidget()
+{
+    m_selector = new CADViewSelector();
+    m_selector->setContext(m_ctx);
+    return m_selector;
+}
 
-	QgToolBase *create(QgPluginContext *context,
-		QObject *parent = nullptr) override
-	{
-	    return new ViewSelectTool(context, parent);
-	}
-};
+QIcon *
+ViewSelectTool::createIcon()
+{
+    return new QIcon(QPixmap(":selective-tool.svg"));
+}
 
-#include "select.moc"
+void
+ViewSelectTool::refresh()
+{
+    if (m_selector)
+	m_selector->do_view_update(QgViewUpdateFlags{});
+}
 
+/* The selector installs a scoped application action layer on the endpoint.
+ * Qt only normalizes events at the canvas boundary; the tool never owns a
+ * competing raw-event filter. */
+void
+ViewSelectTool::attachToView(QgView *view)
+{
+    if (m_selector && view)
+	m_selector->attachToView(view);
+}
+
+void
+ViewSelectTool::detachFromView(QgView *view)
+{
+    if (m_selector && view)
+	m_selector->detachFromView(view);
+}
+
+/* ------------------------------------------------------------------ */
+/* ViewSelectFactory                                                    */
+/* ------------------------------------------------------------------ */
+
+QgPluginDescriptor
+ViewSelectFactory::descriptor() const
+{
+    QgPluginDescriptor d;
+    d.id             = "org.brlcad.qged.view.select";
+    d.displayName    = "View Select";
+    d.category       = QStringLiteral(QGED_CATEGORY_VIEW);
+    d.iconName       = ":selective-tool.svg";
+    d.sortKey        = 2;
+    d.requiresOpenDb = true;
+    d.requiresView   = true;
+    d.description    = "Select objects in the scene by point, rectangle, or ray test; add to or remove from selection sets; draw or erase selected geometry.";
+    d.vendor         = "BRL-CAD";
+    d.version        = "1.0";
+    return d;
+}
+
+QgToolBase *
+ViewSelectFactory::create(QgPluginContext *ctx, QObject *parent)
+{
+    return new ViewSelectTool(ctx, parent);
+}
 
 
 // Local Variables:

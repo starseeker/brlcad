@@ -31,13 +31,14 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include "bg/polygon_types.h"
+#include "ged/draw.h"
 #include "qtcad/QgColorRGB.h"
-#include "qtcad/QgPolyFilter.h"
-#include "qtcad/QgView.h"
+#include "qtcad/QgTypes.h"
 #include "QPolySettings.h"
 
-struct ged;
 class QgPluginContext;
+class QgPolyCreateFilter;
+class QgPolyFilter;
 
 class QPolyCreate : public QWidget
 {
@@ -46,7 +47,9 @@ class QPolyCreate : public QWidget
     public:
 	QPolyCreate();
 	~QPolyCreate();
-	void setContext(QgPluginContext *context) { m_context = context; }
+
+	void setContext(QgPluginContext *ctx) { m_ctx = ctx; }
+	void cancel();
 
 	// Boolean Operation Mode
 	QComboBox *csg_modes;
@@ -64,6 +67,7 @@ class QPolyCreate : public QWidget
 
 	// Modifying polygons
 	QCheckBox *close_general_poly;
+	QPushButton *cancel_poly;
 
 	// Existing view polygon copy
 	QLineEdit *vpoly_name;
@@ -100,17 +104,17 @@ class QPolyCreate : public QWidget
 	bool eventFilter(QObject *, QEvent *);
 
     private:
-	bg_clip_t op = bg_Union;
+	enum bg_polygon_boolean_op op = BG_POLYGON_BOOLEAN_UNION;
 	int poly_cnt = 0;
-	struct bv_scene_obj *p = NULL;
+	ged_view_polygon_ref p = GED_VIEW_POLYGON_REF_NULL_INIT;
 	bool do_bool = false;
 
 	QgPolyFilter *cf = NULL;
-	QPolyCreateFilter *pcf;
-	QgPluginContext *m_context = nullptr;
+	QgPolyCreateFilter *pcf = nullptr;
+	QgPluginContext *m_ctx = nullptr;
 
-	struct ged *ged() const;
-	struct bview *activeView() const;
+	void select_created_polygon(void *view);
+	struct ged *getGed() const;
 };
 
 #endif //QPOLYCREATE_H

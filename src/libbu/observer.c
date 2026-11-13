@@ -197,7 +197,7 @@ bu_observer_free(struct bu_observer_list *observers)
 
 
 /**
- * observer commands for libdm and librt's dg_obj, view_obj, and
+ * observer commands for graphical and librt's dg_obj, view_obj, and
  * wdb_obj interfaces.
  */
 static struct bu_cmdtab bu_observer_cmds[] = {

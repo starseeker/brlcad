@@ -25,15 +25,24 @@
 
 #include <QWidget>
 #include <QPushButton>
+#include <QButtonGroup>
+#include <QGroupBox>
 #include <QCheckBox>
+#include <QComboBox>
+#include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
-#include <QPointer>
 #include <QRadioButton>
-#include "qtcad/QgSelectFilter.h"
-#include "qtcad/QgSignalFlags.h"
+#include "BObol/BInput.h"
+#include "qtcad/QgTypes.h"
 
 class QgPluginContext;
+class QgSelectBoxFilter;
+class QgSelectFilter;
+class QgSelectPntFilter;
+class QgSelectRayFilter;
 class QgView;
+struct bobol_display_endpoint;
 
 class CADViewSelector : public QWidget
 {
@@ -42,9 +51,10 @@ class CADViewSelector : public QWidget
     public:
 	CADViewSelector(QWidget *p = 0);
 	~CADViewSelector();
-	void setContext(QgPluginContext *context) { m_context = context; }
+
+	void setContext(QgPluginContext *ctx) { m_ctx = ctx; }
 	void attachToView(QgView *view);
-	void detachFromView(QgView *view = nullptr);
+	void detachFromView(QgView *view);
 
 	QRadioButton *use_pnt_select_button;
 	QRadioButton *use_rect_select_button;
@@ -55,14 +65,16 @@ class CADViewSelector : public QWidget
 	QRadioButton *erase_from_scene_button;
 	QRadioButton *add_to_group_button;
 	QRadioButton *rm_from_group_button;
+	//QComboBox *current_group;
 	QListWidget *group_contents;
+	//QPushButton *add_new_group;
+	//QPushButton *rm_group;
 
 	QPushButton *draw_selections;
 	QPushButton *erase_selections;
 
 
-
-    signals:
+signals:
 	void view_changed(QgViewUpdateFlags);
 
     public slots:
@@ -76,22 +88,26 @@ class CADViewSelector : public QWidget
 	void do_draw_selections();
 	void do_erase_selections();
 
-    protected:
-	bool eventFilter(QObject *, QEvent *);
-
     private:
+	static const BObolInputActionLayer *inputActionLayer();
+	static int inputActionDispatch(void *user_data,
+		BObolInputAction action, const BObolInputEvent *event);
+	int applyInputAction(BObolInputAction action,
+		const BObolInputEvent *event);
 	void select_objs();
 	void deselect_objs();
 	int erase_objs();
 
-	QgSelectFilter *cf = nullptr;
-	QgSelectPntFilter *pf = nullptr;
-	QgSelectBoxFilter *bf = nullptr;
-	QgSelectRayFilter *rf = nullptr;
+	QgSelectFilter *cf = NULL;
+	QgSelectPntFilter *pf;
+	QgSelectBoxFilter *bf;
+	QgSelectRayFilter *rf;
 
-	QgPluginContext *m_context = nullptr;
-	QPointer<QgView> m_view;
+	QgPluginContext *m_ctx = nullptr;
+	QgView *m_input_view = nullptr;
+	struct bobol_display_endpoint *m_input_endpoint = nullptr;
 	unsigned long long ohash = 0;
+	unsigned long long omhash = 0;
 };
 
 // Local Variables:

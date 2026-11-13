@@ -1,0 +1,13 @@
+{
+    "id": "org.brlcad.qged.edit.arb",
+    "displayName": "ARB Edit",
+    "category": "qged.object",
+    "iconName": ":arb.svg",
+    "sortKey": 1050,
+    "requiresOpenDb": true,
+    "requiresView": true,
+    "description": "Edit ARB4 through ARB8 primitives with topology-aware viewport handles.",
+    "vendor": "BRL-CAD",
+    "version": "1.0",
+    "apiVersion": 1
+}

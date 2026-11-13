@@ -1022,9 +1022,123 @@ txn_reuse_performance_test(int item_cnt)
     return ret;
 }
 
+/* Deferred durability must not alter transaction visibility, and a clean
+ * close must still make both immediate and batched writes persistent. */
+int
+deferred_sync_test()
+{
+    int ret = 0;
+    const char *cfile = "deferred_sync_cache";
+    const int immediate = 17;
+    const int batched = 42;
+    struct bu_cache *c = bu_cache_open_with_options(
+	cfile, 1, 0, BU_CACHE_OPEN_DEFER_SYNC);
+    if (!c) {
+	bu_log("Failed to open deferred-sync cache\n");
+	return 1;
+    }
+
+    if (bu_cache_write((void *)&immediate, sizeof(immediate),
+	    "immediate", c, NULL) != sizeof(immediate))
+	ret = 1;
+    struct bu_cache_txn *txn = NULL;
+    if (bu_cache_write((void *)&batched, sizeof(batched),
+	    "batched", c, &txn) != sizeof(batched) ||
+	bu_cache_write_commit(c, &txn) != BRLCAD_OK)
+	ret = 1;
+
+    void *data = NULL;
+    size_t size = bu_cache_get(&data, "batched", c, NULL);
+    if (size != sizeof(batched) || !data ||
+	memcmp(data, &batched, sizeof(batched)))
+	ret = 1;
+    if (data)
+	bu_free(data, "deferred sync live read");
+
+    if (bu_cache_close(c) != BRLCAD_OK)
+	ret = 1;
+    c = bu_cache_open(cfile, 0, 0);
+    if (!c) {
+	ret = 1;
+    } else {
+	data = NULL;
+	size = bu_cache_get(&data, "immediate", c, NULL);
+	if (size != sizeof(immediate) || !data ||
+	    memcmp(data, &immediate, sizeof(immediate)))
+	    ret = 1;
+	if (data)
+	    bu_free(data, "deferred sync persistent immediate read");
+	data = NULL;
+	size = bu_cache_get(&data, "batched", c, NULL);
+	if (size != sizeof(batched) || !data ||
+	    memcmp(data, &batched, sizeof(batched)))
+	    ret = 1;
+	if (data)
+	    bu_free(data, "deferred sync persistent batched read");
+	if (bu_cache_close(c) != BRLCAD_OK)
+	    ret = 1;
+    }
+    bu_cache_erase(cfile);
+    bu_log("Deferred sync semantics test %s\n", ret ? "[FAIL]" : "[PASS]");
+    return ret;
+}
+
+/* Whole-cache invalidation must use one database transaction and leave the
+ * existing handle usable. */
+int
+clear_all_test()
+{
+    int ret = 0;
+    const char *cfile = "clear_all_cache";
+    struct bu_cache *c = bu_cache_open(cfile, 1, 0);
+    if (!c)
+	return 1;
+
+    const int values[] = {11, 22, 33};
+    const char *keys[] = {"first", "second", "third"};
+    struct bu_cache_txn *txn = NULL;
+    for (size_t i = 0; i < 3; ++i) {
+	if (bu_cache_write((void *)&values[i], sizeof(values[i]), keys[i],
+		c, &txn) != sizeof(values[i]))
+	    ret = 1;
+    }
+    if (!txn || bu_cache_write_commit(c, &txn) != BRLCAD_OK)
+	ret = 1;
+
+    if (bu_cache_clear_all(c) != BRLCAD_OK)
+	ret = 1;
+    char **storedKeys = NULL;
+    const int storedCount = bu_cache_keys(&storedKeys, c);
+    if (storedCount != 0)
+	ret = 1;
+    if (storedKeys)
+	bu_argv_free(static_cast<size_t>(storedCount), storedKeys);
+
+    const int replacement = 44;
+    if (bu_cache_write((void *)&replacement, sizeof(replacement),
+	    "replacement", c, NULL) != sizeof(replacement))
+	ret = 1;
+    void *data = NULL;
+    const size_t size = bu_cache_get(&data, "replacement", c, NULL);
+    if (size != sizeof(replacement) || !data ||
+	memcmp(data, &replacement, sizeof(replacement)))
+	ret = 1;
+    if (data)
+	bu_free(data, "clear-all replacement read");
+
+    if (bu_cache_clear_all(NULL) != BRLCAD_ERROR ||
+	bu_cache_close(c) != BRLCAD_OK)
+	ret = 1;
+    bu_cache_erase(cfile);
+    bu_log("Whole-cache clear test %s\n", ret ? "[FAIL]" : "[PASS]");
+    return ret;
+}
+
 //------------------------ Section: Test Summary Printing -------------------
 
-void print_test_summary(int ret_basic, int ret_limit, int ret_threading, int ret_stress, int ret_boundary, int ret_multiwrite)
+void print_test_summary(int ret_basic, int ret_limit, int ret_threading,
+	int ret_stress, int ret_boundary, int ret_multiwrite,
+	int ret_deferred_sync, int ret_clear_all)
 {
     bu_log("\n========================\n");
     bu_log("   Test Summary Report  \n");
@@ -1037,8 +1151,11 @@ void print_test_summary(int ret_basic, int ret_limit, int ret_threading, int ret
     bu_log("Stress Tests:             %s\n", show(ret_stress));
     bu_log("Boundary/Error Handling:  %s\n", show(ret_boundary));
     bu_log("Write Transaction Reuse Performance Test:  %s\n", show(ret_multiwrite));
+    bu_log("Deferred Sync Semantics:   %s\n", show(ret_deferred_sync));
+    bu_log("Whole-Cache Clear:          %s\n", show(ret_clear_all));
     bu_log("========================\n");
-    int overall = ret_basic | ret_limit | ret_threading | ret_stress | ret_boundary |ret_multiwrite;
+    int overall = ret_basic | ret_limit | ret_threading | ret_stress |
+	ret_boundary | ret_multiwrite | ret_deferred_sync | ret_clear_all;
     if (!overall)
         bu_log("ALL TESTS PASSED\n");
     else
@@ -1079,10 +1196,13 @@ main(int argc, char **argv)
     int ret_stress = stress_tests();                ret |= ret_stress;
     int ret_boundary = boundary_and_error_tests();  ret |= ret_boundary;
     int ret_multiwrite = txn_reuse_performance_test(item_cnt);  ret |= ret_multiwrite;
+    int ret_deferred_sync = deferred_sync_test();   ret |= ret_deferred_sync;
+    int ret_clear_all = clear_all_test();           ret |= ret_clear_all;
 
     bu_dirclear(cache_dir);
 
-    print_test_summary(ret_basic, ret_limit, ret_threading, ret_stress, ret_boundary, ret_multiwrite);
+    print_test_summary(ret_basic, ret_limit, ret_threading, ret_stress,
+	ret_boundary, ret_multiwrite, ret_deferred_sync, ret_clear_all);
 
     return (ret ? 1 : 0);
 }

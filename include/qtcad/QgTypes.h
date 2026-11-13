@@ -19,7 +19,7 @@
  */
 /** @file QgTypes.h
  *
- * Shared strongly typed libqtcad values.
+ * Shared enum-class based libqtcad type definitions.
  */
 
 #ifndef QGTYPES_H
@@ -28,24 +28,24 @@
 #include <QtGlobal>
 
 enum class QgViewType : int {
-    Auto = 0,
-    SW = 1,
-    GL = 2
+	Auto = 0,
+	SW = 1,
+	GL = 2
 };
 
 enum class QgQuadrantId : int {
-    UpperRight = 0,
-    UpperLeft = 1,
-    LowerLeft = 2,
-    LowerRight = 3
+	UpperRight = 0,
+	UpperLeft = 1,
+	LowerLeft = 2,
+	LowerRight = 3
 };
 
 enum class QgCombTypeId : int {
-    StandardObj = 0,
-    Region = 1,
-    Air = 2,
-    AirRegion = 3,
-    Assembly = 4
+	StandardObj = 0,
+	Region = 1,
+	Air = 2,
+	AirRegion = 3,
+	Assembly = 4
 };
 
 enum class QgViewUpdateFlag : int {
@@ -58,11 +58,13 @@ enum class QgViewUpdateFlag : int {
 Q_DECLARE_FLAGS(QgViewUpdateFlags, QgViewUpdateFlag)
 Q_DECLARE_OPERATORS_FOR_FLAGS(QgViewUpdateFlags)
 
+// Canonical QgViewUpdateFlags constants for all view-flag signals and slots.
+// Use these in signal emissions and slot flag checks instead of raw integers.
 inline const QgViewUpdateFlags QG_VIEW_REFRESH = QgViewUpdateFlag::Refresh;
-inline const QgViewUpdateFlags QG_VIEW_DRAWN = QgViewUpdateFlag::Drawn;
-inline const QgViewUpdateFlags QG_VIEW_SELECT = QgViewUpdateFlag::Select;
-inline const QgViewUpdateFlags QG_VIEW_MODE = QgViewUpdateFlag::Mode;
-inline const QgViewUpdateFlags QG_VIEW_DB = QgViewUpdateFlag::DB;
+inline const QgViewUpdateFlags QG_VIEW_DRAWN   = QgViewUpdateFlag::Drawn;
+inline const QgViewUpdateFlags QG_VIEW_SELECT  = QgViewUpdateFlag::Select;
+inline const QgViewUpdateFlags QG_VIEW_MODE    = QgViewUpdateFlag::Mode;
+inline const QgViewUpdateFlags QG_VIEW_DB      = QgViewUpdateFlag::DB;
 
 #endif /* QGTYPES_H */
 

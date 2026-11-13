@@ -29,14 +29,15 @@
 #include <stdio.h>
 
 #include "bu/color.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 void
-cmap_crunch(RGBpixel (*scan_buf), int pixel_ct, ColorMap *cmap)
+cmap_crunch(unsigned char (*scan_buf)[3], int pixel_ct,
+	struct imgstream_fb_colormap *cmap)
 {
-    unsigned short *rp = cmap->cm_red;
-    unsigned short *gp = cmap->cm_green;
-    unsigned short *bp = cmap->cm_blue;
+    uint16_t *rp = cmap->red;
+    uint16_t *gp = cmap->green;
+    uint16_t *bp = cmap->blue;
 
     /* noalias ? */
     for (; pixel_ct > 0; pixel_ct--, scan_buf++) {

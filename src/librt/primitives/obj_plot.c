@@ -28,7 +28,6 @@
 int
 rt_obj_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol)
 {
-    int id;
     const struct rt_functab *ft;
 
     if (!vhead || !ip)
@@ -39,11 +38,12 @@ rt_obj_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_te
     if (ttol) BG_CK_TESS_TOL(ttol);
     if (tol) BN_CK_TOL(tol);
 
-    id = ip->idb_minor_type;
-    if (id < 0)
+    if (ip->idb_minor_type < 0)
 	return -2;
 
-    ft = &OBJ[id];
+    /* See rt_obj_tess: non-geometric database majors use idb_minor_type for
+     * format subtypes, so only idb_meth is a safe callback authority. */
+    ft = ip->idb_meth;
     if (!ft)
 	return -3;
     if (!ft->ft_plot)

@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * Originally from https://github.com/juangburgos/QConsoleListener
+ * Originally from https://github.com/juangburgos/QgConsoleListener
  */
 
 #ifndef QG_CONSOLE_LISTENER_H
@@ -33,10 +33,10 @@
 #include <iostream>
 
 #ifdef Q_OS_WIN
-#  include <QWinEventNotifier>
-#  include <windows.h>
+#include <QWinEventNotifier>
+#include <windows.h>
 #else
-#  include <QSocketNotifier>
+#include <QSocketNotifier>
 #endif
 
 #include "bu.h"
@@ -44,19 +44,37 @@
 
 #include "qtcad/defines.h"
 
-class QTCAD_EXPORT QgConsoleListener : public QObject
-{
-    Q_OBJECT
-    Q_DISABLE_COPY_MOVE(QgConsoleListener)
 
-    public:
+/**
+ * Monitors a subprocess file descriptor using a notifier owned by the GUI
+ * thread.  GED callbacks and Qt state therefore stay on one thread, while
+ * result delivery and listener retirement are queued until after the
+ * notifier callback returns.
+ */
+class QTCAD_EXPORT QgConsoleListener : public QObject {
+	Q_OBJECT
+	Q_DISABLE_COPY_MOVE(QgConsoleListener)
+
+
+public:
+	/**
+	 * Construct a listener for file descriptor @p fd belonging to
+	 * subprocess @p p.  The optional QObject @p parent is used for
+	 * standard Qt parent–child ownership (lifetime management).
+	 */
 	explicit QgConsoleListener(int fd = -1,
-		struct ged_subprocess *p = nullptr,
-		bu_process_io_t t = BU_PROCESS_STDIN,
-		ged_io_func_t c = nullptr,
-		void *d = nullptr,
-		QObject *parent = nullptr);
+	                           struct ged_subprocess *p = nullptr,
+	                           bu_process_io_t t = BU_PROCESS_STDIN,
+	                           ged_io_func_t c = nullptr,
+	                           void *d = nullptr,
+	                           QObject *parent = nullptr);
 	~QgConsoleListener() override;
+
+	/**
+	 * Disconnect the platform notifier so no further activated() callbacks
+	 * are delivered.  Call before on_finished() or destruction when no more
+	 * I/O callbacks may land after this method returns.
+	 */
 	void disconnectNotifier();
 
 	// Called by client code when it is done with the process
@@ -77,10 +95,10 @@ Q_SIGNALS:
 	// finishedGetLine is for internal use
 	void finishedGetLine(const QString &strNewLine);
 
-    private Q_SLOTS:
+private Q_SLOTS:
 	void on_finishedGetLine(const QString &strNewLine);
 
-    private:
+private:
 #ifdef Q_OS_WIN
 	QWinEventNotifier *m_notifier = nullptr;
 #else
@@ -90,7 +108,7 @@ Q_SIGNALS:
 
 using QConsoleListener = QgConsoleListener;
 
-#endif // QG_CONSOLE_LISTENER_H
+#endif //QG_CONSOLE_LISTENER_H
 
 // Local Variables:
 // tab-width: 8

@@ -48,7 +48,7 @@
 #include "bu/getopt.h"
 #include "bu/exit.h"
 #include "vmath.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 #define LSB 0 /* Least Significant Byte */
@@ -129,7 +129,7 @@ main(int argc, char **argv)
     static int lace[4] = {8, 8, 4, 2};
     static int offs[4] = {0, 4, 2, 1};
 
-    struct fb *fbp;
+    imgstream_fb_t *fbp;
     FILE *fp;
 
     bu_setprogname(argv[0]);
@@ -282,7 +282,8 @@ main(int argc, char **argv)
 /*
  * Open the frame buffer.
  */
-    if ((fbp = fb_open(framebuffer, WORD(Im.IH_Width), WORD(Im.IH_Height))) != NULL) {
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)WORD(Im.IH_Width),
+	    (size_t)WORD(Im.IH_Height))) != NULL) {
 	int ih_height = WORD(Im.IH_Height);
 	int ih_width = WORD(Im.IH_Width);
 
@@ -299,15 +300,16 @@ main(int argc, char **argv)
 	    for (k=0;k<ih_width;k++) {
 		idx = getByte(fp);
 		if (idx < 0) {
-		    fb_close(fbp);
+		    imgstream_fb_close(fbp);
 		    bu_exit(1, "Error: Unexpectedly reached end of input. Output may be incomplete.\n");
 		}
 		*lp++ = GlobalColors[idx].red;
 		*lp++ = GlobalColors[idx].green;
 		*lp++ = GlobalColors[idx].blue;
 	    }
-	    fb_write(fbp, 0, ih_height-lineNumber, line, ih_width);
-	    fb_flush(fbp);
+	    imgstream_fb_write(fbp, 0, ih_height-1-lineNumber, line,
+		(size_t)ih_width);
+	    imgstream_fb_flush(fbp);
 	    lineNumber += lineInc;
 	    if (lineNumber >= ih_height) {
 		++lineIdx;
@@ -316,7 +318,7 @@ main(int argc, char **argv)
 		lineNumber = offs[lineIdx];
 	    }
 	}
-	fb_close(fbp);
+	imgstream_fb_close(fbp);
     }
     return 0;
 }

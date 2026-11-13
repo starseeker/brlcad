@@ -35,9 +35,12 @@
 #include "bu/path.h"
 #include "bu/vls.h"
 #include "ged/db_index.h"
+#include "ged/draw.h"
 #include "ged/selection.h"
 
+#include "./ged_draw_view_private.h"
 #include "./ged_private.h"
+#include "./ged_scene_backend_private.h"
 
 
 struct ged_native_selection_set {
@@ -57,9 +60,17 @@ struct ged_selection_state {
     int batch_depth;
     std::map<std::string, ged_native_selection_set> native_sets;
     std::set<std::string> dirty_sets;
-    ged_selection_present_func_t present = nullptr;
-    void *present_data = nullptr;
+    std::set<std::string> presented_paths;
+    uint64_t presented_scene_revision;
 };
+
+struct ged_selection_source_record_info {
+    std::string database_path;
+    std::string instance_key;
+    std::string owner_group_path;
+    int selected = 0;
+};
+
 
 static void
 ged_selection_revision_bump(struct ged *gedp)
@@ -559,16 +570,10 @@ ged_selection_native_index_ensure(struct ged *gedp,
 		if (parent_hash)
 		    set->active_parent_path_hashes.insert(parent_hash);
 	    }
-	    if (ids.size() > 1) {
-		struct ged_db_index_record parent = {};
-		if (ged_db_index_record_get(gedp, ids[ids.size() - 2], &parent))
-		    set->immediate_parent_object_ids.insert(parent.object_id);
-	    }
-	    for (size_t i = 0; i + 2 < ids.size(); i++) {
-		struct ged_db_index_record parent = {};
-		if (ged_db_index_record_get(gedp, ids[i], &parent))
-		    set->grand_parent_object_ids.insert(parent.object_id);
-	    }
+	    if (ids.size() > 1)
+		set->immediate_parent_object_ids.insert(ids[ids.size() - 2]);
+	    for (size_t i = 0; i + 2 < ids.size(); i++)
+		set->grand_parent_object_ids.insert(ids[i]);
 	} else {
 	    const std::vector<unsigned long long> digest =
 		ged_selection_path_digest_string(path.c_str());
@@ -857,11 +862,138 @@ ged_selection_native_path_op(struct ged *gedp,
 
 
 static int
-ged_selection_path_is_valid_or_drawn(struct ged *gedp,
-                                     const std::string &path)
+ged_selection_source_path_matches(const std::string &selected,
+				  const char *record_path)
 {
-    return (gedp && !path.empty() &&
-            ged_db_index_path_exists(gedp, path.c_str())) ? 1 : 0;
+    if (selected.empty() || !record_path)
+	return 0;
+
+    std::string rpath = ged_selection_canonical_path(record_path);
+    if (rpath.empty())
+	return 0;
+    if (rpath == selected)
+	return 1;
+    if (rpath.size() > selected.size() &&
+	    rpath.compare(0, selected.size(), selected) == 0 &&
+	    rpath[selected.size()] == '/')
+	return 1;
+
+    std::string selected_semantic =
+	ged_selection_semantic_path(selected.c_str());
+    std::string record_semantic =
+	ged_selection_semantic_path(record_path);
+    if (selected_semantic.empty() || record_semantic.empty())
+	return 0;
+    if (record_semantic == selected_semantic)
+	return 1;
+    if (record_semantic.size() > selected_semantic.size() &&
+	    record_semantic.compare(0, selected_semantic.size(),
+		selected_semantic) == 0 &&
+	    record_semantic[selected_semantic.size()] == '/')
+	return 1;
+    return 0;
+}
+
+static int
+ged_selection_source_record_matches_path(
+	const struct ged_selection_source_record_info &rec,
+	const std::string &path)
+{
+    if (path.empty())
+	return 0;
+
+    if (ged_selection_source_path_matches(path, rec.database_path.c_str()))
+	return 1;
+
+    if (ged_selection_source_path_matches(path, rec.owner_group_path.c_str()))
+	return 1;
+
+    if (!rec.instance_key.empty() &&
+	    ged_selection_canonical_path(rec.instance_key.c_str()) == path)
+	return 1;
+
+    if (!rec.database_path.empty() && path.find('/') == std::string::npos) {
+	std::vector<std::string> elements;
+	ged_selection_path_split(elements, rec.database_path.c_str());
+	if (!elements.empty() &&
+		ged_selection_strip_comb_instance_suffix(elements.back()) == path)
+	    return 1;
+    }
+    return 0;
+}
+
+
+struct ged_selection_source_collect_ctx {
+    std::vector<ged_selection_source_record_info> *records;
+};
+
+
+static int
+ged_selection_source_collect_cb(
+	struct ged *UNUSED(gedp),
+	const struct ged_draw_obol_database_source_record *record,
+	void *ud)
+{
+    struct ged_selection_source_collect_ctx *ctx =
+	(struct ged_selection_source_collect_ctx *)ud;
+    if (!ctx || !ctx->records || !record || !record->valid)
+	return 1;
+
+    struct ged_selection_source_record_info info;
+    if (record->database_path)
+	info.database_path =
+	    ged_selection_canonical_path(record->database_path);
+    if (record->instance_key)
+	info.instance_key =
+	    ged_selection_canonical_path(record->instance_key);
+    if (record->owner_group_path)
+	info.owner_group_path =
+	    ged_selection_canonical_path(record->owner_group_path);
+    info.selected = record->selected ? 1 : 0;
+    if (!info.database_path.empty() || !info.instance_key.empty())
+	ctx->records->push_back(info);
+    return 1;
+}
+
+
+static int
+ged_selection_source_records_collect(
+	struct ged *gedp,
+	std::vector<ged_selection_source_record_info> &records)
+{
+    records.clear();
+    struct ged_selection_source_collect_ctx ctx;
+    ctx.records = &records;
+    int ret = ged_draw_obol_database_source_records_foreach(gedp, 0,
+	    ged_selection_source_collect_cb, &ctx);
+    return ret >= 0 ? 1 : 0;
+}
+
+
+static int
+ged_selection_path_is_valid_or_drawn(struct ged *gedp,
+				     const std::string &path)
+{
+    if (!gedp || path.empty())
+	return 0;
+
+    /* The database index answers speculative path-existence questions without
+     * logging or rebuilding on an ordinary miss.  Selection reconciliation
+     * routinely asks about paths invalidated by erase/remove, so the verbose
+     * db_string_to_path() parser is both noisy and unnecessarily expensive
+     * here. */
+    if (ged_db_index_path_exists(gedp, path.c_str()))
+	return 1;
+
+    std::vector<ged_selection_source_record_info> records;
+    if (!ged_selection_source_records_collect(gedp, records))
+	return 0;
+
+    for (const struct ged_selection_source_record_info &rec : records) {
+	if (ged_selection_source_record_matches_path(rec, path))
+	    return 1;
+    }
+    return 0;
 }
 
 
@@ -914,8 +1046,76 @@ static int
 ged_selection_native_present(struct ged *gedp)
 {
     struct ged_selection_state *state = ged_selection_native_state(gedp);
-    return (state && state->present) ? state->present(gedp,
-	state->present_data) : 0;
+    if (!gedp || !state)
+	return 0;
+
+    std::set<std::string> effective_paths;
+    for (const auto &entry : state->native_sets)
+	effective_paths.insert(entry.second.selected_paths.begin(),
+	    entry.second.selected_paths.end());
+
+    std::vector<std::string> added;
+    std::vector<std::string> removed;
+    std::set_difference(effective_paths.begin(), effective_paths.end(),
+	state->presented_paths.begin(), state->presented_paths.end(),
+	std::back_inserter(added));
+    std::set_difference(state->presented_paths.begin(),
+	state->presented_paths.end(), effective_paths.begin(),
+	effective_paths.end(),
+	std::back_inserter(removed));
+
+    const uint64_t scene_revision = ged_draw_scene_revision(gedp);
+    if (scene_revision != state->presented_scene_revision) {
+	/* Newly drawn sources must inherit retained semantic selection even when
+	 * the selection itself did not change.  Indexed source routing keeps this
+	 * proportional to selected paths, not total scene size. */
+	for (const std::string &path : effective_paths) {
+	    if (std::find(added.begin(), added.end(), path) == added.end())
+		added.push_back(path);
+	}
+    }
+
+    std::vector<const char *> added_paths;
+    std::vector<const char *> removed_paths;
+    std::vector<const char *> selected_path_views;
+    added_paths.reserve(added.size());
+    removed_paths.reserve(removed.size());
+    selected_path_views.reserve(effective_paths.size());
+    for (const std::string &path : added)
+	added_paths.push_back(path.c_str());
+    for (const std::string &path : removed)
+	removed_paths.push_back(path.c_str());
+    for (const std::string &path : effective_paths)
+	selected_path_views.push_back(path.c_str());
+
+    int changed = 0;
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
+	struct ged_view_context *view_ctx =
+	    (struct ged_view_context *)BU_PTBL_GET(views, i);
+	if (!view_ctx)
+	    continue;
+	if (ged_selection_apply_path_delta(view_ctx,
+		GED_SELECTION_SELECTED_PATH,
+		added_paths.empty() ? NULL : added_paths.data(),
+		added_paths.size(),
+		removed_paths.empty() ? NULL : removed_paths.data(),
+		removed_paths.size()))
+	    changed = 1;
+    }
+
+    if ((!added_paths.empty() || !removed_paths.empty()) &&
+	ged_scene_backend_selection_private(gedp,
+	    added_paths.empty() ? NULL : added_paths.data(), added_paths.size(),
+	    removed_paths.empty() ? NULL : removed_paths.data(),
+	    removed_paths.size(),
+	    selected_path_views.empty() ? NULL : selected_path_views.data(),
+	    selected_path_views.size()))
+	changed = 1;
+
+    state->presented_paths = effective_paths;
+    state->presented_scene_revision = scene_revision;
+    return changed;
 }
 
 
@@ -955,6 +1155,7 @@ ged_selection_state_create(struct ged *gedp)
     state->gedp = gedp;
     state->revision = 1;
     state->batch_depth = 0;
+    state->presented_scene_revision = 0;
     return state;
 }
 
@@ -965,31 +1166,6 @@ ged_selection_state_destroy(struct ged_selection_state *state)
     if (!state)
 	return;
     delete state;
-}
-
-
-void
-ged_selection_presenter_set_private(struct ged *gedp,
-	ged_selection_present_func_t present, void *client_data)
-{
-    struct ged_selection_state *state = ged_selection_native_state(gedp);
-    if (!state)
-	return;
-    state->present = present;
-    state->present_data = client_data;
-}
-
-
-void
-ged_selection_presenter_clear_private(struct ged *gedp,
-	ged_selection_present_func_t present, void *client_data)
-{
-    struct ged_selection_state *state = ged_selection_native_state(gedp);
-    if (!state || state->present != present ||
-	state->present_data != client_data)
-	return;
-    state->present = nullptr;
-    state->present_data = nullptr;
 }
 
 

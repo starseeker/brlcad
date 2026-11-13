@@ -25,10 +25,6 @@
 
 #include "common.h"
 
-#include <unordered_map>
-#include <set>
-
-#include "RTree.h"
 #include "clipper.hpp"
 
 #include "vmath.h"
@@ -42,349 +38,168 @@ extern "C" {
 }
 
 fastf_t
-bg_find_polygon_area(struct bg_polygon *gpoly, fastf_t sf, plane_t *vp, fastf_t size)
+bg_polygon_area(const struct bg_polygon *polygon, fastf_t coordinate_scale,
+	const plane_t plane, fastf_t view_scale)
 {
-    size_t j, k, n;
     ClipperLib::Path poly;
     fastf_t area = 0.0;
 
-    if (NEAR_ZERO(sf, SMALL_FASTF))
+    if (!polygon || (polygon->num_contours && !polygon->contour) ||
+	NEAR_ZERO(coordinate_scale, SMALL_FASTF))
 	return 0.0;
 
-    for (j = 0; j < gpoly->num_contours; ++j) {
-	n = gpoly->contour[j].num_points;
+    plane_t local_plane = HINIT_ZERO;
+    if (plane)
+	HMOVE(local_plane, plane);
+    for (size_t j = 0; j < polygon->num_contours; ++j) {
+	const size_t n = polygon->contour[j].num_points;
+	if (n && !polygon->contour[j].point)
+	    return 0.0;
 	poly.resize(n);
-	for (k = 0; k < n; k++) {
-	    fastf_t fx, fy;
-	    bg_plane_closest_pt(&fx, &fy, vp, &gpoly->contour[j].point[k]);
+	for (size_t k = 0; k < n; k++) {
+	    fastf_t fx = polygon->contour[j].point[k][X];
+	    fastf_t fy = polygon->contour[j].point[k][Y];
+	    if (plane)
+		(void)bg_plane_closest_pt(&fx, &fy, &local_plane,
+		    (point_t *)&polygon->contour[j].point[k]);
 
-	    poly[k].X = (ClipperLib::long64)(fx * sf);
-	    poly[k].Y = (ClipperLib::long64)(fy * sf);
+	    poly[k].X = (ClipperLib::long64)(fx * coordinate_scale);
+	    poly[k].Y = (ClipperLib::long64)(fy * coordinate_scale);
 	}
 
-	area += (fastf_t)ClipperLib::Area(poly);
+	const fastf_t contour_area = fabs((fastf_t)ClipperLib::Area(poly));
+	area += (polygon->hole && polygon->hole[j]) ?
+	    -contour_area : contour_area;
     }
 
-    sf = 1.0/(sf*sf) * size * size;
+    const fastf_t area_scale = 1.0 /
+	(coordinate_scale * coordinate_scale) * view_scale * view_scale;
 
-    return (area * sf);
+    return area * area_scale;
 }
 
-
-typedef struct {
-    size_t      pc_num_points;
-    point2d_t   *pc_point;
-} poly_contour_2d;
-
-typedef struct {
-    size_t              p_num_contours;
-    int                 *p_hole;
-    poly_contour_2d     *p_contour;
-} polygon_2d;
 
 extern "C" int
-bg_polygons_overlap(struct bg_polygon *polyA, struct bg_polygon *polyB, plane_t *vp, const struct bn_tol *tol, fastf_t iscale)
+bg_polygon_overlaps(const struct bg_polygon *a,
+	const struct bg_polygon *b, const plane_t plane,
+	const struct bn_tol *tol, fastf_t coordinate_scale)
 {
-    size_t beginA, endA, beginB, endB;
-    fastf_t scale;
-    polygon_2d polyA_2d;
-    polygon_2d polyB_2d;
-    int ret = 0;
-
-    if (polyA->num_contours < 1 || polyA->contour[0].num_points < 1 ||
-	polyB->num_contours < 1 || polyB->contour[0].num_points < 1)
+    if (!a || !b || !tol ||
+	NEAR_ZERO(coordinate_scale, SMALL_FASTF))
 	return 0;
 
-    scale = (iscale > (fastf_t)UINT16_MAX) ? iscale : (fastf_t)UINT16_MAX;
+    /* Use the boolean topology engine for contour nesting and holes.  The
+     * former bespoke segment/containment path handled only one nesting level
+     * and disagreed with polygon booleans for islands inside holes. */
+    struct bg_polygon intersection = BG_POLYGON_INIT_ZERO;
+    if (bg_polygon_boolean(&intersection,
+	    BG_POLYGON_BOOLEAN_INTERSECTION, a, b, coordinate_scale, plane))
+	return 0;
 
-    /* Project polyA and polyB onto the view plane */
-    polyA_2d.p_num_contours = polyA->num_contours;
-    polyA_2d.p_hole = (int *)bu_calloc(polyA->num_contours, sizeof(int), "p_hole");
-    polyA_2d.p_contour = (poly_contour_2d *)bu_calloc(polyA->num_contours, sizeof(poly_contour_2d), "p_contour");
-
-    for (size_t i = 0; i < polyA->num_contours; ++i) {
-	polyA_2d.p_hole[i] = polyA->hole[i];
-	polyA_2d.p_contour[i].pc_num_points = polyA->contour[i].num_points;
-	polyA_2d.p_contour[i].pc_point = (point2d_t *)bu_calloc(polyA->contour[i].num_points, sizeof(point2d_t), "pc_point");
-
-	for (size_t j = 0; j < polyA->contour[i].num_points; ++j) {
-	    point_t vpoint;
-	    fastf_t fx, fy;
-	    bg_plane_closest_pt(&fx, &fy, vp, &polyA->contour[i].point[j]);
-	    VSET(vpoint, fx * scale, fy * scale, 0);
-	    V2MOVE(polyA_2d.p_contour[i].pc_point[j], vpoint);
-	}
-    }
-
-    polyB_2d.p_num_contours = polyB->num_contours;
-    polyB_2d.p_hole = (int *)bu_calloc(polyB->num_contours, sizeof(int), "p_hole");
-    polyB_2d.p_contour = (poly_contour_2d *)bu_calloc(polyB->num_contours, sizeof(poly_contour_2d), "p_contour");
-
-    for (size_t i = 0; i < polyB->num_contours; ++i) {
-	polyB_2d.p_hole[i] = polyB->hole[i];
-	polyB_2d.p_contour[i].pc_num_points = polyB->contour[i].num_points;
-	polyB_2d.p_contour[i].pc_point = (point2d_t *)bu_calloc(polyB->contour[i].num_points, sizeof(point2d_t), "pc_point");
-
-	for (size_t j = 0; j < polyB->contour[i].num_points; ++j) {
-	    point_t vpoint;
-	    fastf_t fx, fy;
-	    bg_plane_closest_pt(&fx, &fy, vp, &polyB->contour[i].point[j]);
-	    VSET(vpoint, fx * scale, fy * scale, 0);
-	    V2MOVE(polyB_2d.p_contour[i].pc_point[j], vpoint);
-	}
-    }
-
-    // Next, assemble RTrees of the polygon lines so we can quickly identify
-    // which pairs we need to check for intersection.  In order to provide a
-    // single index for the RTree to identify each segment, we map a count of
-    // segments to a contour/point number pair
-    RTree<size_t, double, 2> rtree_2d_A;
-    std::unordered_map<size_t, std::pair<size_t, size_t>> s_indA;
-    int s_cnt_A = 0;
-    for (size_t i = 0; i < polyA_2d.p_num_contours; ++i) {
-	for (beginA = 0; beginA < polyA_2d.p_contour[i].pc_num_points; ++beginA) {
-	    point2d_t p1, p2;
-	    endA = (beginA == polyA_2d.p_contour[i].pc_num_points-1) ? 0 : beginA + 1;
-	    V2MOVE(p1, polyA_2d.p_contour[i].pc_point[beginA]);
-	    V2MOVE(p2, polyA_2d.p_contour[i].pc_point[endA]);
-	    s_indA[s_cnt_A] = std::make_pair(i, beginA);
-	    double tMin[2], tMax[2];
-	    tMin[0] = (p1[X] < p2[X]) ? p1[X] : p2[X];
-	    tMin[1] = (p1[Y] < p2[Y]) ? p1[Y] : p2[Y];
-	    tMax[0] = (p1[X] > p2[X]) ? p1[X] : p2[X];
-	    tMax[1] = (p1[Y] > p2[Y]) ? p1[Y] : p2[Y];
-	    rtree_2d_A.Insert(tMin, tMax, s_cnt_A);
-	    s_cnt_A++;
-	}
-    }
-    RTree<size_t, double, 2> rtree_2d_B;
-    std::unordered_map<size_t, std::pair<size_t, size_t>> s_indB;
-    int s_cnt_B = 0;
-    for (size_t i = 0; i < polyB_2d.p_num_contours; ++i) {
-	for (beginB = 0; beginB < polyB_2d.p_contour[i].pc_num_points; ++beginB) {
-	    point2d_t p1, p2;
-	    endB = (beginB == polyB_2d.p_contour[i].pc_num_points-1) ? 0 : beginB + 1;
-	    V2MOVE(p1, polyB_2d.p_contour[i].pc_point[beginB]);
-	    V2MOVE(p2, polyB_2d.p_contour[i].pc_point[endB]);
-	    s_indB[s_cnt_B] = std::make_pair(i, beginB);
-	    double tMin[2], tMax[2];
-	    tMin[0] = (p1[X] < p2[X]) ? p1[X] : p2[X];
-	    tMin[1] = (p1[Y] < p2[Y]) ? p1[Y] : p2[Y];
-	    tMax[0] = (p1[X] > p2[X]) ? p1[X] : p2[X];
-	    tMax[1] = (p1[Y] > p2[Y]) ? p1[Y] : p2[Y];
-	    rtree_2d_B.Insert(tMin, tMax, s_cnt_B);
-	    s_cnt_B++;
-	}
-    }
-
-    std::set<std::pair<size_t, size_t>> test_segs;
-    size_t ovlp_cnt = rtree_2d_A.Overlaps(rtree_2d_B, &test_segs);
-    //bu_log("ovlp_cnt: %zd\n", ovlp_cnt);
-    //rtree_2d_A.plot2d("TreeA.plot3");
-    //rtree_2d_B.plot2d("TreeB.plot3");
-
-    /*
-     * Check every line segment pairing from polyA & polyB where the bounding
-     * boxes overlapped.  If there are any intersecting line segments, there
-     * exists an overlap.
-     */
-    if (ovlp_cnt) {
-	std::set<std::pair<size_t, size_t>>::iterator ts_it;
-	for (ts_it = test_segs.begin(); ts_it != test_segs.end(); ts_it++) {
-	    vect2d_t dirA, dirB;
-	    size_t iA = s_indA[ts_it->first].first;
-	    beginA = s_indA[ts_it->first].second;
-	    endA = (beginA == polyA_2d.p_contour[iA].pc_num_points-1) ? 0 : beginA + 1;
-	    V2SUB2(dirA, polyA_2d.p_contour[iA].pc_point[endA], polyA_2d.p_contour[iA].pc_point[beginA]);
-
-	    size_t iB = s_indB[ts_it->second].first;
-	    beginB = s_indB[ts_it->second].second;
-	    endB = (beginB == polyB_2d.p_contour[iB].pc_num_points-1) ? 0 : beginB + 1;
-	    V2SUB2(dirB, polyB_2d.p_contour[iB].pc_point[endB], polyB_2d.p_contour[iB].pc_point[beginB]);
-
-	    vect2d_t distvec;
-	    if (bg_isect_lseg2_lseg2(distvec,
-			polyA_2d.p_contour[iA].pc_point[beginA], dirA,
-			polyB_2d.p_contour[iB].pc_point[beginB], dirB,
-			tol) == 1) {
-		ret = 1;
-		goto end;
-	    }
-	}
-    }
-
-    /* If there aren't any overlapping segments, then it boils down to whether
-     * one of the polygons is fully inside the other but NOT fully inside a
-     * hole.  Since we have ruled out segment intersections, we can simply
-     * check one point on each contour against the other polygon's contours.
-     * If it's inside a hole, it's not an overlap.  If it's not inside a hole
-     * but IS inside a contour, it's an overlap.  This doesn't cover multiply
-     * nested contours, but that's not currently a use case of interest - in the
-     * event that use case does come up, we'll have to sort out in the original
-     * polygon which positive contours are fully inside holes and establish a
-     * hierarchy. */
-    for (size_t i = 0; i < polyA_2d.p_num_contours; ++i) {
-	bool in_hole = false;
-	// No points, no work to do
-	if (!polyA_2d.p_contour[i].pc_num_points)
-	    continue;
-	const point2d_t *tp = &polyA_2d.p_contour[i].pc_point[0];
-	for (size_t j = 0; j < polyB_2d.p_num_contours; ++j) {
-	    if (!polyB_2d.p_contour[j].pc_num_points || !polyB_2d.p_hole[j])
-		continue;
-	    int is_in = bg_pnt_in_polygon(polyB_2d.p_contour[j].pc_num_points, polyB_2d.p_contour[j].pc_point, tp);
-	    if (is_in) {
-		in_hole = true;
-		// If we assume non-nested contour, we now know the answer for this contour
-		break;
-	    }
-	}
-	if (in_hole)
-	    continue;
-
-	// Not inside a hole, see if we're inside a positive contour
-	for (size_t j = 0; j < polyB_2d.p_num_contours; ++j) {
-	    if (!polyB_2d.p_contour[j].pc_num_points || polyB_2d.p_hole[j])
-		continue;
-	    int is_in = bg_pnt_in_polygon(polyB_2d.p_contour[j].pc_num_points, polyB_2d.p_contour[j].pc_point, tp);
-	    if (is_in) {
-		// If we assume non-nested contour, we now know the answer
-		ret = 1;
-		goto end;
-	    }
-	}
-    }
-
-    // Check B points against a contours
-    for (size_t i = 0; i < polyB_2d.p_num_contours; ++i) {
-	bool in_hole = false;
-	// No points, no work to do
-	if (!polyB_2d.p_contour[i].pc_num_points)
-	    continue;
-	const point2d_t *tp = &polyB_2d.p_contour[i].pc_point[0];
-	for (size_t j = 0; j < polyA_2d.p_num_contours; ++j) {
-	    if (!polyA_2d.p_contour[j].pc_num_points || !polyA_2d.p_hole[j])
-		continue;
-	    int is_in = bg_pnt_in_polygon(polyA_2d.p_contour[j].pc_num_points, polyA_2d.p_contour[j].pc_point, tp);
-	    if (is_in) {
-		in_hole = true;
-		// If we assume non-nested contour, we now know the answer for this contour
-		break;
-	    }
-	}
-	if (in_hole)
-	    continue;
-
-	// Not inside a hole, see if we're inside a positive contour
-	for (size_t j = 0; j < polyA_2d.p_num_contours; ++j) {
-	    if (!polyA_2d.p_contour[j].pc_num_points || polyA_2d.p_hole[j])
-		continue;
-	    int is_in = bg_pnt_in_polygon(polyA_2d.p_contour[j].pc_num_points, polyA_2d.p_contour[j].pc_point, tp);
-	    if (is_in) {
-		// If we assume non-nested contour, we now know the answer
-		ret = 1;
-		goto end;
-	    }
-	}
-    }
-
-end:
-    for (size_t i = 0; i < polyA->num_contours; ++i)
-	bu_free((void *)polyA_2d.p_contour[i].pc_point, "pc_point");
-    for (size_t i = 0; i < polyB->num_contours; ++i)
-	bu_free((void *)polyB_2d.p_contour[i].pc_point, "pc_point");
-
-    bu_free((void *)polyA_2d.p_hole, "p_hole");
-    bu_free((void *)polyA_2d.p_contour, "p_contour");
-    bu_free((void *)polyB_2d.p_hole, "p_hole");
-    bu_free((void *)polyB_2d.p_contour, "p_contour");
-
-    return ret;
+    const fastf_t area = fabs(bg_polygon_area(&intersection,
+	coordinate_scale, plane, 1.0));
+    bg_polygon_clear(&intersection);
+    return area > tol->dist_sq;
 }
 
 
-typedef struct {
-    ClipperLib::long64 x;
-    ClipperLib::long64 y;
-} clipper_vertex;
-
-
-static fastf_t
-load_polygon(ClipperLib::Clipper &clipper, ClipperLib::PolyType ptype, struct bg_polygon *gpoly, fastf_t sf, plane_t *vp)
+static int
+load_polygon(ClipperLib::Clipper &clipper, ClipperLib::PolyType ptype,
+	const struct bg_polygon *polygon, fastf_t coordinate_scale,
+	const plane_t plane)
 {
-    size_t j, k, n;
     ClipperLib::Path curr_poly;
-    fastf_t vZ = 1.0;
+    plane_t local_plane = HINIT_ZERO;
+    if (!polygon || (polygon->num_contours && !polygon->contour))
+	return 1;
+    if (plane)
+	HMOVE(local_plane, plane);
 
-    for (j = 0; j < gpoly->num_contours; ++j) {
-	n = gpoly->contour[j].num_points;
+    for (size_t j = 0; j < polygon->num_contours; ++j) {
+	const struct bg_poly_contour *contour = &polygon->contour[j];
+	const size_t n = contour->num_points;
+	if (!n)
+	    continue;
+	if (!contour->point)
+	    return 1;
 	curr_poly.resize(n);
-	for (k = 0; k < n; k++) {
-	    fastf_t fx = gpoly->contour[j].point[k][0];
-	    fastf_t fy = gpoly->contour[j].point[k][1];
-	    if (vp)
-		bg_plane_closest_pt(&fx, &fy, vp, &gpoly->contour[j].point[k]);
+	for (size_t k = 0; k < n; k++) {
+	    fastf_t fx = contour->point[k][X];
+	    fastf_t fy = contour->point[k][Y];
+	    if (plane)
+		bg_plane_closest_pt(&fx, &fy, &local_plane,
+		    (point_t *)&contour->point[k]);
 
-	    curr_poly[k].X = (ClipperLib::long64)(fx * sf);
-	    curr_poly[k].Y = (ClipperLib::long64)(fy * sf);
+	    curr_poly[k].X = (ClipperLib::long64)(fx * coordinate_scale);
+	    curr_poly[k].Y = (ClipperLib::long64)(fy * coordinate_scale);
 	}
 
 	try {
-	    clipper.AddPath(curr_poly, ptype, !gpoly->contour[j].open);
+	    if (!clipper.AddPath(curr_poly, ptype, !contour->open))
+		return 1;
 	} catch (...) {
-	    bu_log("Exception thrown by clipper\n");
+	    return 1;
 	}
     }
 
-    return vZ;
+    return 0;
 }
 
-static fastf_t
-load_polygons(ClipperLib::Clipper &clipper, ClipperLib::PolyType ptype, struct bg_polygons *subj, fastf_t sf, plane_t *vp)
+static int
+load_polygons(ClipperLib::Clipper &clipper, ClipperLib::PolyType ptype,
+	const struct bg_polygons *polygons, fastf_t coordinate_scale,
+	const plane_t plane)
 {
-    size_t i;
-    fastf_t vZ = 1.0;
+    if (!polygons || (polygons->num_polygons && !polygons->polygon))
+	return 1;
+    for (size_t i = 0; i < polygons->num_polygons; ++i) {
+	if (load_polygon(clipper, ptype, &polygons->polygon[i],
+		coordinate_scale, plane))
+	    return 1;
+    }
 
-    for (i = 0; i < subj->num_polygons; ++i)
-	vZ = load_polygon(clipper, ptype, &subj->polygon[i], sf, vp);
-
-    return vZ;
+    return 0;
 }
 
-/*
- * Process/extract the clipper_polys into a struct bg_polygon.
- */
-static struct bg_polygon *
-extract(ClipperLib::PolyTree &clipper_polytree, fastf_t sf, plane_t *vp)
+static int
+extract_polygon(struct bg_polygon *result,
+	ClipperLib::PolyTree &clipper_polytree, fastf_t inverse_scale,
+	const plane_t plane)
 {
-    size_t j, n;
-    size_t num_contours = clipper_polytree.Total();
-    struct bg_polygon *outp;
+    if (!result)
+	return 1;
+    struct bg_polygon extracted = BG_POLYGON_INIT_ZERO;
+    const size_t num_contours = clipper_polytree.Total();
+    if (!num_contours)
+	return bg_polygon_move(result, &extracted);
 
-    BU_ALLOC(outp, struct bg_polygon);
-    outp->num_contours = num_contours;
-
-    if (num_contours < 1)
-	return outp;
-
-    outp->hole = (int *)bu_calloc(num_contours, sizeof(int), "hole");
-    outp->contour = (struct bg_poly_contour *)bu_calloc(num_contours, sizeof(struct bg_poly_contour), "contour");
+    extracted.num_contours = num_contours;
+    extracted.hole = (int *)bu_calloc(num_contours, sizeof(int), "hole");
+    extracted.contour = (struct bg_poly_contour *)bu_calloc(num_contours,
+	    sizeof(struct bg_poly_contour), "contour");
+    plane_t local_plane = HINIT_ZERO;
+    if (plane)
+	HMOVE(local_plane, plane);
 
     ClipperLib::PolyNode *polynode = clipper_polytree.GetFirst();
-    n = 0;
+    size_t n = 0;
     while (polynode) {
 	ClipperLib::Path &path = polynode->Contour;
 
-	outp->hole[n] = polynode->IsHole();
-	outp->contour[n].num_points = path.size();
-	outp->contour[n].open = polynode->IsOpen();
-	outp->contour[n].point = (point_t *)bu_calloc(outp->contour[n].num_points, sizeof(point_t), "point");
+	extracted.hole[n] = polynode->IsHole();
+	extracted.contour[n].num_points = path.size();
+	extracted.contour[n].open = polynode->IsOpen();
+	extracted.contour[n].point = (point_t *)bu_calloc(path.size(),
+	    sizeof(point_t), "point");
 
-	for (j = 0; j < outp->contour[n].num_points; ++j) {
-	    if (vp) {
-		bg_plane_pt_at(&outp->contour[n].point[j], vp, (fastf_t)(path[j].X) * sf, (fastf_t)(path[j].Y) * sf);
+	for (size_t j = 0; j < path.size(); ++j) {
+	    const fastf_t x = (fastf_t)path[j].X * inverse_scale;
+	    const fastf_t y = (fastf_t)path[j].Y * inverse_scale;
+	    if (plane) {
+		bg_plane_pt_at(&extracted.contour[n].point[j],
+		    &local_plane, x, y);
 	    } else {
-		VSET(outp->contour[n].point[j], (fastf_t)(path[j].X) * sf, (fastf_t)(path[j].Y) * sf, 0);
+		VSET(extracted.contour[n].point[j], x, y, 0);
 	    }
 	}
 
@@ -392,94 +207,186 @@ extract(ClipperLib::PolyTree &clipper_polytree, fastf_t sf, plane_t *vp)
 	polynode = polynode->GetNext();
     }
 
-    // In case we had to skip any contours, finalize the num_contours value.
-    outp->num_contours = n;
-
-    return outp;
+    extracted.num_contours = n;
+    return bg_polygon_move(result, &extracted);
 }
 
-
-struct bg_polygon *
-bg_clip_polygon(bg_clip_t op, struct bg_polygon *subj, struct bg_polygon *clip, fastf_t sf, plane_t *vp)
+static int
+clipper_operation(ClipperLib::ClipType *clipper_op,
+	enum bg_polygon_boolean_op op)
 {
-    fastf_t inv_sf;
-    ClipperLib::Clipper clipper;
-    ClipperLib::PolyTree result_clipper_polys;
-    ClipperLib::ClipType ctOp;
-
-    /* need to scale the points up/down and then convert to/from long64 */
-    /* need a matrix to rotate into a plane */
-    /* need the inverse of the matrix above to put things back after clipping */
-
-    /* Load subject polygon into clipper */
-    load_polygon(clipper, ClipperLib::ptSubject, subj, sf, vp);
-
-    /* Load clip polygon into clipper */
-    load_polygon(clipper, ClipperLib::ptClip, clip, sf, vp);
-
-    /* Convert op from BRL-CAD to Clipper */
     switch (op) {
-    case bg_Intersection:
-	ctOp = ClipperLib::ctIntersection;
-	break;
-    case bg_Union:
-	ctOp = ClipperLib::ctUnion;
-	break;
-    case bg_Difference:
-	ctOp = ClipperLib::ctDifference;
-	break;
+    case BG_POLYGON_BOOLEAN_INTERSECTION:
+	*clipper_op = ClipperLib::ctIntersection;
+	return 0;
+    case BG_POLYGON_BOOLEAN_UNION:
+	*clipper_op = ClipperLib::ctUnion;
+	return 0;
+    case BG_POLYGON_BOOLEAN_DIFFERENCE:
+	*clipper_op = ClipperLib::ctDifference;
+	return 0;
+    case BG_POLYGON_BOOLEAN_XOR:
+	*clipper_op = ClipperLib::ctXor;
+	return 0;
     default:
-	ctOp = ClipperLib::ctXor;
-	break;
+	return 1;
     }
-
-    /* Clip'em */
-    clipper.Execute(ctOp, result_clipper_polys, ClipperLib::pftEvenOdd, ClipperLib::pftEvenOdd);
-
-    inv_sf = 1.0/sf;
-    return extract(result_clipper_polys, inv_sf, vp);
 }
 
-
-struct bg_polygon *
-bg_clip_polygons(bg_clip_t op, struct bg_polygons *subj, struct bg_polygons *clip, fastf_t sf, plane_t *vp)
+int
+bg_polygon_boolean(struct bg_polygon *result,
+	enum bg_polygon_boolean_op op, const struct bg_polygon *subject,
+	const struct bg_polygon *clip, fastf_t coordinate_scale,
+	const plane_t plane)
 {
-    fastf_t inv_sf;
-    ClipperLib::Clipper clipper;
-    ClipperLib::PolyTree result_clipper_polys;
-    ClipperLib::ClipType ctOp;
+    if (!result || !subject || !clip ||
+	NEAR_ZERO(coordinate_scale, SMALL_FASTF))
+	return 1;
+    ClipperLib::ClipType clipper_op;
+    if (clipper_operation(&clipper_op, op))
+	return 1;
 
-    /* need to scale the points up/down and then convert to/from long64 */
-    /* need a matrix to rotate into a plane */
-    /* need the inverse of the matrix above to put things back after clipping */
+    ClipperLib::Clipper clipper_engine;
+    ClipperLib::PolyTree clipped;
+    if (load_polygon(clipper_engine, ClipperLib::ptSubject, subject,
+	    coordinate_scale, plane) ||
+	load_polygon(clipper_engine, ClipperLib::ptClip, clip,
+	    coordinate_scale, plane))
+	return 1;
+    try {
+	if (!clipper_engine.Execute(clipper_op, clipped,
+		ClipperLib::pftEvenOdd, ClipperLib::pftEvenOdd))
+	    return 1;
+    } catch (...) {
+	return 1;
+    }
+    return extract_polygon(result, clipped, 1.0 / coordinate_scale, plane);
+}
 
-    /* Load subject polygons into clipper */
-    load_polygons(clipper, ClipperLib::ptSubject, subj, sf, vp);
+int
+bg_polygons_boolean(struct bg_polygon *result,
+	enum bg_polygon_boolean_op op, const struct bg_polygons *subject,
+	const struct bg_polygons *clip, fastf_t coordinate_scale,
+	const plane_t plane)
+{
+    if (!result || !subject || !clip ||
+	NEAR_ZERO(coordinate_scale, SMALL_FASTF))
+	return 1;
+    ClipperLib::ClipType clipper_op;
+    if (clipper_operation(&clipper_op, op))
+	return 1;
 
-    /* Load clip polygons into clipper */
-    load_polygons(clipper, ClipperLib::ptClip, clip, sf, vp);
+    ClipperLib::Clipper clipper_engine;
+    ClipperLib::PolyTree clipped;
+    if (load_polygons(clipper_engine, ClipperLib::ptSubject, subject,
+	    coordinate_scale, plane) ||
+	load_polygons(clipper_engine, ClipperLib::ptClip, clip,
+	    coordinate_scale, plane))
+	return 1;
+    try {
+	if (!clipper_engine.Execute(clipper_op, clipped,
+		ClipperLib::pftEvenOdd, ClipperLib::pftEvenOdd))
+	    return 1;
+    } catch (...) {
+	return 1;
+    }
+    return extract_polygon(result, clipped, 1.0 / coordinate_scale, plane);
+}
 
-    /* Convert op from BRL-CAD to Clipper */
-    switch (op) {
-    case bg_Intersection:
-	ctOp = ClipperLib::ctIntersection;
-	break;
-    case bg_Union:
-	ctOp = ClipperLib::ctUnion;
-	break;
-    case bg_Difference:
-	ctOp = ClipperLib::ctDifference;
-	break;
-    default:
-	ctOp = ClipperLib::ctXor;
-	break;
+int
+bg_polygon_hatch(struct bg_polygon *result,
+	const struct bg_polygon *polygon, const plane_t plane,
+	const vect2d_t slope, fastf_t spacing)
+{
+    if (!result || !polygon || !plane || !slope ||
+	polygon->num_contours < 1 || !polygon->contour ||
+	fabs(spacing) < BN_TOL_DIST)
+	return 1;
+
+    plane_t local_plane;
+    HMOVE(local_plane, plane);
+    vect2d_t direction;
+    V2MOVE(direction, slope);
+    if (MAG2SQ(direction) < SMALL_FASTF)
+	V2SET(direction, 1.0, 0.0);
+    V2UNITIZE(direction);
+    if (direction[X] < 0.0 ||
+	(NEAR_ZERO(direction[X], SMALL_FASTF) && direction[Y] < 0.0)) {
+	direction[X] = -direction[X];
+	direction[Y] = -direction[Y];
     }
 
-    /* Clip'em */
-    clipper.Execute(ctOp, result_clipper_polys, ClipperLib::pftEvenOdd, ClipperLib::pftEvenOdd);
+    struct bg_polygon mask = BG_POLYGON_INIT_ZERO;
+    if (bg_polygon_copy(&mask, polygon))
+	return 1;
+    vect2d_t minimum = {MAX_FASTF, MAX_FASTF};
+    vect2d_t maximum = {-MAX_FASTF, -MAX_FASTF};
+    size_t projected_count = 0;
+    for (size_t i = 0; i < mask.num_contours; i++) {
+	for (size_t j = 0; j < mask.contour[i].num_points; j++) {
+	    fastf_t x = 0.0, y = 0.0;
+	    bg_plane_closest_pt(&x, &y, &local_plane,
+		&mask.contour[i].point[j]);
+	    VSET(mask.contour[i].point[j], x, y, 0.0);
+	    vect2d_t projected = {x, y};
+	    V2MINMAX(minimum, maximum, projected);
+	    projected_count++;
+	}
+    }
+    if (!projected_count) {
+	bg_polygon_clear(&mask);
+	return 1;
+    }
 
-    inv_sf = 1.0/sf;
-    return extract(result_clipper_polys, inv_sf, vp);
+    const fastf_t diagonal = DIST_PNT2_PNT2(maximum, minimum);
+    const fastf_t line_spacing = fabs(spacing);
+    const size_t each_side = (size_t)ceil(0.5 * diagonal / line_spacing);
+    const size_t line_count = each_side * 2 + 1;
+    struct bg_polygon lines = BG_POLYGON_INIT_ZERO;
+    lines.num_contours = line_count;
+    lines.hole = (int *)bu_calloc(line_count, sizeof(int), "hatch holes");
+    lines.contour = (struct bg_poly_contour *)bu_calloc(line_count,
+	    sizeof(struct bg_poly_contour), "hatch contours");
+
+    vect2d_t center, perpendicular;
+    center[X] = 0.5 * (minimum[X] + maximum[X]);
+    center[Y] = 0.5 * (minimum[Y] + maximum[Y]);
+    V2SET(perpendicular, -direction[Y], direction[X]);
+    const fastf_t half_length = 0.55 * diagonal + line_spacing;
+    for (size_t i = 0; i < line_count; i++) {
+	const fastf_t offset = ((fastf_t)i - (fastf_t)each_side) *
+	    line_spacing;
+	vect2d_t line_center, start, end;
+	V2JOIN1(line_center, center, offset, perpendicular);
+	V2JOIN1(start, line_center, -half_length, direction);
+	V2JOIN1(end, line_center, half_length, direction);
+	lines.contour[i].num_points = 2;
+	lines.contour[i].open = 1;
+	lines.contour[i].point = (point_t *)bu_calloc(2, sizeof(point_t),
+	    "hatch line points");
+	VSET(lines.contour[i].point[0], start[X], start[Y], 0.0);
+	VSET(lines.contour[i].point[1], end[X], end[Y], 0.0);
+    }
+
+    struct bg_polygon clipped = BG_POLYGON_INIT_ZERO;
+    const int boolean_status = bg_polygon_boolean(&clipped,
+	BG_POLYGON_BOOLEAN_INTERSECTION, &lines, &mask, CLIPPER_MAX, NULL);
+    bg_polygon_clear(&lines);
+    bg_polygon_clear(&mask);
+    if (boolean_status) {
+	bg_polygon_clear(&clipped);
+	return 1;
+    }
+
+    for (size_t i = 0; i < clipped.num_contours; i++) {
+	clipped.contour[i].open = 1;
+	for (size_t j = 0; j < clipped.contour[i].num_points; j++) {
+	    const fastf_t x = clipped.contour[i].point[j][X];
+	    const fastf_t y = clipped.contour[i].point[j][Y];
+	    bg_plane_pt_at(&clipped.contour[i].point[j], &local_plane, x, y);
+	}
+    }
+    return bg_polygon_move(result, &clipped);
 }
 
 // Local Variables:

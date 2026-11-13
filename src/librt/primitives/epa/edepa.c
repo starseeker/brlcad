@@ -131,8 +131,7 @@ static const struct rt_edit_param_desc epa_r2_params[] = {
 
 static const struct rt_edit_cmd_desc epa_cmds[] = {
     {
-	ECMD_EPA_H,           /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_EPA_H),           /* name       */
+	ECMD_EPA_H, RT_EDIT_CMD_NAME(ECMD_EPA_H),           /* cmd_id       */
 	"Set H",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -142,8 +141,7 @@ static const struct rt_edit_cmd_desc epa_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_EPA_R1,          /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_EPA_R1),          /* name       */
+	ECMD_EPA_R1, RT_EDIT_CMD_NAME(ECMD_EPA_R1),          /* cmd_id       */
 	"Set A",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -153,8 +151,7 @@ static const struct rt_edit_cmd_desc epa_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_EPA_R2,          /* cmd_id       */
-	RT_EDIT_CMD_NAME(ECMD_EPA_R2),          /* name       */
+	ECMD_EPA_R2, RT_EDIT_CMD_NAME(ECMD_EPA_R2),          /* cmd_id       */
 	"Set B",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -183,7 +180,6 @@ rt_edit_epa_edit_desc(void)
 {
     return &epa_prim_desc;
 }
-
 
 C_DECL int
 rt_edit_epa_get_values(struct rt_edit *s, int cmd_id,

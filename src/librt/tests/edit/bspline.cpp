@@ -33,6 +33,7 @@
 #include "bu/log.h"
 #include "bu/malloc.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
 #include "rt/geom.h"
 #include "nmg.h"
 #include "nmg/nurb.h"
@@ -135,20 +136,10 @@ rt_edit_test_bspline(void)
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size = 100.0;
-    v->gv_isize = 1.0 / v->gv_size;
-    v->gv_scale = 50.0;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width  = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init_size(&v, 100.0);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 0;
     s->local2base = 1.0;
 
@@ -430,7 +421,6 @@ rt_edit_test_bspline(void)
 
     rt_edit_destroy(s);
     db_free_full_path(&fp);
-    bv_free(v);
     db_close(dbip);
     return check_bspline_operation_matrix();
 }
@@ -529,7 +519,7 @@ bspline_same_state(const struct rt_edit *edit,
 
 static int
 bspline_run_case(struct db_full_path *path, struct db_i *dbip,
-		 struct bn_tol *tol, struct bview *view,
+		 struct bn_tol *tol, struct rt_edit_view *view,
 		 const char *unit, const char *name, int command,
 		 const fastf_t *values, int count,
 		 int setup_command, const fastf_t *setup_values,
@@ -620,13 +610,10 @@ bspline_check_unit(fastf_t local2base, const char *unit)
     db_full_path_init(&path);
     db_add_node_to_full_path(&path, dp);
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    struct bview *view;
-    BU_GET(view, struct bview);
-    bv_init(view, NULL);
-    view->gv_size = 100.0;
-    view->gv_isize = 1.0 / view->gv_size;
-    view->gv_scale = 0.5 * view->gv_size;
-    bv_update(view);
+    struct rt_edit_view view_storage;
+    rt_edit_view_init(&view_storage);
+    struct rt_edit_view *view = &view_storage;
+    view->gv_scale = 50.0;
     MAT_IDN(view->gv_model2view);
     MAT_IDN(view->gv_view2model);
 
@@ -750,7 +737,6 @@ bspline_check_unit(fastf_t local2base, const char *unit)
 	nan_knot_value, 1, ECMD_BSPLINE_PICK_KNOT,
 	pick_u_knot, 3, false, &expected, true);
 
-    bv_free(view);
     db_free_full_path(&path);
     db_close(dbip);
     bu_log("BSpline operation matrix %s: %s\n", unit,

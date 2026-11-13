@@ -389,6 +389,7 @@ rt_edit_annot_get_values(struct rt_edit *s, int cmd_id,
     }
 }
 
+
 /*
  * Local Variables:
  * mode: C

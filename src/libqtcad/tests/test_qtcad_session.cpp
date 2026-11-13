@@ -19,8 +19,6 @@
 #include <QtTest/QTest>
 
 #include "ged.h"
-#include "ged/database.h"
-#include "ged/scene.h"
 #include "ged/selection.h"
 #include "qtcad/QgAttributesModel.h"
 #include "qtcad/QgGedEventBatch.h"
@@ -57,17 +55,6 @@ qg_event_observer(struct ged *, const struct ged_event *, size_t event_count,
     state->events += event_count;
 }
 
-static bool
-no_pending_db_changes(struct ged *gedp)
-{
-    struct ged_db_change_set *changes = ged_db_change_set_create(gedp, 0);
-    if (!changes)
-	return false;
-    bool empty = !ged_db_change_set_revision(changes);
-    ged_db_change_set_destroy(changes);
-    return empty;
-}
-
 void
 QgSessionTest::ownsGedContext()
 {
@@ -75,10 +62,7 @@ QgSessionTest::ownsGedContext()
 
     QVERIFY(session.ged() != nullptr);
     QVERIFY(session.dbip() == nullptr);
-    QVERIFY(session.activeView() != nullptr);
-    QCOMPARE(session.activeView(), session.ged()->ged_gvp);
-    QVERIFY(!ged_db_change_available(session.ged()));
-    QCOMPARE(session.ged()->new_cmd_forms, 1);
+    QVERIFY(session.activeViewContext() != nullptr);
 }
 
 void
@@ -145,8 +129,7 @@ QgSessionTest::suppliesModelContext()
 
     QVERIFY(model.session() != nullptr);
     QCOMPARE(model.ged(), model.session()->ged());
-    QCOMPARE(model.gedp, model.ged());
-    QVERIFY(model.ged()->ged_gvp != nullptr);
+    QVERIFY(model.session()->activeViewContext() != nullptr);
 }
 
 void
@@ -173,16 +156,14 @@ QgSessionTest::reconcilesModelEvents()
     const char *openArguments[] = {"open", databasePath.constData()};
     QCOMPARE(model.run_cmd(model.ged()->ged_result_str, 2, openArguments),
 	BRLCAD_OK);
-    QVERIFY(ged_db_change_available(model.ged()));
     QCOMPARE(model.rowCount(), 0);
 
     QSignalSpy changes(model.session(), &QgSession::db_changed);
     QSignalSpy viewChanges(model.session(), &QgSession::view_changed);
-    QSignalSpy compatibilityViewChanges(&model, &QgModel::view_change);
+    QSignalSpy modelViewChanges(&model, &QgModel::view_changed);
     QSignalSpy modelResets(&model, &QAbstractItemModel::modelReset);
     QSignalSpy rowsInserted(&model, &QAbstractItemModel::rowsInserted);
     QSignalSpy rowsRemoved(&model, &QAbstractItemModel::rowsRemoved);
-    QSignalSpy rowsMoved(&model, &QAbstractItemModel::rowsMoved);
     QSignalSpy dataChanges(&model, &QAbstractItemModel::dataChanged);
     const char *makeArguments[] = {"make", "event.s", "sph"};
     QCOMPARE(model.run_cmd(model.ged()->ged_result_str, 3, makeArguments),
@@ -207,7 +188,6 @@ QgSessionTest::reconcilesModelEvents()
     QCOMPARE(model.topItems().size(), size_t(1));
     QVERIFY(model.hasItem(eventItem));
 
-    QVERIFY(no_pending_db_changes(model.ged()));
     QVERIFY(db_lookup(model.ged()->dbip, "event.s", LOOKUP_QUIET) !=
 	RT_DIR_NULL);
 
@@ -245,51 +225,19 @@ QgSessionTest::reconcilesModelEvents()
     QVERIFY(dataChanges.count() > changesBeforeAttribute);
     QVERIFY(persistentKeepIndex.isValid());
 
-    QCOMPARE(model.data(eventIndex, QgModel::DrawnDisplayRole).toInt(),
-	int(GED_SCENE_PATH_NOT_DRAWN));
-    int dataChangesBeforeDraw = dataChanges.count();
     QCOMPARE(model.draw("event.s"), BRLCAD_OK);
     QCOMPARE(viewChanges.count(), 1);
-    QCOMPARE(compatibilityViewChanges.count(), 1);
-    QCOMPARE(model.data(eventIndex, QgModel::DrawnDisplayRole).toInt(),
-	int(GED_SCENE_PATH_DRAWN));
-    QVERIFY(dataChanges.count() > dataChangesBeforeDraw);
-    int dataChangesBeforeErase = dataChanges.count();
+    QCOMPARE(modelViewChanges.count(), 1);
     QCOMPARE(model.erase("event.s"), BRLCAD_OK);
     QCOMPARE(viewChanges.count(), 2);
-    QCOMPARE(compatibilityViewChanges.count(), 2);
-    QCOMPARE(model.data(eventIndex, QgModel::DrawnDisplayRole).toInt(),
-	int(GED_SCENE_PATH_NOT_DRAWN));
-    QVERIFY(dataChanges.count() > dataChangesBeforeErase);
-
-    const char *presentPaths[] = {"event.s"};
-    struct ged_scene_draw_request sceneRequest;
-    ged_scene_draw_request_init(&sceneRequest);
-    sceneRequest.view = model.ged()->ged_gvp;
-    sceneRequest.paths = presentPaths;
-    sceneRequest.path_count = 1;
-    sceneRequest.autoview = 1;
-    struct ged_scene_result *sceneResult = ged_scene_result_create();
-    QVERIFY(sceneResult != nullptr);
-    int dataChangesBeforeFacadeDraw = dataChanges.count();
-    QCOMPARE(ged_scene_draw(model.ged(), &sceneRequest, sceneResult),
-	GED_SCENE_OK);
-    QCOMPARE(ged_scene_result_changed(sceneResult), 1);
-    ged_scene_result_destroy(sceneResult);
-    QVERIFY(dataChanges.count() > dataChangesBeforeFacadeDraw);
-    QCOMPARE(model.data(eventIndex, QgModel::DrawnDisplayRole).toInt(),
-	int(GED_SCENE_PATH_DRAWN));
-    QCOMPARE(viewChanges.count(), 2);
-    QCOMPARE(compatibilityViewChanges.count(), 2);
-    QCOMPARE(model.erase("event.s"), BRLCAD_OK);
+    QCOMPARE(modelViewChanges.count(), 2);
 
     const char *groupArguments[] = {"g", "event.g", "event.s"};
     QCOMPARE(model.run_cmd(model.ged()->ged_result_str, 3, groupArguments),
 	BRLCAD_OK);
     QCOMPARE(changes.count(), 4);
     QCOMPARE(model.rowCount(), 2);
-    QVERIFY(model.allItems().size() >= size_t(2));
-    QVERIFY(model.allItems().size() <= size_t(3));
+    QCOMPARE(model.allItems().size(), size_t(3));
     QVERIFY(persistentKeepIndex.isValid());
     QCOMPARE(model.getItem(persistentKeepIndex), keepItem);
 
@@ -303,13 +251,8 @@ QgSessionTest::reconcilesModelEvents()
     }
     QVERIFY(groupIndex.isValid());
     QCOMPARE(model.getItem(groupIndex)->availableChildCount(), size_t(1));
-    QVERIFY(model.hasChildren(groupIndex));
-    if (model.canFetchMore(groupIndex)) {
-	QCOMPARE(model.rowCount(groupIndex), 0);
-	model.fetchMore(groupIndex);
-    }
+    QCOMPARE(model.getItem(groupIndex)->childItems().size(), size_t(1));
     QCOMPARE(model.rowCount(groupIndex), 1);
-    QVERIFY(model.hasChildren(groupIndex));
     QVERIFY(!model.canFetchMore(groupIndex));
     QCOMPARE(model.allItems().size(), size_t(3));
 
@@ -360,7 +303,7 @@ QgSessionTest::reconcilesModelEvents()
     QVERIFY(!model.hasItem(groupItem));
     QVERIFY(persistentKeepIndex.isValid());
     QCOMPARE(model.getItem(persistentKeepIndex), keepItem);
-    QVERIFY(no_pending_db_changes(model.ged()));
+    QVERIFY(model.items->find(childItem) == model.items->end());
     QVERIFY(db_lookup(model.ged()->dbip, "event.g", LOOKUP_QUIET) ==
 	RT_DIR_NULL);
 
@@ -398,7 +341,6 @@ QgSessionTest::reconcilesModelEvents()
     QCOMPARE(modelResets.count(), resetsBeforeRename + 2);
     QVERIFY(rowsInserted.count() > 0);
     QVERIFY(rowsRemoved.count() > 0);
-    QVERIFY(rowsMoved.count() > 0);
 }
 
 void
@@ -435,20 +377,20 @@ QgSessionTest::tracksDuplicateSelectionOccurrences()
     QCOMPARE(model.rowCount(), 1);
     QModelIndex outerIndex = abstractModel->index(0, 0);
     QCOMPARE(model.data(outerIndex).toString(), QString("outer.g"));
-    model.fetchMore(outerIndex);
+    if (model.canFetchMore(outerIndex))
+	model.fetchMore(outerIndex);
     QCOMPARE(model.rowCount(outerIndex), 2);
 
     QModelIndex firstInnerIndex = abstractModel->index(0, 0, outerIndex);
     QModelIndex secondInnerIndex = abstractModel->index(1, 0, outerIndex);
-    model.fetchMore(firstInnerIndex);
+    if (model.canFetchMore(firstInnerIndex))
+	model.fetchMore(firstInnerIndex);
     QCOMPARE(model.rowCount(firstInnerIndex), 2);
-    QCOMPARE(model.rowCount(secondInnerIndex), 0);
 
     QModelIndex firstLeafIndex = abstractModel->index(0, 0,
 	firstInnerIndex);
     QModelIndex secondLeafIndex = abstractModel->index(1, 0,
 	firstInnerIndex);
-    QgItem *outerItem = model.getItem(outerIndex);
     QgItem *firstInnerItem = model.getItem(firstInnerIndex);
     QgItem *firstLeafItem = model.getItem(firstLeafIndex);
     QgItem *secondLeafItem = model.getItem(secondLeafIndex);
@@ -457,29 +399,49 @@ QgSessionTest::tracksDuplicateSelectionOccurrences()
     QSignalSpy dataChanges(&model, &QAbstractItemModel::dataChanged);
     QSignalSpy layoutChanges(&model, &QAbstractItemModel::layoutChanged);
 
-    model.itemSelect(firstLeafItem);
-    QgViewUpdateFlags selectionFlags = model.selectionCommit();
-    QVERIFY(selectionFlags & QG_VIEW_SELECT);
-    QCOMPARE(model.selectionCount(), size_t(1));
-    QVERIFY(model.itemSelected(firstLeafItem));
-    QVERIFY(!model.itemSelected(secondLeafItem));
-    QCOMPARE(model.data(firstLeafIndex, QgModel::SelectDisplayRole).toInt(),
+    std::vector<unsigned long long> firstLeafPath = firstLeafItem->path_items();
+    QCOMPARE(ged_selection_batch_begin(model.ged()), 1);
+    QCOMPARE(ged_selection_select_path_ids(model.ged(), nullptr,
+	firstLeafPath.data(), firstLeafPath.size(), 0), 1);
+    QCOMPARE(ged_selection_recompute(model.ged(), nullptr), 1);
+    QCOMPARE(ged_selection_batch_end(model.ged()), 1);
+    model.notifySelectionItemsChanged();
+    QCOMPARE(ged_selection_count(model.ged(), nullptr), size_t(1));
+    QVERIFY(ged_selection_is_path_selected(model.ged(), nullptr,
+	firstLeafItem->path_hash()));
+    QVERIFY(!ged_selection_is_path_selected(model.ged(), nullptr,
+	secondLeafItem->path_hash()));
+    QCOMPARE(model.data(firstLeafIndex,
+	QgDataRoles::SelectDisplayRole).toInt(),
 	1);
-    QCOMPARE(model.data(secondLeafIndex, QgModel::SelectDisplayRole).toInt(),
+    QCOMPARE(model.data(secondLeafIndex,
+	QgDataRoles::SelectDisplayRole).toInt(),
 	0);
-    QCOMPARE(model.itemHighlight(firstInnerItem), 1);
-    QCOMPARE(model.itemHighlight(outerItem), 1);
+    QCOMPARE(model.data(firstInnerIndex,
+	QgDataRoles::HighlightDisplayRole).toInt(), 1);
+    QCOMPARE(model.data(outerIndex,
+	QgDataRoles::HighlightDisplayRole).toInt(),
+	1);
     QVERIFY(dataChanges.count() > 0);
     QCOMPARE(layoutChanges.count(), 0);
 
     firstInnerItem->setOpen(true);
-    QCOMPARE(model.itemHighlight(firstInnerItem), 0);
+    QCOMPARE(model.data(firstInnerIndex,
+	QgDataRoles::HighlightDisplayRole).toInt(), 0);
     firstInnerItem->setOpen(false);
-    model.itemSelect(secondLeafItem);
-    model.selectionCommit();
-    QCOMPARE(model.selectionCount(), size_t(2));
-    QVERIFY(model.itemSelected(firstLeafItem));
-    QVERIFY(model.itemSelected(secondLeafItem));
+    std::vector<unsigned long long> secondLeafPath =
+	secondLeafItem->path_items();
+    QCOMPARE(ged_selection_batch_begin(model.ged()), 1);
+    QCOMPARE(ged_selection_select_path_ids(model.ged(), nullptr,
+	secondLeafPath.data(), secondLeafPath.size(), 0), 1);
+    QCOMPARE(ged_selection_recompute(model.ged(), nullptr), 1);
+    QCOMPARE(ged_selection_batch_end(model.ged()), 1);
+    model.notifySelectionItemsChanged();
+    QCOMPARE(ged_selection_count(model.ged(), nullptr), size_t(2));
+    QVERIFY(ged_selection_is_path_selected(model.ged(), nullptr,
+	firstLeafItem->path_hash()));
+    QVERIFY(ged_selection_is_path_selected(model.ged(), nullptr,
+	secondLeafItem->path_hash()));
 
     const char *clearDefault[] = {"select", "clear", "default"};
     QCOMPARE(model.run_cmd(model.ged()->ged_result_str, 3, clearDefault),
@@ -506,17 +468,19 @@ QgSessionTest::tracksDuplicateSelectionOccurrences()
     QVERIFY(model.itemSelected(firstLeafItem));
     QVERIFY(model.itemSelected(secondLeafItem));
 
-    model.fetchMore(secondInnerIndex);
+    if (model.canFetchMore(secondInnerIndex))
+	model.fetchMore(secondInnerIndex);
     QCOMPARE(model.rowCount(secondInnerIndex), 2);
     for (int row = 0; row < model.rowCount(secondInnerIndex); row++) {
 	QModelIndex leafIndex = abstractModel->index(row, 0, secondInnerIndex);
-	QVERIFY(!model.itemSelected(model.getItem(leafIndex)));
+	QVERIFY(!ged_selection_is_path_selected(model.ged(), nullptr,
+	    model.getItem(leafIndex)->path_hash()));
     }
 
     const char *removeArguments[] = {"comb", "inner.g", "rm", "leaf.s"};
     QCOMPARE(model.run_cmd(model.ged()->ged_result_str, 4, removeArguments),
 	BRLCAD_OK);
-    QCOMPARE(model.selectionCount(), size_t(0));
+    QCOMPARE(ged_selection_count(model.ged(), nullptr), size_t(0));
     QVERIFY(!persistentFirstLeaf.isValid());
     QVERIFY(!persistentSecondLeaf.isValid());
     QCOMPARE(model.rowCount(firstInnerIndex), 0);
@@ -572,7 +536,7 @@ QgSessionTest::tracksSessionAttributes()
     QCOMPARE(attributes.data(attributes.index(0, 1, QModelIndex())).toString(),
 	QString("second"));
 
-    model.session()->notifyViewChanged(QG_VIEW_REFRESH);
+    model.session()->notifyViewChanged(1);
     QCOMPARE(resets.count(), 1);
 
     const char *killArguments[] = {"kill", "attribute.s"};

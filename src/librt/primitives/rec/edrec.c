@@ -129,8 +129,7 @@ static const struct rt_edit_param_desc rec_r_params[] = {
 
 static const struct rt_edit_cmd_desc rec_cmds[] = {
     {
-	ECMD_REC_SET_V,             /* cmd_id */
-	RT_EDIT_CMD_NAME(ECMD_REC_SET_V),             /* name */
+	ECMD_REC_SET_V, RT_EDIT_CMD_NAME(ECMD_REC_SET_V),             /* cmd_id */
 	"Set V",                    /* label */
 	"geometry",                 /* category */
 	1,                          /* nparam */
@@ -140,8 +139,7 @@ static const struct rt_edit_cmd_desc rec_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_REC_SET_H,             /* cmd_id */
-	RT_EDIT_CMD_NAME(ECMD_REC_SET_H),             /* name */
+	ECMD_REC_SET_H, RT_EDIT_CMD_NAME(ECMD_REC_SET_H),             /* cmd_id */
 	"Set H",                    /* label */
 	"geometry",                 /* category */
 	1,                          /* nparam */
@@ -151,8 +149,7 @@ static const struct rt_edit_cmd_desc rec_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_REC_SCALE_R1,          /* cmd_id */
-	RT_EDIT_CMD_NAME(ECMD_REC_SCALE_R1),          /* name */
+	ECMD_REC_SCALE_R1, RT_EDIT_CMD_NAME(ECMD_REC_SCALE_R1),          /* cmd_id */
 	"Set Radius 1",             /* label */
 	"geometry",                 /* category */
 	1,                          /* nparam */
@@ -162,8 +159,7 @@ static const struct rt_edit_cmd_desc rec_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_REC_SCALE_R2,          /* cmd_id */
-	RT_EDIT_CMD_NAME(ECMD_REC_SCALE_R2),          /* name */
+	ECMD_REC_SCALE_R2, RT_EDIT_CMD_NAME(ECMD_REC_SCALE_R2),          /* cmd_id */
 	"Set Radius 2",             /* label */
 	"geometry",                 /* category */
 	1,                          /* nparam */
@@ -173,8 +169,7 @@ static const struct rt_edit_cmd_desc rec_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_REC_SCALE_R,           /* cmd_id */
-	RT_EDIT_CMD_NAME(ECMD_REC_SCALE_R),           /* name */
+	ECMD_REC_SCALE_R, RT_EDIT_CMD_NAME(ECMD_REC_SCALE_R),           /* cmd_id */
 	"Set Radius",               /* label */
 	"geometry",                 /* category */
 	1,                          /* nparam */
@@ -356,47 +351,44 @@ rt_edit_rec_edit_xy(struct rt_edit *s, const vect_t mousevec)
     return rt_edit_tgc_edit_xy(s, mousevec);
 }
 
-static int
-rec_current_numbers(struct rt_edit *s, int cmd_id, fastf_t *vals)
-{
-    struct rt_tgc_internal *tgc;
-    if (!s || !vals)
-	return -1;
-    tgc = (struct rt_tgc_internal *)s->es_int.idb_ptr;
-    RT_TGC_CK_MAGIC(tgc);
-
-    switch (cmd_id) {
-	case ECMD_REC_SET_V:
-	    vals[0] = tgc->v[X] * s->base2local;
-	    vals[1] = tgc->v[Y] * s->base2local;
-	    vals[2] = tgc->v[Z] * s->base2local;
-	    return 3;
-	case ECMD_REC_SET_H:
-	    vals[0] = tgc->h[X] * s->base2local;
-	    vals[1] = tgc->h[Y] * s->base2local;
-	    vals[2] = tgc->h[Z] * s->base2local;
-	    return 3;
-	case ECMD_REC_SCALE_R1:
-	    vals[0] = MAGNITUDE(tgc->a) * s->base2local;
-	    return 1;
-	case ECMD_REC_SCALE_R2:
-	    vals[0] = MAGNITUDE(tgc->b) * s->base2local;
-	    return 1;
-	case ECMD_REC_SCALE_R:
-	    vals[0] = (MAGNITUDE(tgc->a) + MAGNITUDE(tgc->b)) * 0.5 * s->base2local;
-	    return 1;
-	default:
-	    break;
-    }
-    return 0;
-}
-
 C_DECL int
 rt_edit_rec_get_values(struct rt_edit *s, int cmd_id,
 	struct rt_edit_cmd_values *result)
 {
-    return edit_current_values_from_numbers(s, cmd_id, result,
-	rec_current_numbers);
+    struct rt_tgc_internal *tgc;
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    tgc = (struct rt_tgc_internal *)s->es_int.idb_ptr;
+    RT_TGC_CK_MAGIC(tgc);
+
+	switch (cmd_id) {
+	case ECMD_REC_SET_V:
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    tgc->v[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_REC_SET_H:
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    tgc->h[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_REC_SCALE_R1:
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(tgc->a) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_REC_SCALE_R2:
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(tgc->b) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_REC_SCALE_R:
+	    rt_edit_cmd_values_set_value(result, 0,
+		(MAGNITUDE(tgc->a) + MAGNITUDE(tgc->b)) * 0.5 *
+		s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	default:
+	    break;
+    }
+    return RT_EDIT_VALUE_UNAVAILABLE;
 }
 
 /*
