@@ -180,10 +180,10 @@ QgToolPalette::resizeEvent(QResizeEvent *pevent)
 void
 QgToolPalette::setIconWidth(int iwidth)
 {
-	icon_width = iwidth;
+	icon_width = std::max(1, iwidth);
 	foreach(QgToolPaletteElement *el, elements) {
-		el->buttonWidget()->setMinimumWidth(icon_height);
-		el->buttonWidget()->setMaximumWidth(icon_height);
+		el->buttonWidget()->setMinimumWidth(icon_width);
+		el->buttonWidget()->setMaximumWidth(icon_width);
 	}
 	updateGeometry();
 }
@@ -191,7 +191,7 @@ QgToolPalette::setIconWidth(int iwidth)
 void
 QgToolPalette::setIconHeight(int iheight)
 {
-	icon_height = iheight;
+	icon_height = std::max(1, iheight);
 	foreach(QgToolPaletteElement *el, elements) {
 		el->buttonWidget()->setMinimumHeight(icon_height);
 		el->buttonWidget()->setMaximumHeight(icon_height);
@@ -227,7 +227,7 @@ QgToolPalette::palette_do_view_changed(QgViewUpdateFlags flags)
 void
 QgToolPalette::addElement(QgToolPaletteElement *element)
 {
-	if (!element || elements.contains(element))
+	if (!element || !element->buttonWidget() || elements.contains(element))
 		return;
 	element->setParent(this);
 	element->buttonWidget()->setMinimumWidth(icon_width);

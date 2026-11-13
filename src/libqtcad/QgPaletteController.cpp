@@ -20,6 +20,8 @@
 
 #include "common.h"
 
+#include <QSet>
+
 #include "qtcad/QgPaletteController.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgPluginInterfaces.h"
@@ -48,8 +50,7 @@ QgPaletteController::QgPaletteController(QgToolPalette *palette,
     }
     if (m_manager) {
 	connect(m_manager, &QgPluginManager::pluginsAboutToUnload,
-		this, &QgPaletteController::onPluginsAboutToUnload,
-		Qt::DirectConnection);
+		this, &QgPaletteController::clear, Qt::DirectConnection);
 	connect(m_manager, &QgPluginManager::catalogChanged,
 		this, &QgPaletteController::populate);
     }
@@ -73,28 +74,35 @@ QgPaletteController::activeView() const
 }
 
 void
-QgPaletteController::clear()
+QgPaletteController::removeTool(const QString &id)
 {
-    if (m_currentTool) {
-	m_currentTool->setActive(false);
-	detachFilter(m_currentTool);
-    }
-    const bool hadCurrent = m_currentTool != nullptr;
-    m_currentTool = nullptr;
+    QgToolBase *tool = m_tools.take(id);
+    if (!tool)
+	return;
 
-    const QList<QgToolPaletteElement *> elements = m_elementToId.keys();
-    m_elementToId.clear();
-    if (m_palette) {
-	for (QgToolPaletteElement *element : elements)
+    if (tool == m_currentTool) {
+	tool->setActive(false);
+	detachFilter(tool);
+	m_currentTool = nullptr;
+	emit currentToolChanged(nullptr);
+    }
+
+    QgToolPaletteElement *element = m_elementToId.key(id, nullptr);
+    if (element) {
+	m_elementToId.remove(element);
+	if (m_palette)
 	    m_palette->deleteElement(element, false);
     }
+    delete tool;
+}
 
-    const QList<QgToolBase *> tools = m_tools.values();
-    m_tools.clear();
-    for (QgToolBase *tool : tools)
-	delete tool;
-    if (hadCurrent)
-	emit currentToolChanged(nullptr);
+void
+QgPaletteController::clear()
+{
+    const QStringList ids = m_tools.keys();
+    for (const QString &id : ids)
+	removeTool(id);
+    m_elementToId.clear();
 }
 
 void
@@ -102,35 +110,56 @@ QgPaletteController::populate()
 {
     if (!m_palette || !m_manager)
 	return;
-    QList<IQgToolFactory *> facs = m_manager->factories<IQgToolFactory>(m_category);
-    for (IQgToolFactory *fac : facs) {
-	QgPluginDescriptor d = fac->descriptor();
-	if (m_tools.contains(d.id))
+    const QList<IQgToolFactory *> factories =
+	m_manager->factories<IQgToolFactory>(m_category);
+    QSet<QString> availableIds;
+    for (IQgToolFactory *factory : factories) {
+	if (!factory)
 	    continue;
-	QgToolBase *tool = fac->create(m_ctx, this);
+	const QgPluginDescriptor plugin = factory->descriptor();
+	if (!plugin.id.isEmpty())
+	    availableIds.insert(plugin.id);
+    }
+
+    const QStringList existingIds = m_tools.keys();
+    for (const QString &id : existingIds) {
+	if (!availableIds.contains(id))
+	    removeTool(id);
+    }
+
+    for (IQgToolFactory *factory : factories) {
+	if (!factory)
+	    continue;
+	const QgPluginDescriptor plugin = factory->descriptor();
+	if (plugin.id.isEmpty() || m_tools.contains(plugin.id))
+	    continue;
+
+	QgToolBase *tool = factory->create(m_ctx, this);
 	if (!tool)
 	    continue;
-	m_tools.insert(d.id, tool);
-	QgToolPaletteElement *el = tool->paletteElement();
-	if (!el) {
+	QgToolPaletteElement *element = tool->paletteElement();
+	if (!element) {
 	    delete tool;
-	    m_tools.remove(d.id);
 	    continue;
 	}
 	/* Tool palettes are intentionally free to change their layout.  Give the
 	 * semantic tool, activation button, and controls stable ids so recorded
 	 * GUI workflows do not depend on QScrollArea's private QObject hierarchy
 	 * or plugin discovery order. */
-	tool->setProperty("qgTestId", d.id + QStringLiteral(".tool"));
-	el->setProperty("qgTestId", d.id + QStringLiteral(".element"));
-	if (el->buttonWidget())
-	    el->buttonWidget()->setProperty(
-		"qgTestId", d.id + QStringLiteral(".activate"));
-	if (el->controlsWidget())
-	    el->controlsWidget()->setProperty(
-		"qgTestId", d.id + QStringLiteral(".controls"));
-	m_elementToId.insert(el, d.id);
-	m_palette->addElement(el);
+	tool->setProperty("qgTestId",
+		plugin.id + QStringLiteral(".tool"));
+	element->setProperty("qgTestId",
+		plugin.id + QStringLiteral(".element"));
+	if (element->buttonWidget())
+	    element->buttonWidget()->setProperty("qgTestId",
+		    plugin.id + QStringLiteral(".activate"));
+	if (element->controlsWidget())
+	    element->controlsWidget()->setProperty("qgTestId",
+		    plugin.id + QStringLiteral(".controls"));
+
+	m_tools.insert(plugin.id, tool);
+	m_elementToId.insert(element, plugin.id);
+	m_palette->addElement(element);
     }
 }
 
@@ -191,45 +220,6 @@ QgPaletteController::onElementSelected(QgToolPaletteElement *el)
 	attachFilter(m_currentTool);
     }
     emit currentToolChanged(m_currentTool);
-}
-
-void
-QgPaletteController::onFactoryRegistered(const QString & /*id*/)
-{
-    /* Re-populate to pick up the new factory if it matches our
-     * category.  populate() is idempotent. */
-    populate();
-}
-
-void
-QgPaletteController::onFactoryUnregistered(const QString &id)
-{
-    QgToolBase *tool = m_tools.take(id);
-    if (!tool)
-	return;
-    if (tool == m_currentTool) {
-	tool->setActive(false);
-	detachFilter(m_currentTool);
-	m_currentTool = nullptr;
-	emit currentToolChanged(nullptr);
-    }
-    /* Remove element mapping. */
-    for (auto it = m_elementToId.begin(); it != m_elementToId.end(); ) {
-	if (it.value() == id) {
-	    if (m_palette)
-		m_palette->deleteElement(it.key());
-	    it = m_elementToId.erase(it);
-	} else {
-	    ++it;
-	}
-    }
-    delete tool;
-}
-
-void
-QgPaletteController::onPluginsAboutToUnload()
-{
-    clear();
 }
 
 void

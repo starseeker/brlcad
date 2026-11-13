@@ -26,6 +26,7 @@
 
 #include "qtcad/QgPluginContext.h"
 #include "HostStatusPanelFactory.h"
+#include "QgEdCategories.h"
 #include "../common/HostStatusCommon.h"
 
 QgPluginDescriptor
@@ -34,7 +35,7 @@ HostStatusPanelFactory::descriptor() const
     QgPluginDescriptor d;
     d.id = "org.brlcad.qged.panel.host_status";
     d.displayName = "Host Status";
-    d.category = "qged.panel";
+    d.category = QStringLiteral(QGED_CATEGORY_PANEL);
     d.sortKey = 0;
     d.description = "Dockable status panel showing the active qged host, database, and view.";
     d.vendor = "BRL-CAD";

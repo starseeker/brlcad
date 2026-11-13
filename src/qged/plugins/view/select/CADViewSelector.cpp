@@ -46,7 +46,7 @@
 static struct ged_view_context *
 qged_selector_view(const QgPluginContext *ctx)
 {
-    return ctx ? ged_view_context_from_bv(ctx->activeViewContext()) : nullptr;
+    return ctx ? ctx->activeViewContext() : nullptr;
 }
 
 static enum ged_scene_status

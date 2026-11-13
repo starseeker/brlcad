@@ -17,6 +17,7 @@
 #include <QtTest/QTest>
 
 #include "bu/app.h"
+#include "ged/view_types.h"
 #include "qtcad/QgPaletteController.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgPluginManager.h"
@@ -66,7 +67,7 @@ QgedNativePluginTest::discoversCreatesAndUnloadsTools()
     QgPluginContext context;
     context.gedAccessor = [&session]() { return session.ged(); };
     context.viewContextAccessor = [&session]() {
-	return session.activeView();
+	return ged_view_context_from_bv(session.activeViewContext());
     };
     context.selectionSetAccessor = []() {
 	return QStringLiteral("native-plugin-test");
@@ -102,7 +103,7 @@ QgedNativePluginTest::discoversCreatesAndUnloadsTools()
     QVERIFY2(manager.unloadAll(&errors),
 	qPrintable(errors.join(QLatin1Char('\n'))));
     QVERIFY(controller.currentTool() == nullptr);
-    QVERIFY(view.curr_event_filter == nullptr);
+    QVERIFY(view.active_event_filter() == nullptr);
 }
 
 int

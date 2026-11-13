@@ -217,7 +217,8 @@ QgEdApp::QgEdApp(int &argc, char *argv[], const char *db_file, int swrast_mode,
 
     mdl = new QgModel();
     m_plugin_notifier = new QgPluginNotifier(this);
-    QObject::connect(this, &QgEdApp::dbi_update, m_plugin_notifier, &QgPluginNotifier::dbChanged);
+    QObject::connect(mdl->session(), &QgSession::db_changed,
+	m_plugin_notifier, &QgPluginNotifier::dbChanged);
     QObject::connect(this, &QgEdApp::view_update, m_plugin_notifier, &QgPluginNotifier::viewUpdated);
     /* QgEdApp owns mdl for the lifetime of the application; the accessor
      * re-reads the member so future replacements are observed as well. */
@@ -232,6 +233,11 @@ QgEdApp::QgEdApp(int &argc, char *argv[], const char *db_file, int swrast_mode,
 	if (!view_context)
 	    view_context = qged_session_active_view_context(mdl);
 	return view_context ? ged_view_context_from_bv(view_context) : NULL;
+    };
+    m_plugin_context.selectionSetAccessor = [this]() -> QString {
+	if (!mdl || mdl->selectionSetName().empty())
+	    return QString();
+	return QString::fromLocal8Bit(mdl->selectionSetName().c_str());
     };
     m_plugin_context.model = mdl;
     m_plugin_context.notifier = m_plugin_notifier;
@@ -402,6 +408,7 @@ QgEdApp::~QgEdApp() {
     w = nullptr;
     m_plugin_context.viewWidgetAccessor = {};
     m_plugin_context.viewContextAccessor = {};
+    m_plugin_context.selectionSetAccessor = {};
     if (mdl && mdl->session())
 	mdl->session()->setActiveViewContext(NULL);
     m_plugin_context.model = nullptr;

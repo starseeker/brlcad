@@ -48,7 +48,7 @@ static constexpr double qged_cutting_normal_minimum_length = 1.0e-6;
 static struct bv_context *
 qged_settings_view(const QgPluginContext *ctx)
 {
-    return ctx ? ctx->activeViewContext() : nullptr;
+    return ctx ? ged_view_context_bv(ctx->activeViewContext()) : nullptr;
 }
 
 static int

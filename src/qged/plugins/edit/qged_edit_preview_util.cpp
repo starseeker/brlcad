@@ -29,9 +29,7 @@
 struct ged_view_context *
 qged_edit_ged_view_context(const QgPluginContext *ctx)
 {
-    struct bv_context *view = ctx ?
-	static_cast<struct bv_context *>(ctx->activeViewContext()) : nullptr;
-    return ged_view_context_from_bv(view);
+    return ctx ? ctx->activeViewContext() : nullptr;
 }
 
 

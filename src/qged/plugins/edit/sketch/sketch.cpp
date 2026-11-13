@@ -13,6 +13,7 @@
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgToolPalette.h"
 #include "qtcad/QgView.h"
+#include "QgEdCategories.h"
 #include "EditSketchFactory.h"
 
 EditSketchTool::EditSketchTool(QgPluginContext *ctx, QObject *parent) :
@@ -109,7 +110,7 @@ EditSketchFactory::descriptor() const
     QgPluginDescriptor descriptor;
     descriptor.id = "org.brlcad.qged.edit.sketch";
     descriptor.displayName = "Sketch Edit";
-    descriptor.category = "qged.object";
+    descriptor.category = QStringLiteral(QGED_CATEGORY_OBJECT);
     descriptor.iconName = ":sketch_edit.svg";
     descriptor.sortKey = 1060;
     descriptor.requiresOpenDb = true;

@@ -92,14 +92,12 @@ class QTCAD_EXPORT QgPaletteController : public QObject
 
     private slots:
 	void onElementSelected(QgToolPaletteElement *el);
-	void onFactoryRegistered(const QString &id);
-	void onFactoryUnregistered(const QString &id);
-	void onPluginsAboutToUnload();
 	void onPaletteDestroyed();
 
     private:
 	void attachFilter(QgToolBase *tool);
 	void detachFilter(QgToolBase *tool);
+	void removeTool(const QString &id);
 
 	QPointer<QgToolPalette> m_palette;
 	QPointer<QgPluginManager> m_manager;

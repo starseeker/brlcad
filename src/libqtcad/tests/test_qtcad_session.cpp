@@ -536,7 +536,7 @@ QgSessionTest::tracksSessionAttributes()
     QCOMPARE(attributes.data(attributes.index(0, 1, QModelIndex())).toString(),
 	QString("second"));
 
-    model.session()->notifyViewChanged(1);
+    model.session()->notifyViewChanged(QG_VIEW_REFRESH);
     QCOMPARE(resets.count(), 1);
 
     const char *killArguments[] = {"kill", "attribute.s"};

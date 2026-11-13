@@ -25,6 +25,7 @@
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
 #include "HostStatusCommandFactory.h"
+#include "QgEdCategories.h"
 #include "../common/HostStatusCommon.h"
 
 QgPluginDescriptor
@@ -33,7 +34,7 @@ HostStatusCommandFactory::descriptor() const
     QgPluginDescriptor d;
     d.id = "org.brlcad.qged.command.host_status";
     d.displayName = "host_status";
-    d.category = "qged.command";
+    d.category = QStringLiteral(QGED_CATEGORY_COMMAND);
     d.sortKey = 0;
     d.description = "Reports qged host status and optionally requests a view refresh.";
     d.vendor = "BRL-CAD";

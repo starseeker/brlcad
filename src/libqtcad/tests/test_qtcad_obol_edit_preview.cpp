@@ -180,9 +180,13 @@ main(int argc, char **argv)
 
     QgPluginContext context;
     context.viewWidgetAccessor = [&view]() -> QgView * { return &view; };
+    context.viewContextAccessor = [&view]() -> ged_view_context * {
+	return ged_view_context_from_bv(view.viewContext());
+    };
     if (context.getViewWidget() != &view)
 	FAIL("plugin context should expose the active QgView widget");
-    if (context.activeViewContext() != view.viewContext())
+    if (context.activeViewContext() !=
+	ged_view_context_from_bv(view.viewContext()))
 	FAIL("plugin context should expose the active view context");
 
     BObolViewController *controller = view.obolViewController();
