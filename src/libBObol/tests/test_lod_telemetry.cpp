@@ -239,6 +239,19 @@ validate_sanitized_log(const std::string &log,
 			"pass_missing_mesh_budget_blocked") &&
 		    after.at("submission").contains("last_submitted_tasks") &&
 		    after.at("submission").contains("last_updated_cuts") &&
+		after.at("structural_reducer").contains(
+		    "projection_exact") &&
+		after.at("structural_reducer").contains(
+		    "projection_visible_count") &&
+		after.at("structural_reducer").contains(
+		    "unresolved_occurrence_count") &&
+		after.at("structural_reducer").contains(
+		    "successor_base_ready") &&
+		after.at("structural_reducer").contains("blocker_mask") &&
+		after.at("structural_reducer").at("blockers").contains(
+		    "projection_inexact") &&
+		after.at("structural_reducer").at("blockers").contains(
+		    "submission_active") &&
 		    signals.contains(
 			"handoff_waiting_for_cooldown") &&
 		    signals.contains(
