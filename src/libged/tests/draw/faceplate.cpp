@@ -301,6 +301,19 @@ main(int ac, char *av[]) {
     if (!faceplate_controller)
 	bu_exit(EXIT_FAILURE,
 	    "faceplate progress isolation requires an Obol controller\n");
+    const char *lod_status_av[] = {"view", "faceplate", "lod", "0", NULL};
+    int lod_status_visible = 1;
+    if (ged_exec_view(gedp, 4, lod_status_av) != BRLCAD_OK ||
+	!ged_view_lod_progress_visible_get(&lod_status_visible, v) ||
+	lod_status_visible)
+	bu_exit(EXIT_FAILURE,
+	    "faceplate lod command did not disable the status line\n");
+    lod_status_av[3] = "1";
+    if (ged_exec_view(gedp, 4, lod_status_av) != BRLCAD_OK ||
+	!ged_view_lod_progress_visible_get(&lod_status_visible, v) ||
+	!lod_status_visible)
+	bu_exit(EXIT_FAILURE,
+	    "faceplate lod command did not enable the status line\n");
     const BObolFeatureHandle grid_handle =
 	faceplate_controller->features().find("_faceplate/grid");
     SoNode *grid_node = faceplate_controller->features().node(grid_handle);

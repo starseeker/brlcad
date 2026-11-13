@@ -401,6 +401,22 @@ struct BOBOL_EXPORT BObolLodProgressDisplayStatus {
     }
 };
 
+/** Toolkit-neutral, user-facing description of current LoD activity.
+ *
+ * This intentionally reports observed state rather than predicted completion
+ * time.  Hosts may render it with native controls, but the retained Obol HUD
+ * uses the same title, detail, and severity color. */
+struct BOBOL_EXPORT BObolLodProgressPresentationStatus {
+    SbBool visible = FALSE;
+    SbBool terminal = FALSE;
+    SbBool terminalReady = FALSE;
+    BObolLodProgressDisplayClass publicationClass =
+	BOBOL_LOD_PROGRESS_DISPLAY_IDLE;
+    SbString title;
+    SbString detail;
+    SbColor color = SbColor(1.0f, 0.75f, 0.28f);
+};
+
 /** User-facing progress for one view epoch.
  *
  * The fraction is an observed-time estimate of progress toward the current
@@ -414,6 +430,7 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     BObolLodConvergenceStatus(void);
     void clear(void);
     BObolLodProgressDisplayStatus progressDisplayStatus(void) const;
+    BObolLodProgressPresentationStatus progressPresentationStatus(void) const;
 
     int phase;
     int outcome;
