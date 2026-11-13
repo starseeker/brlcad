@@ -215,6 +215,8 @@ struct ged_event_service *ged_event_service_create(struct ged *gedp);
 void ged_event_service_destroy(struct ged_event_service *service);
 struct ged_selection_state *ged_selection_state_create(struct ged *gedp);
 void ged_selection_state_destroy(struct ged_selection_state *state);
+void ged_dbi_state_create_private(struct ged *gedp);
+void ged_dbi_state_destroy_private(struct ged *gedp);
 typedef int (*ged_selection_present_func_t)(struct ged *, void *);
 void ged_selection_presenter_set_private(struct ged *gedp,
 	ged_selection_present_func_t present, void *client_data);
