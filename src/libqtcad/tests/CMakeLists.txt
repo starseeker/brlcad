@@ -20,7 +20,6 @@ set(TEST_QTCAD_PLUGIN_METADATA
   test_qtcad_plugin_dialog.json
 )
 set(TEST_QTCAD_PLUGIN_REUSE_SRCS test_qtcad_plugin_reuse.cpp)
-set(TEST_QTCAD_PRIMITIVE_EDIT_SRCS test_qtcad_primitive_edit.cpp)
 set(TEST_QTCAD_OBOL_CONTROLLER_SRCS test_qtcad_obol_controller.cpp)
 set(TEST_QTCAD_OBOL_DRAW_SYNC_SRCS test_qtcad_obol_draw_sync.cpp ../QgCanvasInput.cpp)
 set(TEST_QTCAD_OBOL_EDIT_PREVIEW_SRCS test_qtcad_obol_edit_preview.cpp)
@@ -179,6 +178,7 @@ elseif(TARGET Qt5::Widgets)
 endif()
 if(TARGET test_qtcad_primitive_edit)
   target_compile_definitions(test_qtcad_primitive_edit PRIVATE BRLCADBUILD HAVE_CONFIG_H)
+  add_dependencies(test_qtcad_primitive_edit ged_plugins)
   brlcad_add_test(NAME test_qtcad_primitive_edit COMMAND test_qtcad_primitive_edit)
   set_property(TEST test_qtcad_primitive_edit APPEND PROPERTY ENVIRONMENT
     BRLCAD_ROOT=${CMAKE_BINARY_DIR} QT_QPA_PLATFORM=offscreen)
@@ -889,6 +889,7 @@ endif()
 
 cmakefiles(
   CMakeLists.txt
+  qgmodel_db_update.cpp
   ${TEST_QTCAD_SESSION_SRCS}
   ${TEST_QTCAD_MODEL_INVARIANTS_SRCS}
   ${TEST_QTCAD_PRIMITIVE_EDIT_SRCS}
@@ -915,7 +916,6 @@ cmakefiles(
   ${TEST_QTCAD_OBOL_SNAP_SRCS}
   ${TEST_QTCAD_OBOL_WINDOW_HOST_SRCS}
   ${TEST_QTCAD_PLUGIN_REUSE_SRCS}
-  ${TEST_QTCAD_PRIMITIVE_EDIT_SRCS}
   ${TEST_QGMODEL_MODEL_TESTER_SRCS}
   ${TEST_QGMODEL_SCALE_SRCS}
   )

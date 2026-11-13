@@ -246,6 +246,7 @@ QPolyCreate::QPolyCreate()
 
 QPolyCreate::~QPolyCreate()
 {
+    delete pcf;
 }
 
 void

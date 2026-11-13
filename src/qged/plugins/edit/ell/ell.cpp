@@ -30,6 +30,7 @@
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgToolPalette.h"
 #include "qtcad/QgView.h"
+#include "QgEdCategories.h"
 #include "EditEllFactory.h"
 
 EditEllTool::EditEllTool(QgPluginContext *ctx, QObject *parent)
@@ -131,7 +132,7 @@ EditEllFactory::descriptor() const
     QgPluginDescriptor d;
     d.id = "org.brlcad.qged.edit.ell";
     d.displayName = "Ell Edit";
-    d.category = "qged.object";
+    d.category = QStringLiteral(QGED_CATEGORY_OBJECT);
     d.iconName = ":ell.svg";
     d.sortKey = 1000;
     d.requiresOpenDb = true;

@@ -27,6 +27,7 @@
 #include <QVBoxLayout>
 
 #include "qtcad/QgPluginContext.h"
+#include "QgEdCategories.h"
 #include "HostStatusDialogFactory.h"
 #include "../common/HostStatusCommon.h"
 
@@ -36,7 +37,7 @@ HostStatusDialogFactory::descriptor() const
     QgPluginDescriptor d;
     d.id = "org.brlcad.qged.dialog.host_status";
     d.displayName = "Host Status";
-    d.category = "qged.dialog";
+    d.category = QStringLiteral(QGED_CATEGORY_DIALOG);
     d.sortKey = 0;
     d.description = "Modeless dialog showing the active qged host, database, and view.";
     d.vendor = "BRL-CAD";
