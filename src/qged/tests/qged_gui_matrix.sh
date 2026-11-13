@@ -1308,10 +1308,10 @@ validate_report()
 		(.lod_estimated_remaining_ms == 0)
 	     end))) and
 	# "View ready" is the faceplate terminal promise.  Validate the actual
-	# retained label text, not merely the controller readiness bit: a usable
-	# framebuffer may coexist with background work and an incomplete bar.
+	# retained card title, not merely the controller readiness bit: a usable
+	# framebuffer may coexist with background work.
 	(all(.samples[];
-	    (((.lod_progress_label_text // "") |
+	    (((.lod_progress_card_title // "") |
 	      startswith("View ready")) | not) or
 	    ((.lod_convergence_has_state // false) == true and
 	     (.lod_convergence_terminal // false) == true and

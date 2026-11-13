@@ -46,6 +46,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <string>
 #include <string.h>
 #include <type_traits>
 #include <unordered_map>
@@ -839,6 +840,149 @@ BObolLodConvergenceStatus::progressDisplayStatus(void) const
 	break;
     }
     return display;
+}
+
+static const char *
+lod_progress_producer_activity(int stage)
+{
+    switch (stage) {
+	case BOBOL_LOD_PRODUCER_STAGE_ASSET_SERIALIZATION:
+	    return "Waiting for shared geometry";
+	case BOBOL_LOD_PRODUCER_STAGE_CACHE_LOOKUP:
+	    return "Checking the geometry cache";
+	case BOBOL_LOD_PRODUCER_STAGE_SOURCE_PREPARATION:
+	    return "Preparing source geometry";
+	case BOBOL_LOD_PRODUCER_STAGE_COVERAGE_PREVIEW:
+	    return "Sampling visible coverage";
+	case BOBOL_LOD_PRODUCER_STAGE_SOURCE_HASHING:
+	    return "Identifying source geometry";
+	case BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS:
+	    return "Analyzing object bounds";
+	case BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION:
+	    return "Classifying mesh faces";
+	case BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION:
+	    return "Building drawable meshes";
+	case BOBOL_LOD_PRODUCER_STAGE_SPATIAL_CONSTRUCTION:
+	    return "Building spatial detail pages";
+	case BOBOL_LOD_PRODUCER_STAGE_CACHE_PERSISTENCE:
+	    return "Saving reusable geometry";
+	default:
+	    return NULL;
+    }
+}
+
+static SbString
+lod_progress_count_detail(uint64_t completed, uint64_t total,
+	const char *unit)
+{
+    SbString detail;
+    detail.sprintf("%llu/%llu %s complete",
+	static_cast<unsigned long long>(std::min(completed, total)),
+	static_cast<unsigned long long>(total), unit);
+    return detail;
+}
+
+BObolLodProgressPresentationStatus
+BObolLodConvergenceStatus::progressPresentationStatus(void) const
+{
+    BObolLodProgressPresentationStatus result;
+    const BObolLodProgressDisplayStatus display =
+	this->progressDisplayStatus();
+    result.visible = display.visible;
+    result.terminal = this->terminal;
+    result.terminalReady = display.terminalReady;
+    result.publicationClass = display.publicationClass;
+    if (!result.visible)
+	return result;
+
+    if (this->terminalError || this->failedSourceCount > 0) {
+	result.title = "Geometry preparation failed";
+	result.color = SbColor(1.0f, 0.35f, 0.31f);
+	if (this->failedSourceCount > 0)
+	    result.detail.sprintf("%u source%s failed", this->failedSourceCount,
+		this->failedSourceCount == 1 ? "" : "s");
+	return result;
+    }
+    if (this->terminal && (this->memoryLimited || this->gpuMemoryPressure)) {
+	result.title = "Detail limited by memory";
+	result.detail = "Showing the best geometry available within the memory limit";
+	result.color = SbColor(1.0f, 0.67f, 0.25f);
+	return result;
+    }
+    if (this->terminal && this->performanceLimited) {
+	result.title = "Detail limited by the frame budget";
+	result.detail = "Showing the best detail that remains responsive";
+	result.color = SbColor(0.44f, 0.92f, 0.53f);
+	return result;
+    }
+    if (display.terminalReady) {
+	result.title = "View ready";
+	result.color = SbColor(0.44f, 0.92f, 0.53f);
+	return result;
+    }
+
+    const char *producerActivity =
+	lod_progress_producer_activity(this->producerStage);
+    if (producerActivity)
+	result.title = producerActivity;
+    else if (this->rendererPreparationPreparingTargetCount > 0)
+	result.title = "Preparing geometry for display";
+    else if (this->capacitySearchPhase != BOBOL_LOD_CAPACITY_SEARCH_INACTIVE &&
+	this->capacitySearchPhase != BOBOL_LOD_CAPACITY_SEARCH_TERMINAL)
+	result.title = "Measuring available render capacity";
+    else if (this->sourcePreparationPending)
+	result.title = "Preparing source geometry";
+    else if (this->queuedResults > 0 || this->publicationFramePending)
+	result.title = "Publishing refined geometry";
+    else if (this->episode.stableViewReached)
+	result.title = "Finalizing the view";
+    else if (!this->episode.firstMeshReached)
+	result.title = "Preparing visible geometry";
+    else if (display.publicationClass == BOBOL_LOD_PROGRESS_DISPLAY_INTERACTIVE)
+	result.title = "Adjusting visible detail";
+    else
+	result.title = "Refining visible detail";
+
+    result.color = display.publicationClass ==
+	BOBOL_LOD_PROGRESS_DISPLAY_PREPARING ||
+	display.publicationClass == BOBOL_LOD_PROGRESS_DISPLAY_DISCOVERING ?
+	SbColor(0.38f, 0.75f, 1.0f) : SbColor(1.0f, 0.75f, 0.28f);
+
+    if (this->producerStageTotalUnits > 0) {
+	result.detail = lod_progress_count_detail(
+	    this->producerStageCompletedUnits,
+	    this->producerStageTotalUnits, "work units");
+    } else if (this->sourcePreparationTotalUnits > 0 &&
+	this->sourcePreparationPending) {
+	result.detail = lod_progress_count_detail(
+	    this->sourcePreparationCompletedUnits,
+	    this->sourcePreparationTotalUnits, "sources");
+    } else if (this->rendererPreparationTotalUnits > 0 &&
+	this->rendererPreparationPreparingTargetCount > 0) {
+	result.detail = lod_progress_count_detail(
+	    this->rendererPreparationCompletedUnits,
+	    this->rendererPreparationTotalUnits, "render units");
+    } else if (this->queuedResults > 0) {
+	result.detail.sprintf("%llu completed result%s ready to publish",
+	    static_cast<unsigned long long>(this->queuedResults),
+	    this->queuedResults == 1 ? "" : "s");
+    } else if (this->inFlight > 0) {
+	result.detail.sprintf("%llu geometry task%s running",
+	    static_cast<unsigned long long>(this->inFlight),
+	    this->inFlight == 1 ? "" : "s");
+    } else if (this->pendingTasks > 0) {
+	result.detail.sprintf("%llu geometry task%s queued",
+	    static_cast<unsigned long long>(this->pendingTasks),
+	    this->pendingTasks == 1 ? "" : "s");
+    } else if (this->activePayloadCount > this->satisfiedPayloadCount) {
+	const size_t unresolved =
+	    this->activePayloadCount - this->satisfiedPayloadCount;
+	result.detail.sprintf("%llu visible item%s still refining",
+	    static_cast<unsigned long long>(unresolved),
+	    unresolved == 1 ? "" : "s");
+    }
+
+    return result;
 }
 
 BObolLodControlTraceState::BObolLodControlTraceState(void) :
