@@ -107,6 +107,7 @@ ged_scene_occurrence_ref_is_null
 ged_scene_occurrences_visit
 ged_scene_path_request_init
 ged_scene_path_state_get
+ged_scene_path_state_ids
 ged_scene_paths_append
 ged_scene_redraw
 ged_scene_redraw_request_init

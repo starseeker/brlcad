@@ -6572,6 +6572,18 @@ test_draw(struct ged *gedp)
 			      "all.g/platform.r", GED_SCENE_DRAW_DEFAULT) ==
 	  GED_SCENE_PATH_DRAWN,
 	  "draw path_state must report child path drawn");
+    const size_t scene_path_id_count = ged_db_index_path_resolve(
+	gedp, "all.g/platform.r", NULL, 0);
+    std::vector<ged_db_index_id> scene_path_ids(scene_path_id_count);
+    CHECK(scene_path_id_count == 2 &&
+	ged_db_index_path_resolve(gedp, "all.g/platform.r",
+	    scene_path_ids.data(), scene_path_ids.size()) ==
+	    scene_path_id_count,
+	  "draw path_state test must resolve the indexed child path");
+    CHECK(ged_scene_path_state_ids(gedp, view_ctx, scene_path_ids.data(),
+	scene_path_ids.size(), GED_SCENE_DRAW_DEFAULT) ==
+	GED_SCENE_PATH_DRAWN,
+	  "indexed draw path_state must report the child path drawn");
 
     struct bu_vls group_paths = BU_VLS_INIT_ZERO;
     CHECK(ged_scene_paths_append(gedp, view_ctx, GED_SCENE_DRAW_DEFAULT,

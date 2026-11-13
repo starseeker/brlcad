@@ -58,7 +58,6 @@ ged_close_core(struct ged *gedp, int UNUSED(argc), const char **UNUSED(argv))
     /* Stop callbacks and children before dismantling database state they may
      * still reference. */
     ged_subprocesses_terminate(gedp);
-    ged_dbi_state_destroy_private(gedp);
     ged_event_librt_callbacks_disable(gedp);
 
     /* close current database */

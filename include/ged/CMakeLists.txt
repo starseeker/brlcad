@@ -10,7 +10,6 @@ set(
   edit.h
   event.h
   objects.h
-  presentation.h
   view_polygon.h
   view_polygon_types.h
   view_edit.h

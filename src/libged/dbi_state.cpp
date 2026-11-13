@@ -474,27 +474,6 @@ DbiState::~DbiState()
 }
 
 
-void
-ged_dbi_state_create_private(struct ged *gedp)
-{
-    if (!gedp || gedp->dbi_state)
-	return;
-
-    gedp->dbi_state = new DbiState(gedp);
-}
-
-
-void
-ged_dbi_state_destroy_private(struct ged *gedp)
-{
-    if (!gedp || !gedp->dbi_state)
-	return;
-
-    delete static_cast<DbiState *>(gedp->dbi_state);
-    gedp->dbi_state = NULL;
-}
-
-
 int
 DbiState::selection_present(struct ged *gedp, void *client_data)
 {
