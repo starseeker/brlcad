@@ -161,9 +161,68 @@ test_identity_domains(void)
     return 0;
 }
 
+static int
+test_performance_epochs(void)
+{
+    BObolLodSourceSnapshot first;
+    first.routingId.set(1);
+    first.path = "first.c";
+    BObolLodSourceSnapshot second;
+    second.routingId.set(2);
+    second.path = "second.c";
+    BObolLodSourceSnapshot third;
+    third.routingId.set(3);
+    third.path = "third.c";
+    BObolLodSourceSnapshot fourth;
+    fourth.routingId.set(4);
+    fourth.path = "fourth.c";
+    BObolLodSourceSnapshot fifth;
+    fifth.routingId.set(5);
+    fifth.path = "fifth.c";
+
+    const Snapshot empty;
+    const Snapshot one({first});
+    const Snapshot two({first, second});
+    const Snapshot reordered({second, first});
+    const Snapshot three({first, second, third});
+    BObolLodSourceSnapshot inventoried = first;
+    inventoried.inventoryRevision.set(1);
+    const Snapshot inventoryOnly({inventoried});
+    if (!expect(one.startsNewPerformanceEpoch(empty.sources()),
+	    "populating an empty scene starts a performance epoch") ||
+	!expect(empty.startsNewPerformanceEpoch(one.sources()),
+	    "clearing a populated scene starts a performance epoch") ||
+	!expect(!two.startsNewPerformanceEpoch(one.sources()),
+	    "adding one source preserves performance history") ||
+	!expect(!one.startsNewPerformanceEpoch(two.sources()),
+	    "removing one of two sources preserves performance history") ||
+	!expect(!three.startsNewPerformanceEpoch(two.sources()),
+	    "a small source-set extension preserves performance history") ||
+	!expect(!reordered.startsNewPerformanceEpoch(two.sources()),
+	    "source publication order preserves performance history") ||
+	!expect(!inventoryOnly.startsNewPerformanceEpoch(one.sources()),
+	    "progressive inventory preserves performance history"))
+	return 1;
+
+    BObolLodSourceSnapshot replacement = first;
+    replacement.sourceRevision++;
+    const Snapshot replaced({replacement});
+    const Snapshot mostlyReplaced({first, fourth, fifth});
+    if (!expect(replaced.startsNewPerformanceEpoch(one.sources()),
+	    "replacing the only source starts a performance epoch") ||
+	!expect(mostlyReplaced.startsNewPerformanceEpoch(three.sources()),
+	    "replacing most source contracts starts a performance epoch") ||
+	!expect(!two.startsNewPerformanceEpoch(two.sources()),
+	    "an unchanged scene preserves performance history"))
+	return 1;
+
+    return 0;
+}
+
 int
 main(void)
 {
     bu_setprogname("test_lod_source_evidence");
-    return test_pending_observations() || test_identity_domains();
+    return test_pending_observations() || test_identity_domains() ||
+	test_performance_epochs();
 }
