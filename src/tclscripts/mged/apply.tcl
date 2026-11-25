@@ -22,20 +22,25 @@
 #	Procedures to apply commands to one or more graphics views.
 #
 
-set mged_apply_retry_interval_ms 25
+namespace eval ::brlcad::mged::display {}
 
-proc mged_apply_when_available {retry_command script} {
-    global mged_apply_retry_interval_ms
+proc ::brlcad::mged::display::apply_when_available {retry_command script} {
+    variable retry_interval_ms
 
     set status [catch {uplevel 1 $script} message options]
-    if {$status && [mged_command_busy $options]} {
+    if {$status && [command_busy $options]} {
 	# Long-running GED commands pump Tk events.  A display-manager menu
 	# callback serviced during that window must wait for the shared state
 	# instead of dropping the requested change.
-	after $mged_apply_retry_interval_ms $retry_command
+	after $retry_interval_ms $retry_command
     }
 
     return $message
+}
+
+proc mged_apply_when_available {retry_command script} {
+    # Preserve the caller's scope for the script evaluated by the helper.
+    tailcall ::brlcad::mged::display::apply_when_available $retry_command $script
 }
 
 proc mged_apply { id cmd } {
@@ -59,8 +64,9 @@ proc mged_apply { id cmd } {
 proc mged_apply_active { id cmd } {
     global mged_gui
 
-    return [mged_apply_when_available [list mged_apply_active $id $cmd] {
-	winset $mged_gui($id,active_pane)
+    return [::brlcad::mged::display::apply_when_available \
+	[list ::mged_apply_active $id $cmd] {
+	::brlcad::mged winset $mged_gui($id,active_pane)
 	uplevel \#0 $cmd
     }]
 }
@@ -68,44 +74,47 @@ proc mged_apply_active { id cmd } {
 proc mged_apply_local { id cmd } {
     global mged_gui
 
-    return [mged_apply_when_available [list mged_apply_local $id $cmd] {
-	winset $mged_gui($id,top).ul
+    return [::brlcad::mged::display::apply_when_available \
+	[list ::mged_apply_local $id $cmd] {
+	::brlcad::mged winset $mged_gui($id,top).ul
 	uplevel \#0 $cmd
 
-	winset $mged_gui($id,top).ur
+	::brlcad::mged winset $mged_gui($id,top).ur
 	uplevel \#0 $cmd
 
-	winset $mged_gui($id,top).ll
+	::brlcad::mged winset $mged_gui($id,top).ll
 	uplevel \#0 $cmd
 
-	winset $mged_gui($id,top).lr
+	::brlcad::mged winset $mged_gui($id,top).lr
 	uplevel \#0 $cmd
 
-	winset $mged_gui($id,active_pane)
+	::brlcad::mged winset $mged_gui($id,active_pane)
     }]
 }
 
 proc mged_apply_using_list { id cmd } {
     global mged_gui
 
-    return [mged_apply_when_available [list mged_apply_using_list $id $cmd] {
+    return [::brlcad::mged::display::apply_when_available \
+	[list ::mged_apply_using_list $id $cmd] {
 	foreach display_path $mged_gui($id,apply_list) {
-	    winset $display_path
+	    ::brlcad::mged winset $display_path
 	    uplevel \#0 $cmd
 	}
 
-	winset $mged_gui($id,active_pane)
+	::brlcad::mged winset $mged_gui($id,active_pane)
     }]
 }
 
 proc mged_apply_all { win cmd } {
-    return [mged_apply_when_available [list mged_apply_all $win $cmd] {
-	foreach display_path [get_display_list] {
-	    winset $display_path
+    return [::brlcad::mged::display::apply_when_available \
+	[list ::mged_apply_all $win $cmd] {
+	foreach display_path [::brlcad::mged get_display_list] {
+	    ::brlcad::mged winset $display_path
 	    uplevel \#0 $cmd
 	}
 
-	winset $win
+	::brlcad::mged winset $win
     }]
 }
 
@@ -138,7 +147,10 @@ proc mged_shaded_mode_helper {val} {
 	set mged_gui($id,zclip) $val
 	set mged_gui($id,lighting) $val
 
-	mged_apply_local $id "dm set renderer.depth_test $val; dm set view.zclip $val; dm set renderer.lighting $val"
+	mged_apply_local $id "
+	    ::brlcad::mged dm set renderer.depth_test $val
+	    ::brlcad::mged dm set view.zclip $val
+	    ::brlcad::mged dm set renderer.lighting $val"
     }
 
     return ""
