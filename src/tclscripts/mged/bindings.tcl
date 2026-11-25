@@ -22,16 +22,25 @@ if ![info exists mged_players] {
     set mged_players {}
 }
 
-proc mged_command_busy {options} {
+namespace eval ::brlcad::mged::display {
+    variable semantic_input
+    variable retry_interval_ms 25
+}
+
+proc ::brlcad::mged::display::command_busy {options} {
     expr {[dict exists $options -errorcode] &&
 	[dict get $options -errorcode] eq {BRLCAD MGED COMMAND_BUSY}}
 }
 
-proc mged_activate_endpoint {w} {
+proc mged_command_busy {options} {
+    tailcall ::brlcad::mged::display::command_busy $options
+}
+
+proc ::brlcad::mged::display::activate_endpoint {w} {
     global tcl_platform
 
-    if {[catch {winset $w} message options]} {
-	if {[mged_command_busy $options]} {
+    if {[catch {::brlcad::mged winset $w} message options]} {
+	if {[command_busy $options]} {
 	    return
 	}
 	return -options $options $message
@@ -44,42 +53,44 @@ proc mged_activate_endpoint {w} {
     }
 }
 
-proc mged_release_endpoint {w} {
+proc ::brlcad::mged::display::release_endpoint {w} {
+    variable retry_interval_ms
+
     if {![winfo exists $w]} {
 	return
     }
 
-    if {[catch {winset $w; dm idle} message options]} {
-	if {[mged_command_busy $options]} {
+    if {[catch {
+	::brlcad::mged winset $w
+	::brlcad::mged dm idle
+    } message options]} {
+	if {[command_busy $options]} {
 	    # A mouse pick may pump events while an edit command runs.  Defer
 	    # the release until its shared GED state is available again.
-	    set retry_interval_ms 25
-	    after $retry_interval_ms [list mged_release_endpoint $w]
+	    after $retry_interval_ms [list ::brlcad::mged::display::release_endpoint $w]
 	    return
 	}
 	return -options $options $message
     }
 }
 
-proc mged_bind_endpoint { w } {
+proc ::brlcad::mged::display::bind_endpoint {w} {
     global hot_key
     global forwarding_key
+    variable semantic_input
 
     # KeySym for <F9> --> 0xffc6 --> 65478
     set hot_key 65478
+    set semantic_input($w) 1
 
-    bind $w <Enter> [list mged_activate_endpoint $w]
+    bind $w <Enter> [list ::brlcad::mged::display::activate_endpoint $w]
 
     #default mouse bindings
     default_mouse_bindings $w
 
     #default key bindings
     set forwarding_key($w) 0
-    if {[info exists ::mged_obol_semantic_input($w)]} {
-	obol_semantic_key_bindings $w
-    } else {
-	default_key_bindings $w
-    }
+    semantic_key_bindings $w
 }
 
 proc print_return_val str {
@@ -139,72 +150,79 @@ if ![info exists mged_default(pane_key_bindings)] {
 
 proc default_key_bindings { w } {
     # common view shortcuts
-    bind $w 2 "winset $w; ae 35 -25; break"
-    bind $w 3 "winset $w; press 35,25; break"
-    bind $w 4 "winset $w; press 45,45; break"
-    bind $w 5 "winset $w; ae 145 25; break"
-    bind $w 6 "winset $w; ae 215 25; break"
-    bind $w 7 "winset $w; ae 325 25; break"
+    bind $w 2 "[list ::brlcad::mged winset $w]; ae 35 -25; break"
+    bind $w 3 "[list ::brlcad::mged winset $w]; press 35,25; break"
+    bind $w 4 "[list ::brlcad::mged winset $w]; press 45,45; break"
+    bind $w 5 "[list ::brlcad::mged winset $w]; ae 145 25; break"
+    bind $w 6 "[list ::brlcad::mged winset $w]; ae 215 25; break"
+    bind $w 7 "[list ::brlcad::mged winset $w]; ae 325 25; break"
 
     # default key shortcuts
-    bind $w a "winset $w; adc; break"
-    bind $w b "winset $w; press bottom; break"
+    bind $w a "[list ::brlcad::mged winset $w]; adc; break"
+    bind $w b "[list ::brlcad::mged winset $w]; press bottom; break"
     bind $w c "open_cmd_win id_0"
-    bind $w e "winset $w; rset ax edit_draw !; update_gui $w edit_draw \[rset ax edit_draw\]; break"
-    bind $w f "winset $w; press front; break"
-    bind $w i "winset $w; aip f; break"
-    bind $w l "winset $w; press left; break"
-    bind $w m "winset $w; rset ax model_draw !; update_gui $w model_draw \[rset ax model_draw\]; break"
-    bind $w o "winset $w; press oill; break"
-    bind $w p "winset $w; M 1 0 0; break"
-    bind $w q "winset $w; press reject; break"
-    bind $w r "winset $w; press right; break"
-    bind $w s "winset $w; press sill; break"
-    bind $w t "winset $w; press top; break"
-    bind $w u "winset $w; svb; break"
-    bind $w v "winset $w; rset ax view_draw !; update_gui $w view_draw \[rset ax view_draw\]; break"
+    bind $w e "[list ::brlcad::mged winset $w]; rset ax edit_draw !; update_gui $w edit_draw \[rset ax edit_draw\]; break"
+    bind $w f "[list ::brlcad::mged winset $w]; press front; break"
+    bind $w i "[list ::brlcad::mged winset $w]; aip f; break"
+    bind $w l "[list ::brlcad::mged winset $w]; press left; break"
+    bind $w m "[list ::brlcad::mged winset $w]; rset ax model_draw !; update_gui $w model_draw \[rset ax model_draw\]; break"
+    bind $w o "[list ::brlcad::mged winset $w]; press oill; break"
+    bind $w p "[list ::brlcad::mged winset $w]; M 1 0 0; break"
+    bind $w q "[list ::brlcad::mged winset $w]; press reject; break"
+    bind $w r "[list ::brlcad::mged winset $w]; press right; break"
+    bind $w s "[list ::brlcad::mged winset $w]; press sill; break"
+    bind $w t "[list ::brlcad::mged winset $w]; press top; break"
+    bind $w u "[list ::brlcad::mged winset $w]; svb; break"
+    bind $w v "[list ::brlcad::mged winset $w]; rset ax view_draw !; update_gui $w view_draw \[rset ax view_draw\]; break"
 
     # default shift+key shortcuts
-    bind $w A "winset $w; press accept; break"
-    bind $w I "winset $w; aip b; break"
-    bind $w N "winset $w; puts \[nirt -b\]; break"
-    bind $w P "winset $w; catch {sed_apply}; break"
-    bind $w R "winset $w; press rear; break"
-    bind $w S "winset $w; catch {sed_reset}; break"
+    bind $w A "[list ::brlcad::mged winset $w]; press accept; break"
+    bind $w I "[list ::brlcad::mged winset $w]; aip b; break"
+    bind $w N "[list ::brlcad::mged winset $w]; puts \[nirt -b\]; break"
+    bind $w P "[list ::brlcad::mged winset $w]; catch {sed_apply}; break"
+    bind $w R "[list ::brlcad::mged winset $w]; press rear; break"
+    bind $w S "[list ::brlcad::mged winset $w]; catch {sed_reset}; break"
 
     # default control+key shortcuts
-    bind $w <Control-n> "winset $w; ::brlcad::mged view_ring next; break"
-    bind $w <Control-p> "winset $w; ::brlcad::mged view_ring prev; break"
-    bind $w <Control-t> "winset $w; ::brlcad::mged view_ring toggle; break"
+    bind $w <Control-n> "[list ::brlcad::mged winset $w]; ::brlcad::mged view_ring next; break"
+    bind $w <Control-p> "[list ::brlcad::mged winset $w]; ::brlcad::mged view_ring prev; break"
+    bind $w <Control-t> "[list ::brlcad::mged winset $w]; ::brlcad::mged view_ring toggle; break"
 
     # shift grips navigation
-    bind $w <Control-Shift-Down> "winset $w; knob -i aY \$mged_default(tran_factor); break"
-    bind $w <Control-Shift-Left> "winset $w; knob -i az \$mged_default(rot_factor); break"
-    bind $w <Control-Shift-Right> "winset $w; knob -i az -\$mged_default(rot_factor); break"
-    bind $w <Control-Shift-Up> "winset $w; knob -i aY -\$mged_default(tran_factor); break"
-    bind $w <Down> "winset $w; knob -i ax \$mged_default(rot_factor); break"
-    bind $w <Left> "winset $w; knob -i ay -\$mged_default(rot_factor); break"
-    bind $w <Right> "winset $w; knob -i ay \$mged_default(rot_factor); break"
-    bind $w <Up> "winset $w; knob -i ax -\$mged_default(rot_factor); break"
-    bind $w <Shift-Down> "winset $w; knob -i aZ -\$mged_default(tran_factor); break"
-    bind $w <Shift-Left> "winset $w; knob -i aX \$mged_default(tran_factor); break"
-    bind $w <Shift-Right> "winset $w; knob -i aX -\$mged_default(tran_factor); break"
-    bind $w <Shift-Up> "winset $w; knob -i aZ \$mged_default(tran_factor); break"
+    bind $w <Control-Shift-Down> "[list ::brlcad::mged winset $w]; knob -i aY \$mged_default(tran_factor); break"
+    bind $w <Control-Shift-Left> "[list ::brlcad::mged winset $w]; knob -i az \$mged_default(rot_factor); break"
+    bind $w <Control-Shift-Right> "[list ::brlcad::mged winset $w]; knob -i az -\$mged_default(rot_factor); break"
+    bind $w <Control-Shift-Up> "[list ::brlcad::mged winset $w]; knob -i aY -\$mged_default(tran_factor); break"
+    bind $w <Down> "[list ::brlcad::mged winset $w]; knob -i ax \$mged_default(rot_factor); break"
+    bind $w <Left> "[list ::brlcad::mged winset $w]; knob -i ay -\$mged_default(rot_factor); break"
+    bind $w <Right> "[list ::brlcad::mged winset $w]; knob -i ay \$mged_default(rot_factor); break"
+    bind $w <Up> "[list ::brlcad::mged winset $w]; knob -i ax -\$mged_default(rot_factor); break"
+    bind $w <Shift-Down> "[list ::brlcad::mged winset $w]; knob -i aZ -\$mged_default(tran_factor); break"
+    bind $w <Shift-Left> "[list ::brlcad::mged winset $w]; knob -i aX \$mged_default(tran_factor); break"
+    bind $w <Shift-Right> "[list ::brlcad::mged winset $w]; knob -i aX -\$mged_default(tran_factor); break"
+    bind $w <Shift-Up> "[list ::brlcad::mged winset $w]; knob -i aZ \$mged_default(tran_factor); break"
 
     # function keys (settings)
-    bind $w <F1> "winset $w; dm set renderer.depth_cue !; update_gui $w depthcue \[expr {\[dm get renderer.depth_cue\] ? 1 : 0}\]; break"
-    bind $w <F2> "winset $w; dm set view.zclip !; update_gui $w zclip \[expr {\[dm get view.zclip\] ? 1 : 0}\]; break"
-    bind $w <F3> "winset $w; set perspective_mode !; update_gui $w perspective_mode \$perspective_mode; break"
-    bind $w <F4> "winset $w; dm set renderer.depth_test !; update_gui $w zbuffer \[expr {\[dm get renderer.depth_test\] ? 1 : 0}\]; break"
-    bind $w <F5> "winset $w; dm set renderer.lighting !; update_gui $w lighting \[expr {\[dm get renderer.lighting\] ? 1 : 0}\]; break"
-    bind $w <F6> "winset $w; set toggle_perspective !; break"
-    bind $w <F7> "winset $w; set faceplate !; update_gui $w faceplate \$faceplate; break"
-    bind $w <F8> "winset $w; set orig_gui !; update_gui $w orig_gui \$orig_gui; break"
+    foreach {key property setting} {
+	F1 renderer.depth_cue depthcue
+	F2 view.zclip zclip
+	F4 renderer.depth_test zbuffer
+	F5 renderer.lighting lighting
+    } {
+	bind $w <$key> "[list ::brlcad::mged winset $w];
+	    [list ::brlcad::mged dm set $property !];
+	    [list update_gui $w $setting] \[expr {\[[list ::brlcad::mged dm get $property]\] ? 1 : 0}\];
+	    break"
+    }
+    bind $w <F3> "[list ::brlcad::mged winset $w]; set perspective_mode !; update_gui $w perspective_mode \$perspective_mode; break"
+    bind $w <F6> "[list ::brlcad::mged winset $w]; set toggle_perspective !; break"
+    bind $w <F7> "[list ::brlcad::mged winset $w]; set faceplate !; update_gui $w faceplate \$faceplate; break"
+    bind $w <F8> "[list ::brlcad::mged winset $w]; set orig_gui !; update_gui $w orig_gui \$orig_gui; break"
     bind $w <F9> "toggle_forward_key_bindings $w; update_gui $w forward_keys \$forwarding_key($w); break"
-    bind $w <F12> "winset $w; knob zero; break"
+    bind $w <F12> "[list ::brlcad::mged winset $w]; knob zero; break"
 
     # interrupt
-    bind $w <Escape> "winset $w; reset_everything $w; break"
+    bind $w <Escape> "[list ::brlcad::mged winset $w]; reset_everything $w; break"
 
     # Throw away other key events
     bind $w <KeyPress> {
@@ -212,7 +230,7 @@ proc default_key_bindings { w } {
     }
 }
 
-proc obol_semantic_key_bindings { w } {
+proc ::brlcad::mged::display::semantic_key_bindings {w} {
     default_key_bindings $w
 
     # The endpoint owns these unmodified semantic view actions.  Shift-A
@@ -258,8 +276,8 @@ proc set_forward_keys { w val } {
     set forwarding_key($w) $val
     if {$forwarding_key($w)} {
 	forward_key_bindings $w
-    } elseif {[info exists ::mged_obol_semantic_input($w)]} {
-	obol_semantic_key_bindings $w
+    } elseif {[info exists ::brlcad::mged::display::semantic_input($w)]} {
+	::brlcad::mged::display::semantic_key_bindings $w
     } else {
 	default_key_bindings $w
     }
@@ -269,8 +287,8 @@ proc toggle_forward_key_bindings { w } {
     global forwarding_key
 
     if {$forwarding_key($w)} {
-	if {[info exists ::mged_obol_semantic_input($w)]} {
-	    obol_semantic_key_bindings $w
+	if {[info exists ::brlcad::mged::display::semantic_input($w)]} {
+	    ::brlcad::mged::display::semantic_key_bindings $w
 	} else {
 	    default_key_bindings $w
 	}
@@ -368,48 +386,46 @@ proc default_mouse_bindings { w } {
     }
 
     if {[info exists no_focus_hack] && $no_focus_hack} {
-	bind $w <1> "winset $w; zoom 0.5; break"
-	bind $w <2> "winset $w; set tmpstr \[dm m %x %y\]; print_return_val \$tmpstr; break"
-	bind $w <3> "winset $w; zoom 2.0; break"
+	bind $w <1> "[list ::brlcad::mged winset $w]; zoom 0.5; break"
+	bind $w <2> "[list ::brlcad::mged winset $w]; set tmpstr \[::brlcad::mged dm m %x %y\]; print_return_val \$tmpstr; break"
+	bind $w <3> "[list ::brlcad::mged winset $w]; zoom 2.0; break"
 
 	# Mouse wheel fun with Tcl/Tk - see https://wiki.tcl-lang.org/page/mousewheel
-	bind $w <MouseWheel> "winset $w; focus $w; if {%D < 0} {zoom 0.9} else {zoom 1.1}"
+	bind $w <MouseWheel> "[list ::brlcad::mged winset $w]; focus $w; if {%D < 0} {zoom 0.9} else {zoom 1.1}"
 	bind $w <Button-4> {event generate [focus] <MouseWheel> -delta  120}
 	bind $w <Button-5> {event generate [focus] <MouseWheel> -delta -120}
 
 	if {$::tcl_platform(os) == "Darwin"} {
 	    # Mac option-key emulates mouse 2 (doesn't work?)
-	    bind $w <Option-ButtonPress-1> "winset $w; set tmpstr \[dm m %x %y\]; print_return_val \$tmpstr; break"
+	    bind $w <Option-ButtonPress-1> "[list ::brlcad::mged winset $w]; set tmpstr \[::brlcad::mged dm m %x %y\]; print_return_val \$tmpstr; break"
 	    # Mac command-key emulates mouse 3
-	    bind $w <Mod2-ButtonPress-1> "winset $w; zoom 2.0; break"
+	    bind $w <Mod2-ButtonPress-1> "[list ::brlcad::mged winset $w]; zoom 2.0; break"
 	}
     } else {
-	bind $w <1> "winset $w; focus $w; zoom 0.5; break"
-	bind $w <2> "winset $w; focus $w; set tmpstr \[dm m %x %y\]; print_return_val \$tmpstr; break"
-	bind $w <3> "winset $w; focus $w; zoom 2.0; break"
+	bind $w <1> "[list ::brlcad::mged winset $w]; focus $w; zoom 0.5; break"
+	bind $w <2> "[list ::brlcad::mged winset $w]; focus $w; set tmpstr \[::brlcad::mged dm m %x %y\]; print_return_val \$tmpstr; break"
+	bind $w <3> "[list ::brlcad::mged winset $w]; focus $w; zoom 2.0; break"
 
 	# Mouse wheel fun with Tcl/Tk - see https://wiki.tcl-lang.org/page/mousewheel
-	bind $w <MouseWheel> "winset $w; focus $w; if {%D < 0} {zoom 0.9} else {zoom 1.1}; break"
+	bind $w <MouseWheel> "[list ::brlcad::mged winset $w]; focus $w; if {%D < 0} {zoom 0.9} else {zoom 1.1}; break"
 	bind $w <Button-4> {event generate [focus] <MouseWheel> -delta  120}
 	bind $w <Button-5> {event generate [focus] <MouseWheel> -delta -120}
 
 	if {$::tcl_platform(os) == "Darwin"} {
 	    # Mac command-key emulates mouse 2 (doesn't work?)
-	    bind $w <Option-ButtonPress-1> "winset $w; focus $w; set tmpstr \[dm m %x %y\]; print_return_val \$tmpstr; break"
+	    bind $w <Option-ButtonPress-1> "[list ::brlcad::mged winset $w]; focus $w; set tmpstr \[::brlcad::mged dm m %x %y\]; print_return_val \$tmpstr; break"
 	    # Mac command-key emulates mouse 3
-	    bind $w <Mod2-ButtonPress-1> "winset $w; focus $w; zoom 2.0; break"
+	    bind $w <Mod2-ButtonPress-1> "[list ::brlcad::mged winset $w]; focus $w; zoom 2.0; break"
 	}
     }
 
-    bind $w <ButtonRelease> "mged_release_endpoint $w; break"
+    bind $w <ButtonRelease> "[list ::brlcad::mged::display::release_endpoint $w]; break"
     # Tk Obol dispatches native motion through its endpoint handler.
     bind $w <Motion> {break}
-    bind $w <KeyRelease-Control_L> "winset $w; dm idle; break"
-    bind $w <KeyRelease-Control_R> "winset $w; dm idle; break"
-    bind $w <KeyRelease-Shift_L> "winset $w; dm idle; break"
-    bind $w <KeyRelease-Shift_R> "winset $w; dm idle; break"
-    bind $w <KeyRelease-Alt_L> "winset $w; dm idle; break"
-    bind $w <KeyRelease-Alt_R> "winset $w; dm idle; break"
+    set modifier_keys {Control_L Control_R Shift_L Shift_R Alt_L Alt_R}
+    foreach modifier_key $modifier_keys {
+	bind $w <KeyRelease-$modifier_key> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm idle; break"
+    }
 
     if ![catch {adc draw} result] {
 	set adcflag $result
@@ -418,90 +434,90 @@ proc default_mouse_bindings { w } {
     }
 
     if {$adcflag == "1" && $transform == "a"} {
-	bind $w <Shift-ButtonPress-1> "winset $w; dm adc t %x %y; \
+	bind $w <Shift-ButtonPress-1> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm adc t %x %y; \
 		shift_grip_hints $w \"Translate ADC\"; break"
-	bind $w <Shift-ButtonPress-2> "winset $w; dm adc t %x %y; \
+	bind $w <Shift-ButtonPress-2> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm adc t %x %y; \
 		shift_grip_hints $w \"Translate ADC\"; break"
-	bind $w <Shift-ButtonPress-3> "winset $w; dm adc d %x %y; \
+	bind $w <Shift-ButtonPress-3> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm adc d %x %y; \
 		shift_grip_hints $w \"Translate Tick Distance\"; break"
 
-	bind $w <Control-ButtonPress-1> "winset $w; dm adc 1 %x %y; \
+	bind $w <Control-ButtonPress-1> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm adc 1 %x %y; \
 		shift_grip_hints $w \"Rotate Angle 1\"; break"
-	bind $w <Control-ButtonPress-2> "winset $w; dm adc 2 %x %y; \
+	bind $w <Control-ButtonPress-2> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm adc 2 %x %y; \
 		shift_grip_hints $w \"Rotate Angle 2\"; break"
-	bind $w <Control-ButtonPress-3> "winset $w; dm adc d %x %y; \
+	bind $w <Control-ButtonPress-3> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm adc d %x %y; \
 		shift_grip_hints $w \"Translate Tick Distance\"; break"
 
-	bind $w <Shift-Control-ButtonPress-1> "winset $w; dm adc d %x %y; \
+	bind $w <Shift-Control-ButtonPress-1> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm adc d %x %y; \
 		shift_grip_hints $w \"Translate Tick Distance\"; break"
-	bind $w <Shift-Control-ButtonPress-2> "winset $w; dm adc d %x %y; \
+	bind $w <Shift-Control-ButtonPress-2> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm adc d %x %y; \
 		shift_grip_hints $w \"Translate Tick Distance\"; break"
-	bind $w <Shift-Control-ButtonPress-3> "winset $w; dm adc d %x %y; \
+	bind $w <Shift-Control-ButtonPress-3> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm adc d %x %y; \
 		shift_grip_hints $w \"Translate Tick Distance\"; break"
 
 	#constrained adc defaults
-	bind $w <Alt-Shift-ButtonPress-1> "winset $w; dm con a x %x %y; \
+	bind $w <Alt-Shift-ButtonPress-1> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con a x %x %y; \
 		shift_grip_hints $w \"X Translate ADC\"; break"
-	bind $w <Alt-Shift-ButtonPress-2> "winset $w; dm con a y %x %y; \
+	bind $w <Alt-Shift-ButtonPress-2> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con a y %x %y; \
 		shift_grip_hints $w \"Y Translate ADC\"; break"
-	bind $w <Alt-Shift-ButtonPress-3> "winset $w; dm con a d %x %y; \
+	bind $w <Alt-Shift-ButtonPress-3> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con a d %x %y; \
 		shift_grip_hints $w \"Translate Tick Distance\"; break"
 
-	bind $w <Alt-Control-ButtonPress-1> "winset $w; dm con a 1 %x %y; \
+	bind $w <Alt-Control-ButtonPress-1> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con a 1 %x %y; \
 		shift_grip_hints $w \"Rotate Angle 1\"; break"
-	bind $w <Alt-Control-ButtonPress-2> "winset $w; dm con a 2 %x %y; \
+	bind $w <Alt-Control-ButtonPress-2> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con a 2 %x %y; \
 		shift_grip_hints $w \"Rotate Angle 2\"; break"
-	bind $w <Alt-Control-ButtonPress-3> "winset $w; dm con a d %x %y; \
+	bind $w <Alt-Control-ButtonPress-3> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con a d %x %y; \
 		shift_grip_hints $w \"Translate Tick Distance\"; break"
 
-	bind $w <Alt-Shift-Control-ButtonPress-1> "winset $w; dm con a d %x %y; \
+	bind $w <Alt-Shift-Control-ButtonPress-1> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con a d %x %y; \
 		shift_grip_hints $w \"Translate Tick Distance\"; break"
-	bind $w <Alt-Shift-Control-ButtonPress-2> "winset $w; dm con a d %x %y; \
+	bind $w <Alt-Shift-Control-ButtonPress-2> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con a d %x %y; \
 		shift_grip_hints $w \"Translate Tick Distance\"; break"
-	bind $w <Alt-Shift-Control-ButtonPress-3> "winset $w; dm con a d %x %y; \
+	bind $w <Alt-Shift-Control-ButtonPress-3> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con a d %x %y; \
 		shift_grip_hints $w \"Translate Tick Distance\"; break"
     } else {
-	bind $w <Shift-ButtonPress-1> "winset $w; dm am t %x %y; \
+	bind $w <Shift-ButtonPress-1> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm am t %x %y; \
 		shift_grip_hints $w Translate; break"
-	bind $w <Shift-ButtonPress-2> "winset $w; dm am t %x %y; \
+	bind $w <Shift-ButtonPress-2> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm am t %x %y; \
 		shift_grip_hints $w Translate; break"
-	bind $w <Shift-ButtonPress-3> "winset $w; dm am t %x %y; \
+	bind $w <Shift-ButtonPress-3> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm am t %x %y; \
 		shift_grip_hints $w Translate; break"
 
-	bind $w <Control-ButtonPress-1> "winset $w; dm am r %x %y; \
+	bind $w <Control-ButtonPress-1> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm am r %x %y; \
 		shift_grip_hints $w Rotate; break"
-	bind $w <Control-ButtonPress-2> "winset $w; dm am r %x %y; \
+	bind $w <Control-ButtonPress-2> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm am r %x %y; \
 		shift_grip_hints $w Rotate; break"
-	bind $w <Control-ButtonPress-3> "winset $w; dm am r %x %y; \
+	bind $w <Control-ButtonPress-3> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm am r %x %y; \
 		shift_grip_hints $w Rotate; break"
 
-	bind $w <Shift-Control-ButtonPress-1> "winset $w; dm am s %x %y; \
+	bind $w <Shift-Control-ButtonPress-1> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm am s %x %y; \
 		shift_grip_hints $w Scale/Zoom; break"
-	bind $w <Shift-Control-ButtonPress-2> "winset $w; dm am s %x %y; \
+	bind $w <Shift-Control-ButtonPress-2> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm am s %x %y; \
 		shift_grip_hints $w Scale/Zoom; break"
-	bind $w <Shift-Control-ButtonPress-3> "winset $w; dm am s %x %y; \
+	bind $w <Shift-Control-ButtonPress-3> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm am s %x %y; \
 		shift_grip_hints $w Scale/Zoom; break"
 
 	#constrained defaults
-	bind $w <Alt-Shift-ButtonPress-1> "winset $w; dm con t x %x %y; \
+	bind $w <Alt-Shift-ButtonPress-1> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con t x %x %y; \
 		shift_grip_hints $w \"X Translation\"; break"
-	bind $w <Alt-Shift-ButtonPress-2> "winset $w; dm con t y %x %y; \
+	bind $w <Alt-Shift-ButtonPress-2> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con t y %x %y; \
 		shift_grip_hints $w \"Y Translation\"; break"
-	bind $w <Alt-Shift-ButtonPress-3> "winset $w; dm con t z %x %y; \
+	bind $w <Alt-Shift-ButtonPress-3> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con t z %x %y; \
 		shift_grip_hints $w \"Z Translation\"; break"
 
-	bind $w <Alt-Control-ButtonPress-1> "winset $w; dm con r x %x %y; \
+	bind $w <Alt-Control-ButtonPress-1> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con r x %x %y; \
 		shift_grip_hints $w \"X Rotation\"; break"
-	bind $w <Alt-Control-ButtonPress-2> "winset $w; dm con r y %x %y; \
+	bind $w <Alt-Control-ButtonPress-2> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con r y %x %y; \
 		shift_grip_hints $w \"Y Rotation\"; break"
-	bind $w <Alt-Control-ButtonPress-3> "winset $w; dm con r z %x %y; \
+	bind $w <Alt-Control-ButtonPress-3> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con r z %x %y; \
 		shift_grip_hints $w \"Z Rotation\"; break"
 
-	bind $w <Alt-Shift-Control-ButtonPress-1> "winset $w; dm con s x %x %y; \
+	bind $w <Alt-Shift-Control-ButtonPress-1> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con s x %x %y; \
 		scale_shift_grip_hints $w X; break"
-	bind $w <Alt-Shift-Control-ButtonPress-2> "winset $w; dm con s y %x %y; \
+	bind $w <Alt-Shift-Control-ButtonPress-2> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con s y %x %y; \
 		scale_shift_grip_hints $w Y; break"
-	bind $w <Alt-Shift-Control-ButtonPress-3> "winset $w; dm con s z %x %y; \
+	bind $w <Alt-Shift-Control-ButtonPress-3> "[list ::brlcad::mged winset $w]; ::brlcad::mged dm con s z %x %y; \
 		scale_shift_grip_hints $w Z; break"
 
     }
@@ -509,7 +525,7 @@ proc default_mouse_bindings { w } {
     # The endpoint bindtag precedes this application tag and owns these MGED
     # action lifecycles in both standard and ADC transform modes.  Exact Tcl
     # breaks prevent the generic bindings from applying an action twice.
-    if {[info exists ::mged_obol_semantic_input($w)]} {
+    if {[info exists ::brlcad::mged::display::semantic_input($w)]} {
 	# The endpoint action layer owns MGED's complete middle-button
 	# mouse-behavior lifecycle, including rubber-band completion, plus the
 	# one-shot unmodified left/right zoom actions.
@@ -517,7 +533,7 @@ proc default_mouse_bindings { w } {
 	bind $w <ButtonPress-2> {break}
 	bind $w <ButtonRelease-2> {break}
 	bind $w <ButtonPress-3> {break}
-	foreach modifier_key {Control_L Control_R Shift_L Shift_R Alt_L Alt_R} {
+	foreach modifier_key $modifier_keys {
 	    bind $w <KeyRelease-$modifier_key> {break}
 	}
 	foreach modifiers {Shift Control Shift-Control Alt-Shift Alt-Control Alt-Shift-Control} {
