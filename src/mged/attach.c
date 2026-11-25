@@ -57,6 +57,8 @@
 #include "./sedit.h"
 #include "./mged_display.h"
 
+#define MGED_DISPLAY_NAMESPACE MGED_COMMAND_NAMESPACE "::display"
+
 // FIXME: Globals
 /* Geometry display instances used by MGED */
 struct bu_ptbl active_display_set = BU_PTBL_INIT_ZERO;  /* set of active graphics views */
@@ -1180,7 +1182,6 @@ mged_display_init(
 	int argc,
 	const char *argv[])
 {
-    struct bu_vls vls = BU_VLS_INIT_ZERO;
     const char *failure = "unknown direct endpoint error";
 
     if (!BU_STR_EQUAL(host_type, "tkobol"))
@@ -1322,12 +1323,20 @@ mged_display_init(
 
     const char *logical_path = mged_display_pathname(s->mged_curr_display);
     if (logical_path) {
-	(void)Tcl_SetVar2(s->interp, "mged_obol_semantic_input", logical_path,
-	    "1", TCL_GLOBAL_ONLY);
-	bu_vls_printf(&vls, "mged_bind_endpoint %s", logical_path);
-	Tcl_Eval(s->interp, bu_vls_cstr(&vls));
+	Tcl_Obj *command =
+	    Tcl_NewStringObj(MGED_DISPLAY_NAMESPACE "::bind_endpoint", -1);
+	Tcl_Obj *path = Tcl_NewStringObj(logical_path, -1);
+	Tcl_Obj *args[] = {command, path};
+	Tcl_IncrRefCount(command);
+	Tcl_IncrRefCount(path);
+	int status = Tcl_EvalObjv(s->interp, 2, args, TCL_EVAL_GLOBAL);
+	Tcl_DecrRefCount(path);
+	Tcl_DecrRefCount(command);
+	if (status != TCL_OK) {
+	    failure = "cannot bind the display endpoint";
+	    goto attach_fail;
+	}
     }
-    bu_vls_free(&vls);
     bu_vls_free(&pathname);
 
     return TCL_OK;
@@ -1394,8 +1403,8 @@ mged_obol_display_detach(struct mged_state *s, struct mged_display *mdmp)
 	    mdmp);
     }
     if (s->interp && logical_path)
-	(void)Tcl_UnsetVar2(s->interp, "mged_obol_semantic_input", logical_path,
-	    TCL_GLOBAL_ONLY);
+	(void)Tcl_UnsetVar2(s->interp, MGED_DISPLAY_NAMESPACE "::semantic_input",
+	    logical_path, TCL_GLOBAL_ONLY);
     mdmp->display_input_state = NULL;
     mdmp->display_input_motion_pending = 0;
     (void)ged_view_context_obol_endpoint_set(mdmp->display_view_state->vs_gvp,
@@ -1447,6 +1456,13 @@ release(struct mged_state *s, char *name, int need_close)
 	fbserv_set_port(NULL, NULL, NULL, NULL, s);
     }
 
+    /* Detach while this display still owns the view used to find the endpoint. */
+    if (need_close) {
+	if (s->gedp)
+	    ged_view_framebuffer_release(s->gedp);
+	mged_obol_display_detach(s, s->mged_curr_display);
+    }
+
     /*
      * This saves the state of the resources to the "nu" display
      * manager, which is beneficial only if closing the last display
@@ -1460,13 +1476,6 @@ release(struct mged_state *s, char *name, int need_close)
      */
     if (s->mged_curr_display->display_tie != NULL)
 	s->mged_curr_display->display_tie->cl_tie = (struct mged_display *)NULL;
-
-    if (need_close && s->gedp)
-	ged_view_framebuffer_release(s->gedp);
-
-    if (need_close) {
-	mged_obol_display_detach(s, s->mged_curr_display);
-    }
 
     bu_ptbl_rm(&active_display_set, (long *)s->mged_curr_display);
     mged_slider_free_vls(s->mged_curr_display);

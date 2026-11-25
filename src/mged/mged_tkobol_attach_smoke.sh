@@ -385,6 +385,7 @@ dm get render.rt.geometry_revision
 dm get render.rt.presentation_revision
 dm renderer hw
 release .mged_direct
+check_obol_display_released
 quit
 ' "$RT_MOVED_OUT"
 } | "$MGED" -c -a nu -r "$DB" > "$LOG" 2>&1
@@ -437,6 +438,12 @@ if [ -z "$rt_geometry_0" ] || [ "$rt_geometry_0" -le 0 ] ||
     [ "$rt_presentation_1" -le "$rt_presentation_0" ] ||
     cmp -s "$RT_OUT" "$RT_MOVED_OUT"; then
     echo "MGED retained RT did not present or retain geometry across a native camera change" 1>&2
+    cat "$LOG" 1>&2
+    exit 1
+fi
+
+if ! grep -qx OBOL_DISPLAY_NAMESPACE_OK "$LOG" || ! grep -qx OBOL_DISPLAY_RELEASE_OK "$LOG"; then
+    echo "MGED Tk Obol display namespace did not track endpoint lifetime" 1>&2
     cat "$LOG" 1>&2
     exit 1
 fi
