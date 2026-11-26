@@ -225,6 +225,16 @@ struct fast_work_reservation {
 };
 
 
+struct fast_cdt_cancel {
+    brep_cdt_cancel_func_t function;
+    void *data;
+
+    bool requested() const
+    {
+	return function && function(data);
+    }
+};
+
 struct fast_cdt_parallel_state {
     const ON_Brep *brep;
     const struct bg_tess_tol *ttol;
@@ -244,6 +254,7 @@ struct fast_cdt_parallel_state {
     int64_t deadline;
     bool allow_partial;
     fast_work_budget *work_budget;
+    fast_cdt_cancel cancel;
 };
 
 static void
@@ -253,7 +264,7 @@ fast_cdt_face_worker(int UNUSED(cpu), void *data)
     const int face_cnt = state->end_face;
 
     for (;;) {
-	if (state->stop.load())
+	if (state->stop.load() || state->cancel.requested())
 	    return;
 	const int face_index = state->next_face.fetch_add(1);
 	if (face_index >= face_cnt)
@@ -280,6 +291,8 @@ fast_cdt_face_worker(int UNUSED(cpu), void *data)
 	    return;
 	fast_work_reservation reservation(state->work_budget,
 	    working_estimate);
+	if (state->cancel.requested())
+	    return;
 	fast_cdt_face_result &result = (*state->results)[face_index];
 	result = fast_evaluate_face(face, face_ttol, state->tol,
 	    state->model_diagonal, state->options);
@@ -598,6 +611,7 @@ struct fast_cdt_refine_state {
     bool incomplete_only;
     int64_t deadline;
     fast_work_budget *work_budget;
+    fast_cdt_cancel cancel;
 };
 
 
@@ -607,7 +621,7 @@ fast_cdt_refine_worker(int UNUSED(cpu), void *data)
     fast_cdt_refine_state *state = (fast_cdt_refine_state *)data;
     const int face_count = state->brep->m_F.Count();
     for (;;) {
-	if (state->stop.load())
+	if (state->stop.load() || state->cancel.requested())
 	    return;
 	const int face_index = state->next_face.fetch_add(1);
 	if (face_index >= face_count)
@@ -648,6 +662,8 @@ fast_cdt_refine_worker(int UNUSED(cpu), void *data)
 	}
 	fast_work_reservation reservation(state->work_budget,
 	    working_estimate);
+	if (state->cancel.requested())
+	    return;
 
 	fast_cdt_face_result candidate = fast_evaluate_face(face, state->ttol,
 	    state->tol, state->model_diagonal, state->options);
@@ -747,6 +763,8 @@ fast_refine_faces(fast_cdt_refine_state &state, double coarse_relative,
     const auto &face_triangle_budgets = *state.triangle_budgets;
     for (int face_index = 0; face_index < brep_face_count;
 	    face_index++) {
+	if (state.cancel.requested())
+	    return report;
 	fast_cdt_face_result &result =
 	    face_results[(size_t)face_index];
 	if (!result.completed() || result.skipped_degenerate() ||
@@ -777,6 +795,8 @@ fast_refine_faces(fast_cdt_refine_state &state, double coarse_relative,
 
     auto run_refinement_pass = [&](double relative, bool coarsening,
 	    bool incomplete_only = false) {
+	if (state.cancel.requested())
+	    return false;
 	const int64_t now = bu_gettime();
 	/* A recovery pass schedules only missing faces, so a full-object
 	 * elapsed-time estimate would prevent the retry it is meant to make.
@@ -885,7 +905,8 @@ fast_heal_failed_faces(const ON_Brep &source, int first_face, int end_face,
 	const struct bg_tess_tol *ttol, const struct bn_tol *tol,
 	double model_diagonal, int64_t deadline,
 	std::vector<fast_cdt_face_result> &results, fast_work_budget &work_budget,
-	fast_output_budget &output_budget, std::vector<int> &recovered)
+	fast_output_budget &output_budget, std::vector<int> &recovered,
+	const fast_cdt_cancel &cancel)
 {
     /* Authoritative trim samples and source tokens belong to the original
      * topology.  An owned copy cannot silently change their identities. */
@@ -929,6 +950,8 @@ fast_heal_failed_faces(const ON_Brep &source, int first_face, int end_face,
 	return;
 
     for (int fi : healing.faces) {
+	if (cancel.requested())
+	    break;
 	if (fi < first_face || fi >= end_face)
 	    continue;
 	fast_cdt_face_result &current = results[(size_t)fi];
@@ -1118,11 +1141,12 @@ fast_assemble_faces(fast_face_mesh &output, struct brep_cdt_fast_report &summary
 }
 
 int
-brep_cdt_fast_ex(int **faces, int *face_cnt, vect_t **pnt_norms,
+brep_cdt_fast_ex_cancellable(int **faces, int *face_cnt, vect_t **pnt_norms,
 	point_t **pnts, int *pntcnt, const ON_Brep *brep, int index,
 	const struct bg_tess_tol *ttol, const struct bn_tol *tol,
 	const struct brep_cdt_fast_options *user_options,
-	struct brep_cdt_fast_report *report)
+	struct brep_cdt_fast_report *report, brep_cdt_cancel_func_t cancel_func,
+	void *cancel_data)
 {
     if (!faces || !face_cnt || !pnt_norms || !pnts || !pntcnt)
 	return BREP_CDT_FAST_ERROR;
@@ -1147,6 +1171,9 @@ brep_cdt_fast_ex(int **faces, int *face_cnt, vect_t **pnt_norms,
 
     const struct brep_cdt_fast_options options =
 	fast_resolve_options(user_options, brep_face_count);
+    const fast_cdt_cancel cancel = {cancel_func, cancel_data};
+    if (cancel.requested())
+	return BREP_CDT_FAST_CANCELLED;
 
     const int64_t start_time = bu_gettime();
     const int64_t deadline = options.max_time_ms > 0 ?
@@ -1219,12 +1246,14 @@ brep_cdt_fast_ex(int **faces, int *face_cnt, vect_t **pnt_norms,
 	&face_results, adaptive_quality ? &face_working_estimates : NULL,
 	first_face, end_face, &output_budget,
 	false, false, false, false,
-	deadline, (bool)options.allow_partial, &work_budget
+	deadline, (bool)options.allow_partial, &work_budget, cancel
     };
     if (index == -1)
 	bu_parallel(fast_cdt_face_worker, options.max_workers, &initial_state);
     else
 	fast_cdt_face_worker(0, &initial_state);
+    if (cancel.requested())
+	return BREP_CDT_FAST_CANCELLED;
     hit_time_limit = initial_state.hit_time_limit.load();
     hit_memory_limit = initial_state.hit_memory_limit.load();
     hit_point_limit = initial_state.hit_point_limit.load();
@@ -1240,18 +1269,22 @@ brep_cdt_fast_ex(int **faces, int *face_cnt, vect_t **pnt_norms,
 	    coarse_relative, options.area_change_tolerance, &face_results,
 	    &refinement, &face_boundary_boxes, &face_boundary_tolerances,
 	    &face_triangle_budgets, &face_working_estimates,
-	    0, false, false, &output_budget, false, false, deadline, &work_budget
+	    0, false, false, &output_budget, false, false, deadline, &work_budget,
+	    cancel
 	};
 	refinement_report = fast_refine_faces(refine_state, coarse_relative,
 	    requested_relative, start_time);
     }
+    if (cancel.requested())
+	return BREP_CDT_FAST_CANCELLED;
 
     if (!hit_time_limit && !hit_memory_limit && !hit_point_limit) {
 	std::vector<int> recovered;
 	try {
 	    fast_heal_failed_faces(*brep,
 		first_face, end_face, options, ttol, tol, model_diagonal,
-		deadline, face_results, work_budget, output_budget, recovered);
+		deadline, face_results, work_budget, output_budget, recovered,
+		cancel);
 	} catch (const std::bad_alloc &) {
 	    hit_memory_limit = true;
 	} catch (...) {
@@ -1277,6 +1310,9 @@ brep_cdt_fast_ex(int **faces, int *face_cnt, vect_t **pnt_norms,
 	if (deadline > 0 && bu_gettime() >= deadline)
 	    hit_time_limit = true;
     }
+
+    if (cancel.requested())
+	return BREP_CDT_FAST_CANCELLED;
 
     struct brep_cdt_fast_report summary = {};
     fast_assemble_faces(output, summary, face_results, refinement,
@@ -1319,6 +1355,17 @@ brep_cdt_fast_ex(int **faces, int *face_cnt, vect_t **pnt_norms,
     if (hit_limit)
 	return BREP_CDT_FAST_LIMIT;
     return summary.failed_faces ? BREP_CDT_FAST_PARTIAL : BREP_CDT_FAST_OK;
+}
+
+int
+brep_cdt_fast_ex(int **faces, int *face_cnt, vect_t **pnt_norms,
+	point_t **pnts, int *pntcnt, const ON_Brep *brep, int index,
+	const struct bg_tess_tol *ttol, const struct bn_tol *tol,
+	const struct brep_cdt_fast_options *options,
+	struct brep_cdt_fast_report *report)
+{
+    return brep_cdt_fast_ex_cancellable(faces, face_cnt, pnt_norms, pnts,
+	pntcnt, brep, index, ttol, tol, options, report, NULL, NULL);
 }
 
 int

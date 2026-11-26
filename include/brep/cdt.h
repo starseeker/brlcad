@@ -43,6 +43,11 @@ __BEGIN_DECLS
 /* Container that holds the state of a triangulation */
 struct ON_Brep_CDT_State;
 
+/* Return nonzero once the caller no longer needs the result and keep
+ * returning nonzero for the rest of the operation. Fast tessellation calls
+ * this from its face workers. */
+typedef int (*brep_cdt_cancel_func_t)(void *data);
+
 /* Conversion-quality tessellation result categories.  These supplement the
  * legacy integer return from ON_Brep_CDT_Tessellate with a stable reason for
  * failure. */
@@ -63,6 +68,7 @@ struct ON_Brep_CDT_State;
 #define BREP_CDT_RESULT_GEOMETRIC_FAILED -12
 #define BREP_CDT_RESULT_REPAIRED 3
 #define BREP_CDT_RESULT_REPAIR_FAILED -13
+#define BREP_CDT_RESULT_CANCELLED -14
 
 #define BREP_CDT_STAGE_NONE 0
 #define BREP_CDT_STAGE_INPUT 1
@@ -346,6 +352,12 @@ extern BREP_EXPORT void
 ON_Brep_CDT_Face_Time_Limit_Set(struct ON_Brep_CDT_State *s,
 	long max_time_ms);
 
+/** Install a cooperative cancellation callback. Set it before tessellation
+ * or repair begins and retain its data until the operation returns. */
+extern BREP_EXPORT void
+ON_Brep_CDT_Cancel_Set(struct ON_Brep_CDT_State *s,
+	brep_cdt_cancel_func_t cancel, void *data);
+
 /** Return the ON_Brep associated with state s. */
 extern BREP_EXPORT void *
 ON_Brep_CDT_Brep(struct ON_Brep_CDT_State *s);
@@ -578,6 +590,7 @@ struct brep_cdt_fast_report {
 #define BREP_CDT_FAST_PARTIAL 1
 #define BREP_CDT_FAST_ERROR -1
 #define BREP_CDT_FAST_LIMIT -2
+#define BREP_CDT_FAST_CANCELLED -3
 
 /**
  * Initialize display-quality CDT options with library defaults.
@@ -631,6 +644,16 @@ brep_cdt_fast_ex(int **faces, int *face_cnt, vect_t **pnt_norms,
 	const struct bg_tess_tol *ttol, const struct bn_tol *tol,
 	const struct brep_cdt_fast_options *options,
 	struct brep_cdt_fast_report *report);
+
+/** As above, with a cooperative cancellation callback. Cancellation returns
+ * BREP_CDT_FAST_CANCELLED without publishing mesh output. */
+extern BREP_EXPORT int
+brep_cdt_fast_ex_cancellable(int **faces, int *face_cnt, vect_t **pnt_norms,
+	point_t **pnts, int *pntcnt, const ON_Brep *brep, int index,
+	const struct bg_tess_tol *ttol, const struct bn_tol *tol,
+	const struct brep_cdt_fast_options *options,
+	struct brep_cdt_fast_report *report, brep_cdt_cancel_func_t cancel,
+	void *data);
 #endif
 
 __END_DECLS

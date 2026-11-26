@@ -1863,10 +1863,10 @@ struct repair_fast_mesh {
 	    const brep_cdt_fast_options &options)
     {
 	bn_tol model_tolerance = BN_TOL_INIT_TOL;
-	result = brep_cdt_fast_ex(cdt_array_address(faces), &face_count,
+	result = brep_cdt_fast_ex_cancellable(cdt_array_address(faces), &face_count,
 	    cdt_array_address(normals), cdt_array_address(points),
 	    &point_count, state->orig_brep, face, &state->tol,
-	    &model_tolerance, &options, &report);
+	    &model_tolerance, &options, &report, state->cancel, state->cancel_data);
 	resource_limits = repair_fast_resource_limits(report);
     }
 
@@ -2514,6 +2514,8 @@ repair_attempt::retain_adaptive_faces()
 	    settings->use_fast_face_fallback &&
 	    settings->mesh.allow_self_intersections) {
 	for (int failed_face : failed_faces) {
+	    if (cdt_cancelled(s_cdt))
+		return;
 	    const auto diagnostic =
 		s_cdt->failed_face_diagnostics.find(failed_face);
 	    const auto mesh = s_cdt->fmeshes.find(failed_face);
@@ -2580,6 +2582,8 @@ repair_attempt::recover_clean_charts()
 	    settings->max_surface_deviation > 0.0 ?
 	    settings->max_surface_deviation : s_cdt->absmax;
 	for (int failed_face : failed_faces) {
+	    if (cdt_cancelled(s_cdt))
+		return;
 	    if (assembly.reconstructed_faces.find(failed_face) !=
 		    assembly.reconstructed_faces.end())
 		continue;
@@ -2623,6 +2627,8 @@ repair_attempt::recover_surface_patches()
 	    (INT64_MAX - strip_start) / 1000 ? strip_start +
 	    (int64_t)settings->max_fast_time_ms * 1000 : INT64_MAX;
 	for (int failed_face : failed_faces) {
+	    if (cdt_cancelled(s_cdt))
+		return;
 	    if (assembly.reconstructed_faces.find(failed_face) !=
 		    assembly.reconstructed_faces.end())
 		continue;
@@ -2754,6 +2760,8 @@ repair_attempt::recover_topological_disks()
 	    settings->use_fast_face_fallback && !failed_faces.empty()) {
 	const int64_t disk_start = bu_gettime();
 	for (int failed_face : failed_faces) {
+	    if (cdt_cancelled(s_cdt))
+		return;
 	    if (assembly.reconstructed_faces.find(failed_face) !=
 		    assembly.reconstructed_faces.end())
 		continue;
@@ -2869,6 +2877,8 @@ repair_attempt::recover_display_faces()
 	size_t fast_points_used = 0;
 	size_t fast_bytes_used = 0;
 	for (int failed_face : failed_faces) {
+	    if (cdt_cancelled(s_cdt))
+		return;
 	    if (assembly.reconstructed_faces.find(failed_face) !=
 		    assembly.reconstructed_faces.end())
 		continue;
@@ -4684,16 +4694,16 @@ repair_attempt::publish()
 int
 repair_attempt::run()
 {
-    if (prepare_input() < 0)
+    if (cdt_cancelled(s_cdt) || prepare_input() < 0)
 	return -1;
     retain_adaptive_faces();
     recover_clean_charts();
     recover_surface_patches();
     recover_topological_disks();
-    if (recover_full_display() < 0)
+    if (cdt_cancelled(s_cdt) || recover_full_display() < 0)
 	return -1;
     recover_display_faces();
-    if (prepare_boundary_repair() < 0)
+    if (cdt_cancelled(s_cdt) || prepare_boundary_repair() < 0)
 	return -1;
     trace_input();
     if (repair_boundaries() < 0 || repair_mesh() < 0 ||
@@ -4701,7 +4711,7 @@ repair_attempt::run()
 	    preserve_rigorous_triangles() < 0 || validate_area() < 0 ||
 	    validate_surface() < 0 || validate_coverage() < 0)
 	return -1;
-    return publish();
+    return cdt_cancelled(s_cdt) ? -1 : publish();
 }
 
 } // namespace
@@ -4937,9 +4947,13 @@ ON_Brep_CDT_Repair(struct ON_Brep_CDT_State *s_cdt,
 	const struct brep_cdt_repair_settings *settings,
 	struct brep_cdt_repair_report *report)
 {
+    if (cdt_cancelled(s_cdt))
+	return -1;
     struct brep_cdt_repair_report local_report = BREP_CDT_REPAIR_REPORT_INIT;
     struct brep_cdt_repair_report *active = report ? report : &local_report;
     const int original_result = brep_cdt_repair(s_cdt, settings, active);
+    if (cdt_cancelled(s_cdt))
+	return -1;
     if (original_result >= 0 || !s_cdt || !s_cdt->orig_brep || !settings ||
 	!settings->try_invalid_brep || settings->use_full_fast_fallback ||
 	active->source_diagnostic.result != BREP_CDT_RESULT_INVALID_BREP)
@@ -4971,6 +4985,7 @@ ON_Brep_CDT_Repair(struct ON_Brep_CDT_State *s_cdt,
 	ON_Brep_CDT_Create(healing.brep.get(), s_cdt->name), ON_Brep_CDT_Destroy);
     ON_Brep_CDT_Tol_Set(candidate.get(), &s_cdt->tol);
     ON_Brep_CDT_Face_Time_Limit_Set(candidate.get(), s_cdt->max_face_time_ms);
+    ON_Brep_CDT_Cancel_Set(candidate.get(), s_cdt->cancel, s_cdt->cancel_data);
     ON_Brep_CDT_Tessellate(candidate.get(), 0, NULL);
 
     struct provenance_capture {

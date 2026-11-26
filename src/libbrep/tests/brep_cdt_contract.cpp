@@ -703,6 +703,44 @@ main(int argc, const char **argv)
 	first.faces == second.faces && first.vertices == second.vertices;
 
     bool unused_edge = first_ok && unused_edge_contract(*bi->brep, tolerance, first);
+    const auto cancel_after_poll = [](void *data) -> int {
+	int &remaining_polls = *static_cast<int *>(data);
+	if (remaining_polls > 0)
+	    --remaining_polls;
+	return remaining_polls == 0;
+    };
+    int remaining_polls = 4;
+    ON_Brep_CDT_Cancel_Set(state, cancel_after_poll, &remaining_polls);
+    mesh_output cancelled_mesh;
+    const bool cancelled = ON_Brep_CDT_Tessellate(state, 0, NULL) == -1 &&
+	ON_Brep_CDT_Diagnostic(&diagnostic, state) == 0 &&
+	diagnostic.result == BREP_CDT_RESULT_CANCELLED &&
+	!mesh_get(cancelled_mesh, state);
+    ON_Brep_CDT_Cancel_Set(state, NULL, NULL);
+    const bool resumed = ON_Brep_CDT_Tessellate(state, 0, NULL) == 0;
+
+    struct brep_cdt_fast_options fast_options;
+    brep_cdt_fast_options_default(&fast_options);
+    fast_options.max_workers = 1;
+    remaining_polls = 2;
+    int *fast_faces = NULL;
+    int fast_face_count = 0;
+    vect_t *fast_normals = NULL;
+    point_t *fast_points = NULL;
+    int fast_point_count = 0;
+    const struct bn_tol geometric = BN_TOL_INIT_TOL;
+    const bool fast_cancelled = brep_cdt_fast_ex_cancellable(&fast_faces,
+	&fast_face_count, &fast_normals, &fast_points, &fast_point_count,
+	bi->brep, -1, &tolerance, &geometric, &fast_options, NULL,
+	cancel_after_poll, &remaining_polls) ==
+	BREP_CDT_FAST_CANCELLED && !fast_faces && !fast_normals && !fast_points;
+    if (fast_faces)
+	bu_free(fast_faces, "fast cancelled faces");
+    if (fast_normals)
+	bu_free(fast_normals, "fast cancelled normals");
+    if (fast_points)
+	bu_free(fast_points, "fast cancelled points");
+
     bool empty_rejected = empty_mesh_contract();
     bool untrimmed_tree = untrimmed_surface_tree_contract();
     bool repaired = repair_contract();
@@ -746,7 +784,8 @@ main(int argc, const char **argv)
 	diagnostic.stage == BREP_CDT_STAGE_TOPOLOGY;
     ON_Brep_CDT_Destroy(state);
 
-    return initial && first_ok && second_ok && unused_edge && empty_rejected &&
+    return initial && first_ok && second_ok && cancelled && resumed &&
+	fast_cancelled && unused_edge && empty_rejected &&
 	untrimmed_tree && repaired && local_surface_repaired &&
 	relaxed_fidelity_settings && relaxed_fidelity_acceptance &&
 	relaxed_invalid && relaxed_outer &&

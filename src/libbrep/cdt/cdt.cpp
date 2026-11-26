@@ -140,6 +140,8 @@ refine_triangulation(struct ON_Brep_CDT_State *s_cdt, cdt_mesh_t *fmesh,
     if (!s_cdt || !fmesh) return false;
 
     const auto time_limit_reached = [&]() {
+	if (cdt_cancelled(s_cdt))
+	    return true;
 	if (!s_cdt->face_deadline || bu_gettime() < s_cdt->face_deadline)
 	    return false;
 	const std::string message = "rigorous face triangulation exceeded its " +
@@ -477,7 +479,8 @@ do_triangulation(struct ON_Brep_CDT_State *s_cdt, int fi)
     }
 
     if (!fmesh->cdt()) {
-	bu_log("Face %d: initial CDT (fmesh->cdt) FAILED\n", face.m_face_index);
+	if (!cdt_cancelled(s_cdt))
+	    bu_log("Face %d: initial CDT (fmesh->cdt) FAILED\n", face.m_face_index);
 	return false;
     }
 
@@ -1862,6 +1865,8 @@ validate_tessellation_input(struct ON_Brep_CDT_State *s_cdt,
 static bool
 initialize_tessellation(struct ON_Brep_CDT_State *s_cdt, bool try_invalid_brep)
 {
+    if (cdt_cancelled(s_cdt))
+	return false;
     // We may be changing the ON_Brep data, so work on a copy
     // rather than the original object
     s_cdt->brep = new ON_Brep(*s_cdt->orig_brep);
@@ -1947,16 +1952,22 @@ initialize_tessellation(struct ON_Brep_CDT_State *s_cdt, bool try_invalid_brep)
     // length, it is difficult to mesh them successfully.  Refine edges that
     // are close to other edges.
     refine_close_edges(s_cdt);
+    if (cdt_cancelled(s_cdt))
+	return false;
 
     // On to tolerance based splitting.  Process the non-linear edges first -
     // we will need information from them to handle the linear edges
     tol_curved_edges_split(s_cdt);
+    if (cdt_cancelled(s_cdt))
+	return false;
 
     // After the initial curve split, make another pass looking for curved
     // edges sharing a vertex.  We want larger curves to refine close to the
     // median segment length of the smaller ones, since this situation can be a
     // sign that the surface will generate small triangles near large ones.
     curved_edges_refine(s_cdt);
+    if (cdt_cancelled(s_cdt))
+	return false;
 
     // Now, process the linear edges
     char message[256] = {0};
@@ -2041,6 +2052,8 @@ triangulate_selected_faces(struct ON_Brep_CDT_State *s_cdt,
     int first_failed_face = -1;
     int fc = ((face_cnt == 0) || !faces) ? s_cdt->brep->m_F.Count() : face_cnt;
     for (int i = 0; i < fc; i++) {
+	if (cdt_cancelled(s_cdt))
+	    return -1;
 	int fi = ((face_cnt == 0) || !faces) ? i : faces[i];
 	const auto inconsistent = s_cdt->inconsistent_edge_faces.find(fi);
 	bool face_triangulated = false;
@@ -2055,6 +2068,8 @@ triangulate_selected_faces(struct ON_Brep_CDT_State *s_cdt,
 	} else {
 	    face_triangulated = do_triangulation(s_cdt, fi);
 	}
+	if (cdt_cancelled(s_cdt))
+	    return -1;
 	if (face_triangulated) {
 	    face_successes++;
 	} else {
@@ -2131,6 +2146,8 @@ certify_assembled_mesh(struct ON_Brep_CDT_State *s_cdt, int face_successes)
     size_t assembled_refinement_points = 0;
     int assembled_refinement_attempts = 0;
     while (true) {
+	if (cdt_cancelled(s_cdt))
+	    return -1;
 	if (!assemble_face_meshes(output, s_cdt)) {
 	    s_cdt->status = BREP_CDT_FAILED;
 	    cdt_diagnostic_set(s_cdt, BREP_CDT_RESULT_MESH_EXPORT_FAILED,
@@ -2269,16 +2286,24 @@ brep_cdt_tessellate(struct ON_Brep_CDT_State *s_cdt, int face_cnt,
     cdt_diagnostic_set(s_cdt, BREP_CDT_RESULT_INITIALIZATION_FAILED,
 	BREP_CDT_STAGE_INPUT, -1, 0, 0, "tessellation started");
 
-    if (!validate_tessellation_input(s_cdt, face_cnt, faces, try_invalid_brep) ||
-	!initialize_tessellation(s_cdt, try_invalid_brep))
-	return -1;
-
     int face_successes = 0;
-    const int result = triangulate_selected_faces(s_cdt, face_cnt, faces,
-	face_successes);
-    if (result)
-	return result;
-    return certify_assembled_mesh(s_cdt, face_successes);
+    int result = -1;
+    if (!cdt_cancelled(s_cdt) &&
+	validate_tessellation_input(s_cdt, face_cnt, faces, try_invalid_brep) &&
+	initialize_tessellation(s_cdt, try_invalid_brep)) {
+	result = triangulate_selected_faces(s_cdt, face_cnt, faces, face_successes);
+	if (!result)
+	    result = certify_assembled_mesh(s_cdt, face_successes);
+    }
+    if (cdt_cancelled(s_cdt)) {
+	s_cdt->certified.clear();
+	s_cdt->status = BREP_CDT_FAILED;
+	cdt_diagnostic_set(s_cdt, BREP_CDT_RESULT_CANCELLED,
+	    s_cdt->diagnostic.stage, -1, face_successes, 0,
+	    "tessellation cancelled");
+	return -1;
+    }
+    return result;
 }
 
 int
@@ -2504,6 +2529,8 @@ ON_Brep_CDT_Mesh(
 	*normals = NULL;
 	*ncnt = 0;
     }
+    if (s_cdt->diagnostic.result == BREP_CDT_RESULT_CANCELLED)
+	return -1;
 
     const bool full_mesh = !exp_face_cnt || !exp_faces;
     const bool no_normals = !face_normals && !fn_cnt && !normals && !ncnt;

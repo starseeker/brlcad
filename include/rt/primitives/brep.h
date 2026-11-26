@@ -34,6 +34,7 @@
 __BEGIN_DECLS
 
 struct rt_primitive_lod_realization;
+struct rt_primitive_indexed_face_set;
 
 /* BREP drawing routines */
 RT_EXPORT extern int rt_brep_wireframe_line_set(struct rt_primitive_lod_realization *realization,
@@ -44,6 +45,13 @@ RT_EXPORT extern int rt_brep_plot(struct bu_list                *vhead,
 				  const struct bg_tess_tol       *ttol,
 				  const struct bn_tol            *tol,
 				  const struct bv_view_info *info);
+
+/* The callback is polled during tessellation and may be called from workers.
+ * A nonzero result abandons the mesh and returns BRLCAD_ERROR. */
+RT_EXPORT extern int rt_brep_indexed_face_set_cancellable(
+	struct rt_primitive_indexed_face_set *face_set,
+	struct rt_db_internal *ip, const struct bg_tess_tol *ttol,
+	const struct bn_tol *tol, int (*cancel)(void *), void *data);
 /* BREP validity test */
 /* Preserved intended solid whose reconstruction is incomplete.  Clear
  * this marker only after repairing and validating its solid semantics. */

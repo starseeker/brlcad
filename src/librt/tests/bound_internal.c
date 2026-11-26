@@ -28,6 +28,15 @@
 #include "rt/display_bounds.h"
 #include "wdb.h"
 
+static int
+cancel_after_object(void *data)
+{
+    int *remaining = (int *)data;
+    if (*remaining > 0)
+	--*remaining;
+    return *remaining == 0;
+}
+
 
 int
 main(int UNUSED(argc), const char **argv)
@@ -113,6 +122,13 @@ main(int UNUSED(argc), const char **argv)
 		BRLCAD_OK)
 	    goto done;
 	if (!VNEAR_EQUAL(bmin, shifted_min, BN_TOL_DIST) ||
+	    !VNEAR_EQUAL(bmax, shifted_max, BN_TOL_DIST))
+	    goto done;
+	int remaining = 2;
+	if (rt_display_bounds_cancellable(NULL, dbip, 1, paths, bmin, bmax,
+		cancel_after_object, &remaining) != BRLCAD_ERROR ||
+	    remaining ||
+	    !VNEAR_EQUAL(bmin, shifted_min, BN_TOL_DIST) ||
 	    !VNEAR_EQUAL(bmax, shifted_max, BN_TOL_DIST))
 	    goto done;
     }

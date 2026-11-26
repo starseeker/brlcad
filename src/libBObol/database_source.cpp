@@ -64,6 +64,7 @@
 #include "rt/display_bounds.h"
 #include "rt/eval_wireframe.h"
 #include "rt/primitives/annot.h"
+#include "rt/primitives/brep.h"
 #include "rt/tree.h"
 #include "rt/vlist.h"
 #include "rt/view.h"
@@ -4045,13 +4046,20 @@ local_bounds_from_internal(struct rt_db_internal *intern, SbBox3f &bounds)
     return bounds.isEmpty() ? FALSE : TRUE;
 }
 
+static int
+source_stream_cancelled(void *data)
+{
+    return static_cast<BObolCompactOccurrenceStream *>(data)->isCancelled();
+}
+
 /* Obtain a representation-independent, Boolean-aware bound for one database
  * path without constructing raytracing regions or acceleration structures.
  * This remains detached-worker work: primitive fallback plotting and nested
  * combination imports do not belong on the GUI publication path. */
 static SbBool
 source_bounds_from_database_path(SoBRLDatabaseSource *source,
-	const char *path, SbBox3f &bounds)
+	const char *path, SbBox3f &bounds,
+	BObolCompactOccurrenceStream *stream = nullptr)
 {
     bounds.makeEmpty();
     struct db_i *dbip = source ? source->getDatabase() : NULL;
@@ -4062,7 +4070,8 @@ source_bounds_from_database_path(SoBRLDatabaseSource *source,
     point_t bmax;
     struct bu_vls messages = BU_VLS_INIT_ZERO;
     const char *paths[1] = {path};
-    const int ret = rt_display_bounds(&messages, dbip, 1, paths, bmin, bmax);
+    const int ret = rt_display_bounds_cancellable(&messages, dbip, 1, paths,
+	bmin, bmax, stream ? source_stream_cancelled : nullptr, stream);
     bu_vls_free(&messages);
     if (ret != BRLCAD_OK || !point_bbox_valid(bmin, bmax))
 	return FALSE;
@@ -5174,7 +5183,8 @@ static std::shared_ptr<BObolStagedSourceMesh>
 cad_staged_mesh_from_primitive_face_set(
     struct db_i *dbip, struct directory *dp, struct rt_db_internal *intern,
     const struct bg_tess_tol *ttol, const struct bn_tol *tol,
-    uint32_t sourceRevision, BObolSourceMeshRequest &request)
+    uint32_t sourceRevision, BObolSourceMeshRequest &request,
+    int (*cancel)(void *) = nullptr, void *cancelData = nullptr)
 {
     request.clear();
     if (!dbip || !dp || !internal_payload_magic_valid(intern) ||
@@ -5184,8 +5194,15 @@ cad_staged_mesh_from_primitive_face_set(
     struct rt_primitive_indexed_face_set faceSet;
     struct bv_view_info viewInfo = BV_VIEW_INFO_INIT;
     memset(&faceSet, 0, sizeof(faceSet));
-    if (intern->idb_meth->ft_indexed_face_set(&faceSet, intern, ttol, tol,
-	    &viewInfo) != BRLCAD_OK) {
+    int result;
+    if (cancel && intern->idb_type == ID_BREP) {
+	result = rt_brep_indexed_face_set_cancellable(&faceSet, intern, ttol, tol,
+	    cancel, cancelData);
+    } else {
+	result = intern->idb_meth->ft_indexed_face_set(&faceSet, intern, ttol, tol,
+	    &viewInfo);
+    }
+    if (result != BRLCAD_OK || (cancel && cancel(cancelData))) {
 	primitive_indexed_face_set_free(&faceSet);
 	return std::shared_ptr<BObolStagedSourceMesh>();
     }
@@ -5263,10 +5280,11 @@ std::shared_ptr<BObolStagedSourceMesh>
 bobol_database_brep_staged_mesh_variant(
     struct db_i *dbip, const char *name, const struct bg_tess_tol *ttol,
     uint64_t contentKey, uint32_t sourceRevision,
-    BObolSourceMeshRequest &request)
+    BObolSourceMeshRequest &request, int (*cancel)(void *), void *cancelData)
 {
     request.clear();
-    if (!dbip || !name || !name[0] || !ttol || !contentKey)
+    if (!dbip || !name || !name[0] || !ttol || !contentKey ||
+	(cancel && cancel(cancelData)))
 	return std::shared_ptr<BObolStagedSourceMesh>();
     struct directory *dp = db_lookup(dbip, name, LOOKUP_QUIET);
     if (!dp || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BREP)
@@ -5278,7 +5296,8 @@ bobol_database_brep_staged_mesh_variant(
     const struct bn_tol tol = BN_TOL_INIT_TOL;
     std::shared_ptr<BObolStagedSourceMesh> staged =
 	cad_staged_mesh_from_primitive_face_set(
-	    dbip, dp, &intern, ttol, &tol, sourceRevision, request);
+	    dbip, dp, &intern, ttol, &tol, sourceRevision, request,
+	    cancel, cancelData);
     rt_db_free_internal(&intern);
     if (!staged)
 	return staged;
@@ -7052,7 +7071,10 @@ realize_direct_leaf_mesh_compact(
 		    std::shared_ptr<BObolStagedSourceMesh> staged =
 			cad_staged_mesh_from_primitive_face_set(
 			    dbip, dp, &validInternal.local, &ttol, &tol,
-			    revision, sourceMeshRequest);
+			    revision, sourceMeshRequest,
+			    stream ? source_stream_cancelled : nullptr, stream);
+		    if (stream && stream->isCancelled())
+			return 0;
 		    if (staged) {
 			sourceMeshRequest.meshAssetPath = fullPath.c_str();
 			sourceMeshRequest.meshAssetName = dp->d_namep;
@@ -15726,8 +15748,9 @@ compact_stream_publish_parallel_coverage(
 		std::shared_ptr<BObolStagedSourceMesh> staged =
 		    cad_staged_mesh_from_primitive_face_set(
 			source->getDatabase(), asset.dp, &intern, &ttol, &tol,
-			revision, asset.sourceMeshRequest);
-		if (staged) {
+			revision, asset.sourceMeshRequest, source_stream_cancelled,
+			stream);
+		if (staged && !stream->isCancelled()) {
 		    asset.realizedSourceType = "brep";
 		    asset.sourceMeshRequest.meshAssetPath =
 			asset.assetPath.c_str();
@@ -16189,7 +16212,7 @@ compact_stream_publish_parallel_coverage(
 	if (!terminalBoundsExact) {
 	    SbBox3f semanticBounds;
 	    if (source_bounds_from_database_path(source, treeName,
-		    semanticBounds)) {
+		    semanticBounds, stream)) {
 		terminalBounds = semanticBounds;
 		terminalBoundsExact = true;
 	    }
@@ -16210,6 +16233,8 @@ compact_stream_publish_parallel_coverage(
 	    stream->setCoverageBoundsComplete(true);
 	}
     }
+    if (stream->isCancelled())
+	return -1;
     const int64_t coverageCompleted = bu_gettime();
     if (getenv("BOBOL_DRAW_TIMING"))
 	bu_log("[obol-timing] coverage bounds: %.1f ms; %zu occurrences, "
