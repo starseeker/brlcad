@@ -167,6 +167,7 @@ controller_structural_frontier_identity(
 
 enum class ControllerStructuralSelectionMode {
     UNCOLLAPSED,
+    READY_UNCOLLAPSED,
     ABOVE_PIXEL_THRESHOLD
 };
 
@@ -200,9 +201,9 @@ controller_select_structural_occurrences(
 	    continue;
 
 	const std::vector<Obol::InstanceId> occurrences =
-	    mode == ControllerStructuralSelectionMode::UNCOLLAPSED ?
-		assembly->lastUncollapsedStructuralProxyInstances() :
-		assembly->lastStructuralProxyInstancesAbovePixels(pixelThreshold);
+	    mode == ControllerStructuralSelectionMode::ABOVE_PIXEL_THRESHOLD ?
+		assembly->lastStructuralProxyInstancesAbovePixels(pixelThreshold) :
+		assembly->lastUncollapsedStructuralProxyInstances();
 
 	std::vector<size_t> entryIndices;
 	entryIndices.reserve(occurrences.size());
@@ -234,6 +235,15 @@ controller_select_structural_occurrences(
 	selection.totalOccurrenceCount = entryIndices.size() >
 	    SIZE_MAX - selection.totalOccurrenceCount ? SIZE_MAX :
 	    selection.totalOccurrenceCount + entryIndices.size();
+	if (mode == ControllerStructuralSelectionMode::READY_UNCOLLAPSED) {
+	    entryIndices.erase(std::remove_if(entryIndices.begin(),
+		entryIndices.end(), [source](size_t index) {
+		    BObolCompactLodPlanningSummary summary;
+		    return !source->getCompactLodPlanningSummary(
+			static_cast<int>(index), summary) ||
+			!summary.sourceMeshRequestValid;
+		}), entryIndices.end());
+	}
 	const size_t remainingPlanCapacity =
 	    selection.plannedOccurrenceCount >= maximumPlannedOccurrences ? 0 :
 	    maximumPlannedOccurrences - selection.plannedOccurrenceCount;
@@ -1825,19 +1835,31 @@ BObolViewController::advanceStableLodReducerIfReady(void)
      * patched without changing the visible fallback population.  It is
      * therefore not a legal retry identity: keying admission to that revision
      * let a no-op source pass re-arm itself before the pending framebuffer was
-     * presented.  Resolve and hash the actual occurrence frontier instead.
+     * presented.  Key admission to the occurrence frontier. While source
+     * preparation is live, omit boxes that cannot yet submit mesh work so new
+     * requests can advance the frontier without changing the projected boxes.
      * This same plan is transferred to submission below, so collection and
      * admission cannot disagree about which boxes the transaction owns. */
     ControllerStructuralSelection structuralRepairSelection;
     if (structuralRepairReady)
 	structuralRepairSelection = controller_select_structural_occurrences(
 	    this, viewLodState,
-	    ControllerStructuralSelectionMode::UNCOLLAPSED);
+	    externalProducersSettled ?
+		ControllerStructuralSelectionMode::UNCOLLAPSED :
+		ControllerStructuralSelectionMode::READY_UNCOLLAPSED);
     const bool exactStructuralFrontier =
 	structuralRepairSelection.exact &&
 	structuralRepairSelection.totalOccurrenceCount ==
 	    presentedStructuralBoxes &&
 	structuralRepairSelection.totalOccurrenceCount > 0;
+    if (structuralRepairReady && !externalProducersSettled &&
+	(!exactStructuralFrontier || !structuralRepairSelection.plannedOccurrenceCount)) {
+	(void)this->d->lodCoveragePolicy.parkDemandCensusForProvider();
+	this->d->retireRetainedRefinementObservation();
+	return;
+    }
+    const size_t structuralRepairCount = externalProducersSettled ?
+	unresolvedStructuralCount : structuralRepairSelection.plannedOccurrenceCount;
     const uint64_t structuralFrontierIdentity =
 	controller_structural_frontier_identity(
 	    structuralProjection, structuralRepairSelection.plans);
@@ -1857,7 +1879,7 @@ BObolViewController::advanceStableLodReducerIfReady(void)
 	inputs.viewRevision = this->d->lodViewRevision.value();
 	inputs.policyRevision = this->d->lodPolicyRevision.value();
 	inputs.frontierIdentity = structuralFrontierIdentity;
-	inputs.unresolvedCount = unresolvedStructuralCount;
+	inputs.unresolvedCount = structuralRepairCount;
 	inputs.activeCost = activePopulationCost;
 	inputs.currentBudget = this->d->lodAdmissionEvidence.capacity().currentBudget();
 	inputs.certifiedBudget = structuralCertifiedBudget;
@@ -1876,7 +1898,7 @@ BObolViewController::advanceStableLodReducerIfReady(void)
 	    const size_t provisionalReservation =
 		BObolLodAdmissionPlanner::structuralPerOccurrenceReservation(
 		    admittedBudget, activePopulationCost,
-		    unresolvedStructuralCount);
+		    structuralRepairCount);
 	    if (getenv("BOBOL_LOD_TRACE_STRUCTURAL_BUDGET"))
 		bu_log("BObol LoD structural capacity boxes=%zu "
 		       "unaggregatable=%zu active=%zu current=%zu "
@@ -1942,18 +1964,18 @@ BObolViewController::advanceStableLodReducerIfReady(void)
 	    this->d->lodSubmissionDelta.reset();
 	if (getenv("BOBOL_LOD_TRACE_STRUCTURAL_REPAIR"))
 	bu_log("BObol LoD structural repair frontier boxes=%zu "
-	       "mapped=%zu exact=%d sources=%zu\n",
+	       "mapped=%zu planned=%zu exact=%d sources=%zu\n",
 	       presentedStructuralBoxes,
 	       structuralRepairSelection.totalOccurrenceCount,
+	       structuralRepairSelection.plannedOccurrenceCount,
 	       exactStructuralFrontier ? 1 : 0,
 	       this->d->lodSubmissionDelta.planCount());
 	this->d->lodSubmissionIntent.configure(true, false);
 	if (terminalProxyRepair)
 	    this->d->lodStructuralRepair.beginTerminalProxy(
-		presentedStructuralBoxes - terminalOccurrenceFailures);
+		structuralRepairCount);
 	else
-	    this->d->lodStructuralRepair.begin(
-		presentedStructuralBoxes - terminalOccurrenceFailures);
+	    this->d->lodStructuralRepair.begin(structuralRepairCount);
 	/* This accumulator belongs to the newly closed repair transaction.  A
 	 * prior coverage/demand pass may have exhausted its budget while the
 	 * renderer was still classifying boxes; carrying that debt into this exact

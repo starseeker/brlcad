@@ -10440,7 +10440,7 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
  * compact_index_replace_entry_geometry. */
 static bool
 compact_index_merge_source_contract(BObolCompactInstanceIndex &index,
-	size_t entryIdx, const BObolCompactOccurrence &occurrence)
+    size_t entryIdx, const BObolCompactOccurrence &occurrence)
 {
     if (entryIdx >= index.entries.size())
 	return false;
@@ -10466,16 +10466,9 @@ compact_index_merge_source_contract(BObolCompactInstanceIndex &index,
     }
     if (!changed)
 	return false;
-    /* Source semantics become authoritative with the request, but the
-     * currently drawn arrays, proxy transform, placement, part, and runtime
-     * visibility/selection state remain untouched.  The unresolved-LoD role
-     * is nevertheless an occurrence presentation property: it must reach the
-     * retained assembly so convergence cannot mistake this box for authored
-     * geometry.  Advance the existing sparse record revision and let Obol's
-     * instance-attribute journal patch the one flag without rebuilding the
-     * shared part or frame plan. */
-    entry.geometryRevision =
-	compact_next_revision(entry.geometryRevision);
+    /* The request can change projected mesh bounds even when the displayed
+     * part and its placement stay the same. Invalidate LoD planning. */
+    entry.geometryRevision = compact_next_revision(entry.geometryRevision);
     entry.shapeSummary.shapeKind = occurrence.summary.shapeKind;
     entry.shapeSummary.sourceType = occurrence.summary.sourceType;
     entry.shapeSummary.sourceId = occurrence.summary.sourceId;
@@ -10484,6 +10477,7 @@ compact_index_merge_source_contract(BObolCompactInstanceIndex &index,
     previous.~BObolCompactInstanceEntry();
     new (&previous) BObolCompactInstanceEntry(std::move(entry));
     compact_index_count_entry(index, previous, 1);
+    /* Publish a changed unresolved-LoD role even when the box is shared. */
     if (entryIdx < index.instances.size())
 	index.instances[entryIdx].record.lodStructuralProxy =
 	    previous.geometry && previous.geometry->structuralProxy &&
@@ -10544,6 +10538,8 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
     bool overviewArrived = false;
     std::vector<size_t> changedEntries;
     changedEntries.reserve(occurrences.size());
+    std::vector<size_t> presentationEntries;
+    presentationEntries.reserve(occurrences.size());
     const bool denyPartialMerge = occurrences.size() > 1 &&
 	bobol_transaction_fault_requested(
 	    BObolTransactionFaultPoint::SOURCE_STREAM_PARTIAL_MERGE_AFTER_COMPLETION);
@@ -10562,8 +10558,10 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
 	    this->d->compactOverviewState =
 		BObolCompactOccurrenceRegistryState::OverviewState::RetirementPending;
 	this->d->compactOccurrenceRegistry = TRUE;
-	this->markCompiledAssemblyDirty();
-	this->markCadBatchDirty(changedEntries);
+	if (!presentationEntries.empty()) {
+	    this->markCompiledAssemblyDirty();
+	    this->markCadBatchDirty(presentationEntries);
+	}
 	this->markDisplayMeshLodDirty(changedEntries,
 	    index.entries.size() > firstNew ? TRUE : FALSE);
 	if (mergedSourceContract) {
@@ -10573,7 +10571,7 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
 	    this->d->displayMeshLodContractInputsRevision =
 		this->inputsRevision.getValue();
 	}
-	if (committed)
+	if (committed && !presentationEntries.empty())
 	    committed(context);
 	SbBox3f bounds;
 	if (!this->hasExactSourceBounds() &&
@@ -10620,17 +10618,32 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
 		if (newTier < oldTier ||
 		(newTier == oldTier && !richerDataContract))
 		    continue;
-		const bool replaceGeometry = evolvingOverview ||
-		authoritativeGeometry;
+		/* Tessellation can make a mesh request available without
+		 * changing the box already on screen. Keep its presented
+		 * projection usable while other leaves are being prepared. */
+		const bool preservePresentation = !wasOverview && !isOverview &&
+		    newTier == oldTier && !existing.sourceMeshRequestValid &&
+		    occurrence.sourceMeshRequestValid && existing.geometry &&
+		    existing.geometry == occurrence.geometry &&
+		    existing.geometry->structuralProxy && existing.lodBacked &&
+		    occurrence.lodBacked &&
+		    existing.viewDependentCsgGeometry ==
+			occurrence.viewDependentCsgGeometry &&
+		    existing.geometryTransform == occurrence.geometryTransform &&
+		    existing.placementTransform == occurrence.localTransform;
+		const bool replaceGeometry = !preservePresentation &&
+		    (evolvingOverview || authoritativeGeometry);
 		const bool merged = newTier == oldTier && !replaceGeometry ?
-		compact_index_merge_source_contract(index, found->second,
-		    occurrence) :
-		compact_index_replace_entry_geometry(this, index,
-		    found->second, occurrence, *this->d);
+		    compact_index_merge_source_contract(index, found->second,
+			occurrence) :
+		    compact_index_replace_entry_geometry(this, index,
+			found->second, occurrence, *this->d);
 		if (merged) {
 		    overviewArrived = overviewArrived || isOverview;
 		    changed++;
 		    changedEntries.push_back(found->second);
+		    if (!preservePresentation)
+			presentationEntries.push_back(found->second);
 		    if (occurrence.sourceMeshRequestValid)
 		        mergedSourceContract = true;
 		}
@@ -10648,6 +10661,7 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
 	    overviewArrived = overviewArrived || isOverview;
 	    changed++;
 	    changedEntries.push_back(index.entries.size() - 1);
+	    presentationEntries.push_back(index.entries.size() - 1);
 	    if (occurrence.sourceMeshRequestValid)
 		mergedSourceContract = true;
 	}
@@ -14089,7 +14103,24 @@ struct compact_coverage_asset {
 struct compact_coverage_work_item {
     compact_coverage_asset *asset = NULL;
     compact_coverage_occurrence occurrence;
+    double projectedAreaUpperBound = 0.0;
 };
+
+/* The detached producer has no current camera. Source-space box face area
+ * still ranks prominent occurrences ahead of traversal-order detail without
+ * tying the preparation queue to a camera that can move while it runs. */
+static double
+compact_coverage_detail_priority(const SbBox3f &bounds)
+{
+    if (bounds.isEmpty())
+	return 0.0;
+    const SbVec3f size = bounds.getSize();
+    const double x = size[0];
+    const double y = size[1];
+    const double z = size[2];
+    const double area = x * y + y * z + z * x;
+    return std::isfinite(area) ? area : 0.0;
+}
 
 /* Amortize the producer/consumer mutex without delaying useful feedback by
  * more than a tiny fraction of one frame.  Discovery order is not a rendering
@@ -15138,6 +15169,9 @@ compact_coverage_seed_warm_terminal_work(
 	compact_coverage_work_item item;
 	item.asset = asset;
 	item.occurrence = std::move(occurrence);
+	item.projectedAreaUpperBound = compact_coverage_detail_priority(
+	    database_source_transform_bounds(record.bounds,
+		item.occurrence.localTransform));
 	stagedWork.push_back(std::move(item));
     }
 
@@ -15509,8 +15543,11 @@ compact_stream_publish_parallel_coverage(
 			database_source_transform_bounds(
 			    asset.coverageBounds,
 			    item.occurrence.localTransform);
-		    if (!occurrenceBounds.isEmpty())
+		    if (!occurrenceBounds.isEmpty()) {
 			aggregateBounds.extendBy(occurrenceBounds);
+			item.projectedAreaUpperBound =
+			    compact_coverage_detail_priority(occurrenceBounds);
+		    }
 		    const int64_t now = bu_gettime();
 		    if (!aggregateBounds.isEmpty() &&
 			(lastOverviewPublication == 0 ||
@@ -16186,6 +16223,11 @@ compact_stream_publish_parallel_coverage(
      * complete visual coverage and an exact target extent are available,
      * reuse the same bounded worker count to import the source arrays needed
      * by PoP and enrich each standing leaf in place. */
+    std::stable_sort(collect.detailWork.begin(), collect.detailWork.end(),
+	[](const compact_coverage_work_item &a,
+	    const compact_coverage_work_item &b) {
+	    return a.projectedAreaUpperBound > b.projectedAreaUpperBound;
+	});
     workers.clear();
     BObolParallelBudgetLease detailBudget;
     const size_t detailWorkerCount =

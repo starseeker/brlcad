@@ -705,6 +705,15 @@ mesh_lod_cold_preview_candidate_eligible(
 	    candidate.aggregateVisualFootprint));
 }
 
+static bool
+mesh_lod_cold_preview_source(const BObolCompactLodPlanningSummary &summary)
+{
+    /* A BREP publishes its keyed mesh contract after the tessellation is
+     * cached. Such a preview reads a ready prefix, even during discovery. */
+    return summary.sourceFaceCount > 0 &&
+	(summary.botSource || (summary.brepSource && summary.sourceContentHash));
+}
+
 void
 SoBRLMeshLodSubmitAction::setStructuralCoveragePreviewLimit(
 	size_t occurrenceCount)
@@ -3755,7 +3764,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			static_cast<int>(index), summary) ||
 		    !summary.valid || !summary.visible ||
 		    !summary.lodBacked || !summary.sourceMeshRequestValid ||
-		    !summary.botSource || summary.sourceFaceCount == 0 ||
+		    !mesh_lod_cold_preview_source(summary) ||
 		    summary.meshGeometry || summary.residentProgressiveGeometry)
 		    continue;
 		const bool selectedEditPromotion = summary.selected &&
@@ -4345,7 +4354,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		submitAction->structuralCoveragePreviewScanEnabled &&
 		submitAction->structuralCoverageOnly &&
 		!structuralCoveragePreview && providerLodEligible &&
-		summary.botSource && summary.sourceFaceCount > 0 &&
+		mesh_lod_cold_preview_source(summary) &&
 		!summary.meshGeometry && !summary.residentProgressiveGeometry &&
 		!displayedMeshPayload && !selectedEditPromotion &&
 		!presentationProjectsToPoint) {
