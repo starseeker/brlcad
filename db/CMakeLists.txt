@@ -267,6 +267,19 @@ if(TARGET m35.g)
   endforeach()
 endif()
 
+if(BUILD_TESTING AND TARGET qged AND TARGET m35.g)
+  brlcad_add_test(NAME qged_autoview_progressive_replay
+    COMMAND qged --swrast --test-script
+    "${CMAKE_SOURCE_DIR}/src/qged/test_qged_autoview_progressive.json"
+    "${CMAKE_BINARY_DIR}/${DATA_DIR}/db/m35.g")
+  set_tests_properties(qged_autoview_progressive_replay PROPERTIES
+    ENVIRONMENT "BRLCAD_ROOT=${CMAKE_BINARY_DIR};QT_QPA_PLATFORM=offscreen;QTCAD_OBOL_FORCE_OSMESA=1"
+    LABELS drawing_baseline
+    TIMEOUT 30)
+  add_dependencies(unit m35.g)
+  add_dependencies(check m35.g)
+endif()
+
 # gtools is configured before the sample database targets exist.  Add the
 # performance fixtures here, after both the root and FAA conversions have been
 # declared, so a direct qualification build cannot silently skip every case.
