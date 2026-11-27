@@ -28,15 +28,12 @@
 #include <QVBoxLayout>
 
 #include <cmath>
-#include <cstdio>
 #include <limits>
 
-#include "bu/opt.h"
-#include "bu/malloc.h"
 #include "bu/str.h"
-#include "BObol/BDisplayEndpoint.h"
-#include "ged.h"
+#include "BObol/BViewController.h"
 #include "ged/draw.h"
+#include "ged/plugin/obol.h"
 #include "ged/view.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
@@ -174,60 +171,51 @@ qged_cutting_spinbox(QWidget *parent, double value)
 }
 
 static int
-qged_cutting_plane_get(const QgPluginContext *context, int *enabled,
+qged_cutting_plane_get(const struct ged_view_context *view_ctx, int *enabled,
     double origin[3], double normal[3])
 {
-    struct ged *gedp = context ? context->getGed() : NULL;
-    if (!gedp || !enabled || !origin || !normal)
+    /* Refresh can run while the command worker owns the GED result buffer. */
+    const BObolViewController *controller =
+	ged_plugin_obol_view_controller(view_ctx);
+    if (!controller)
 	return 0;
-
-    const char *argv[] = {"view", "cutting"};
-    if (ged_exec(gedp, 2, argv) != BRLCAD_OK)
-	return 0;
-
-    int planeEnabled = 0;
-    if (std::sscanf(bu_vls_cstr(gedp->ged_result_str),
-	"enable %d\norigin %lf %lf %lf\nnormal %lf %lf %lf",
-	&planeEnabled, &origin[0], &origin[1], &origin[2],
-	&normal[0], &normal[1], &normal[2]) != 7)
-	return 0;
-    *enabled = planeEnabled ? 1 : 0;
+    const SbPlane plane = controller->getCuttingPlane();
+    const SbVec3f direction = plane.getNormal();
+    const SbVec3f point = direction * plane.getDistanceFromOrigin();
+    for (size_t i = 0; i < 3; i++) {
+	origin[i] = point[i];
+	normal[i] = direction[i];
+    }
+    *enabled = controller->isCuttingPlaneEnabled();
     return 1;
 }
 
 static int
-qged_cutting_plane_set(const QgPluginContext *context, int enabled,
+qged_cutting_plane_set(struct ged_view_context *view_ctx, int enabled,
     const double origin[3], const double normal[3])
 {
-    struct ged *gedp = context ? context->getGed() : NULL;
-    if (!gedp || !origin || !normal || !std::isfinite(origin[0]) ||
-	!std::isfinite(origin[1]) || !std::isfinite(origin[2]) ||
-	!std::isfinite(normal[0]) || !std::isfinite(normal[1]) ||
-	!std::isfinite(normal[2]))
-	return 0;
-    const double normalLengthSquared = normal[0] * normal[0] +
-	normal[1] * normal[1] + normal[2] * normal[2];
-    if (normalLengthSquared <= qged_cutting_normal_minimum_length *
-	qged_cutting_normal_minimum_length)
+    BObolViewController *controller = ged_plugin_obol_view_controller(view_ctx);
+    if (!controller)
 	return 0;
 
-    char x[3][64] = {};
-    char n[3][64] = {};
+    SbVec3f point;
+    SbVec3f direction;
     for (size_t i = 0; i < 3; i++) {
-	std::snprintf(x[i], sizeof(x[i]), "%.17g", origin[i]);
-	std::snprintf(n[i], sizeof(n[i]), "%.17g", normal[i]);
-	if (!x[i][0] || !n[i][0])
+	constexpr double coordinateLimit = std::numeric_limits<float>::max();
+	if (!std::isfinite(origin[i]) || std::fabs(origin[i]) > coordinateLimit ||
+	    !std::isfinite(normal[i]) || std::fabs(normal[i]) > coordinateLimit)
 	    return 0;
-	}
-    const char *originArgv[] = {"view", "cutting", "origin",
-	x[0], x[1], x[2]};
-    const char *normalArgv[] = {"view", "cutting", "normal",
-	n[0], n[1], n[2]};
-    const char *enableArgv[] = {"view", "cutting", "enable",
-	enabled ? "1" : "0"};
-    return ged_exec(gedp, 6, originArgv) == BRLCAD_OK &&
-	ged_exec(gedp, 6, normalArgv) == BRLCAD_OK &&
-	ged_exec(gedp, 4, enableArgv) == BRLCAD_OK;
+	point[i] = static_cast<float>(origin[i]);
+    }
+    const double length = std::hypot(normal[0], normal[1], normal[2]);
+    if (length <= qged_cutting_normal_minimum_length)
+	return 0;
+    for (size_t i = 0; i < 3; i++)
+	direction[i] = static_cast<float>(normal[i] / length);
+    if (!controller->setCuttingPlane(SbPlane(direction, point)))
+	return 0;
+    controller->setCuttingPlaneEnabled(enabled);
+    return 1;
 }
 
 CADViewSettings::CADViewSettings(QWidget *parent) : QWidget(parent)
@@ -444,10 +432,13 @@ CADViewSettings::cutting_update()
 	cuttingOrigin[i] = cutting_origin[i]->value();
 	cuttingNormal[i] = cutting_normal[i]->value();
     }
-    if (!qged_cutting_plane_set(m_ctx, ckbx_val(cutting_enabled_ckbx),
+
+    struct ged_view_context *view_ctx =
+	m_ctx ? m_ctx->activeViewContext() : nullptr;
+    if (!qged_cutting_plane_set(view_ctx, ckbx_val(cutting_enabled_ckbx),
 	cuttingOrigin, cuttingNormal)) {
 	/* Invalid normals must not partially commit a new plane.  Restoring
-	 * authoritative command state also distinguishes this from a detached
+	 * authoritative view state also distinguishes this from a detached
 	 * view, for which the group becomes unavailable. */
 	checkbox_refresh(0);
 	return;
@@ -511,7 +502,7 @@ CADViewSettings::checkbox_refresh(unsigned long long)
     int cuttingEnabled = 0;
     double cuttingOrigin[3] = {};
     double cuttingNormal[3] = {};
-    const int cuttingSupported = qged_cutting_plane_get(m_ctx,
+    const int cuttingSupported = qged_cutting_plane_get(view_ctx,
 	&cuttingEnabled, cuttingOrigin, cuttingNormal);
     cutting_grp->setEnabled(cuttingSupported ? true : false);
     cutting_enabled_ckbx->blockSignals(true);

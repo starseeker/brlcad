@@ -2,7 +2,7 @@
     "id": "org.brlcad.qged.edit.ell",
     "displayName": "Ell Edit",
     "category": "qged.object",
-    "iconName": ":ell.svg",
+    "iconName": ":/images/primitives/ell.png",
     "sortKey": 1000,
     "requiresOpenDb": true,
     "requiresView": true,

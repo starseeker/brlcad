@@ -29,6 +29,7 @@ set(plugin_ignore_files CMakeLists.txt)
 cmakefiles(${plugin_ignore_files})
 
 # Plugins
+add_subdirectory(edit)
 add_subdirectory(extensions)
 add_subdirectory(polygon)
 add_subdirectory(view)
