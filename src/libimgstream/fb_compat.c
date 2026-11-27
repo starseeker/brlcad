@@ -1266,22 +1266,68 @@ imgstream_fb_write(imgstream_fb_t *fb, int x, int y, const unsigned char *rgb, s
 }
 
 
-static int
-fb_rect_valid(const imgstream_fb_t *fb, int x, int y, int width, int height)
+enum fb_rect_clip_result {
+    FB_RECT_INVALID = -1,
+    FB_RECT_OUTSIDE = 0,
+    FB_RECT_INSIDE = 1,
+    FB_RECT_CLIPPED = 2
+};
+
+
+struct fb_rect_clip {
+    int x;
+    int y;
+    int width;
+    int height;
+    size_t buffer_x;
+    size_t buffer_y;
+    size_t buffer_width;
+};
+
+
+static enum fb_rect_clip_result
+fb_rect_clip(const imgstream_fb_t *fb, int x, int y, int width, int height,
+	struct fb_rect_clip *clip)
 {
-    if (!fb || !fb->stream || x < 0 || y < 0 || width <= 0 || height <= 0)
-	return 0;
+    if (!fb || !fb->stream || !clip || width <= 0 || height <= 0)
+	return FB_RECT_INVALID;
 
-    if ((size_t)x >= imgstream_fb_width(fb) || (size_t)y >= imgstream_fb_height(fb))
-	return 0;
+    int64_t left = x;
+    int64_t bottom = y;
+    int64_t right = left + width;
+    int64_t top = bottom + height;
+    int64_t fb_width = (imgstream_fb_width(fb) > (size_t)INT64_MAX) ?
+	INT64_MAX : (int64_t)imgstream_fb_width(fb);
+    int64_t fb_height = (imgstream_fb_height(fb) > (size_t)INT64_MAX) ?
+	INT64_MAX : (int64_t)imgstream_fb_height(fb);
 
-    if ((size_t)width > imgstream_fb_width(fb) - (size_t)x)
-	return 0;
+    if (right <= 0 || top <= 0 || left >= fb_width || bottom >= fb_height)
+	return FB_RECT_OUTSIDE;
 
-    if ((size_t)height > imgstream_fb_height(fb) - (size_t)y)
-	return 0;
+    int64_t clipped_left = (left < 0) ? 0 : left;
+    int64_t clipped_bottom = (bottom < 0) ? 0 : bottom;
+    int64_t clipped_right = (right > fb_width) ? fb_width : right;
+    int64_t clipped_top = (top > fb_height) ? fb_height : top;
+    int64_t clipped_width = clipped_right - clipped_left;
+    int64_t clipped_height = clipped_top - clipped_bottom;
 
-    return 1;
+    if (clipped_width > INT_MAX || clipped_height > INT_MAX ||
+	clipped_width > INT_MAX / clipped_height)
+	return FB_RECT_INVALID;
+
+    clip->x = (int)clipped_left;
+    clip->y = (int)clipped_bottom;
+    clip->width = (int)clipped_width;
+    clip->height = (int)clipped_height;
+    clip->buffer_x = (size_t)(clipped_left - left);
+    clip->buffer_y = (size_t)(clipped_bottom - bottom);
+    clip->buffer_width = (size_t)width;
+
+    if (clipped_left == left && clipped_bottom == bottom &&
+	clipped_right == right && clipped_top == top)
+	return FB_RECT_INSIDE;
+
+    return FB_RECT_CLIPPED;
 }
 
 
@@ -1311,8 +1357,38 @@ imgstream_fb_readrect(const imgstream_fb_t *fb, int xmin, int ymin, int width, i
 	return pixels;
     }
 
-    if (!fb_rect_valid(fb, xmin, ymin, width, height) || !rgb)
+    if (!rgb)
 	return -1;
+
+    struct fb_rect_clip clip;
+    enum fb_rect_clip_result clip_result = fb_rect_clip(fb, xmin, ymin,
+	width, height, &clip);
+    if (clip_result == FB_RECT_INVALID)
+	return -1;
+    if (clip_result == FB_RECT_OUTSIDE)
+	return 0;
+    if (clip_result == FB_RECT_CLIPPED) {
+	size_t buffer_pixel = clip.buffer_y * clip.buffer_width + clip.buffer_x;
+	if (!fb->remote) {
+	    if (imgstream_read_rect(fb->stream, (size_t)clip.x, (size_t)clip.y,
+		    (size_t)clip.width, (size_t)clip.height,
+		    rgb + buffer_pixel * 3, clip.buffer_width * 3) != 0)
+		return -1;
+	    return clip.width * clip.height;
+	}
+
+	int pixels = 0;
+	for (int row = 0; row < clip.height; row++) {
+	    buffer_pixel = (clip.buffer_y + (size_t)row) *
+		clip.buffer_width + clip.buffer_x;
+	    int ret = imgstream_fb_readrect(fb, clip.x, clip.y + row,
+		clip.width, 1, rgb + buffer_pixel * 3);
+	    if (ret != clip.width)
+		return (ret < 0) ? -1 : pixels + ret;
+	    pixels += ret;
+	}
+	return pixels;
+    }
 
     if (fb->remote) {
 	int ret = imgstream_fb_remote_readrect(fb->remote, xmin, ymin, width,
@@ -1361,8 +1437,29 @@ imgstream_fb_writerect(imgstream_fb_t *fb, int xmin, int ymin, int width, int he
 	return pixels;
     }
 
-    if (!fb_rect_valid(fb, xmin, ymin, width, height) || !rgb)
+    if (!rgb)
 	return -1;
+
+    struct fb_rect_clip clip;
+    enum fb_rect_clip_result clip_result = fb_rect_clip(fb, xmin, ymin,
+	width, height, &clip);
+    if (clip_result == FB_RECT_INVALID)
+	return -1;
+    if (clip_result == FB_RECT_OUTSIDE)
+	return 0;
+    if (clip_result == FB_RECT_CLIPPED && fb->remote) {
+	int pixels = 0;
+	for (int row = 0; row < clip.height; row++) {
+	    size_t buffer_pixel = (clip.buffer_y + (size_t)row) *
+		clip.buffer_width + clip.buffer_x;
+	    int ret = imgstream_fb_writerect(fb, clip.x, clip.y + row,
+		clip.width, 1, rgb + buffer_pixel * 3);
+	    if (ret != clip.width)
+		return (ret < 0) ? -1 : pixels + ret;
+	    pixels += ret;
+	}
+	return pixels;
+    }
 
     if (fb->remote) {
 	int ret = imgstream_fb_remote_writerect(fb->remote, xmin, ymin, width,
@@ -1375,10 +1472,13 @@ imgstream_fb_writerect(imgstream_fb_t *fb, int xmin, int ymin, int width, int he
 	return ret;
     }
 
-    if (imgstream_write_rect(fb->stream, (size_t)xmin, (size_t)ymin, (size_t)width, (size_t)height, rgb, (size_t)width * 3) != 0)
+    size_t buffer_pixel = clip.buffer_y * clip.buffer_width + clip.buffer_x;
+    if (imgstream_write_rect(fb->stream, (size_t)clip.x, (size_t)clip.y,
+		(size_t)clip.width, (size_t)clip.height, rgb + buffer_pixel * 3,
+		clip.buffer_width * 3) != 0)
 	return -1;
 
-    return width * height;
+    return clip.width * clip.height;
 }
 
 
@@ -1415,8 +1515,29 @@ imgstream_fb_bwreadrect(const imgstream_fb_t *fb, int xmin, int ymin, int width,
 	return pixels;
     }
 
-    if (!fb_rect_valid(fb, xmin, ymin, width, height) || !bw)
+    if (!bw)
 	return -1;
+
+    struct fb_rect_clip clip;
+    enum fb_rect_clip_result clip_result = fb_rect_clip(fb, xmin, ymin,
+	width, height, &clip);
+    if (clip_result == FB_RECT_INVALID)
+	return -1;
+    if (clip_result == FB_RECT_OUTSIDE)
+	return 0;
+    if (clip_result == FB_RECT_CLIPPED) {
+	int pixels = 0;
+	for (int row = 0; row < clip.height; row++) {
+	    size_t buffer_pixel = (clip.buffer_y + (size_t)row) *
+		clip.buffer_width + clip.buffer_x;
+	    int ret = imgstream_fb_bwreadrect(fb, clip.x, clip.y + row,
+		clip.width, 1, bw + buffer_pixel);
+	    if (ret != clip.width)
+		return (ret < 0) ? -1 : pixels + ret;
+	    pixels += ret;
+	}
+	return pixels;
+    }
 
     if (fb->remote)
 	return imgstream_fb_remote_bwreadrect(fb->remote, xmin, ymin, width,
@@ -1467,8 +1588,29 @@ imgstream_fb_bwwriterect(imgstream_fb_t *fb, int xmin, int ymin, int width, int 
 	return pixels;
     }
 
-    if (!fb_rect_valid(fb, xmin, ymin, width, height) || !bw)
+    if (!bw)
 	return -1;
+
+    struct fb_rect_clip clip;
+    enum fb_rect_clip_result clip_result = fb_rect_clip(fb, xmin, ymin,
+	width, height, &clip);
+    if (clip_result == FB_RECT_INVALID)
+	return -1;
+    if (clip_result == FB_RECT_OUTSIDE)
+	return 0;
+    if (clip_result == FB_RECT_CLIPPED) {
+	int pixels = 0;
+	for (int row = 0; row < clip.height; row++) {
+	    size_t buffer_pixel = (clip.buffer_y + (size_t)row) *
+		clip.buffer_width + clip.buffer_x;
+	    int ret = imgstream_fb_bwwriterect(fb, clip.x, clip.y + row,
+		clip.width, 1, bw + buffer_pixel);
+	    if (ret != clip.width)
+		return (ret < 0) ? -1 : pixels + ret;
+	    pixels += ret;
+	}
+	return pixels;
+    }
 
     if (fb->remote) {
 	int ret = imgstream_fb_remote_bwwriterect(fb->remote, xmin, ymin,

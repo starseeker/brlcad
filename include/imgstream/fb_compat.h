@@ -179,6 +179,11 @@ IMGSTREAM_EXPORT size_t imgstream_fb_height(const imgstream_fb_t *fb);
 IMGSTREAM_EXPORT int imgstream_fb_clear(imgstream_fb_t *fb, const unsigned char *rgb);
 IMGSTREAM_EXPORT ssize_t imgstream_fb_read(const imgstream_fb_t *fb, int x, int y, unsigned char *rgb, size_t count);
 IMGSTREAM_EXPORT ssize_t imgstream_fb_write(imgstream_fb_t *fb, int x, int y, const unsigned char *rgb, size_t count);
+/*
+ * Rectangle operations clip to the framebuffer bounds and return the number
+ * of pixels transferred.  Buffers retain the requested width as their row
+ * stride; clipped read positions are left unchanged.
+ */
 IMGSTREAM_EXPORT int imgstream_fb_readrect(const imgstream_fb_t *fb, int xmin, int ymin, int width, int height, unsigned char *rgb);
 IMGSTREAM_EXPORT int imgstream_fb_writerect(imgstream_fb_t *fb, int xmin, int ymin, int width, int height, const unsigned char *rgb);
 IMGSTREAM_EXPORT int imgstream_fb_bwreadrect(const imgstream_fb_t *fb, int xmin, int ymin, int width, int height, unsigned char *bw);

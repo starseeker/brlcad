@@ -527,9 +527,9 @@ test_memory_compat_stream(void)
     }
 
     CHECK(imgstream_fb_read(fb, -1, 0, pixel, 1) == -1, "negative read coordinate rejected");
-    CHECK(imgstream_fb_writerect(fb, 3, 2, 2, 1, rect) == -1, "out-of-bounds rect rejected");
-    CHECK(imgstream_fb_bwreadrect(fb, 3, 2, 2, 1, bw_out) == -1, "out-of-bounds bw rect read rejected");
-    CHECK(imgstream_fb_bwwriterect(fb, 3, 2, 2, 1, bw_in) == -1, "out-of-bounds bw rect write rejected");
+    CHECK(imgstream_fb_writerect(fb, 3, 2, 2, 1, rect) == 1, "right-edge rect write clipped");
+    CHECK(imgstream_fb_bwreadrect(fb, 3, 2, 2, 1, bw_out) == 1, "right-edge bw rect read clipped");
+    CHECK(imgstream_fb_bwwriterect(fb, 3, 2, 2, 1, bw_in) == 1, "right-edge bw rect write clipped");
 
     struct imgstream_info info;
     CHECK(imgstream_get_info(imgstream_fb_stream(fb), &info) == 0, "underlying stream info query accepted");
@@ -553,6 +553,70 @@ read_exact_file(const char *path, unsigned char *bytes, size_t byte_count)
     int ok = (got == byte_count && extra == EOF && !ferror(fp));
     fclose(fp);
     return ok;
+}
+
+
+static int
+test_rect_clipping(void)
+{
+    imgstream_fb_t *fb = imgstream_fb_open("/dev/mem", 4, 4);
+    CHECK(fb != NULL, "opened clipping compatibility stream");
+
+    unsigned char clear[3] = {0, 0, 0};
+    unsigned char rgb[3 * 3 * 3];
+    for (size_t i = 0; i < sizeof(rgb); i++)
+	rgb[i] = (unsigned char)(i + 1);
+
+    CHECK(imgstream_fb_clear(fb, clear) == 0, "cleared clipping stream");
+    imgstream_dirty_clear(imgstream_fb_stream(fb));
+    CHECK(imgstream_fb_writerect(fb, -1, -1, 3, 3, rgb) == 4,
+	"lower-left clipped RGB write accepted");
+
+    struct imgstream_rect dirty = {0, 0, 0, 0};
+    CHECK(imgstream_dirty_rect(imgstream_fb_cstream(fb), &dirty) == 1 &&
+	dirty.x == 0 && dirty.y == 0 && dirty.width == 2 && dirty.height == 2,
+	"clipped RGB write reports exact dirty bounds");
+
+    unsigned char clipped[2 * 2 * 3] = {0};
+    CHECK(imgstream_fb_readrect(fb, 0, 0, 2, 2, clipped) == 4,
+	"read lower-left clipped RGB pixels");
+    CHECK(memcmp(clipped, rgb + 12, 6) == 0 &&
+	memcmp(clipped + 6, rgb + 21, 6) == 0,
+	"lower-left clipping preserves source row stride");
+
+    unsigned char readback[3 * 3 * 3];
+    memset(readback, 0, sizeof(readback));
+    CHECK(imgstream_fb_readrect(fb, -1, -1, 3, 3, readback) == 4,
+	"lower-left clipped RGB read accepted");
+    CHECK(memcmp(readback + 12, rgb + 12, 6) == 0 &&
+	memcmp(readback + 21, rgb + 21, 6) == 0,
+	"clipped RGB read preserves destination row stride");
+
+    imgstream_dirty_clear(imgstream_fb_stream(fb));
+    CHECK(imgstream_fb_writerect(fb, 3, 3, 3, 3, rgb) == 1,
+	"upper-right clipped RGB write accepted");
+    CHECK(imgstream_dirty_rect(imgstream_fb_cstream(fb), &dirty) == 1 &&
+	dirty.x == 3 && dirty.y == 3 && dirty.width == 1 && dirty.height == 1,
+	"upper-right clipping reports exact dirty bounds");
+
+    unsigned char bw[3 * 3] = {10, 20, 30, 40, 50, 60, 70, 80, 90};
+    CHECK(imgstream_fb_bwwriterect(fb, -1, -1, 3, 3, bw) == 4,
+	"clipped monochrome write accepted");
+    unsigned char bw_readback[3 * 3] = {0};
+    CHECK(imgstream_fb_bwreadrect(fb, -1, -1, 3, 3, bw_readback) == 4,
+	"clipped monochrome read accepted");
+    CHECK(bw_readback[4] == 50 && bw_readback[5] == 60 &&
+	bw_readback[7] == 80 && bw_readback[8] == 90,
+	"monochrome clipping preserves buffer placement");
+
+    CHECK(imgstream_fb_writerect(fb, -3, 0, 3, 1, rgb) == 0 &&
+	imgstream_fb_readrect(fb, 4, 0, 1, 1, readback) == 0 &&
+	imgstream_fb_bwwriterect(fb, 0, -3, 1, 3, bw) == 0 &&
+	imgstream_fb_bwreadrect(fb, 0, 4, 1, 1, bw_readback) == 0,
+	"fully outside rectangles are empty operations");
+
+    imgstream_fb_close(fb);
+    return 0;
 }
 
 
@@ -1006,6 +1070,8 @@ main(int ac, char **av)
     if (test_display_host_detach())
 	return 1;
     if (test_memory_compat_stream())
+	return 1;
+    if (test_rect_clipping())
 	return 1;
     if (test_colormap_compat_state())
 	return 1;

@@ -44,6 +44,10 @@ main(int argc, char **argv)
 	7, 8, 9, 10, 11, 12
     };
     static const unsigned char clipped_pixels[6] = {13, 14, 15, 16, 17, 18};
+    static const unsigned char corner_pixels[12] = {
+	21, 22, 23, 24, 25, 26,
+	27, 28, 29, 30, 31, 32
+    };
     unsigned char readback[12] = {0};
     ColorMap cmap;
     int mode = 0;
@@ -70,6 +74,10 @@ main(int argc, char **argv)
 	"rectangle readback changed");
     CHECK(fb_writerect(fbp, 1, 0, 2, 1, clipped_pixels) == 1,
 	"right-edge rectangle clipping changed");
+    CHECK(fb_writerect(fbp, -1, -1, 2, 2, corner_pixels) == 1 &&
+	fb_read(fbp, 0, 0, readback, 1) == 1 &&
+	memcmp(readback, corner_pixels + 9, 3) == 0,
+	"negative-coordinate rectangle clipping changed");
     CHECK(fb_view(fbp, 1, 1, 2, 3) == 0 &&
 	fb_getview(fbp, &xcenter, &ycenter, &xzoom, &yzoom) == 0 &&
 	xcenter == 1 && ycenter == 1 && xzoom == 2 && yzoom == 3,

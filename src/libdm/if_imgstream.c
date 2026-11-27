@@ -122,6 +122,42 @@ if_imgstream_write(struct fb *ifp, int x, int y, const unsigned char *rgb,
 
 
 static int
+if_imgstream_readrect(struct fb *ifp, int xmin, int ymin, int width,
+	int height, unsigned char *rgb)
+{
+    return imgstream_fb_readrect(IMGSTREAM_FB(ifp), xmin, ymin, width,
+	height, rgb);
+}
+
+
+static int
+if_imgstream_writerect(struct fb *ifp, int xmin, int ymin, int width,
+	int height, const unsigned char *rgb)
+{
+    return imgstream_fb_writerect(IMGSTREAM_FB(ifp), xmin, ymin, width,
+	height, rgb);
+}
+
+
+static int
+if_imgstream_bwreadrect(struct fb *ifp, int xmin, int ymin, int width,
+	int height, unsigned char *bw)
+{
+    return imgstream_fb_bwreadrect(IMGSTREAM_FB(ifp), xmin, ymin, width,
+	height, bw);
+}
+
+
+static int
+if_imgstream_bwwriterect(struct fb *ifp, int xmin, int ymin, int width,
+	int height, const unsigned char *bw)
+{
+    return imgstream_fb_bwwriterect(IMGSTREAM_FB(ifp), xmin, ymin, width,
+	height, bw);
+}
+
+
+static int
 if_imgstream_rmap(struct fb *ifp, ColorMap *cmap)
 {
     struct imgstream_fb_colormap imgstream_cmap;
@@ -268,10 +304,10 @@ struct fb_impl imgstream_memory_interface_impl = {
     if_imgstream_setcursor,
     if_imgstream_cursor,
     if_imgstream_getcursor,
-    fb_sim_readrect,
-    fb_sim_writerect,
-    fb_sim_bwreadrect,
-    fb_sim_bwwriterect,
+    if_imgstream_readrect,
+    if_imgstream_writerect,
+    if_imgstream_bwreadrect,
+    if_imgstream_bwwriterect,
     if_imgstream_configure_window,
     if_imgstream_refresh,
     if_imgstream_poll,
