@@ -71,6 +71,28 @@ assert_view_ok(struct ged *gedp, int argc, const char **argv, int line)
 
 #define ASSERT_VIEW_OK(gedp, argc, argv) assert_view_ok((gedp), (argc), (argv), __LINE__)
 
+static int
+reject_owner_task(void *data, ged_exec_owner_task_t, void *)
+{
+    *static_cast<bool *>(data) = true;
+    return BRLCAD_ERROR;
+}
+
+static void
+test_view_owner_dispatch(struct ged *gedp)
+{
+    /* A host can decline a task during teardown. The command must return
+     * the host's status before it accesses the view or retained scene. */
+    bool dispatched = false;
+    ASSERT(ged_exec_owner_dispatch_set(gedp, reject_owner_task, &dispatched));
+    for (const char *subcommand : {"faceplate", "cutting", "polygon"}) {
+	dispatched = false;
+	const char *argv[] = {"view", subcommand};
+	ASSERT(run_view(gedp, 2, argv) == BRLCAD_ERROR && dispatched);
+    }
+    ASSERT(ged_exec_owner_dispatch_set(gedp, nullptr, nullptr));
+}
+
 static void
 assert_feature_point_count(struct ged_view_context *view, const char *name,
     size_t expected, int line)
@@ -952,6 +974,7 @@ main(int argc, const char **argv)
 	    ged_view_active_ctx_set(gedp, views[i]);
     }
 
+    test_view_owner_dispatch(gedp);
     test_display_endpoint_slot(gedp, views[0]);
     test_cutting_plane_command(gedp, views[0]);
     test_shading_policy_command(gedp, views[0], views[1]);

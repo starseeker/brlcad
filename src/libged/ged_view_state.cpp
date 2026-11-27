@@ -846,6 +846,9 @@ ged_bobol_request_shared_presentation(struct ged_view_context *view_ctx,
     if (!view_ctx || !controller || ged_view_context_is_independent(view_ctx))
 	return 1;
 
+    /* Tool panels need a durable change marker even if the render request
+     * has already been consumed when the host checks for command changes. */
+    (void)bv_frame_revision_bump(bv_context_view(ged_view_context_bv(view_ctx)));
     controller->requestPresentationRender(context && context->reason ?
 	context->reason : "ged-shared-presentation");
     return 1;

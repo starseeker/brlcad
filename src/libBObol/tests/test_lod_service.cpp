@@ -2580,6 +2580,48 @@ test_shared_producer_late_join_while_result_queued(void)
 }
 
 static int
+test_shared_producer_retry_with_replay_queued(void)
+{
+    SharedProducerLeaseFixture fixture;
+    if (!fixture.service.start(1, FALSE))
+	return 1;
+    const uint64_t ownerGeneration = fixture.service.beginGeneration();
+    const uint64_t otherGeneration = fixture.service.beginGeneration();
+    BObolLodTask owner = shared_producer_lease_task_for(
+	fixture, ownerGeneration, "/lease/retry-owner");
+    BObolLodTask other = shared_producer_lease_task_for(
+	fixture, otherGeneration, "/lease/retry-other");
+    if (!fixture.service.submitIfNotActive(owner) ||
+	fixture.service.submitIfNotActive(other) != 0)
+	return 1;
+    release_shared_producer(fixture);
+    if (wait_for_settled(fixture.service, 2))
+	return 1;
+
+    std::vector<BObolLodResult> initial;
+    fixture.service.drainGenerationResults(initial, ownerGeneration);
+    if (check_shared_consumer_result(initial, ownerGeneration, owner.request,
+	BOBOL_LOD_PROVIDER_READY, "initial owner") ||
+	fixture.service.queuedResultCountForGeneration(otherGeneration) != 1 ||
+	!fixture.service.submitIfNotActive(owner)) {
+	printf("FAIL: a queued replay suppressed a new producer\n");
+	return 1;
+    }
+    if (wait_for_settled(fixture.service, 2))
+	return 1;
+    std::vector<BObolLodResult> ownerResults;
+    std::vector<BObolLodResult> otherResults;
+    fixture.service.drainGenerationResults(ownerResults, ownerGeneration);
+    fixture.service.drainGenerationResults(otherResults, otherGeneration);
+    return check_shared_consumer_result(ownerResults, ownerGeneration,
+	owner.request, BOBOL_LOD_PROVIDER_READY, "retry owner") ||
+	check_shared_consumer_result(otherResults, otherGeneration,
+	    other.request, BOBOL_LOD_PROVIDER_SUPERSEDED, "preserved replay") ||
+	fixture.state.calls != 2 ||
+	check_shared_producer_clean(fixture.service, "retry with replay queued");
+}
+
+static int
 test_shared_producer_final_consumer_cancellation_during_build(void)
 {
     SharedProducerLeaseFixture fixture;
@@ -6301,6 +6343,8 @@ main(int argc, char **argv)
     if (runIsolated(test_shared_producer_late_join_during_build))
 	return 1;
     if (runIsolated(test_shared_producer_late_join_while_result_queued))
+	return 1;
+    if (runIsolated(test_shared_producer_retry_with_replay_queued))
 	return 1;
     if (runIsolated(
 	    test_shared_producer_final_consumer_cancellation_during_build))
