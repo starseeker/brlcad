@@ -46,6 +46,9 @@
 namespace {
 
 static constexpr int bobol_lod_telemetry_schema_version = 1;
+static constexpr size_t bobol_lod_telemetry_buffer_bytes = 1024u * 1024u;
+static constexpr std::chrono::milliseconds
+    bobol_lod_telemetry_flush_interval(250);
 static const char *bobol_lod_telemetry_file_environment =
     "BOBOL_LOD_TELEMETRY_FILE";
 static const char *bobol_lod_telemetry_sanitize_environment =
@@ -1122,6 +1125,64 @@ telemetry_signals(const BObolLodControlTraceState &state)
 }
 
 static std::string
+telemetry_structural_reducer(const BObolLodControlTraceState &state)
+{
+    const uint64_t blockers = state.structuralSuccessorBlockerMask;
+    TelemetryJsonObject blockerState;
+    blockerState.boolean("no_frontier",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_NO_FRONTIER);
+    blockerState.boolean("projection_inexact",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_PROJECTION_INEXACT);
+    blockerState.boolean("auto_submit_disabled",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_AUTO_SUBMIT_DISABLED);
+    blockerState.boolean("service_unavailable",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_SERVICE_UNAVAILABLE);
+    blockerState.boolean("interaction_active",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_INTERACTION_ACTIVE);
+    blockerState.boolean("census_incomplete",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_CENSUS_INCOMPLETE);
+    blockerState.boolean("submission_active",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_SUBMISSION_ACTIVE);
+    blockerState.boolean("presentation_barrier",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_PRESENTATION_BARRIER);
+    blockerState.boolean("triangle_recovery",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_TRIANGLE_RECOVERY);
+    blockerState.boolean("residency_busy",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_RESIDENCY_BUSY);
+    blockerState.boolean("population_unsettled",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_POPULATION_UNSETTLED);
+    blockerState.boolean("result_work",
+	blockers & BOBOL_LOD_STRUCTURAL_SUCCESSOR_RESULT_WORK);
+
+    TelemetryJsonObject result;
+    result.boolean("occurrence_coverage_exact",
+	state.structuralOccurrenceCoverageExact != FALSE);
+    result.boolean("projection_exact",
+	state.structuralProjectionExact != FALSE);
+    result.integer("projection_visible_count",
+	state.structuralProjectionVisibleCount);
+    result.integer("unresolved_occurrence_count",
+	state.structuralUnresolvedOccurrenceCount);
+    result.boolean("population_settled",
+	state.structuralPopulationSettled != FALSE);
+    result.boolean("complete_visible_count_valid",
+	state.structuralCompleteVisibleCountValid != FALSE);
+    result.boolean("mesh_first_scene_safe",
+	state.structuralMeshFirstSceneSafe != FALSE);
+    result.boolean("point_aggregation_owner",
+	state.structuralPointAggregationOwner != FALSE);
+    result.boolean("point_policy_exhausted",
+	state.structuralPointPolicyExhausted != FALSE);
+    result.boolean("external_producers_settled",
+	state.structuralExternalProducersSettled != FALSE);
+    result.boolean("successor_base_ready",
+	state.structuralSuccessorBaseReady != FALSE);
+    result.integer("blocker_mask", blockers);
+    result.raw("blockers", blockerState.take());
+    return result.take();
+}
+
+static std::string
 telemetry_state(const BObolLodControlTraceState &state, bool sanitize)
 {
     const BObolLodConvergenceStatus &status = state.convergence;
@@ -1148,6 +1209,7 @@ telemetry_state(const BObolLodControlTraceState &state, bool sanitize)
     result.raw("gpu", telemetry_gpu(status));
     result.raw("pending", telemetry_pending(state));
     result.raw("submission", telemetry_submission(state));
+    result.raw("structural_reducer", telemetry_structural_reducer(state));
     result.raw("signals", telemetry_signals(state));
     result.integer("presentation_transaction_serial",
 	status.presentationTransactionSerial);
@@ -1213,6 +1275,8 @@ public:
 		path.c_str());
 	    return;
 	}
+	(void)std::setvbuf(this->file, this->fileBuffer.data(), _IOFBF,
+	    this->fileBuffer.size());
 	TelemetryJsonObject schema;
 	schema.integer("version", bobol_lod_telemetry_schema_version);
 	schema.text("format", "jsonl");
@@ -1285,8 +1349,17 @@ public:
 	    record.raw("data", data);
 	    std::string line = record.take();
 	    line.push_back('\n');
-	    if (std::fwrite(line.data(), 1, line.size(), this->file) !=
-		line.size() || std::fflush(this->file) != 0) {
+	    const bool writeFailed =
+		std::fwrite(line.data(), 1, line.size(), this->file) !=
+		line.size();
+	    const auto now = std::chrono::steady_clock::now();
+	    const bool flushDue =
+		now - this->lastFlush >= bobol_lod_telemetry_flush_interval;
+	    const bool flushFailed = !writeFailed && flushDue &&
+		std::fflush(this->file) != 0;
+	    if (flushDue && !flushFailed)
+		this->lastFlush = now;
+	    if (writeFailed || flushFailed) {
 		this->failed.store(true, std::memory_order_relaxed);
 		bu_log("BObol LoD telemetry output failed; logging disabled\n");
 	    }
@@ -1298,10 +1371,12 @@ public:
 private:
     std::string pathValue;
     FILE *file = NULL;
+    std::array<char, bobol_lod_telemetry_buffer_bytes> fileBuffer;
     bool sanitizedValue = false;
     std::atomic_bool failed {false};
     std::mutex mutex;
     std::chrono::steady_clock::time_point started;
+    std::chrono::steady_clock::time_point lastFlush = started;
     uint64_t nextSequence = 1;
     uint64_t nextController = 1;
     size_t activeControllers = 0;
@@ -1500,7 +1575,8 @@ public:
     }
 
     void recordTransition(const BObolViewController &controller,
-	const BObolLodControlTransitionRecord &transition)
+	const BObolLodControlTransitionRecord &transition,
+	uint64_t durationMicroseconds)
     {
 	if (!this->started) {
 	    TelemetryJsonObject start;
@@ -1513,6 +1589,17 @@ public:
 
 	TelemetryJsonObject data;
 	data.integer("transition_serial", ++this->transitionSerial);
+	data.integer("duration_us", durationMicroseconds);
+	data.integer("progressive_advance_us",
+	    controller.getLastProgressiveAdvanceTimeNanoseconds() / 1000);
+	data.integer("result_processing_us",
+	    controller.getLastLodResultProcessingTimeNanoseconds() / 1000);
+	data.integer("provider_us",
+	    controller.getLastProgressiveProviderTimeNanoseconds() / 1000);
+	data.integer("submission_us",
+	    controller.getLastLodSubmissionTimeNanoseconds() / 1000);
+	data.integer("presentation_sync_us",
+	    controller.getLastPresentationSyncTimeNanoseconds() / 1000);
 	data.text("event",
 	    bobol_lod_control_transition_event_name(transition.event));
 	data.raw("before", telemetry_state(transition.before,
@@ -1531,6 +1618,43 @@ public:
 	    transition.event == BOBOL_LOD_CONTROL_TRANSITION_EXTERNAL_INPUT;
 	if (inspectInventory)
 	    this->recordInventory(controller, inventoryRevision);
+    }
+
+    void recordForegroundCommand(const BObolViewController &controller,
+	uint64_t serial, bool complete, uint64_t durationMicroseconds,
+	bool deferredProgressiveWork)
+    {
+	if (!this->started) {
+	    TelemetryJsonObject start;
+	    start.boolean("sanitized", this->sink->sanitized());
+	    start.raw("camera", telemetry_camera(controller));
+	    this->sink->write(this->controllerId, "controller_start",
+		start.take());
+	    this->started = true;
+	}
+
+	TelemetryJsonObject data;
+	data.integer("command_serial", serial);
+	data.text("phase", complete ? "complete" : "start");
+	data.integer("duration_us", durationMicroseconds);
+	data.boolean("deferred_progressive_work", deferredProgressiveWork);
+	this->sink->write(this->controllerId, "foreground_command",
+	    data.take());
+    }
+
+    void recordEventLoopHeartbeat(uint64_t serial,
+	uint64_t expectedIntervalMicroseconds,
+	uint64_t actualIntervalMicroseconds, uint64_t latenessMicroseconds,
+	bool foregroundActivity)
+    {
+	TelemetryJsonObject data;
+	data.integer("heartbeat_serial", serial);
+	data.integer("expected_interval_us", expectedIntervalMicroseconds);
+	data.integer("actual_interval_us", actualIntervalMicroseconds);
+	data.integer("late_by_us", latenessMicroseconds);
+	data.boolean("foreground_activity", foregroundActivity);
+	this->sink->write(this->controllerId, "event_loop_heartbeat",
+	    data.take());
     }
 
     void recordPublication(
@@ -1892,11 +2016,46 @@ BObolLodTelemetry::~BObolLodTelemetry(void) = default;
 
 void
 BObolLodTelemetry::recordTransition(const BObolViewController &controller,
-    const BObolLodControlTransitionRecord &transition) noexcept
+    const BObolLodControlTransitionRecord &transition,
+    uint64_t durationMicroseconds) noexcept
 {
     try {
 	if (this->impl)
-	    this->impl->recordTransition(controller, transition);
+	    this->impl->recordTransition(controller, transition,
+		durationMicroseconds);
+    } catch (...) {
+	if (this->impl)
+	    this->impl->recordGap();
+    }
+}
+
+void
+BObolLodTelemetry::recordForegroundCommand(
+    const BObolViewController &controller, uint64_t serial, SbBool complete,
+    uint64_t durationMicroseconds, SbBool deferredProgressiveWork) noexcept
+{
+    try {
+	if (this->impl)
+	    this->impl->recordForegroundCommand(controller, serial,
+		complete != FALSE, durationMicroseconds,
+		deferredProgressiveWork != FALSE);
+    } catch (...) {
+	if (this->impl)
+	    this->impl->recordGap();
+    }
+}
+
+void
+BObolLodTelemetry::recordEventLoopHeartbeat(uint64_t serial,
+    uint64_t expectedIntervalMicroseconds,
+    uint64_t actualIntervalMicroseconds, uint64_t latenessMicroseconds,
+    SbBool foregroundActivity) noexcept
+{
+    try {
+	if (this->impl)
+	    this->impl->recordEventLoopHeartbeat(serial,
+		expectedIntervalMicroseconds, actualIntervalMicroseconds,
+		latenessMicroseconds, foregroundActivity != FALSE);
     } catch (...) {
 	if (this->impl)
 	    this->impl->recordGap();

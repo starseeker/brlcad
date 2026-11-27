@@ -277,9 +277,18 @@ draw_expand_legacy_attr_args(struct ged *gedp, int argc, const char *argv[],
 /*
  *  Main drawing command control logic
  */
+static void
+ged_draw2_trace(const char *checkpoint, int value)
+{
+    const char *tracePath = getenv("BOBOL_LOD_TELEMETRY_FILE");
+    if (tracePath && tracePath[0])
+	bu_log("BObol draw trace: %s (%d)\n", checkpoint, value);
+}
+
 extern "C" int
 ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
 {
+    ged_draw2_trace("entered", argc);
     int print_help = 0;
     int bot_threshold = -1;
     int no_autoview = 0;
@@ -347,6 +356,7 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
 	bu_vls_printf(gedp->ged_result_str, "No view specified and no shared views found");
 	return BRLCAD_ERROR;
     }
+    ged_draw2_trace("view-selected", ged_view_context_is_independent(cv));
 
     /* User settings may override various options - set up to collect them.
      * Option defaults may be overridden for the purposes of the current draw
@@ -414,6 +424,7 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
 
     // Whatever is left after argument processing are the potential draw paths
     argc = opt_ret;
+    ged_draw2_trace("options-parsed", argc);
 
     // Drawing modes may be set either by -m or by the more verbose options,
     // with the latter taking precedence if both are set.
@@ -490,7 +501,10 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
 	GED_SCENE_REALIZE_PROGRESSIVE : GED_SCENE_REALIZE_EAGER;
     request.realization.strict = vs.strict_fallback;
     request.autoview = blank_slate && !no_autoview;
-    return ged_scene_draw(gedp, &request, NULL) == GED_SCENE_OK ?
+    ged_draw2_trace("scene-submit", argc);
+    const int drawResult = ged_scene_draw(gedp, &request, NULL);
+    ged_draw2_trace("scene-return", drawResult);
+    return drawResult == GED_SCENE_OK ?
 	BRLCAD_OK : BRLCAD_ERROR;
 }
 
