@@ -901,11 +901,8 @@ const struct bu_cmdtab _view_cmds[] = {
     { (char *)NULL,      NULL}
 };
 
-/* Feature stores are intentionally renderer-neutral.  A successful command
- * can therefore change a shared scene node without changing the libbv camera
- * hash that qged traditionally uses to schedule a paint.  Only these command
- * families can mutate retained view content; mutation itself is detected by
- * the shared controller's render-request serial. */
+/* These commands can change shared features or polygons without changing
+ * the camera hash that qged uses to schedule a paint. */
 static bool
 _view_cmd_can_mutate_obol_content(const char *command)
 {
@@ -914,30 +911,99 @@ _view_cmd_can_mutate_obol_content(const char *command)
 	BU_STR_EQUAL(command, "objs") || BU_STR_EQUAL(command, "polygon"));
 }
 
-struct _view_shared_presentation_revision {
+struct _view_content_revision {
     uint64_t features = 0;
     uint64_t polygons = 0;
 
-    bool operator==(const _view_shared_presentation_revision &other) const
+    bool operator==(const _view_content_revision &other) const
     {
 	return features == other.features && polygons == other.polygons;
     }
 
-    bool operator!=(const _view_shared_presentation_revision &other) const
+    bool operator!=(const _view_content_revision &other) const
     {
 	return !(*this == other);
     }
 };
 
-static _view_shared_presentation_revision
-_view_shared_presentation_revision_get(BObolViewController *controller)
+static _view_content_revision
+_view_content_revision_get(BObolViewController *controller)
 {
-    _view_shared_presentation_revision revision;
+    _view_content_revision revision;
     if (!controller)
 	return revision;
     revision.features = controller->features().presentationRevision();
     revision.polygons = controller->polygons().presentationRevision();
     return revision;
+}
+
+struct _view_subcommand_context {
+    struct _ged_view_info &view_info;
+    const char *view_name;
+    int argc;
+    const char **argv;
+    bool track_content_changes;
+};
+
+static int
+_view_exec_subcommand(void *data)
+{
+    const auto &context = *static_cast<struct _view_subcommand_context *>(data);
+    struct _ged_view_info &gd = context.view_info;
+    struct ged *gedp = gd.gedp;
+    const int argc = context.argc;
+    const char **argv = context.argv;
+
+    if (context.view_name) {
+	gd.cv = ged_view_find_ctx(gedp, context.view_name);
+	if (!gd.cv) {
+	    bu_vls_printf(gedp->ged_result_str, ": invalid view name: %s",
+		context.view_name);
+	    return BRLCAD_ERROR;
+	}
+    } else {
+	gd.cv = ged_view_active_ctx(gedp);
+    }
+
+    /* LoD cache inspection and maintenance need only an open database. */
+    const bool database_only_lod_cache =
+	argc > 1 && BU_STR_EQUAL(argv[0], "lod") &&
+	BU_STR_EQUAL(argv[1], "cache");
+    if (!gd.cv && !database_only_lod_cache) {
+	bu_vls_printf(gedp->ged_result_str, ": no view specified and no view listed as current in GED");
+	return BRLCAD_ERROR;
+    }
+
+    BObolViewController *shared_controller = context.track_content_changes ?
+	ged_bobol_shared_view_controller(gedp) : nullptr;
+    BObolViewController *local_controller = context.track_content_changes ?
+	ged_bobol_view_controller(gd.cv) : nullptr;
+    const auto shared_revision = _view_content_revision_get(shared_controller);
+    const auto local_revision = _view_content_revision_get(local_controller);
+    int ret;
+    if (bu_cmd_valid(_view_cmds, argv[0]) == BRLCAD_OK &&
+	bu_cmd(_view_cmds, argc, argv, 0, &gd, &ret) == BRLCAD_OK) {
+	if (ret == BRLCAD_OK) {
+	    if (_view_content_revision_get(shared_controller) != shared_revision)
+		ged_bobol_shared_view_presentation_request(gedp,
+		    "ged-shared-view-content");
+	    if (_view_content_revision_get(local_controller) != local_revision)
+		(void)bv_frame_revision_bump(
+		    bv_context_view(ged_view_context_bv(gd.cv)));
+	}
+	return ret;
+    }
+
+    struct ged_view_context *saved_view = ged_view_active_ctx(gedp);
+    ged_view_active_ctx_set(gedp, gd.cv);
+    const int plugin_found = _ged_cmd_namespace_exec(gedp, "view", argc,
+	argv, &ret);
+    ged_view_active_ctx_set(gedp, saved_view);
+    if (plugin_found)
+	return ret;
+
+    bu_vls_printf(gedp->ged_result_str, "subcommand %s not defined", argv[0]);
+    return BRLCAD_ERROR;
 }
 
 int
@@ -1016,61 +1082,20 @@ ged_view_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    // Either a view was specified, or we use the current view
-    if (bu_vls_strlen(&vname)) {
-	gd.cv = ged_view_find_ctx(gedp, bu_vls_cstr(&vname));
-	if (!gd.cv) {
-	    bu_vls_printf(gedp->ged_result_str, ": invalid view name: %s", bu_vls_cstr(&vname));
-	    bu_vls_free(&vname);
-	    return BRLCAD_ERROR;
-	}
-    } else {
-	gd.cv = ged_view_active_ctx(gedp);
-    }
+    const bool track_content_changes = _view_cmd_can_mutate_obol_content(argv[0]);
+    struct _view_subcommand_context context = {gd,
+	bu_vls_strlen(&vname) ? bu_vls_cstr(&vname) : nullptr,
+	argc, argv, track_content_changes};
 
-    /* LoD cache inspection and maintenance are scoped to the open database,
-     * not to a camera.  Permit that one command family in headless clients;
-     * _view_cmd_lod handles it before consulting gd.cv. */
-    const int database_only_lod_cache =
-	argc > 1 && BU_STR_EQUAL(argv[0], "lod") &&
-	BU_STR_EQUAL(argv[1], "cache");
-    if (!gd.cv && !database_only_lod_cache) {
-	bu_vls_printf(gedp->ged_result_str, ": no view specified and no view listed as current in GED");
-	bu_vls_free(&vname);
-	return BRLCAD_ERROR;
-    }
-
-    BObolViewController *shared_controller =
-	_view_cmd_can_mutate_obol_content(argv[0]) ?
-	ged_bobol_shared_view_controller(gedp) : NULL;
-    const _view_shared_presentation_revision shared_presentation_revision =
-	_view_shared_presentation_revision_get(shared_controller);
-    int ret;
-    if (bu_cmd_valid(_view_cmds, argv[0]) == BRLCAD_OK &&
-	bu_cmd(_view_cmds, argc, argv, 0, (void *)&gd, &ret) == BRLCAD_OK) {
-	if (ret == BRLCAD_OK && shared_controller &&
-	    _view_shared_presentation_revision_get(shared_controller) !=
-		shared_presentation_revision)
-	    ged_bobol_shared_view_presentation_request(gedp,
-		"ged-shared-view-content");
-	bu_vls_free(&vname);
-	return ret;
-    }
-
-    struct ged_view_context *saved_view = ged_view_active_ctx(gedp);
-    ged_view_active_ctx_set(gedp, gd.cv);
-    const int plugin_found = _ged_cmd_namespace_exec(gedp, "view",
-	argc, argv, &ret);
-    ged_view_active_ctx_set(gedp, saved_view);
-    if (plugin_found) {
-	bu_vls_free(&vname);
-	return ret;
-    }
-
-    bu_vls_printf(gedp->ged_result_str, "subcommand %s not defined", argv[0]);
-
+    /* Keep view lookup, retained state access, and presentation notification
+     * together on the thread that owns the display. */
+    const bool needs_owner = track_content_changes ||
+	BU_STR_EQUAL(argv[0], "faceplate") || BU_STR_EQUAL(argv[0], "cutting");
+    const int ret = needs_owner ?
+	ged_exec_owner_invoke(gedp, _view_exec_subcommand, &context) :
+	_view_exec_subcommand(&context);
     bu_vls_free(&vname);
-    return BRLCAD_ERROR;
+    return ret;
 }
 
 #include "../include/plugin.h"
