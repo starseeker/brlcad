@@ -13,6 +13,7 @@
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgToolPalette.h"
 #include "qtcad/QgView.h"
+#include "QgEdCategories.h"
 #include "EditArbFactory.h"
 
 EditArbTool::EditArbTool(QgPluginContext *ctx, QObject *parent)
@@ -108,7 +109,7 @@ EditArbFactory::descriptor() const
     QgPluginDescriptor descriptor;
     descriptor.id = "org.brlcad.qged.edit.arb";
     descriptor.displayName = "ARB Edit";
-    descriptor.category = "qged.object";
+    descriptor.category = QStringLiteral(QGED_CATEGORY_OBJECT);
     descriptor.iconName = ":arb.svg";
     descriptor.sortKey = 1050;
     descriptor.requiresOpenDb = true;

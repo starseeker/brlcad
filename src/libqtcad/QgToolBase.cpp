@@ -61,6 +61,8 @@ QgToolBase::paletteElement()
 
     if (!m_widget)
 	m_widget = createWidget();
+    if (!m_widget)
+	return nullptr;
     QIcon *icon = createIcon();
 
     QgToolPaletteElement *el = new QgToolPaletteElement(icon, m_widget);

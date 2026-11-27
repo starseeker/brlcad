@@ -31,6 +31,7 @@
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgToolPalette.h"
 #include "qtcad/QgView.h"
+#include "QgEdCategories.h"
 #include "EditExtrudeFactory.h"
 
 EditExtrudeTool::EditExtrudeTool(QgPluginContext *ctx, QObject *parent)
@@ -127,7 +128,7 @@ EditExtrudeFactory::descriptor() const
     QgPluginDescriptor d;
     d.id = "org.brlcad.qged.edit.extrude";
     d.displayName = "Extrude Edit";
-    d.category = "qged.object";
+    d.category = QStringLiteral(QGED_CATEGORY_OBJECT);
     d.iconName = ":extrude.svg";
     d.sortKey = 1100;
     d.requiresOpenDb = true;

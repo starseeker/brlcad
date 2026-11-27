@@ -308,6 +308,43 @@ if(BRLCAD_ENABLE_QT AND TARGET qged AND TARGET qged_plugins)
   add_dependencies(qged qged_plugins)
 endif()
 
+if(BRLCAD_ENABLE_QT AND BUILD_TESTING)
+  if(TARGET Qt6::Test)
+    set(QGED_TEST_QT_TEST Qt6::Test)
+    set(QGED_TEST_QT_WIDGETS Qt6::Widgets)
+  elseif(TARGET Qt5::Test)
+    set(QGED_TEST_QT_TEST Qt5::Test)
+    set(QGED_TEST_QT_WIDGETS Qt5::Widgets)
+  endif()
+  if(QGED_TEST_QT_TEST)
+    add_executable(test_qged_native_plugins tests/test_qged_native_plugins.cpp)
+    set_target_properties(test_qged_native_plugins PROPERTIES AUTOMOC ON)
+    target_compile_definitions(test_qged_native_plugins
+      PRIVATE BRLCADBUILD HAVE_CONFIG_H)
+    target_link_libraries(test_qged_native_plugins
+      libqtcad
+      libbu
+      ${QGED_TEST_QT_TEST}
+      ${QGED_TEST_QT_WIDGETS}
+    )
+    add_dependencies(test_qged_native_plugins
+      qged_view_info
+      qged_view_settings
+      qged_select
+      qged_measure
+      qged_polygon_create
+      qged_polygon_modify
+    )
+    brlcad_add_test(NAME test_qged_native_plugins
+      COMMAND test_qged_native_plugins)
+    set_property(TEST test_qged_native_plugins APPEND PROPERTY ENVIRONMENT
+      QGED_TEST_PLUGIN_DIR=${CMAKE_BINARY_DIR}/${LIBEXEC_DIR}/qged
+      BRLCAD_ROOT=${CMAKE_BINARY_DIR}
+      QT_QPA_PLATFORM=offscreen
+    )
+  endif()
+endif()
+
 brlcad_addexec(
   qged_unique_mesh_stress_generator
   tests/generate_unique_mesh_stress.cpp
@@ -366,6 +403,7 @@ set(
   tests/qged_resize_matrix.sh
   tests/qged_selection_ui_matrix.sh
   tests/qged_test_display.sh
+  tests/test_qged_native_plugins.cpp
   tests/test_lod_atlas_reuse.jq
   tests/test_lod_control_trace.sh
   tests/test_lod_hud_contract.sh

@@ -33,6 +33,7 @@
 #include <QSettings>
 #include <QTextStream>
 #include <QTemporaryDir>
+#include <QThread>
 #include "brlcad_version.h"
 #include "bu/malloc.h"
 #include "bu/file.h"
@@ -132,19 +133,25 @@ qt_create_io_handler(struct ged_subprocess *p, bu_process_io_t t, ged_io_func_t 
 
     QgEdApp *ca = (QgEdApp *)p->gedp->ged_io_data;
     QgConsole *c = ca->w->console;
-    c->listen(fd, p, t, callback, data);
-
-    switch (t) {
-	case BU_PROCESS_STDIN:
-	    p->stdin_active = 1;
-	    break;
-	case BU_PROCESS_STDOUT:
-	    p->stdout_active = 1;
-	    break;
-	case BU_PROCESS_STDERR:
-	    p->stderr_active = 1;
-	    break;
-    }
+    const auto attach = [=]() {
+	c->listen(fd, p, t, callback, data);
+	switch (t) {
+	    case BU_PROCESS_STDIN:
+		p->stdin_active = 1;
+		break;
+	    case BU_PROCESS_STDOUT:
+		p->stdout_active = 1;
+		break;
+	    case BU_PROCESS_STDERR:
+		p->stderr_active = 1;
+		break;
+	}
+    };
+    // GED commands may launch subprocesses from a worker.
+    if (QThread::currentThread() == c->thread())
+	attach();
+    else
+	QMetaObject::invokeMethod(c, attach, Qt::BlockingQueuedConnection);
 }
 
 extern "C" void
@@ -155,16 +162,20 @@ qt_delete_io_handler(struct ged_subprocess *p, bu_process_io_t t)
     QgEdApp *ca = (QgEdApp *)p->gedp->ged_io_data;
     QgConsole *c = ca->w->console;
 
-    auto it = c->findListener(p, (int)t);
-    if (!it)
-	return;
-    QgConsoleListener *l = it;
+    const auto detach = [=]() {
+	QgConsoleListener *l = c->findListener(p, (int)t);
+	if (!l)
+	    return;
 
-    // Stop readiness immediately, but queue retirement so this callback never
-    // deletes the listener while its activated() lambda is still on the stack.
-    l->disconnectNotifier();
-    l->on_finished();
-    emit ca->view_update(QG_VIEW_REFRESH);
+	// Queue retirement so the listener can leave its activated() callback.
+	l->disconnectNotifier();
+	l->on_finished();
+	emit ca->view_update(QG_VIEW_REFRESH);
+    };
+    if (QThread::currentThread() == c->thread())
+	detach();
+    else
+	QMetaObject::invokeMethod(c, detach, Qt::BlockingQueuedConnection);
 }
 
 struct qged_qcmd_cleanup {
@@ -233,6 +244,11 @@ QgEdApp::QgEdApp(int &argc, char *argv[], const char *db_file, int swrast_mode,
 	if (!view_context)
 	    view_context = qged_session_active_view_context(mdl);
 	return view_context ? ged_view_context_from_bv(view_context) : NULL;
+    };
+    m_plugin_context.selectionSetAccessor = [this]() -> QString {
+	if (!mdl || mdl->selectionSetName().empty())
+	    return QString();
+	return QString::fromLocal8Bit(mdl->selectionSetName().c_str());
     };
     m_plugin_context.model = mdl;
     m_plugin_context.notifier = m_plugin_notifier;
@@ -403,6 +419,7 @@ QgEdApp::~QgEdApp() {
     w = nullptr;
     m_plugin_context.viewWidgetAccessor = {};
     m_plugin_context.viewContextAccessor = {};
+    m_plugin_context.selectionSetAccessor = {};
     if (mdl && mdl->session())
 	mdl->session()->setActiveViewContext(NULL);
     m_plugin_context.model = nullptr;

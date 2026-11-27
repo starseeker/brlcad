@@ -202,11 +202,11 @@ QgPluginManagerTest::managesToolPalettes()
     QCOMPARE(view.view_type(), QgViewType::SW);
     view.add_event_filter(&firstFilter);
     view.add_event_filter(&secondFilter);
-    QCOMPARE(view.curr_event_filter, &secondFilter);
+    QCOMPARE(view.active_event_filter(), &secondFilter);
     view.clear_event_filter(&firstFilter);
-    QCOMPARE(view.curr_event_filter, &secondFilter);
+    QCOMPARE(view.active_event_filter(), &secondFilter);
     view.clear_event_filter(&secondFilter);
-    QVERIFY(view.curr_event_filter == nullptr);
+    QVERIFY(view.active_event_filter() == nullptr);
 
     controller.setActiveView(&view);
     QCOMPARE(filter->property("attachCount").toInt(), 1);

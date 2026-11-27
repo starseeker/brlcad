@@ -2535,6 +2535,8 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	controller_lod_source_signature(this);
     (void)this->d->observeLodSources(signatures);
     if (signatures.empty()) {
+	if (!this->d->lodSourceEvidence.submitted().empty())
+	    this->d->lodPerformanceResetPending = true;
 	/*
 	 * No current source can consume a submission cursor.  This is a valid
 	 * transient while a source is replaced, and a terminal state when the
@@ -2565,6 +2567,9 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	this->d->lodSourceEvidence.reset();
 	return 0;
     }
+
+    if (this->d->lodPerformanceResetPending)
+	this->d->resetRendererPerformanceEvidence();
 
     if (this->d->lodLastSubmittedViewRevision == this->d->lodViewRevision &&
 	this->d->lodLastSubmittedPolicyRevision == this->d->lodPolicyRevision &&
@@ -2655,6 +2660,9 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
     const bool sourceSetChanged =
 	!this->d->lodSourceEvidence.submitted().empty() &&
 	!signatures.sameIdentities(this->d->lodSourceEvidence.submitted());
+    const bool newPerformanceEpoch = sourceSetChanged &&
+	signatures.startsNewPerformanceEpoch(
+	    this->d->lodSourceEvidence.submitted());
     const bool inventoryChanged =
 	!this->d->lodSourceEvidence.submitted().empty() &&
 	!signatures.sameInventories(this->d->lodSourceEvidence.submitted());
@@ -2668,6 +2676,8 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	this->d->lodLastSubmittedViewRevision != this->d->lodViewRevision ||
 	this->d->lodLastSubmittedPolicyRevision !=
 	    this->d->lodPolicyRevision;
+    if (newPerformanceEpoch)
+	this->d->resetRendererPerformanceEvidence();
     const bool visibilitySupersedesRetainedAllocation = visibilityChanged &&
 	!sourceSetChanged && !inventoryChanged && !viewOrPolicyChanged &&
 	this->d->lodSubmissionPass.active() &&

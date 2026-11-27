@@ -31,6 +31,7 @@
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgToolPalette.h"
 #include "qtcad/QgView.h"
+#include "QgEdCategories.h"
 #include "EditRevolveFactory.h"
 
 EditRevolveTool::EditRevolveTool(QgPluginContext *ctx, QObject *parent)
@@ -126,7 +127,7 @@ EditRevolveFactory::descriptor() const
     QgPluginDescriptor d;
     d.id = "org.brlcad.qged.edit.revolve";
     d.displayName = "Revolve Edit";
-    d.category = "qged.object";
+    d.category = QStringLiteral(QGED_CATEGORY_OBJECT);
     d.iconName = ":revolve.svg";
     d.sortKey = 1200;
     d.requiresOpenDb = true;
