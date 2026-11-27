@@ -2133,7 +2133,7 @@ check_enum_replacement()
 	    require(field.getEnum(i, name) == (failed ? originalValues[i] : nextValues[i]) &&
 		name == (failed ? originalNames[i] : nextNames[i]), "enum replacement corrupted mapping");
 	}
-	field = field;
+	field.operator=(field);
 	require(field.getNumEnums() == (failed ? 2 : 3) && field.getValue() == 7,
 	    "enum self-assignment corrupted mappings");
     }

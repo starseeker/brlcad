@@ -78,7 +78,7 @@
 #include "bu/mapped_file.h"
 #include "bu/str.h"
 
-#define EXPECTED_PLATFORM_SYMBOLS 119
+#define EXPECTED_PLATFORM_SYMBOLS 129
 #define DEFAULT_FALLBACK_THREADS 4
 
 /* -------- Environment helpers -------- */
