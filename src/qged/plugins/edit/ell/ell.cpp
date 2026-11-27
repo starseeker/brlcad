@@ -24,7 +24,6 @@
 
 #include <QMetaObject>
 #include <QIcon>
-#include <QPixmap>
 #include <QSizePolicy>
 
 #include "qtcad/QgPluginContext.h"
@@ -76,7 +75,7 @@ EditEllTool::createWidget()
 QIcon *
 EditEllTool::createIcon()
 {
-    return new QIcon(QPixmap(":ell.svg"));
+    return new QIcon(QStringLiteral(":/images/primitives/ell.png"));
 }
 
 void
@@ -133,7 +132,7 @@ EditEllFactory::descriptor() const
     d.id = "org.brlcad.qged.edit.ell";
     d.displayName = "Ell Edit";
     d.category = QStringLiteral(QGED_CATEGORY_OBJECT);
-    d.iconName = ":ell.svg";
+    d.iconName = QStringLiteral(":/images/primitives/ell.png");
     d.sortKey = 1000;
     d.requiresOpenDb = true;
     d.requiresView = true;
