@@ -42,16 +42,16 @@
 #define ECMD_REC_SCALE_R  7005
 
 static void
-check_getter(struct rt_edit *s, int cmd, int count, const fastf_t *expected)
+check_getter(struct rt_edit *s, int cmd, size_t count, const fastf_t *expected)
 {
     struct rt_edit_cmd_values values;
     if (rt_edit_cmd_values_get(s, cmd, &values) != RT_EDIT_VALUE_OK ||
 	values.value_count != count)
         bu_exit(1, "REC getter returned wrong value count for %d\n", cmd);
-    for (int i = 0; i < count; i++) {
+    for (size_t i = 0; i < count; i++) {
 	if (!values.value_valid[i] ||
 	    !NEAR_EQUAL(values.values[i], expected[i], VUNITIZE_TOL))
-            bu_exit(1, "REC getter %d value %d: got %g, expected %g\n",
+            bu_exit(1, "REC getter %d value %zu: got %g, expected %g\n",
 		    cmd, i, values.values[i], expected[i]);
     }
 }

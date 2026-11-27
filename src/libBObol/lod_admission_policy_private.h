@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <type_traits>
 
 class BObolLodProducerPolicy {
@@ -59,6 +60,26 @@ public:
  */
 class BObolLodAvailabilityLedger {
 public:
+    struct ProvisionalAllocationInputs {
+	bool providerPending = false;
+	bool compactInventoryComplete = false;
+	bool serviceStreamIdle = false;
+	bool resultDeliveryIdle = false;
+	bool residentGrowthPending = false;
+	bool residencyDrainActive = false;
+	bool coverageCensusComplete = false;
+	bool demandCensusCurrent = false;
+	bool quietView = false;
+	size_t activeMeshPopulation = 0;
+	uint64_t residentPopulationRevision = 0;
+	uint64_t inventoryRevision = 0;
+	uint64_t availabilityRevision = 0;
+	uint64_t visibilityRevision = 0;
+	uint64_t viewRevision = 0;
+	uint64_t policyRevision = 0;
+	int64_t nowMicroseconds = 0;
+    };
+
     void noteResultQueueReady(int64_t nowMicroseconds)
     {
 	const int64_t now = nowMicroseconds > 0 ? nowMicroseconds :
@@ -91,6 +112,181 @@ public:
     size_t providerPendingCount(void) const
     {
 	return this->providerPendingCountValue;
+    }
+
+    /* Count accepted immutable-mesh publications independently of the
+     * source-availability epoch.  A compact producer can finish publishing
+     * its complete object inventory before the worker pool has produced even
+     * a modest fraction of that inventory's drawable meshes.  The latter
+     * growth is the useful checkpoint signal for importance allocation. */
+    void noteResidentPopulationAdvanced(size_t count = 1)
+    {
+	const uint64_t increment = static_cast<uint64_t>(count);
+	if (increment > std::numeric_limits<uint64_t>::max() -
+		this->residentPopulationRevisionValue)
+	    this->residentPopulationRevisionValue =
+		std::numeric_limits<uint64_t>::max();
+	else
+	    this->residentPopulationRevisionValue += increment;
+    }
+
+    uint64_t residentPopulationRevision(void) const
+    {
+	return this->residentPopulationRevisionValue;
+    }
+
+    /*
+     * A slow source-preparation tail must not prevent importance allocation
+     * of meshes which are already drawable.  Admit that provisional work
+     * only after the compact and projected-demand censuses are current and
+     * every downstream publication owner is quiet.
+     *
+     * Source publication and resident-mesh publication are separate streams.
+     * Once the source inventory is closed, accepted worker results may still
+     * grow the drawable population for a long time without advancing the
+     * source-availability revision.  Permit either stream to establish the
+     * checkpoint, but only at a quiescent worker/result boundary.  An active
+     * resident-growth drain is allowed: the controller interrupts that
+     * mechanical pass and preserves its debt around the allocation.
+     *
+     * Within one inventory/view/policy scope, new availability may retry the
+     * O(scene) allocator only after both a bounded interval and geometrically
+     * significant population growth.  Recording attempts rather than
+     * completions also bounds work when a later epoch invalidates an
+     * allocation while its time-sliced transaction is still running.  The
+     * ordinary fully-settled path does not consult this checkpoint and
+     * therefore always produces the final authoritative allocation.
+     */
+    bool beginProvisionalAllocationIfReady(
+	const ProvisionalAllocationInputs &inputs)
+    {
+	if (!inputs.compactInventoryComplete ||
+	    !inputs.serviceStreamIdle || !inputs.resultDeliveryIdle ||
+	    !inputs.coverageCensusComplete || !inputs.demandCensusCurrent ||
+	    !inputs.quietView || inputs.activeMeshPopulation == 0)
+	    return false;
+
+	const bool residentPopulationAdvanced =
+	    inputs.residentPopulationRevision >
+		this->provisionalAllocationResidentRevisionValue;
+	/* A closed source inventory needs a positive resident-publication edge;
+	 * changes to presentation cuts or camera metadata alone must not
+	 * impersonate new allocation input. */
+	if (!inputs.providerPending && !residentPopulationAdvanced)
+	    return false;
+
+	const bool sameScope = this->provisionalAllocationBaselineValue &&
+	    this->provisionalAllocationInventoryRevisionValue ==
+		inputs.inventoryRevision &&
+	    this->provisionalAllocationVisibilityRevisionValue ==
+		inputs.visibilityRevision &&
+	    this->provisionalAllocationViewRevisionValue ==
+		inputs.viewRevision &&
+	    this->provisionalAllocationPolicyRevisionValue ==
+		inputs.policyRevision;
+	const int64_t now = inputs.nowMicroseconds > 0 ?
+	    inputs.nowMicroseconds : minimumTimestamp();
+	if (sameScope || !inputs.providerPending) {
+	    const bool sourceAvailabilityAdvanced =
+		inputs.availabilityRevision !=
+		    this->provisionalAllocationAvailabilityRevisionValue;
+	    if (!sourceAvailabilityAdvanced && !residentPopulationAdvanced)
+		return false;
+	    const size_t meshGrowth = inputs.activeMeshPopulation >
+		    this->provisionalAllocationPopulationValue ?
+		inputs.activeMeshPopulation -
+		    this->provisionalAllocationPopulationValue : 0;
+	    const uint64_t residentGrowth64 = residentPopulationAdvanced ?
+		inputs.residentPopulationRevision -
+		    this->provisionalAllocationResidentRevisionValue : 0;
+	    const uint64_t sizeMaximum = static_cast<uint64_t>(
+		std::numeric_limits<size_t>::max());
+	    const size_t residentGrowth = residentGrowth64 > sizeMaximum ?
+		std::numeric_limits<size_t>::max() :
+		static_cast<size_t>(residentGrowth64);
+	    const size_t growth = std::max(meshGrowth, residentGrowth);
+	    const size_t growthBasis =
+		this->provisionalAllocationPopulationValue;
+	    if (growth < provisionalAllocationGrowthRequired(growthBasis))
+		return false;
+	    if (now < this->provisionalAllocationMicrosecondsValue ||
+		now - this->provisionalAllocationMicrosecondsValue <
+		    provisionalAllocationIntervalMicroseconds())
+		return false;
+	}
+
+	this->provisionalAllocationAttemptedValue = true;
+	this->provisionalAllocationBaselineValue = true;
+	this->provisionalAllocationPopulationValue =
+	    inputs.activeMeshPopulation;
+	this->provisionalAllocationResidentRevisionValue =
+	    inputs.residentPopulationRevision;
+	this->provisionalAllocationInventoryRevisionValue =
+	    inputs.inventoryRevision;
+	this->provisionalAllocationAvailabilityRevisionValue =
+	    inputs.availabilityRevision;
+	this->provisionalAllocationVisibilityRevisionValue =
+	    inputs.visibilityRevision;
+	this->provisionalAllocationViewRevisionValue = inputs.viewRevision;
+	this->provisionalAllocationPolicyRevisionValue = inputs.policyRevision;
+	this->provisionalAllocationMicrosecondsValue = now;
+	return true;
+    }
+
+    /* A completed allocation, provisional or final, is the baseline against
+     * which later resident growth is measured.  Retiring the in-progress bit
+     * also lets automatic-control teardown distinguish a finished checkpoint
+     * from an abandoned time-sliced allocation. */
+    void completeProvisionalAllocation(
+	const ProvisionalAllocationInputs &inputs)
+    {
+	this->provisionalAllocationAttemptedValue = false;
+	this->provisionalAllocationBaselineValue = true;
+	this->provisionalAllocationPopulationValue =
+	    inputs.activeMeshPopulation;
+	this->provisionalAllocationResidentRevisionValue =
+	    inputs.residentPopulationRevision;
+	this->provisionalAllocationInventoryRevisionValue =
+	    inputs.inventoryRevision;
+	this->provisionalAllocationAvailabilityRevisionValue =
+	    inputs.availabilityRevision;
+	this->provisionalAllocationVisibilityRevisionValue =
+	    inputs.visibilityRevision;
+	this->provisionalAllocationViewRevisionValue = inputs.viewRevision;
+	this->provisionalAllocationPolicyRevisionValue = inputs.policyRevision;
+	this->provisionalAllocationMicrosecondsValue =
+	    inputs.nowMicroseconds > 0 ?
+		inputs.nowMicroseconds : minimumTimestamp();
+    }
+
+    void resetProvisionalAllocation(void)
+    {
+	this->provisionalAllocationAttemptedValue = false;
+	this->provisionalAllocationBaselineValue = false;
+	this->provisionalAllocationPopulationValue = 0;
+	this->provisionalAllocationResidentRevisionValue = 0;
+	this->provisionalAllocationInventoryRevisionValue = 0;
+	this->provisionalAllocationAvailabilityRevisionValue = 0;
+	this->provisionalAllocationVisibilityRevisionValue = 0;
+	this->provisionalAllocationViewRevisionValue = 0;
+	this->provisionalAllocationPolicyRevisionValue = 0;
+	this->provisionalAllocationMicrosecondsValue = 0;
+	this->residentPopulationRevisionValue = 0;
+    }
+
+    bool provisionalAllocationAttempted(void) const
+    {
+	return this->provisionalAllocationAttemptedValue;
+    }
+
+    size_t provisionalAllocationPopulation(void) const
+    {
+	return this->provisionalAllocationPopulationValue;
+    }
+
+    static constexpr int64_t provisionalAllocationIntervalMicroseconds(void)
+    {
+	return 1000000;
     }
 
     bool deferInventoryDelta(bool inventoryChanged, bool providerPending,
@@ -240,10 +436,27 @@ private:
 	return interactive ? 100000 : 250000;
     }
 
+    static size_t provisionalAllocationGrowthRequired(size_t population)
+    {
+	static const size_t minimumGrowth = 64;
+	return std::max(minimumGrowth, population / 2);
+    }
+
     std::atomic<int64_t> firstResultReadyMicrosecondsValue {0};
     size_t providerPendingCountValue = 0;
     int64_t inventoryFirstPendingMicrosecondsValue = 0;
     ResidentGrowthPhase residentGrowthPhaseValue = ResidentGrowthPhase::IDLE;
+    bool provisionalAllocationAttemptedValue = false;
+    bool provisionalAllocationBaselineValue = false;
+    size_t provisionalAllocationPopulationValue = 0;
+    uint64_t provisionalAllocationResidentRevisionValue = 0;
+    uint64_t provisionalAllocationInventoryRevisionValue = 0;
+    uint64_t provisionalAllocationAvailabilityRevisionValue = 0;
+    uint64_t provisionalAllocationVisibilityRevisionValue = 0;
+    uint64_t provisionalAllocationViewRevisionValue = 0;
+    uint64_t provisionalAllocationPolicyRevisionValue = 0;
+    int64_t provisionalAllocationMicrosecondsValue = 0;
+    uint64_t residentPopulationRevisionValue = 0;
 };
 
 /*
@@ -1140,6 +1353,7 @@ public:
 	bool stableCalibrationPending = false;
 	bool capacityAllocationPending = false;
 	bool capacitySamplePending = false;
+	bool headroomProbePending = false;
 	bool stablePresentationAvailable = false;
 	bool providerPending = false;
 	bool servicePending = false;
@@ -1417,7 +1631,7 @@ public:
     static bool presentationPausesSubmission(
 	bool discoveryCalibrationPending, bool stableCalibrationPending,
 	bool capacityAllocationPending, bool capacitySamplePending,
-	bool stablePresentationAvailable);
+	bool headroomProbePending, bool stablePresentationAvailable);
 
     static bool maySeedPointStructuralDistribution(
 	bool discoveryCalibrationPending, bool stableCalibrationPending,

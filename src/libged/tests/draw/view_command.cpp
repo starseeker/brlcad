@@ -806,6 +806,16 @@ test_lod_resource_policy_command(struct ged *gedp,
 	std::string::npos);
     ASSERT(result_str(gedp).find("resident_limit_bytes:") !=
 	std::string::npos);
+    ASSERT(result_str(gedp).find("resident_mesh_bytes:") !=
+	std::string::npos);
+    ASSERT(result_str(gedp).find("stable_resident_mesh_bytes:") !=
+	std::string::npos);
+    ASSERT(result_str(gedp).find("working_set_limit_bytes:") !=
+	std::string::npos);
+    ASSERT(result_str(gedp).find("gpu_triangle_atlas_live_bytes:") !=
+	std::string::npos);
+    ASSERT(result_str(gedp).find("gpu_triangle_atlas_capacity_bytes:") !=
+	std::string::npos);
 
     const std::string excessiveMemory = std::to_string(
 	service->getMaximumResidentMeshAvailableMemoryPercent() + 1.0);
@@ -822,6 +832,19 @@ test_lod_resource_policy_command(struct ged *gedp,
 	SMALL_FASTF);
     ASSERT(service->getResidentMeshAvailableMemoryBasisBytes() == 0);
     ASSERT(service->getResidentMeshLimit() > 0);
+
+    const char *service_status[] = {
+	"view", "lod", "service", "status", NULL
+    };
+    ASSERT(run_view(gedp, 4, service_status) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("resident_mesh_bytes:") !=
+	std::string::npos);
+    ASSERT(result_str(gedp).find("active_working_set_bytes:") !=
+	std::string::npos);
+    ASSERT(result_str(gedp).find("resident_mesh_cache_loads:") !=
+	std::string::npos);
+    ASSERT(result_str(gedp).find("gpu_tracked_buffer_bytes:") !=
+	std::string::npos);
 
     const char *fps_restore[] = {"view", "lod", "fps", "60", "20", NULL};
     ASSERT(run_view(gedp, 5, fps_restore) == BRLCAD_OK);

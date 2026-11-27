@@ -29,7 +29,9 @@ qg_scene_bind(struct ged *gedp, QgView *display)
 	return 0;
     if (ged_view_context_obol_endpoint_get(view_ctx) == endpoint)
 	return 1;
-    return ged_view_context_obol_endpoint_set(view_ctx, endpoint, 0);
+    if (!ged_view_context_obol_endpoint_set(view_ctx, endpoint, 0))
+	return 0;
+    return 1;
 }
 
 int

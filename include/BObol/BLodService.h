@@ -9,6 +9,7 @@
 #ifndef BOBOL_BLODSERVICE_H
 #define BOBOL_BLODSERVICE_H
 
+#include "BObol/BDefines.h"
 #include "BObol/BLodRealization.h"
 #include "BObol/BSourceMeshRequest.h"
 #include "bv/view.h"
@@ -164,6 +165,16 @@ struct BOBOL_EXPORT BObolRtProxyProvider {
     struct db_i *getDatabase(void) const;
 };
 
+/* Host-visible latency intent for otherwise equivalent background work.
+ * This is a dispatch hint only: it is not part of request/cache identity and
+ * never bypasses task dependencies, transient-memory admission, or result
+ * reservations.  Within one class the service retains its coarse-quality-
+ * first, FIFO ordering. */
+enum BObolLodTaskDispatchClass {
+    BOBOL_LOD_TASK_DISPATCH_NORMAL = 0,
+    BOBOL_LOD_TASK_DISPATCH_PREVIEW = 1
+};
+
 struct BOBOL_EXPORT BObolLodTask {
     uint64_t generation;
     BObolLodRequest request;
@@ -177,6 +188,10 @@ struct BOBOL_EXPORT BObolLodTask {
     /* Conservative peak bytes needed while realize() is executing.  Zero
      * asks the service to estimate from request.sourceCounts. */
     size_t estimatedWorkingSetBytes;
+    /* Scheduling-only latency class.  A first-visible preview may pass queued
+     * ordinary refinement, but cannot preempt executing work or weaken any
+     * resource/dependency gate. */
+    int dispatchClass;
     SbBool publishResult;
     SbBool writeCache;
 
@@ -276,6 +291,14 @@ struct BOBOL_EXPORT BObolLodServiceWorkStatus {
     SbBool stopping = FALSE;
     size_t pendingTasks = 0;
     size_t executingTasks = 0;
+    /** Workers which have selected a task but are waiting for the shared
+     * process-wide CPU budget.  These are included in executingTasks. */
+    size_t cpuAdmissionWaitingTasks = 0;
+    /** Workers which have acquired CPU admission but are waiting for the
+     * process-wide transient-memory budget.  Ordinary tasks are included in
+     * executingTasks; resident compactions are represented by the compaction
+     * counters below. */
+    size_t transientMemoryAdmissionWaitingTasks = 0;
     size_t inFlightTasks = 0;
     size_t resultReservations = 0;
     size_t cacheWriteReservations = 0;
@@ -291,6 +314,8 @@ struct BOBOL_EXPORT BObolLodServiceWorkStatus {
     SbBool isIdle(void) const
     {
 	return pendingTasks == 0 && executingTasks == 0 &&
+	    cpuAdmissionWaitingTasks == 0 &&
+	    transientMemoryAdmissionWaitingTasks == 0 &&
 	    inFlightTasks == 0 && resultReservations == 0 &&
 	    cacheWriteReservations == 0 && activeRequests == 0 &&
 	    queuedResults == 0 && queuedCacheWrites == 0 &&
@@ -308,10 +333,48 @@ struct BOBOL_EXPORT BObolLodGenerationWorkStatus {
     size_t activeTasks = 0;
     size_t pendingTasks = 0;
     size_t executingTasks = 0;
+    /** Selected tasks waiting at the process-wide CPU gate.  This is a
+     * subset of executingTasks, not an additional work obligation. */
+    size_t cpuAdmissionWaitingTasks = 0;
+    /** Selected tasks which passed the CPU gate and are waiting at the
+     * process-wide transient-memory gate.  This is a subset of
+     * executingTasks. */
+    size_t transientMemoryAdmissionWaitingTasks = 0;
     size_t delayedTasks = 0;
     size_t queuedResults = 0;
     size_t queuedCacheWrites = 0;
     size_t sharedProducerLeases = 0;
+    /* Exact stage of the earliest active mesh producer for this generation.
+     * Multiple shared producers may occupy different stages; stageMask and
+     * activeProducerCount expose that fact, while the task/unit fields
+     * aggregate only producerStage.  A zero total is intentionally
+     * indeterminate rather than an invented percentage. */
+    uint32_t producerStageMask = 0;
+    int producerStage = BOBOL_LOD_PRODUCER_STAGE_NONE;
+    /* Number of relevant active producers in each exact stage.  Index zero
+     * is the NONE sentinel and remains zero.  This preserves concurrent-stage
+     * information which producerStage alone intentionally collapses to the
+     * earliest stage. */
+    size_t producerStageTaskCounts[BOBOL_LOD_PRODUCER_STAGE_COUNT] = {};
+    size_t producerStageTaskCount = 0;
+    size_t activeProducerCount = 0;
+    uint64_t producerStageCompletedUnits = 0;
+    uint64_t producerStageTotalUnits = 0;
+    /** Age of the oldest task which has not yet acquired a worker.  This is
+     * zero when no task owned by (or shared with) this generation is queued. */
+    uint64_t oldestPendingTaskAgeMicroseconds = 0;
+    /** Longest queue wait and execution lifetime among the active producers
+     * represented by this snapshot. */
+    uint64_t maximumProducerQueueWaitMicroseconds = 0;
+    uint64_t maximumProducerElapsedMicroseconds = 0;
+    /** Longest continuous residence in producerStage.  Together with the
+     * unit counters this distinguishes slow work from a stalled queue. */
+    uint64_t producerStageElapsedMicroseconds = 0;
+    /** Source population represented by the active producer set.  Values are
+     * saturating sums and are diagnostic only. */
+    uint64_t activeProducerSourceFaceCount = 0;
+    uint64_t activeProducerSourcePointCount = 0;
+    uint64_t activeProducerSourceByteCount = 0;
 
     SbBool hasResultWork(void) const
     {
@@ -325,6 +388,24 @@ struct BOBOL_EXPORT BObolLodGenerationWorkStatus {
 	    executingTasks == 0 && delayedTasks == 0 &&
 	    queuedResults == 0 && queuedCacheWrites == 0 &&
 	    sharedProducerLeases == 0;
+    }
+};
+
+/** Diagnostic classification of tasks which have not acquired a worker.
+ * Counts are mutually exclusive and describe one generation at the instant
+ * of the snapshot.  Submission-capacity flags are service-wide because a
+ * full task or result reservation pool blocks every generation equally. */
+struct BOBOL_EXPORT BObolLodQueueStatus {
+    size_t runnableTasks = 0;
+    size_t dependencyBlockedTasks = 0;
+    size_t transientMemoryBlockedTasks = 0;
+    SbBool taskCapacityBlocked = FALSE;
+    SbBool resultCapacityBlocked = FALSE;
+
+    size_t classifiedTaskCount(void) const
+    {
+	return runnableTasks + dependencyBlockedTasks +
+	    transientMemoryBlockedTasks;
     }
 };
 
@@ -446,8 +527,10 @@ public:
     /* Offer an immutable intermediate result from the active provider for
      * generation.  This operation never waits for the service lock:
      * providers may call it while holding a resident-asset lock without
-     * violating the documented lock order.  FALSE means the preview was
-     * safely skipped.  The ordinary task completion remains authoritative. */
+     * violating the documented lock order.  TRUE means the newest preview
+     * was accepted for immediate or deferred publication; FALSE means it was
+     * safely skipped.  Deferred values coalesce per producer, and the
+     * ordinary task completion remains authoritative. */
     SbBool tryPublishIntermediateResult(
 	uint64_t generation, BObolLodResult &&result);
     /*
@@ -501,6 +584,8 @@ public:
     /* O(1) per-generation diagnostics for shared-service consumers. */
     BObolLodGenerationWorkStatus generationWorkStatus(
 	uint64_t generation) const;
+    BObolLodQueueStatus generationQueueStatusForDiagnostics(
+	uint64_t generation) const;
     size_t activeTaskCountForGeneration(uint64_t generation) const;
     size_t pendingTaskCountForGeneration(uint64_t generation) const;
     size_t executingTaskCountForGeneration(uint64_t generation) const;
@@ -553,11 +638,14 @@ public:
     /* Replace one view consumer's complete stable demand snapshot and queue
      * memory-bounded background trims against the aggregate demand.  This
      * call never reads or rewrites mesh arrays on its caller.  Assets absent
-     * from all complete snapshots retain only their minimum useful prefix;
-     * richer cuts remain in the on-disk cache.  Returns the number of
-     * newly queued assets.  planningComplete reports whether the bounded
-     * resident-asset scan completed in this call; callers keep pumping quiet
-     * work when it is FALSE. */
+     * from current snapshots retain their richer prefixes while capacity is
+     * available, making resident geometry a latency cache across view
+     * changes.  Once the configured limit is exceeded, demanded assets may
+     * be trimmed and undemanded assets evicted; richer cuts remain in the
+     * on-disk cache.  Returns the number of newly queued assets.
+     * planningComplete reports whether the bounded resident-asset scan
+     * completed in this call; callers keep pumping quiet work when it is
+     * FALSE. */
     size_t scheduleResidentMeshCompaction(
 	uint64_t consumerId,
 	uint64_t demandRevision,

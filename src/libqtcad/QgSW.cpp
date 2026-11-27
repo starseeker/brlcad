@@ -152,6 +152,10 @@ void QgSW::present_frame()
      * camera until a later mouse event. */
     request_update(BV_REFRESH_VIEW | BV_REFRESH_FRAMEBUFFER |
 	BV_REFRESH_FORCE);
+    /* A hidden embedded widget may never receive the paint requested above.
+     * Provider progression is a separate host obligation, so keep its timer
+     * alive even before the application exposes the canvas. */
+    qgcanvas_queue_obol_progressive_update(*d, this);
 }
 
 void QgSW::queued_update()

@@ -10,6 +10,7 @@
 #include "bv.h"
 
 #include "BObol/BDatabaseSource.h"
+#include "BObol/BLodProgressOverlay.h"
 #include "BObol/BLodService.h"
 #include "BObol/BLodRealization.h"
 #include "BObol/BViewController.h"
@@ -516,6 +517,11 @@ check_terminal_error_hud(QgView &view, SoBRLDatabaseSource *source)
 	std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
+    /* This test deliberately validates the renderer-neutral retained records
+     * selected by production QgView hosts. */
+    if (!ged_view_lod_progress_visible_set(view_ctx, 1))
+	FAIL("HUD regression should enable retained presentation");
+
     /* Use the production publication helper with its own cache, and omit
      * periodic samples.  No event-loop or debugger timing can accidentally
      * publish the terminal sample on behalf of the transition under test. */
@@ -553,30 +559,36 @@ check_terminal_error_hud(QgView &view, SoBRLDatabaseSource *source)
     if (!qgcanvas_sync_obol_lod_progress(state, false))
 	FAIL("terminal error must publish its final HUD without a periodic sample");
 
-    BObolFeatureRecord fill;
-    BObolFeatureRecord label;
-    BObolFeatureRecord track;
+    BObolFeatureRecord progress;
     const BObolFeatureStore &features = controller->features();
-    static constexpr float pixelTolerance = 1.0e-4f;
-    if (!features.record(features.find("_faceplate/lod_progress_fill"), fill) ||
-	!features.record(features.find("_faceplate/lod_progress_label"), label) ||
-	!features.record(features.find("_faceplate/lod_progress_track"), track) ||
-	fill.points.size() != 2 || track.points.size() != 2 ||
-	label.labels.size() != 1 ||
-	label.labels[0].text != "View incomplete  1 geometry error" ||
-	fill.style.color != SbColor(1.0f, 90.0f / 255.0f, 80.0f / 255.0f) ||
-	fill.points[1][1] <= fill.points[0][1] ||
-	fabsf(track.points[0][1] - track.points[1][1]) > pixelTolerance ||
-	fabsf(fill.points[1][1] - track.points[0][1]) > pixelTolerance) {
-	fprintf(stderr, "HUD records: fill=%zu layers=%zu track=%zu labels=%zu\n",
-	    fill.points.size(), fill.layers.size(), track.points.size(), label.labels.size());
-	if (fill.points.size() == 2 && track.points.size() == 2 && !label.labels.empty())
-	    fprintf(stderr, "HUD details: fillY=%g,%g trackY=%g,%g color=%g,%g,%g label=%s\n",
-		fill.points[0][1], fill.points[1][1], track.points[0][1], track.points[1][1],
-		fill.style.color[0], fill.style.color[1], fill.style.color[2],
-		label.labels[0].text.getString());
-	FAIL("terminal error should retain a full red bar, terminal cap and error label");
-    }
+    const BObolFeatureHandle progressHandle =
+	features.find("_faceplate/lod_progress");
+    SoNode *progressNode = features.node(progressHandle);
+    if (!features.record(progressHandle, progress) ||
+	progress.kind != BObolFeatureKind::CustomNode || !progressNode ||
+	!progressNode->isOfType(SoBRLLodProgressOverlay::getClassTypeId()))
+	FAIL("terminal error should retain the shared LoD progress card");
+    const auto *card = static_cast<const SoBRLLodProgressOverlay *>(
+	progressNode);
+    if (card->title.getValue() != "Geometry preparation failed" ||
+	card->detail.getValue() != "1 source failed" ||
+	card->color.getValue() != SbColor(1.0f, 0.35f, 0.31f) ||
+	!card->terminal.getValue() || card->terminalReady.getValue() ||
+	!card->getHUDKit())
+	FAIL("terminal error card should preserve exact failure presentation");
+
+    int progressVisible = 0;
+    if (!ged_view_lod_progress_visible_get(&progressVisible, view_ctx) ||
+	!progressVisible)
+	FAIL("retained LoD HUD visibility should be observable");
+    if (!ged_view_lod_progress_visible_set(view_ctx, 0) ||
+	features.exists("_faceplate/lod_progress") ||
+	ged_view_faceplate_sync(gedp, view_ctx) != BRLCAD_OK ||
+	features.exists("_faceplate/lod_progress"))
+	FAIL("disabled LoD HUD presentation should remove retained records");
+    if (!ged_view_lod_progress_visible_set(view_ctx, 1) ||
+	!features.exists("_faceplate/lod_progress"))
+	FAIL("retained LoD HUD ownership should republish the progress card");
 
     const uint64_t feature_revision = features.presentationRevision();
     if (qgcanvas_sync_obol_lod_progress(state, false) ||
@@ -588,7 +600,7 @@ check_terminal_error_hud(QgView &view, SoBRLDatabaseSource *source)
 	features.presentationRevision() != feature_revision ||
 	controller->isRenderRequested() || controller->hasProgressiveWorkPending())
 	FAIL("the final error HUD should retire without another publication or repaint");
-    printf("Terminal error HUD publishes its full bar and retires without repaint\n");
+    printf("Terminal error HUD publishes its card and retires without repaint\n");
 
     source->realizationStatus = SoBRLDatabaseSource::REALIZED;
     if (!ged_view_lod_policy_apply(view_ctx, &original_policy))

@@ -157,7 +157,7 @@ validate_report()
 	  (.lod_service_pending_tasks // -1) == 0)) and
 	(all(.samples[] | select(
 	  .lod_convergence_semantic_presentation_frame_pending // false);
-	  (.lod_progress_label_present // false) == false)) and
+	  (.lod_progress_card_present // false) == false)) and
       (first(.samples[] | select(.action == "mouse_move" and
         .selection_rect_draw == true))) as $drag |
       ($drag.lod_gesture_active == false) and

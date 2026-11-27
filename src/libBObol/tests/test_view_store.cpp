@@ -464,6 +464,43 @@ test_feature_nodes(BObolViewController &view)
 	overlayRecord.primitiveMetadata[0].metadata.size() != 2)
 	FAIL("feature record should preserve primitive metadata");
 
+    std::vector<BObolFeaturePrimitiveMetadata> primitiveMetadataBatch(2);
+    primitiveMetadataBatch[0].primitiveIndex = 1;
+    primitiveMetadataBatch[0].metadata = primitiveMetadata;
+    primitiveMetadataBatch[1].primitiveIndex = 3;
+    primitiveMetadataBatch[1].metadata = metadata;
+    if (!view.features().replacePrimitiveMetadata(localA,
+	    primitiveMetadataBatch))
+	FAIL("feature primitive metadata batch should be settable");
+    if (!view.features().primitiveMetadata(localA, 0, metadataRead) ||
+	!metadataRead.empty() ||
+	!view.features().primitiveMetadata(localA, 1, metadataRead) ||
+	metadataRead.size() != 2 ||
+	bu_strcmp(metadataRead[0].key.getString(), "overlap.objects") != 0 ||
+	!view.features().primitiveMetadata(localA, 3, metadataRead) ||
+	metadataRead.size() != 2 ||
+	bu_strcmp(metadataRead[0].key.getString(), "result.kind") != 0)
+	FAIL("feature primitive metadata batch should replace the complete set");
+    if (!view.features().summaryOwned("local-line", overlaySummary,
+				      BOBOL_FEATURE_SCOPE_LOCAL, &ownerA) ||
+	overlaySummary.primitiveMetadataCount != 2 ||
+	!view.features().record(localA, overlayRecord) ||
+	overlayRecord.primitiveMetadata.size() != 2 ||
+	overlayRecord.primitiveMetadata[0].primitiveIndex != 1 ||
+	overlayRecord.primitiveMetadata[1].primitiveIndex != 3)
+	FAIL("feature primitive metadata batch should publish one complete record");
+
+    std::vector<BObolFeaturePrimitiveMetadata> duplicateMetadata =
+	primitiveMetadataBatch;
+    duplicateMetadata[1].primitiveIndex = 1;
+    if (view.features().replacePrimitiveMetadata(localA,
+	    duplicateMetadata) ||
+	!view.features().record(localA, overlayRecord) ||
+	overlayRecord.primitiveMetadata.size() != 2 ||
+	overlayRecord.primitiveMetadata[0].primitiveIndex != 1 ||
+	overlayRecord.primitiveMetadata[1].primitiveIndex != 3)
+	FAIL("invalid primitive metadata batch should preserve the prior record");
+
     SoNode *localNode = view.features().node(localA);
     if (!localNode ||
 	!localNode->isOfType(SoBRLVListShape::getClassTypeId()) ||
@@ -488,6 +525,8 @@ test_feature_nodes(BObolViewController &view)
 	!view.features().metadata(localA, metadataRead) ||
 	!metadataRead.empty() ||
 	!view.features().primitiveMetadata(localA, 0, metadataRead) ||
+	!metadataRead.empty() ||
+	!view.features().primitiveMetadata(localA, 1, metadataRead) ||
 	!metadataRead.empty())
 	FAIL("feature publish should clear stale metadata");
 

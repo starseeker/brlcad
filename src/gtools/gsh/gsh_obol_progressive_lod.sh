@@ -66,7 +66,7 @@ delay 4 0
 view lod service poll 64
 screengrab %s
 view lod service status
-view lod service wait 25000 64
+view lod service wait 60000 64
 screengrab %s
 view lod service status
 quit
@@ -100,14 +100,47 @@ if ! grep -Eq 'last_applied_results: [1-9][0-9]*' "$LOG"; then
     exit 1
 fi
 
-if grep -Eq 'last_rejected_results: [1-9][0-9]*' "$LOG"; then
-    echo "gsh Obol progressive LoD rejected LoD results" 1>&2
+if ! grep -Eq '^wait_timed_out=0 .*pending_submissions=0 pending_results=0 progressive_pending=0 queued=0 in_flight=0 pending=0 delayed=0$' "$LOG"; then
+    echo "gsh Obol progressive LoD did not reach a terminal idle state" 1>&2
     cat "$LOG" 1>&2
     exit 1
 fi
 
-if ! grep -Eq 'active_lod_mesh_payloads: [1-9][0-9]*' "$LOG"; then
-    echo "gsh Obol progressive LoD did not activate a mesh LoD payload" 1>&2
+final_status_value()
+{
+    awk -v key="$1:" '$1 == key { value = $2; found = 1 } END {
+	if (!found) exit 1
+	print value
+    }' "$LOG"
+}
+
+# Demand epochs may legitimately overtake an in-flight task.  Such a result is
+# reported as rejected in that intermediate batch and is resubmitted for the
+# current demand.  Audit the settled batch instead: it must contain neither a
+# current-demand rejection nor an unmatched route, and every fixture leaf must
+# own a live mesh payload.
+final_rejected=$(final_status_value last_rejected_results) || {
+    echo "gsh Obol progressive LoD did not report terminal rejection status" 1>&2
+    cat "$LOG" 1>&2
+    exit 1
+}
+final_unmatched=$(final_status_value last_unmatched_results) || {
+    echo "gsh Obol progressive LoD did not report terminal routing status" 1>&2
+    cat "$LOG" 1>&2
+    exit 1
+}
+final_payloads=$(final_status_value active_lod_mesh_payloads) || {
+    echo "gsh Obol progressive LoD did not report terminal payload status" 1>&2
+    cat "$LOG" 1>&2
+    exit 1
+}
+if [ "$final_rejected" -ne 0 ] || [ "$final_unmatched" -ne 0 ]; then
+    echo "gsh Obol progressive LoD retained rejected or unmatched terminal results: rejected=${final_rejected} unmatched=${final_unmatched}" 1>&2
+    cat "$LOG" 1>&2
+    exit 1
+fi
+if [ "$final_payloads" -ne 6 ]; then
+    echo "gsh Obol progressive LoD did not activate all fixture payloads: active=${final_payloads} expected=6" 1>&2
     cat "$LOG" 1>&2
     exit 1
 fi

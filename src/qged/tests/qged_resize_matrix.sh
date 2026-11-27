@@ -296,9 +296,7 @@ validate_run()
 	  .view_lod_policy == 0 and
 	  .view_lod_mesh_enabled == false and
 	  .view_lod_csg_enabled == false and
-	  .lod_progress_track_present == false and
-	  .lod_progress_fill_present == false and
-	  .lod_progress_label_present == false
+	  .lod_progress_card_present == false
 	elif ((.checkpoint? // "") | endswith("/lod-enabled.png") or
 	      endswith("/lod-reenabled.png")) then
 	  .view_lod_policy == 1 and
@@ -308,9 +306,7 @@ validate_run()
 	  .view_lod_policy == 0 and
 	  .view_lod_mesh_enabled == false and
 	  .view_lod_csg_enabled == false and
-	  .lod_progress_track_present == false and
-	  .lod_progress_fill_present == false and
-	  .lod_progress_label_present == false
+	  .lod_progress_card_present == false
 	 else
 	  .view_lod_policy == 1 and
 	  .view_lod_mesh_enabled == true and
@@ -332,9 +328,7 @@ validate_run()
 	$terminal.lod_convergence_performance_limited == true or
 	($terminal.failed_sources // 0) > 0) as $terminal_hud_expected |
        $terminal.progressive_pending == false and
-	$terminal.lod_progress_track_present == $terminal_hud_expected and
-	$terminal.lod_progress_fill_present == $terminal_hud_expected and
-	$terminal.lod_progress_label_present == $terminal_hud_expected and
+	$terminal.lod_progress_card_present == $terminal_hud_expected and
 	$terminal.visible_structural_fallback_boxes == 0)
     ' "$report" >>"$log" 2>&1 || return 1
     # Policy changes operate on the retained draw; they must not duplicate or
@@ -378,14 +372,10 @@ validate_run()
       (($opposite.failed_sources // 0) == 0) and
       (($restored.failed_sources // 0) == 0) and
       (if $opposite.view_lod_policy == 0 then
-	$opposite.lod_progress_track_present == false and
-	$opposite.lod_progress_fill_present == false and
-	$opposite.lod_progress_label_present == false
+	$opposite.lod_progress_card_present == false
        else true end) and
       (if $restored.view_lod_policy == 0 then
-	$restored.lod_progress_track_present == false and
-	$restored.lod_progress_fill_present == false and
-	$restored.lod_progress_label_present == false
+	$restored.lod_progress_card_present == false
        else true end) and
       (if $lod == "off" then
 	$opposite.view_lod_policy == 1 and $restored.view_lod_policy == 0

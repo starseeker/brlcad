@@ -22,6 +22,7 @@ struct PartGeometryBuilder;
 }
 
 class SoCADAssembly;
+struct BObolLodCounts;
 
 bool bobol_cad_admit_geometry(
     const std::shared_ptr<const Obol::PartGeometry> &geometry,
@@ -33,6 +34,10 @@ std::shared_ptr<const Obol::PartGeometry> bobol_cad_build_geometry(
 std::shared_ptr<const Obol::PartGeometry>
 bobol_cad_build_geometry_with_optional_proxy(
     Obol::PartGeometryBuilder geometry, const char *operation);
+
+/** Describe the primitive/vertex work submitted by one immutable part. */
+BObolLodCounts bobol_cad_geometry_counts(
+    const Obol::PartGeometry &geometry);
 
 bool bobol_cad_validate_shared_parts(
     const std::vector<Obol::PartUpdate> &updates,
