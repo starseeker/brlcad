@@ -12816,13 +12816,6 @@ database_snapshot_copy_lookup_context(struct db_i *snapshot,
     if (!snapshot || !source)
 	return;
 
-    /* Compact progressive realization identifies each combination leaf by
-     * occurrence, not merely by the referenced directory object.  Detached
-     * database snapshots must therefore walk with instance specifiers enabled
-     * just like the live draw path.  Depending on the process environment here
-     * made cold and warm draws disagree, and duplicate instances could collapse
-     * into an unusable empty compact realization. */
-    (void)db_comb_instance_ids_set(snapshot, 1);
     snapshot->dbi_local2base = source->dbi_local2base;
     snapshot->dbi_base2local = source->dbi_base2local;
     if (snapshot->dbi_filename) {
@@ -12872,7 +12865,11 @@ database_snapshot_create(struct db_i *source, const SbString &sourcePath,
     if (rootName.empty() || (version != 4 && version != 5))
 	return NULL;
     if (version == 5) {
-	snapshot = db_open_inmem();
+	/* A detached snapshot must preserve the source's latched path syntax
+	 * even if the process environment has changed since it was opened. */
+	const unsigned int flags = db_uses_instance_specifiers(source) ?
+	    DB_OPEN_INMEM_COMB_INSTANCES : DB_OPEN_INMEM_DEFAULT;
+	snapshot = db_open_inmem_ex(flags);
     } else {
 	char path[MAXPATHLEN] = {0};
 	FILE *file = bu_temp_file(path, sizeof(path));
@@ -12891,6 +12888,15 @@ database_snapshot_create(struct db_i *source, const SbString &sourcePath,
 	    version);
 	return NULL;
 	}
+    if (db_uses_instance_specifiers(snapshot) !=
+	db_uses_instance_specifiers(source)) {
+	bu_log("Obol detached realization could not preserve database "
+	    "path interpretation\n");
+	db_close(snapshot);
+	if (snapshotPath.getLength() > 0)
+	    (void)bu_file_delete(snapshotPath.getString());
+	return NULL;
+    }
 
     struct rt_wdb *snapshotWdb = wdb_dbopen(snapshot, wdbType);
     std::unordered_set<std::string> copied;
@@ -13835,7 +13841,7 @@ bobol_database_source_construct_wireframe_compact_with_cache(
 		treeName, ret, data.visited_leaves, data.realized_shapes,
 		data.failed_shapes, data.compact_unsupported,
 		compactEntryCount,
-		db_comb_instance_ids_get(source->d->dbip));
+		db_uses_instance_specifiers(source->d->dbip));
 	    source->realizationDiagnostic = diagnostic;
 	}
 	return ret < 0 || data.failed_shapes > 0 ? -1 : 0;

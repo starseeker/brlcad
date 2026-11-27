@@ -820,10 +820,17 @@ rt_edit_set_edflag(struct rt_edit *s, int edflag)
 void
 rt_edit_set_translation_target(struct rt_edit *s, const point_t target)
 {
-    if (!s)
+    if (!s || !target)
 	return;
 
-    VSCALE(s->e_para, target, s->base2local);
+    vect_t local_target;
+    VSCALE(local_target, target, s->base2local);
+    for (int i = 0; i < 3; ++i) {
+	if (!std::isfinite(local_target[i]))
+	    return;
+    }
+
+    VMOVE(s->e_para, local_target);
     s->e_inpara = 3;
 }
 
@@ -1441,6 +1448,23 @@ rt_edit_process_result(struct rt_edit *s)
     bu_clbk_t f = NULL;
     void *d = NULL;
 
+    if (s->e_inpara < 0 || s->e_inpara > RT_EDIT_MAXPARA ||
+	s->e_nstr < 0 || s->e_nstr > RT_EDIT_MAXSTR) {
+	bu_vls_printf(s->log_str,
+		"rt_edit_process: invalid input count (numeric=%d, string=%d)\n",
+		s->e_inpara, s->e_nstr);
+	rt_edit_clear_input(s);
+	return BRLCAD_ERROR;
+    }
+    for (int i = 0; i < s->e_inpara; ++i) {
+	if (!std::isfinite(s->e_para[i])) {
+	    bu_vls_printf(s->log_str,
+		    "rt_edit_process: numeric parameter %d is not finite\n", i);
+	    rt_edit_clear_input(s);
+	    return BRLCAD_ERROR;
+	}
+    }
+
     const int type = s->es_int.idb_type;
     if (type <= ID_NULL || type > ID_MAX_SOLID ||
 	!s->es_int.idb_ptr || EDOBJ[type].magic != RT_FUNCTAB_MAGIC) {
@@ -1542,7 +1566,8 @@ rt_edit_process(struct rt_edit *s)
 void
 rt_edit_snap_point(point2d_t pt, const struct rt_edit *s)
 {
-    if (!s || !s->snap.enabled || s->snap.spacing <= 0.0)
+    if (!pt || !s || !s->snap.enabled ||
+	!std::isfinite(s->snap.spacing) || s->snap.spacing <= 0.0)
 	return;
     fastf_t inv_sp = 1.0 / s->snap.spacing;
     pt[0] = floor(pt[0] * inv_sp + 0.5) * s->snap.spacing;

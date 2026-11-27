@@ -728,6 +728,19 @@ QgModel::item_rebuild(QgItem *item, std::unordered_set<QgItem *> *invalid)
 }
 
 void
+QgModel::clearHierarchyItems()
+{
+	for (QgItem *item : *items)
+		delete item;
+	items->clear();
+	itemIndexClear();
+	tops_items.clear();
+	rootItem->children.clear();
+	rootItem->c_noderow.clear();
+	rootItem->c_count = 0;
+}
+
+void
 QgModel::g_update(struct db_i *n_dbip)
 {
 	struct ged *gedp = m_session->ged();
@@ -738,17 +751,7 @@ QgModel::g_update(struct db_i *n_dbip)
 		// if we have no dbip, clear out everything
 		model_reset_in_progress = true;
 		beginResetModel();
-		std::unordered_set<QgItem *>::iterator s_it;
-		for (s_it = items->begin(); s_it != items->end(); s_it++) {
-			QgItem *itm = *s_it;
-			delete itm;
-		}
-		items->clear();
-		itemIndexClear();
-		tops_items.clear();
-		rootItem->children.clear();
-		rootItem->c_noderow.clear();
-		rootItem->c_count = 0;
+		clearHierarchyItems();
 		emit mdl_changed_db((void *)gedp);
 		if (new_database)
 			m_session->notifyDbReplaced(nullptr);
@@ -762,9 +765,13 @@ QgModel::g_update(struct db_i *n_dbip)
 	}
 
 	// If we have a dbip and the changed flag is set, figure out what's different
+	if (new_database)
+		changed_db_flag = 1;
 	if (changed_db_flag) {
 		model_reset_in_progress = true;
 		beginResetModel();
+		if (new_database)
+			clearHierarchyItems();
 
 		// Step 1 - make sure our instances are current - i.e. they match the
 		// .g database state
@@ -783,7 +790,7 @@ QgModel::g_update(struct db_i *n_dbip)
 				qgmodel_mark_invalid_subtree(invalid, itm);
 				continue;
 			}
-			if (!itm->dp && item_rec.dp)
+			if (itm->dp != item_rec.dp)
 				qgmodel_mark_invalid_subtree(invalid, itm);
 		}
 
@@ -817,7 +824,8 @@ QgModel::g_update(struct db_i *n_dbip)
 		std::unordered_map<unsigned long long, QgItem *> vtops_items;
 		for (size_t i = 0; i < tops_items.size(); i++) {
 			QgItem *titem = tops_items[i];
-			if (tset.find(titem->ihash) != tset.end()) {
+			if (tset.find(titem->ihash) != tset.end() &&
+			    invalid.find(titem) == invalid.end()) {
 				// Still a tops item
 				vtops_items[titem->ihash] = titem;
 			}
@@ -2737,7 +2745,6 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 			bu_vls_sprintf(msg, "A GED command is already running\n");
 		return BRLCAD_ERROR;
 	}
-	model_dbip = gedp->dbip;
 	uint64_t draw_rev_before = ged_scene_revision(gedp);
 	uint64_t draw_event_count_before = draw_observer_event_count;
 	uint64_t db_event_count_before = event_observer_event_count;
@@ -2834,9 +2841,6 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 
 	// If we have a new .g file, set the changed flag
 	int dbip_changed = (model_dbip != gedp->dbip);
-	if (dbip_changed)
-		changed_db_flag = 1;
-
 	if (dbip_changed) {
 		pending_db_event_notify = 0;
 		pending_db_event_model_reset = 0;
@@ -2860,8 +2864,6 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 			notifyDrawnItemsChanged();
 		emit view_changed(QG_VIEW_DRAWN);
 	}
-
-	model_dbip = gedp->dbip;
 
 	if (msg)
 		bu_vls_printf(msg, "%s", bu_vls_cstr(&command_result));

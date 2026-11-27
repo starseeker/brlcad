@@ -292,9 +292,8 @@ _edit_xform_apply(struct ged_edit_ctx *ctx,
 	return BRLCAD_ERROR;
     }
 
-    /* Re-use the authoritative path session, or create it through the public
-     * contract.  In particular, begin rejects a second occurrence path to an
-     * already edited terminal object instead of creating a divergent copy. */
+    /* Reuse the command layer's selected session.  Public API sessions remain
+     * independent variants and are not selected implicitly by path. */
     ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
     const enum ged_edit_status found = ged_edit_session_default_get(gedp,
 	session_path.c_str(), GED_EDIT_TARGET_OBJECT, 0, &session);
@@ -307,9 +306,6 @@ _edit_xform_apply(struct ged_edit_ctx *ctx,
 	const enum ged_edit_status begun = ged_edit_session_default_get(gedp,
 	    session_path.c_str(), GED_EDIT_TARGET_OBJECT, 1, &session);
 	if (begun != GED_EDIT_OK) {
-	    if (begun == GED_EDIT_CONFLICT)
-		bu_vls_printf(gedp->ged_result_str,
-		    "edit: another occurrence of this object is already being edited\n");
 	    db_free_full_path(&dfp);
 	    return BRLCAD_ERROR;
 	}
@@ -317,7 +313,7 @@ _edit_xform_apply(struct ged_edit_ctx *ctx,
 
     struct rt_edit *s = ged_edit_buf_get(gedp, &dfp);
     if (!s) {
-	if (is_new)
+	if (created)
 	    (void)ged_edit_session_cancel(gedp, session);
 	db_free_full_path(&dfp);
 	return BRLCAD_ERROR;
@@ -342,7 +338,7 @@ _edit_xform_apply(struct ged_edit_ctx *ctx,
     rt_edit_set_view(s, had_saved_view ? &saved_view : NULL);
 
     if (ret != BRLCAD_OK) {
-	if (is_new)
+	if (created)
 	    (void)ged_edit_session_cancel(gedp, session);
 	db_free_full_path(&dfp);
 	return BRLCAD_ERROR;
@@ -1694,8 +1690,7 @@ cmd_revert::exec(struct ged *gedp, void *u_data, int argc, const char **argv)
 	return BRLCAD_ERROR;
 
     ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
-    if (ged_edit_session_find(gedp, ctx->geom_specs[0].path.c_str(),
-	    &session) != GED_EDIT_OK) {
+    if (_edit_ctx_session(ctx, &session) != GED_EDIT_OK) {
 	bu_vls_printf(gedp->ged_result_str,
 	    "revert: no active edit session for '%s'\n",
 	    ctx->geom_specs[0].path.c_str());
@@ -1731,8 +1726,7 @@ cmd_reset::exec(struct ged *gedp, void *u_data, int argc, const char **argv)
 	return BRLCAD_ERROR;
 
     ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
-    enum ged_edit_status found = ged_edit_session_find(gedp,
-	ctx->geom_specs[0].path.c_str(), &session);
+    enum ged_edit_status found = _edit_ctx_session(ctx, &session);
     if (found == GED_EDIT_NOT_FOUND)
 	return BRLCAD_OK;
     if (found != GED_EDIT_OK)
@@ -1746,17 +1740,6 @@ cmd_reset::exec(struct ged *gedp, void *u_data, int argc, const char **argv)
  * Shared edit-session inspection and lifecycle commands
  * ------------------------------------------------------------------ */
 
-static enum ged_edit_status
-_edit_ctx_session(struct ged_edit_ctx *ctx, ged_edit_session_ref *session)
-{
-    if (session)
-	*session = GED_EDIT_SESSION_REF_NULL;
-    if (!ctx || !ctx->gedp || !session || ctx->geom_specs.empty() ||
-	ctx->geom_specs[0].path.empty())
-	return GED_EDIT_INVALID;
-    return ged_edit_session_find(ctx->gedp,
-	ctx->geom_specs[0].path.c_str(), session);
-}
 
 
 class cmd_status : public ged_subcmd {
@@ -2716,6 +2699,7 @@ _exec_desc_cmd(struct ged *gedp, struct ged_edit_ctx *ctx,
     if (ctx->occurrence)
 	return BRLCAD_ERROR;
 
+    const char *path = ctx->geom_specs[0].path.c_str();
     ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
     const enum ged_edit_status found = ged_edit_session_default_get(gedp,
 	path, GED_EDIT_TARGET_OBJECT, 0, &session);
@@ -2725,12 +2709,8 @@ _exec_desc_cmd(struct ged *gedp, struct ged_edit_ctx *ctx,
     if (created) {
 	const enum ged_edit_status begun = ged_edit_session_default_get(gedp,
 	    path, GED_EDIT_TARGET_OBJECT, 1, &session);
-	if (begun != GED_EDIT_OK) {
-	    if (begun == GED_EDIT_CONFLICT)
-		bu_vls_printf(gedp->ged_result_str,
-		    "edit: another occurrence of this object is already being edited\n");
+	if (begun != GED_EDIT_OK)
 	    return BRLCAD_ERROR;
-	}
     }
 
     /* Dynamic options configure librt interpretation (notably ARB subtype)

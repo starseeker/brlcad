@@ -1087,7 +1087,6 @@ _pkg_permserver_impl(struct in_addr iface, const char *service, const char *prot
 #endif /* HAVE_WINSOCK_H */
 }
 
-
 #ifdef FIONBIO
 static int
 pkg_set_nonblocking(int fd, int enabled)

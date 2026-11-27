@@ -494,30 +494,30 @@ resolve_view(const rtwizard_settings *s, char picture_type)
     if (ged_exec_autoview(session.get(), 1, autoview_arguments) != BRLCAD_OK)
         throw std::runtime_error("unable to calculate an automatic view: " +
             std::string(bu_vls_addr(session->ged_result_str)));
-    bview *view = session->ged_gvp;
+    struct bv *view = bv_context_view((struct bv_context *)ged_view_active_ctx(session.get()));
 
     vect_t aet = {
         s->az < DBL_MAX ? s->az : 35.0,
         s->el < DBL_MAX ? s->el : 25.0,
         s->tw < DBL_MAX ? s->tw : 0.0
     };
-    bv_view_set_aet(view, aet);
+    bv_aet_set(view, aet);
     if (s->zoom < DBL_MAX) {
         if (!(s->zoom > 0.0)) {
             throw std::runtime_error("zoom must be positive");
         }
-        bv_view_set_size(view, view->gv_size / s->zoom);
+        bv_size_set(view, bv_size_get(view) / s->zoom);
     }
-    view->gv_perspective = result.perspective;
-    if (s->center[0] < DBL_MAX) bv_view_set_center_vec(view, s->center);
+    bv_perspective_set(view, result.perspective);
+    if (s->center[0] < DBL_MAX) bv_center_set(view, s->center);
     bv_update(view);
 
     const char *eye_arguments[] = {"get_eyemodel"};
     if (ged_exec_get_eyemodel(session.get(), 1, eye_arguments) != BRLCAD_OK)
         throw std::runtime_error("unable to resolve the renderer eye point: " +
             std::string(bu_vls_addr(session->ged_result_str)));
-    result.size = view->gv_size;
-    quat_mat2quat(result.orientation, view->gv_rotation);
+    result.size = bv_size_get(view);
+    bv_orientation_quat_get(result.orientation, view);
     double parsed_size = 0.0;
     quat_t parsed_orientation;
     if (std::sscanf(bu_vls_addr(session->ged_result_str),
@@ -861,7 +861,11 @@ write_framebuffer(JobContext &job, const rtwizard_settings *s, const icv_image_t
     const int width = static_cast<int>(image->width);
     const int height = static_cast<int>(image->height);
     const bool tcp_requested = s->port >= 0;
-    const bool existing_target = bu_vls_strlen(s->fb_target) > 0;
+    std::string target = bu_vls_addr(s->fb_target);
+    const char *inherited = getenv(PKG_ADDR_ENVVAR);
+    if (target.empty() && s->port == 0 && inherited && inherited[0])
+        target = std::string("ipc:") + inherited;
+    const bool existing_target = !target.empty();
     if (!existing_target && !tcp_requested && !bu_vls_strlen(s->fb_dev)) return 0;
     const std::string device = bu_vls_strlen(s->fb_dev) ?
         bu_vls_addr(s->fb_dev) : RTWIZARD_DEFAULT_FB_DEVICE;
@@ -869,7 +873,6 @@ write_framebuffer(JobContext &job, const rtwizard_settings *s, const icv_image_t
     imgstream_fb_t *framebuffer = nullptr;
     bu_process *server = nullptr;
     std::string server_token;
-    std::string target;
     std::string existing_server_error;
     constexpr int open_attempts = 30;
     constexpr auto open_retry_delay = std::chrono::milliseconds(100);
@@ -957,7 +960,6 @@ write_framebuffer(JobContext &job, const rtwizard_settings *s, const icv_image_t
     };
 
     if (existing_target) {
-        target = bu_vls_addr(s->fb_target);
         gui_server_lock.lock();
         bu_process *process = gui_framebuffer_server.connection == target ?
             gui_framebuffer_server.process : nullptr;
@@ -973,7 +975,7 @@ write_framebuffer(JobContext &job, const rtwizard_settings *s, const icv_image_t
         if (pkg_ipc_addr(ipc_addr, sizeof(ipc_addr), "rtwizard-fbserv") == 0) {
             ensure_server_token();
             target = std::string("ipc:") + ipc_addr;
-            std::vector<std::string> command = {executable("fbserv"), "-A", "-w", std::to_string(width),
+            std::vector<std::string> command = {executable("fbserv"), "-A", "-1", "-w", std::to_string(width),
                 "-n", std::to_string(height), "-I", ipc_addr, "-F", device};
             job.log("Starting managed framebuffer server over local IPC: " + std::string(ipc_addr) + "\n");
             (void)launch_server(command, target, server_token);
@@ -990,7 +992,7 @@ write_framebuffer(JobContext &job, const rtwizard_settings *s, const icv_image_t
             job.log("Using existing TCP framebuffer server on port " + target + ".\n");
         } else {
             ensure_server_token();
-            std::vector<std::string> command = {executable("fbserv"), "-A", "-w", std::to_string(width),
+            std::vector<std::string> command = {executable("fbserv"), "-A", "-1", "-w", std::to_string(width),
                 "-n", std::to_string(height), "-p", target, "-F", device};
             job.log("Starting managed TCP framebuffer server on port " + target + ".\n");
             (void)launch_server(command, target, server_token);

@@ -733,8 +733,9 @@ ecmd_pipe_pick(struct rt_edit *s)
     if (input != PIPE_POINT_INPUT_READY)
 	return input == PIPE_POINT_INPUT_NONE ? BRLCAD_OK : BRLCAD_ERROR;
 
+    struct rt_edit_view *view = s->vp ? s->vp : &s->view_storage;
     p->es_pipe_pnt = rt_pipe_find_pnt_nearest_pnt(
-	&pipeip->pipe_segs_head, new_pt, s->vp->gv_view2model);
+	&pipeip->pipe_segs_head, new_pt, view->gv_view2model);
     if (!p->es_pipe_pnt) {
 	bu_vls_printf(s->log_str, "No PIPE segment selected\n");
 	return BRLCAD_ERROR;

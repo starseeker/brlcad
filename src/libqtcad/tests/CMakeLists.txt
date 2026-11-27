@@ -165,6 +165,10 @@ if(TARGET test_qtcad_widgets)
   set_property(TEST test_qtcad_widgets APPEND PROPERTY ENVIRONMENT
     QT_QPA_PLATFORM=offscreen)
 endif()
+if(TARGET test_qtcad_session)
+  set_property(TEST test_qtcad_session APPEND PROPERTY ENVIRONMENT
+    BRLCAD_ROOT=${CMAKE_BINARY_DIR} QT_QPA_PLATFORM=offscreen)
+endif()
 
 if(TARGET Qt6::Widgets)
   add_executable(test_qtcad_primitive_edit ${TEST_QTCAD_PRIMITIVE_EDIT_SRCS})

@@ -23,12 +23,11 @@
 #include <vector>
 
 #include "bu/app.h"
-#include "bu/env.h"
 #include "bu/log.h"
 #include "bu/malloc.h"
+#include "bu/process.h"
 #include "bv.h"
 #include "imgstream/fbserv.h"
-#include "pkg.h"
 
 #include "./ged_private.h"
 
@@ -113,6 +112,34 @@ free_displayed_objects(std::vector<char *> &objects)
 
 
 extern "C" GED_EXPORT int
+_ged_enable_framebuffer_underlay(struct ged *gedp, struct ged_view_context *view_ctx)
+{
+    struct bv_display_property_value framebuffer_mode =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    if (ged_view_context_display_property_get(view_ctx,
+		"composition.framebuffer.mode", &framebuffer_mode) !=
+	BV_DISPLAY_PROPERTY_OK) {
+	bu_vls_printf(gedp->ged_result_str,
+		"active view has no Obol framebuffer composition policy\n");
+	return BRLCAD_ERROR;
+    }
+    if (BU_STR_EQUAL(framebuffer_mode.string_value, "off")) {
+	framebuffer_mode.type = BV_DISPLAY_PROPERTY_ENUM;
+	framebuffer_mode.string_value = "underlay";
+	if (ged_view_context_display_property_set(view_ctx,
+		    "composition.framebuffer.mode", &framebuffer_mode) !=
+	    BV_DISPLAY_PROPERTY_OK) {
+	    bu_vls_printf(gedp->ged_result_str,
+		    "unable to enable the Obol framebuffer underlay\n");
+	    return BRLCAD_ERROR;
+	}
+    }
+
+    return BRLCAD_OK;
+}
+
+
+extern "C" GED_EXPORT int
 _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
 	const char *program, const char *callback_command)
 {
@@ -169,34 +196,8 @@ _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
 	return BRLCAD_ERROR;
     }
 
-    struct bv_display_property_value framebuffer_mode =
-	BV_DISPLAY_PROPERTY_VALUE_INIT;
-    if (ged_view_context_display_property_get(view_ctx,
-		"composition.framebuffer.mode", &framebuffer_mode) !=
-	BV_DISPLAY_PROPERTY_OK) {
-	bu_vls_printf(gedp->ged_result_str,
-		"active view has no Obol framebuffer composition policy\n");
+    if (_ged_enable_framebuffer_underlay(gedp, view_ctx) != BRLCAD_OK)
 	return BRLCAD_ERROR;
-    }
-    if (BU_STR_EQUAL(framebuffer_mode.string_value, "off")) {
-	framebuffer_mode.type = BV_DISPLAY_PROPERTY_ENUM;
-	framebuffer_mode.string_value = "underlay";
-	if (ged_view_context_display_property_set(view_ctx,
-		    "composition.framebuffer.mode", &framebuffer_mode) !=
-	    BV_DISPLAY_PROPERTY_OK) {
-	    bu_vls_printf(gedp->ged_result_str,
-		    "unable to enable the Obol framebuffer underlay\n");
-	    return BRLCAD_ERROR;
-	}
-    }
-
-    bool using_ipc = false;
-    if (fbs_can_open_ipc(fbs) && fbs_open_ipc(fbs) == BRLCAD_OK) {
-	using_ipc = true;
-    } else if (!fbs_can_open_network(fbs) || fbs_open(fbs, 0) != BRLCAD_OK) {
-	bu_vls_printf(gedp->ged_result_str, "could not open fb server\n");
-	return BRLCAD_ERROR;
-    }
 
     int width = fbinfo.width;
     int height = fbinfo.height;
@@ -206,6 +207,24 @@ _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
 	return BRLCAD_ERROR;
     }
     requested_dimensions(argc, argv, &width, &height);
+
+    struct bu_process_create_info create_info = {};
+    const char *env_overrides[3] = {};
+    int inherit_fds[2];
+    char auth_env[sizeof("FBSERV_TOKEN=") + sizeof(fbs->fbs_auth_token)];
+    const bool using_ipc = fbs_can_open_ipc(fbs) &&
+	_ged_open_fbs_ipc(gedp, &create_info, env_overrides, inherit_fds) == BRLCAD_OK;
+    if (!using_ipc) {
+	if (!fbs_can_open_network(fbs) || fbs_open(fbs, 0) != BRLCAD_OK) {
+	    bu_vls_printf(gedp->ged_result_str, "could not open fb server\n");
+	    return BRLCAD_ERROR;
+	}
+	if (_ged_configure_fbs_auth(gedp, &create_info, env_overrides, auth_env,
+		sizeof(auth_env)) != BRLCAD_OK) {
+	    bu_vls_printf(gedp->ged_result_str, "could not configure framebuffer authentication\n");
+	    return BRLCAD_ERROR;
+	}
+    }
 
     char executable[MAXPATHLEN] = {0};
     bu_dir(executable, MAXPATHLEN, BU_DIR_BIN, program, BU_DIR_EXT, NULL);
@@ -263,27 +282,6 @@ _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
 	ged_clbk_get(&linger_callback, &linger_data, gedp, callback_command,
 		BU_CLBK_LINGER);
 
-    const char *saved_pkg_addr = getenv(PKG_ADDR_ENVVAR);
-    const bool had_pkg_addr = saved_pkg_addr != NULL;
-    const std::string saved_pkg_addr_value = had_pkg_addr ?
-	std::string(saved_pkg_addr) : std::string();
-    if (using_ipc) {
-	const char *addr_env = fbs_ipc_child_addr_env(fbs);
-	if (!addr_env) {
-	    bu_vls_printf(gedp->ged_result_str,
-		    "unable to get the endpoint IPC address\n");
-	    return BRLCAD_ERROR;
-	} else {
-	    const char *eq = strchr(addr_env, '=');
-	    if (!eq || !eq[1]) {
-		bu_vls_printf(gedp->ged_result_str,
-			"invalid endpoint IPC address\n");
-		return BRLCAD_ERROR;
-	    }
-	    (void)bu_setenv(PKG_ADDR_ENVVAR, eq + 1, 1);
-	}
-    }
-
     int render_object_count = argc - object_arg;
     const char **render_objects = &(argv[object_arg]);
     std::vector<char *> displayed_objects;
@@ -294,8 +292,7 @@ _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
 	render_objects = (const char **)displayed_objects.data();
 	if (!render_object_count) {
 	    if (using_ipc)
-		(void)bu_setenv(PKG_ADDR_ENVVAR, had_pkg_addr ?
-			saved_pkg_addr_value.c_str() : "", 1);
+		fbs_close_ipc_child(fbs);
 	    free_displayed_objects(displayed_objects);
 	    bu_vls_printf(gedp->ged_result_str, "no objects displayed\n");
 	    return BRLCAD_ERROR;
@@ -306,12 +303,12 @@ _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
 	program, using_ipc ? 1 : 0, width, height);
     const int ret = _ged_run_rt(gedp, (int)args.size(), child_argv.data(),
 	render_object_count, render_objects, 0,
-	callback_command ? &child_pid : NULL, linger_callback, linger_data);
+	callback_command ? &child_pid : NULL, linger_callback, linger_data,
+	&create_info);
     free_displayed_objects(displayed_objects);
 
     if (using_ipc)
-	(void)bu_setenv(PKG_ADDR_ENVVAR, had_pkg_addr ?
-		saved_pkg_addr_value.c_str() : "", 1);
+	fbs_close_ipc_child(fbs);
 
     if (callback_command) {
 	bu_clbk_t during_callback = NULL;
