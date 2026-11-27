@@ -2753,6 +2753,14 @@ lod_shared_producer_record_lease_unlocked(BObolLodServicePrivate *p,
 	return FALSE;
 
     auto found = producer->leases.find(generation);
+    if (found == producer->leases.end() &&
+	producer->state == BObolSharedProducerState::RESULT &&
+	!p->queuedResultRequestKeyCounts.count(key.getString())) {
+	/* Remaining leases carry replay notices for work that has already
+	 * finished. An arrival after the payload was drained needs a task
+	 * that can service its own demand. */
+	return FALSE;
+    }
     if (found != producer->leases.end() &&
 	lod_request_demand_is_older(request, found->second.demand))
 	return TRUE;
@@ -2828,7 +2836,8 @@ lod_request_key_recorded_unlocked(const BObolLodServicePrivate *p,
 	return FALSE;
     const BObolSharedProducer *producer =
 	lod_shared_producer_unlocked(p, key);
-    if (producer && !producer->leases.empty())
+    if (producer && producer->state == BObolSharedProducerState::BUILDING &&
+	!producer->leases.empty())
 	return TRUE;
     return p->queuedResultRequestKeyCounts.find(key.getString()) !=
 	p->queuedResultRequestKeyCounts.end() ? TRUE : FALSE;
@@ -7415,9 +7424,9 @@ lod_service_submit_task_unlocked(BObolLodServicePrivate *p,
 
 
     if (skipActiveDuplicate &&
-	lod_request_key_recorded_unlocked(p, activeKey)) {
-	(void)lod_update_active_request_demand_unlocked(
-	    p, activeKey, task.request, item.task.generation, replayReady);
+	(lod_update_active_request_demand_unlocked(p, activeKey,
+	    task.request, item.task.generation, replayReady) ||
+	 lod_request_key_recorded_unlocked(p, activeKey))) {
 	return 0;
     }
 
@@ -7453,8 +7462,17 @@ lod_service_submit_task_unlocked(BObolLodServicePrivate *p,
 	producer.taskId = id;
 	producer.producerGeneration = generation;
 	producer.submittedMicroseconds = submittedMicroseconds;
+	const auto previous = p->sharedProducers.find(activeKey.getString());
+	if (previous != p->sharedProducers.end()) {
+	    /* Preserve wakeups owed to other generations while the new task
+	     * resolves demand that arrived after the previous payload. */
+	    producer.publication = previous->second.publication;
+	    producer.leases = std::move(previous->second.leases);
+	    lod_shared_producer_erase_unlocked(p, previous);
+	}
 	BObolSharedProducerLease lease;
 	lease.demand = task.request;
+	lease.deliveredPublication = producer.publication;
 	producer.leases.emplace(generation, std::move(lease));
 	p->sharedProducers[activeKey.getString()] = std::move(producer);
 	p->sharedProducerTaskKeys[id] = activeKey.getString();
@@ -7578,10 +7596,8 @@ BObolLodService::updateActiveRequestDemand(
     SbBool recorded = FALSE;
     {
 	std::lock_guard<std::mutex> lock(this->p->mutex);
-	recorded = lod_request_key_recorded_unlocked(this->p, key);
-	if (recorded)
-	    recorded = lod_update_active_request_demand_unlocked(
-		this->p, key, request, generation, &replayReady);
+	recorded = lod_update_active_request_demand_unlocked(
+	    this->p, key, request, generation, &replayReady);
     }
     if (replayReady)
 	lod_notify_result_ready(this->p);
