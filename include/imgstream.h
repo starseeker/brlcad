@@ -32,6 +32,8 @@
 __BEGIN_DECLS
 
 #include "imgstream/stream.h"
+#include "imgstream/fb_compat.h"
+#include "imgstream/fbserv.h"
 
 __END_DECLS
 
