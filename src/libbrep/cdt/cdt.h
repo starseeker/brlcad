@@ -147,6 +147,8 @@ struct ON_Brep_CDT_State {
     /* Full tessellation can refine both sides of a crossing shared chord
      * before attempting cleanup within a single face chart. */
     bool defer_chart_cleanup = false;
+    brep_cdt_cancel_func_t cancel;
+    void *cancel_data;
 
     /* 3D data */
     std::vector<ON_3dPoint *> *w3dpnts;
@@ -211,6 +213,12 @@ struct ON_Brep_CDT_State {
 };
 
 ON_3dVector calc_trim_vnorm(ON_BrepVertex& v, ON_BrepTrim *trim);
+inline bool
+cdt_cancelled(const struct ON_Brep_CDT_State *state)
+{
+    return state && state->cancel && state->cancel(state->cancel_data);
+}
+
 bool initialize_edge_segs(struct ON_Brep_CDT_State *s_cdt, char *message,
 	size_t message_size);
 bool initialize_loop_polygons(struct ON_Brep_CDT_State *s_cdt);

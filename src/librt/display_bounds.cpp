@@ -31,6 +31,13 @@ struct display_bound_context {
     struct bg_tess_tol tessellationTolerance = BG_TESS_TOL_INIT_TOL;
     struct bn_tol tolerance = BN_TOL_INIT_TOL;
     std::unordered_set<struct directory *> activeCombinations;
+    int (*cancel)(void *) = NULL;
+    void *cancelData = NULL;
+
+    bool cancelled() const
+    {
+	return cancel && cancel(cancelData);
+    }
 };
 
 static bool
@@ -144,7 +151,7 @@ static bool
 display_bound_object(display_bound_context &context, struct directory *dp,
 	const mat_t matrix, display_bound &bounds)
 {
-    if (!dp)
+    if (!dp || context.cancelled())
 	return false;
     if (!(dp->d_flags & RT_DIR_COMB)) {
 	mat_t primitiveMatrix;
@@ -193,12 +200,23 @@ int
 rt_display_bounds(struct bu_vls *messages, struct db_i *dbip, int argc,
 	const char *argv[], point_t bounds_min, point_t bounds_max)
 {
+    return rt_display_bounds_cancellable(messages, dbip, argc, argv,
+	bounds_min, bounds_max, NULL, NULL);
+}
+
+int
+rt_display_bounds_cancellable(struct bu_vls *messages, struct db_i *dbip,
+    int argc, const char *argv[], point_t bounds_min, point_t bounds_max,
+    int (*cancel)(void *), void *data)
+{
     if (!dbip || argc <= 0 || !argv || !bounds_min || !bounds_max)
 	return BRLCAD_ERROR;
 
     display_bound_context context;
     context.dbip = dbip;
     context.messages = messages;
+    context.cancel = cancel;
+    context.cancelData = data;
     display_bound aggregate;
     for (int index = 0; index < argc; ++index) {
 	if (!argv[index] || !argv[index][0])
@@ -225,7 +243,8 @@ rt_display_bounds(struct bu_vls *messages, struct db_i *dbip, int argc,
 	display_bound_union(aggregate, pathBounds);
     }
 
-    if (aggregate.empty || !display_bound_finite(aggregate))
+    if (aggregate.empty || !display_bound_finite(aggregate) ||
+	context.cancelled())
 	return BRLCAD_ERROR;
     VMOVE(bounds_min, aggregate.minimum);
     VMOVE(bounds_max, aggregate.maximum);

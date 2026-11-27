@@ -2389,6 +2389,8 @@ initialize_edge_segs(struct ON_Brep_CDT_State *s_cdt, char *message,
 	std::set<bedge_seg_t *>::iterator seg_it;
 	std::set<bedge_seg_t *> wsegs = epoly_it->second;
 	for (seg_it = wsegs.begin(); seg_it != wsegs.end(); seg_it++) {
+	    if (cdt_cancelled(s_cdt))
+		return false;
 	    bedge_seg_t *e = *seg_it;
 
 
@@ -3245,6 +3247,8 @@ tol_curved_edges_split(struct ON_Brep_CDT_State *s_cdt)
 		ws->insert(b);
 	    }
 	    while (ws->size()) {
+		if (cdt_cancelled(s_cdt))
+		    return;
 		bedge_seg_t *b = *ws->begin();
 		ws->erase(ws->begin());
 		std::set<bedge_seg_t *> esegs_split = split_edge_seg(s_cdt, b, 0, NULL, 0);
@@ -3460,6 +3464,8 @@ tol_linear_edges_split(struct ON_Brep_CDT_State *s_cdt,
 		ws->insert(b);
 	    }
 	    while (ws->size()) {
+		if (cdt_cancelled(s_cdt))
+		    return false;
 		bedge_seg_t *b = *ws->begin();
 		ws->erase(ws->begin());
 		const double parent_chord =

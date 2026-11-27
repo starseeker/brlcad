@@ -49,6 +49,13 @@ rt_display_bounds(struct bu_vls *messages,
 	point_t bounds_min,
 	point_t bounds_max);
 
+/** As above, with cooperative cancellation between database objects.
+ * Cancellation returns BRLCAD_ERROR without changing either output bound. */
+RT_EXPORT extern int
+rt_display_bounds_cancellable(struct bu_vls *messages,
+	struct db_i *dbip, int argc, const char *argv[], point_t bounds_min,
+	point_t bounds_max, int (*cancel)(void *), void *data);
+
 __END_DECLS
 
 #endif /* RT_DISPLAY_BOUNDS_H */

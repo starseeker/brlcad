@@ -11097,7 +11097,7 @@ test_structural_repair_no_progress_successor(void)
 }
 
 static int
-test_compact_cold_preview_streaming_candidate(void)
+test_compact_cold_preview_streaming_candidate(const char *sourceType)
 {
     /* A 128-entry window sampled at the 64 uniform even offsets does not
      * include odd entries 17, 19, or 21.  Each shared occurrence is below the
@@ -11130,15 +11130,16 @@ test_compact_cold_preview_streaming_candidate(void)
     prototype.summary.valid = TRUE;
     prototype.summary.shapeKind = BObolRealizedShapeSummary::SHAPE_VLIST;
     prototype.summary.sourceName = "lod-submit.bot";
-    prototype.summary.sourceType = "bot";
+    prototype.summary.sourceType = sourceType;
     prototype.summary.geometryKind = "aabb";
     prototype.summary.sourceId = 931;
     prototype.summary.visible = TRUE;
     prototype.summary.selectable = TRUE;
     prototype.lodBacked = TRUE;
+    /* Use the same synthetic asset contract to exercise both source kinds. */
     prototype.sourceMeshRequestValid = TRUE;
     prototype.sourceMeshRequest.sourceName = "lod-submit.bot";
-    prototype.sourceMeshRequest.sourceType = "bot";
+    prototype.sourceMeshRequest.sourceType = sourceType;
     prototype.sourceMeshRequest.sourceId = 931;
     prototype.sourceMeshRequest.meshAssetPath = "lod-submit.bot";
     prototype.sourceMeshRequest.meshAssetName = "lod-submit.bot";
@@ -21558,7 +21559,13 @@ main(int argc, char **argv)
 	return 1;
     if (runIsolated(test_submit_action_retargets_saturated_active_producer))
 	return 1;
-    if (runIsolated(test_compact_cold_preview_streaming_candidate))
+    if (runIsolated([]() {
+	    return test_compact_cold_preview_streaming_candidate("bot");
+	}))
+	return 1;
+    if (runIsolated([]() {
+	    return test_compact_cold_preview_streaming_candidate("brep");
+	}))
 	return 1;
     if (runIsolated(test_compact_native_mesh_not_pop_submitted))
 	return 1;

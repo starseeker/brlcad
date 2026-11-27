@@ -30915,6 +30915,42 @@ check_stream_population_completeness()
 	exact.source->hasCompleteCompactInstancePopulation(),
 	"complete certified compact leaf population was not recognized");
 
+    StreamSceneFixture streamedBrep;
+    BObolCompactOccurrence brep = streamedBrep.incoming.front();
+    brep.geometry = wire_geometry(3.0f, true);
+    brep.summary.sourceType = "brep";
+    brep.summary.geometryKind = "aabb";
+    brep.lodBacked = TRUE;
+    require(streamedBrep.scene->mergeDatabaseSourceInstanceCompactOccurrences(
+	StreamSceneFixture::sourceKey, streamedBrep.stamp, {brep}, TRUE) == 1,
+	"streamed BREP proxy setup failed");
+    const uint64_t frame = streamedBrep.scene->getFrameRevision();
+    BObolCompactLodPlanningSummary before;
+    require(streamedBrep.source->getCompactLodPlanningSummary(1, before) &&
+	!before.sourceMeshRequestValid &&
+	!streamedBrep.source->hasDisplayMeshLodRequests(),
+	"BREP proxy already has a mesh request");
+    const uint64_t inventory =
+	streamedBrep.source->getDisplayMeshLodRevision();
+    brep.sourceMeshRequestValid = TRUE;
+    brep.sourceMeshRequest.meshAssetName = brep.summary.sourceName;
+    brep.sourceMeshRequest.bounds = brep.geometry->wire->bounds;
+    brep.sourceMeshRequest.meshAssetBounds = brep.sourceMeshRequest.bounds;
+    BObolCompactLodPlanningSummary after;
+    std::vector<size_t> changedEntries;
+    SbBool coverageInvalidated = TRUE;
+    require(streamedBrep.scene->mergeDatabaseSourceInstanceCompactOccurrences(
+	StreamSceneFixture::sourceKey, streamedBrep.stamp, {brep}, TRUE) == 1 &&
+	streamedBrep.source->hasDisplayMeshLodRequests() &&
+	streamedBrep.source->getDisplayMeshLodRevision() > inventory &&
+	streamedBrep.source->getCompactLodPlanningSummary(1, after) &&
+	after.sourceMeshRequestValid && after.geometryRevision != before.geometryRevision &&
+	streamedBrep.source->getDisplayMeshLodChangedEntries(
+	    inventory, changedEntries, &coverageInvalidated) &&
+	changedEntries == std::vector<size_t>{1} && !coverageInvalidated &&
+	streamedBrep.scene->getFrameRevision() == frame,
+	"BREP mesh availability invalidated its unchanged proxy presentation");
+
     StreamSceneFixture retained;
     require(retained.scene->certifyDatabaseSourceInstanceCompactStream(
 	StreamSceneFixture::sourceKey, retained.stamp, expectedLeaves) == 1,
