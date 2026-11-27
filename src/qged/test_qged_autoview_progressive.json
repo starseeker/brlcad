@@ -1,0 +1,31 @@
+{
+  "schema": "brlcad.qtcad.events",
+  "version": 1,
+  "events": [
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "size 10" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "draw --no-autoview --defer-leaf-expansion all.g" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "autoview" }
+    },
+    {
+      "target": ".",
+      "action": "wait_progressive_view_ready",
+      "arguments": { "timeout_ms": 15000 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "size", "numeric_gt": 100 }
+    }
+  ]
+}
