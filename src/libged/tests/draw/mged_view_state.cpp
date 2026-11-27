@@ -68,7 +68,6 @@
 #include "../../ged_private.h"
 #include "../../ged_draw_view_private.h"
 
-extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 extern "C" long draw_test_count_nonblack_pixels(const char *filename);
 extern "C" int draw_test_images_differ(const char *a, const char *b, int offmany_threshold);
 

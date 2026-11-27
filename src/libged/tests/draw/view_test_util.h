@@ -18,9 +18,14 @@
 #include "bv.h"
 #include "ged/view_types.h"
 
+struct db_i;
+struct directory;
 struct ged;
 
 __BEGIN_DECLS
+
+void ged_changed_callback(struct db_i *dbip, struct directory *dp,
+	int mode, void *data);
 
 int draw_test_obol_view_init(struct ged *gedp, struct ged_view_context *view_ctx,
 	int width, int height);

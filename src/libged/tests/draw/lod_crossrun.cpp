@@ -71,7 +71,6 @@
 #include <ged/event.h>
 #include <icv.h>
 
-extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 
 static void
 log_lod_state(struct ged *gedp, const char *label)

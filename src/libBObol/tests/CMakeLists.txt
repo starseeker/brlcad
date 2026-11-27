@@ -57,40 +57,29 @@ brlcad_add_test(NAME libBObol_lod_update_action COMMAND test_bobol_lod_update_ac
 
 brlcad_addexec(test_bobol_compact_publication test_compact_publication.cpp
   "libBObol;libimgstream;libicv;libbg;libbu;Obol::Obol" TEST ALL_CXX)
-# These exhaustive allocation-failure sweeps run near three minutes on a
-# loaded development build. Keep enough margin for normal scheduler variance.
+# Partition the exhaustive sweeps to bound each CTest job's runtime and
+# report the result for each subset of publication checks.
 set(_bobol_publication_sweep_timeout 300)
 if(BRLCAD_ENABLE_ADDRESS_SANITIZER OR BRLCAD_ENABLE_UNDEFINED_SANITIZER OR BRLCAD_ENABLE_THREAD_SANITIZER)
-  # Instrumented allocation-failure sweeps take several times longer than the
-  # ordinary build.  Keep the complete matrix runnable through its CTest label.
   set(_bobol_publication_sweep_timeout 1200)
 endif()
 set(_bobol_publication_tests)
-if(BRLCAD_ENABLE_THREAD_SANITIZER)
-  # TSan makes the complete allocation-failure matrices longer than a useful
-  # single test process. Stable round-robin shards retain every selector while
-  # localizing failures and keeping each result within the bounded timeout.
-  set(_bobol_publication_shard_count 8)
-  math(EXPR _bobol_publication_last_shard "${_bobol_publication_shard_count} - 1")
-  foreach(_bobol_publication_shard RANGE 0 ${_bobol_publication_last_shard})
-    set(_source_test "libBObol_compact_publication_${_bobol_publication_shard}")
-    set(_state_test "libBObol_state_publication_${_bobol_publication_shard}")
-    brlcad_add_test(NAME "${_source_test}" COMMAND test_bobol_compact_publication
-      "source-suite-${_bobol_publication_shard}")
-    brlcad_add_test(NAME "${_state_test}" COMMAND test_bobol_compact_publication
-      "state-suite-${_bobol_publication_shard}")
-    list(APPEND _bobol_publication_tests "${_source_test}" "${_state_test}")
-  endforeach()
-  unset(_bobol_publication_shard_count)
-  unset(_bobol_publication_last_shard)
-  unset(_bobol_publication_shard)
-  unset(_source_test)
-  unset(_state_test)
-else()
-  brlcad_add_test(NAME libBObol_compact_publication COMMAND test_bobol_compact_publication source-suite)
-  brlcad_add_test(NAME libBObol_state_publication COMMAND test_bobol_compact_publication state-suite)
-  list(APPEND _bobol_publication_tests libBObol_compact_publication libBObol_state_publication)
-endif()
+set(_bobol_publication_shard_count 8)
+math(EXPR _bobol_publication_last_shard "${_bobol_publication_shard_count} - 1")
+foreach(_bobol_publication_shard RANGE 0 ${_bobol_publication_last_shard})
+  set(_source_test "libBObol_compact_publication_${_bobol_publication_shard}")
+  set(_state_test "libBObol_state_publication_${_bobol_publication_shard}")
+  brlcad_add_test(NAME "${_source_test}" COMMAND test_bobol_compact_publication
+    "source-suite-${_bobol_publication_shard}")
+  brlcad_add_test(NAME "${_state_test}" COMMAND test_bobol_compact_publication
+    "state-suite-${_bobol_publication_shard}")
+  list(APPEND _bobol_publication_tests "${_source_test}" "${_state_test}")
+endforeach()
+unset(_bobol_publication_shard_count)
+unset(_bobol_publication_last_shard)
+unset(_bobol_publication_shard)
+unset(_source_test)
+unset(_state_test)
 set_tests_properties(${_bobol_publication_tests} PROPERTIES
   LABELS "bobol_headless;bobol_sanitizer" TIMEOUT "${_bobol_publication_sweep_timeout}")
 unset(_bobol_publication_tests)
