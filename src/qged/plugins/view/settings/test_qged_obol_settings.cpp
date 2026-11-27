@@ -57,6 +57,7 @@ main(int argc, char **argv)
 	int cuttingEnabled = 0;
 	double cuttingOrigin[3] = {};
 	double cuttingNormal[3] = {};
+	const char *command_result = "foreground command output";
 	view.resize(160, 120);
 	CHECK(view.viewContext() && view.displayEndpoint(),
 	    "settings test creates an endpoint-backed QgView");
@@ -72,9 +73,12 @@ main(int argc, char **argv)
 	    "settings test binds the QgView endpoint to its GED context");
 
 	context.gedAccessor = [&gedp]() { return gedp; };
-	context.viewWidgetAccessor = [&view]() { return &view; };
+	context.viewContextAccessor = [&view_ctx]() { return view_ctx; };
+	bu_vls_strcpy(gedp->ged_result_str, command_result);
 	settings.setContext(&context);
 	settings.checkbox_refresh(0);
+	CHECK(BU_STR_EQUAL(bu_vls_cstr(gedp->ged_result_str), command_result),
+	    "settings refresh preserves the GED command result");
 	CHECK(settings.property("qgTestId").toString() ==
 	    QStringLiteral("org.brlcad.qged.view.settings.controls") &&
 	    settings.grid_ckbx->property("qgTestId").toString() ==
@@ -102,6 +106,8 @@ main(int argc, char **argv)
 	settings.cutting_normal[1]->setValue(1.0);
 	settings.cutting_normal[2]->setValue(0.0);
 	settings.cutting_enabled_ckbx->setChecked(true);
+	CHECK(BU_STR_EQUAL(bu_vls_cstr(gedp->ged_result_str), command_result),
+	    "settings changes preserve the GED command result");
 	CHECK(ged_exec(gedp, 2, cutting_get) == BRLCAD_OK &&
 	    std::sscanf(bu_vls_cstr(gedp->ged_result_str),
 	    "enable %d\norigin %lf %lf %lf\nnormal %lf %lf %lf",
@@ -116,7 +122,7 @@ main(int argc, char **argv)
 	    std::fabs(cuttingNormal[0]) < 1.0e-12 &&
 	    std::fabs(cuttingNormal[1] - 1.0) < 1.0e-12 &&
 	    std::fabs(cuttingNormal[2]) < 1.0e-12,
-	    "settings writes the world-space cutting plane through GED");
+	    "GED sees the world-space cutting plane set by the panel");
 
 	CHECK(ged_exec(gedp, 6, cutting_external) == BRLCAD_OK,
 	    "external cutting origin command succeeds");

@@ -676,6 +676,9 @@ int
 QArb::handle_manipulator_input(QArbManipulatorState *manipulator,
 	BObolInputAction action, const BObolInputEvent *event)
 {
+    /* A hidden palette can retain an edit preview during a tool switch. */
+    if (isHidden())
+	return BOBOL_INPUT_RESULT_UNHANDLED;
     SoBRLIndexedEditManipulator *node = qarb_manipulator_node(manipulator);
     if (!state || !manipulator || !node || !manipulator->controller ||
 	!event || !state->matrix_valid)

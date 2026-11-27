@@ -398,6 +398,8 @@ QEll::handle_manipulator_input(QEllManipulatorState *state,
 	BObolInputAction action,
 	const BObolInputEvent *event)
 {
+    if (isHidden())
+	return BOBOL_INPUT_RESULT_UNHANDLED;
     SoBRLEditManipulator *node = qell_manipulator_node(state);
     if (!state || !node || !state->controller || !event)
 	return BOBOL_INPUT_RESULT_UNHANDLED;

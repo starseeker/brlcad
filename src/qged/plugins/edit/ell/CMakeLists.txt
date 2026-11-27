@@ -18,13 +18,11 @@ set(ell_moc_hdrs QEll.h EditEllFactory.h)
 if(BRLCAD_ENABLE_QT)
   if(Qt6Widgets_FOUND)
     qt6_wrap_cpp(ell_moc_srcs ${ell_moc_hdrs})
-    qt6_add_resources(icon_qrc icon.qrc)
   else()
     qt5_wrap_cpp(ell_moc_srcs ${ell_moc_hdrs})
-    qt5_add_resources(icon_qrc icon.qrc)
   endif(Qt6Widgets_FOUND)
 
-  qged_plugin(qged_ell SHARED ${ell_srcs} ${ell_moc_srcs} ${icon_qrc})
+  qged_plugin(qged_ell SHARED ${ell_srcs} ${ell_moc_srcs})
   if(Qt6Widgets_FOUND)
     target_link_libraries(
       qged_ell
@@ -51,7 +49,6 @@ if(BRLCAD_ENABLE_QT)
   plugin_setup(qged_ell qged)
 
   distclean(
-    icon.qrc.depends
     moc_QEll.cpp_parameters
     moc_EditEllFactory.cpp_parameters
   )
@@ -60,11 +57,8 @@ endif(BRLCAD_ENABLE_QT)
 set(
   ignore_srcs
   CMakeLists.txt
-  README
   ${ell_srcs}
   ${ell_moc_hdrs}
-  icon.qrc
-  ell.svg
   ell.json
 )
 
