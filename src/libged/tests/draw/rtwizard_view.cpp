@@ -73,7 +73,6 @@
 #include "rt/view.h"
 #include "view_test_util.h"
 
-extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 
 /* ---- helpers ------------------------------------------------------------- */
 
