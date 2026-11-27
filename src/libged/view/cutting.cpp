@@ -126,9 +126,13 @@ ged_cutting_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
-    if (view)
+    struct bv *view = bv_context_view(ged_view_context_bv(view_ctx));
+    if (view) {
+	/* The cutting plane lives in Obol, so a successful setter must also
+	 * mark the view for host controls that track the frame revision. */
+	(void)bv_frame_revision_bump(view);
 	(void)bv_refresh_request(view, GED_VIEW_REFRESH_VIEW);
+    }
     ged_refresh_cb(gedp);
     return BRLCAD_OK;
 }
