@@ -27,6 +27,7 @@ TICK_PIX="${WORKDIR}/mged_model_ticks.pix"
 PS_OUT="${WORKDIR}/mged_obol_smoke.ps"
 PLOT_OUT="${WORKDIR}/mged_obol_smoke.plot3"
 LOG="${WORKDIR}/mged_obol_smoke.log"
+RETIRED_COLOR_LOG="${WORKDIR}/mged_obol_retired_color.log"
 MGED_DIR=${MGED%/*}
 if [ "$MGED_DIR" = "$MGED" ]; then
     MGED_DIR=.
@@ -35,7 +36,7 @@ PNG_PIX="${MGED_DIR}/png-pix"
 
 rm -f "$OUT" "$PIX_OUT" "$RT_OUT" "$RT_PIX" "$RT_MOVED_OUT" \
     "$RT_MOVED_PIX" "$TICK_BASE_OUT" "$TICK_OUT" "$TICK_BASE_PIX" \
-    "$TICK_PIX" "$PS_OUT" "$PLOT_OUT" "$LOG"
+    "$TICK_PIX" "$PS_OUT" "$PLOT_OUT" "$LOG" "$RETIRED_COLOR_LOG"
 
 HELP_OUTPUT=$("$MGED" --help 2>&1 || true)
 if ! printf '%s\n' "$HELP_OUTPUT" | grep -q -- '--host'; then
@@ -55,6 +56,14 @@ if printf '%s\n' "$HELP_OUTPUT" | grep -q -- '--eye-sep-dist'; then
 fi
 if "$MGED" --dm-type tkobol --help >/dev/null 2>&1; then
     echo "MGED still accepts the retired display-manager type option" 1>&2
+    exit 1
+fi
+
+printf 'rset cs predictor 255 255 255\nrset cs predictor_a 255 255 255\nrset cs predictor_ia 255 255 255\nquit\n' \
+    | "$MGED" -c -a nu -r "$DB" > "$RETIRED_COLOR_LOG" 2>&1
+if grep -Fq "Keyword 'predictor" "$RETIRED_COLOR_LOG"; then
+    echo "MGED did not ignore retired predictor color settings" 1>&2
+    cat "$RETIRED_COLOR_LOG" 1>&2
     exit 1
 fi
 
@@ -256,4 +265,22 @@ if [ ! -s "$TICK_BASE_OUT" ] || [ ! -s "$TICK_OUT" ] || \
     exit 1
 fi
 
+AUTOSIZE_LOG="${WORKDIR}/mged_obol_autosize.log"
+rm -f "$AUTOSIZE_LOG"
+printf 'dm open --host headless --renderer sw\ndm size 512 512\nset autosize 0\nsize 1234\nZ\ndraw -A region_id -1\nputs OBOL_DRAW_ATTRIBUTE\nwho\nputs OBOL_DRAW_AUTOSIZE_OFF\nsize\nZ\nsize 2345\nB --eager-leaf-expansion all.g\nputs OBOL_BLAST_AUTOSIZE_OFF\nsize\nquit\n' \
+    | "$MGED" -c -a nu -r "$DB" > "$AUTOSIZE_LOG" 2>&1
+
+draw_size=`sed -n '/^OBOL_DRAW_AUTOSIZE_OFF$/{n;p;}' "$AUTOSIZE_LOG"`
+blast_size=`sed -n '/^OBOL_BLAST_AUTOSIZE_OFF$/{n;p;}' "$AUTOSIZE_LOG"`
+attribute_draw=`sed -n '/^OBOL_DRAW_ATTRIBUTE$/{n;p;}' "$AUTOSIZE_LOG"`
+if [ "$attribute_draw" != "all.g" ]; then
+    echo "MGED draw lost legacy attribute-selection compatibility" 1>&2
+    cat "$AUTOSIZE_LOG" 1>&2
+    exit 1
+fi
+if [ "$draw_size" != "1234" ] || [ "$blast_size" != "2345" ]; then
+    echo "MGED draw commands ignored the disabled autosize policy" 1>&2
+    cat "$AUTOSIZE_LOG" 1>&2
+    exit 1
+fi
 exit 0
