@@ -1050,6 +1050,9 @@ test_defaults(void)
     CHECK(imgstream_fb_reset(NULL) == 0, "null reset is a no-op success");
     CHECK(imgstream_fb_viewport(NULL, 0, 0, 0, 0) == 0, "null viewport is a no-op success");
     CHECK(imgstream_fb_poll_rate(NULL) == 0, "null poll rate is zero");
+    CHECK(imgstream_fb_remote_shutdown(NULL) == -1 &&
+	imgstream_fb_remote_shutdown(fb) == -1,
+	"remote shutdown rejects null and local framebuffers");
     imgstream_fb_close(fb);
     return 0;
 }

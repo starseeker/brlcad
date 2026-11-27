@@ -47,11 +47,10 @@
 #include "bu/process.h"
 #include "bu/str.h"
 #include "bv.h"
-#include "dm.h"
-#include "dm/fbserv.h"
 #include "ged.h"
 #include "icv.h"
 #include "icv/anim.h"
+#include "imgstream/fb_compat.h"
 #include "pkg.h"
 #include "raytrace.h"
 
@@ -161,7 +160,7 @@ static std::string
 framebuffer_token()
 {
     std::array<char, FBSERV_TOKEN_SIZE> token = {};
-    if (fbs_create_token(token.data(), token.size()) != BRLCAD_OK)
+    if (imgstream_fb_create_token(token.data(), token.size()) != BRLCAD_OK)
         throw std::runtime_error("unable to establish framebuffer session authentication");
     return token.data();
 }
@@ -867,7 +866,7 @@ write_framebuffer(JobContext &job, const rtwizard_settings *s, const icv_image_t
     const std::string device = bu_vls_strlen(s->fb_dev) ?
         bu_vls_addr(s->fb_dev) : RTWIZARD_DEFAULT_FB_DEVICE;
 
-    struct fb *framebuffer = nullptr;
+    imgstream_fb_t *framebuffer = nullptr;
     bu_process *server = nullptr;
     std::string server_token;
     std::string target;
@@ -881,13 +880,17 @@ write_framebuffer(JobContext &job, const rtwizard_settings *s, const icv_image_t
         const std::string &auth_token = std::string(),
         const std::string &tls_pin = std::string()) {
         for (int attempt = 0; attempt < open_attempts && !framebuffer; ++attempt) {
-            if (!tls_pin.empty()) {
-                framebuffer = fb_open_with_auth_and_tls(connection.c_str(), width,
-                    height, auth_token.c_str(), tls_pin.c_str());
-            } else {
-                framebuffer = auth_token.empty() ? fb_open(connection.c_str(), width, height) :
-                    fb_open_with_auth(connection.c_str(), width, height, auth_token.c_str());
-            }
+            struct imgstream_fb_remote_options options =
+                IMGSTREAM_FB_REMOTE_OPTIONS_INIT;
+            options.auth_token = auth_token.empty() ?
+                getenv(IMGSTREAM_FB_AUTH_TOKEN_ENVVAR) : auth_token.c_str();
+            options.use_tls = !tls_pin.empty() ||
+                getenv(IMGSTREAM_FB_TLS_ENVVAR);
+            options.tls_server_sha256 = tls_pin.empty() ?
+                getenv(IMGSTREAM_FB_TLS_SERVER_SHA256_ENVVAR) : tls_pin.c_str();
+            options.allow_insecure = getenv(IMGSTREAM_FB_INSECURE_ENVVAR) ? 1 : 0;
+            framebuffer = imgstream_fb_open_remote(connection.c_str(), width,
+                height, &options);
             if (framebuffer || (process && !bu_process_alive(process))) break;
             if (attempt + 1 < open_attempts) std::this_thread::sleep_for(open_retry_delay);
         }
@@ -906,7 +909,8 @@ write_framebuffer(JobContext &job, const rtwizard_settings *s, const icv_image_t
 
     auto launch_server = [&](const std::vector<std::string> &command, const std::string &connection,
         const std::string &auth_token) {
-        const bool use_tls = connection.rfind("ipc:", 0) != 0 && getenv("FBSERV_TLS");
+        const bool use_tls = connection.rfind("ipc:", 0) != 0 &&
+            getenv(IMGSTREAM_FB_TLS_ENVVAR);
         fs::path pin_file;
         std::string tls_pin;
         std::vector<const char *> argv;
@@ -981,7 +985,7 @@ write_framebuffer(JobContext &job, const rtwizard_settings *s, const icv_image_t
     if (!framebuffer && !existing_target) {
         const int port = tcp_requested ? s->port : RTWIZARD_DEFAULT_FB_PORT;
         target = std::to_string(port);
-        framebuffer = fb_open(target.c_str(), width, height);
+        (void)open_framebuffer(target);
         if (framebuffer) {
             job.log("Using existing TCP framebuffer server on port " + target + ".\n");
         } else {
@@ -1001,15 +1005,15 @@ write_framebuffer(JobContext &job, const rtwizard_settings *s, const icv_image_t
     std::vector<unsigned char> pixels(image->width * image->height * 3);
     for (size_t i = 0; i < pixels.size(); ++i)
         pixels[i] = static_cast<unsigned char>(std::lround(std::clamp(image->data[i], 0.0, 1.0) * 255.0));
-    int written = fb_writerect(framebuffer, 0, 0, static_cast<int>(image->width),
-        static_cast<int>(image->height), pixels.data());
+    int written = imgstream_fb_writerect(framebuffer, 0, 0,
+        static_cast<int>(image->width), static_cast<int>(image->height),
+        pixels.data());
     if (server) {
-        /* MSG_FBFREE asks fbserv to leave its service loop and close the
-         * opaque IPC listener, including its filesystem endpoint. */
-        (void)fb_free(framebuffer);
+        (void)imgstream_fb_remote_shutdown(framebuffer);
+        imgstream_fb_close(framebuffer);
         stop_server(true);
     } else {
-        fb_close(framebuffer);
+        imgstream_fb_close(framebuffer);
     }
     if (written < 0) throw std::runtime_error("unable to write rendered image to framebuffer");
     return 0;
@@ -1164,7 +1168,8 @@ rtwizard_fbserv_start(char *target, size_t target_size, int width, int height,
         std::vector<const char *> argv;
         for (const std::string &argument : command) argv.push_back(argument.c_str());
         argv.push_back(nullptr);
-        const bool use_tls = connection.rfind("ipc:", 0) != 0 && getenv("FBSERV_TLS");
+        const bool use_tls = connection.rfind("ipc:", 0) != 0 &&
+            getenv(IMGSTREAM_FB_TLS_ENVVAR);
         std::vector<std::string> env_storage = {
             "FBSERV_TOKEN=" + gui_framebuffer_server.token
         };

@@ -134,6 +134,11 @@ struct imgstream_fb_remote_options {
     int allow_insecure;
 };
 
+#define IMGSTREAM_FB_AUTH_TOKEN_ENVVAR "FBSERV_TOKEN"
+#define IMGSTREAM_FB_TLS_ENVVAR "FBSERV_TLS"
+#define IMGSTREAM_FB_TLS_SERVER_SHA256_ENVVAR "FBSERV_TLS_SHA256"
+#define IMGSTREAM_FB_INSECURE_ENVVAR "FBSERV_INSECURE"
+
 #define IMGSTREAM_FB_REMOTE_OPTIONS_INIT { \
 	sizeof(struct imgstream_fb_remote_options), NULL, 0, NULL, 0 }
 
@@ -147,6 +152,7 @@ IMGSTREAM_EXPORT enum imgstream_fb_spec_kind imgstream_fb_spec_kind(const char *
 IMGSTREAM_EXPORT int imgstream_fb_spec_info(const char *spec, imgstream_fb_spec_info_t *info);
 IMGSTREAM_EXPORT const char *imgstream_fb_spec_kind_name(enum imgstream_fb_spec_kind kind);
 IMGSTREAM_EXPORT int imgstream_fb_spec_supported(const char *spec);
+IMGSTREAM_EXPORT int imgstream_fb_create_token(char *token, size_t token_size);
 IMGSTREAM_EXPORT void imgstream_fb_colormap_linear(struct imgstream_fb_colormap *cmap);
 IMGSTREAM_EXPORT int imgstream_fb_colormap_is_linear(const struct imgstream_fb_colormap *cmap);
 IMGSTREAM_EXPORT int imgstream_image_name_size(size_t *width, size_t *height,
@@ -168,6 +174,13 @@ IMGSTREAM_EXPORT imgstream_fb_t *imgstream_fb_open_display(const char *spec, siz
  */
 IMGSTREAM_EXPORT int imgstream_fb_detach_display_host(imgstream_fb_t *fb);
 IMGSTREAM_EXPORT void imgstream_fb_close(imgstream_fb_t *fb);
+/*
+ * Request that a remote framebuffer service release its resources and exit.
+ * The transport is always closed after the request, including on failure, and
+ * the disconnected handle must subsequently be passed to imgstream_fb_close.
+ * A valid server reply is returned verbatim; transport failures return -1.
+ */
+IMGSTREAM_EXPORT int imgstream_fb_remote_shutdown(imgstream_fb_t *fb);
 /* /dev/null is a zero-storage diagnostic sink and returns NULL here. */
 IMGSTREAM_EXPORT imgstream_t *imgstream_fb_stream(imgstream_fb_t *fb);
 IMGSTREAM_EXPORT const imgstream_t *imgstream_fb_cstream(const imgstream_fb_t *fb);

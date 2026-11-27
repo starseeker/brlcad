@@ -279,6 +279,19 @@ imgstream_fb_remote_close(struct imgstream_fb_remote *remote)
     BU_FREE(remote, struct imgstream_fb_remote);
 }
 
+
+int
+imgstream_fb_remote_shutdown_connection(struct imgstream_fb_remote *remote)
+{
+    if (!remote || !remote->connection)
+	return -1;
+
+    int ret = remote_command(remote, FBSERV_MSG_FBFREE, NULL, 0);
+    pkg_close(remote->connection);
+    remote->connection = PKC_NULL;
+    return ret;
+}
+
 int
 imgstream_fb_remote_clear(struct imgstream_fb_remote *remote,
 	const unsigned char *rgb)
@@ -292,7 +305,8 @@ imgstream_fb_remote_read(struct imgstream_fb_remote *remote, int x, int y,
 	unsigned char *rgb, size_t count)
 {
     char payload[3 * FBSERV_NET_LONG_LEN] = {0};
-    if (!remote || !rgb || count > UINT32_MAX || count > INT_MAX / 3)
+    if (!remote || !remote->connection || !rgb || count > UINT32_MAX ||
+	count > INT_MAX / 3)
 	return -1;
     if (!count)
 	return 0;
@@ -312,7 +326,7 @@ imgstream_fb_remote_write(struct imgstream_fb_remote *remote, int x, int y,
 	const unsigned char *rgb, size_t count)
 {
     char payload[3 * FBSERV_NET_LONG_LEN] = {0};
-    if (!remote || (!rgb && count) || count > UINT32_MAX ||
+    if (!remote || !remote->connection || (!rgb && count) || count > UINT32_MAX ||
 	count > (size_t)INT_MAX / 3)
 	return -1;
     if (!count)
@@ -332,7 +346,8 @@ imgstream_fb_remote_readrect(struct imgstream_fb_remote *remote, int x, int y,
 {
     char payload[4 * FBSERV_NET_LONG_LEN] = {0};
     size_t byte_count = 0;
-    if (!remote || !rgb || !remote_pack_rect(payload, x, y, width, height,
+    if (!remote || !remote->connection || !rgb ||
+	!remote_pack_rect(payload, x, y, width, height,
 	3, &byte_count) || byte_count > INT_MAX)
 	return -1;
     if (!byte_count)
@@ -351,7 +366,8 @@ imgstream_fb_remote_writerect(struct imgstream_fb_remote *remote, int x,
 {
     char payload[4 * FBSERV_NET_LONG_LEN] = {0};
     size_t byte_count = 0;
-    if (!remote || !rgb || !remote_pack_rect(payload, x, y, width, height,
+    if (!remote || !remote->connection || !rgb ||
+	!remote_pack_rect(payload, x, y, width, height,
 	3, &byte_count) || byte_count > INT_MAX)
 	return -1;
     if (!byte_count)
@@ -368,7 +384,8 @@ imgstream_fb_remote_bwreadrect(struct imgstream_fb_remote *remote, int x,
 {
     char payload[4 * FBSERV_NET_LONG_LEN] = {0};
     size_t byte_count = 0;
-    if (!remote || !bw || !remote_pack_rect(payload, x, y, width, height,
+    if (!remote || !remote->connection || !bw ||
+	!remote_pack_rect(payload, x, y, width, height,
 	1, &byte_count) || byte_count > INT_MAX)
 	return -1;
     if (!byte_count)
@@ -387,7 +404,8 @@ imgstream_fb_remote_bwwriterect(struct imgstream_fb_remote *remote, int x,
 {
     char payload[4 * FBSERV_NET_LONG_LEN] = {0};
     size_t byte_count = 0;
-    if (!remote || !bw || !remote_pack_rect(payload, x, y, width, height,
+    if (!remote || !remote->connection || !bw ||
+	!remote_pack_rect(payload, x, y, width, height,
 	1, &byte_count) || byte_count > INT_MAX)
 	return -1;
     if (!byte_count)
@@ -415,7 +433,8 @@ imgstream_fb_remote_getview(struct imgstream_fb_remote *remote, int *xcenter,
 	int *ycenter, int *xzoom, int *yzoom)
 {
     char response[5 * FBSERV_NET_LONG_LEN] = {0};
-    if (!remote || !xcenter || !ycenter || !xzoom || !yzoom ||
+    if (!remote || !remote->connection || !xcenter || !ycenter || !xzoom ||
+	!yzoom ||
 	pkg_send(FBSERV_MSG_FBGETVIEW, NULL, 0, remote->connection) < 0 ||
 	pkg_waitfor(FBSERV_MSG_RETURN, response, sizeof(response),
 	    remote->connection) < 5 * FBSERV_NET_LONG_LEN ||
@@ -444,7 +463,7 @@ imgstream_fb_remote_getcursor(struct imgstream_fb_remote *remote, int *mode,
 	int *x, int *y)
 {
     char response[4 * FBSERV_NET_LONG_LEN] = {0};
-    if (!remote || !mode || !x || !y ||
+    if (!remote || !remote->connection || !mode || !x || !y ||
 	pkg_send(FBSERV_MSG_FBGETCURSOR, NULL, 0, remote->connection) < 0 ||
 	pkg_waitfor(FBSERV_MSG_RETURN, response, sizeof(response),
 	    remote->connection) < 4 * FBSERV_NET_LONG_LEN ||
@@ -473,7 +492,7 @@ imgstream_fb_remote_setcursor(struct imgstream_fb_remote *remote,
 	const unsigned char *bits, int xbits, int ybits, int xorig, int yorig)
 {
     char payload[4 * FBSERV_NET_LONG_LEN] = {0};
-    if (!remote || xbits < 0 || ybits < 0 ||
+    if (!remote || !remote->connection || xbits < 0 || ybits < 0 ||
 	(size_t)xbits > SIZE_MAX / (size_t)(ybits ? ybits : 1))
 	return -1;
     size_t bytes = ((size_t)xbits * (size_t)ybits + 7) / 8;
@@ -495,7 +514,7 @@ imgstream_fb_remote_rmap(struct imgstream_fb_remote *remote,
 {
     unsigned char packed[REMOTE_CMAP_BYTES] = {0};
     char response[FBSERV_NET_LONG_LEN] = {0};
-    if (!remote || !cmap ||
+    if (!remote || !remote->connection || !cmap ||
 	pkg_send(FBSERV_MSG_FBRMAP, NULL, 0, remote->connection) < 0 ||
 	pkg_waitfor(FBSERV_MSG_DATA, (char *)packed, sizeof(packed),
 	    remote->connection) < REMOTE_CMAP_BYTES ||

@@ -41,6 +41,14 @@
 #define IMGSTREAM_FB_DIAGNOSTIC_LOG_CMAP 2
 #define IMGSTREAM_FB_DIAGNOSTIC_LOG_PIXELS 4
 
+
+int
+imgstream_fb_create_token(char *token, size_t token_size)
+{
+    return fbs_create_token(token, token_size);
+}
+
+
 struct imgstream_fb {
     char *name;
     char *file_path;
@@ -1060,6 +1068,16 @@ imgstream_fb_close(imgstream_fb_t *fb)
     if (fb->name)
 	bu_free(fb->name, "imgstream fb name");
     BU_FREE(fb, struct imgstream_fb);
+}
+
+
+int
+imgstream_fb_remote_shutdown(imgstream_fb_t *fb)
+{
+    if (!fb || !fb->remote)
+	return -1;
+
+    return imgstream_fb_remote_shutdown_connection(fb->remote);
 }
 
 

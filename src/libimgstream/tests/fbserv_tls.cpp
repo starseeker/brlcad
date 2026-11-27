@@ -165,6 +165,11 @@ main(int UNUSED(argc), char **argv)
 	    std::fprintf(stderr, "authenticated TLS framebuffer exchange failed\n");
 	    failures++;
 	}
+	if (imgstream_fb_remote_shutdown(remote) != 0 ||
+	    imgstream_fb_writerect(remote, 0, 0, 2, 2, pixels) != -1) {
+	    std::fprintf(stderr, "remote framebuffer shutdown state failed\n");
+	    failures++;
+	}
 	imgstream_fb_close(remote);
     }
 

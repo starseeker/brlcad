@@ -7,7 +7,7 @@ if(HAVE_WINDOWS_H)
   list(APPEND RTWIZARD_SRCS rtwizard.rc)
 endif(HAVE_WINDOWS_H)
 
-set(RTWIZARD_LIBS libged librt libbv libdm libpkg libicv Threads::Threads ${M_LIBRARY})
+set(RTWIZARD_LIBS libged librt libbv libimgstream libpkg libicv Threads::Threads ${M_LIBRARY})
 set(RTWIZARD_TARGET_DEPS rt rtedge fbserv dm_plugins ged-draw ged-view ged-get_eyemodel)
 set(RTWIZARD_HAVE_TCL 0)
 if(TARGET libtclcad)

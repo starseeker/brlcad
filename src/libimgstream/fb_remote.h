@@ -18,6 +18,7 @@ int imgstream_fb_remote_open(const imgstream_fb_spec_info_t *info,
     const struct imgstream_fb_remote_options *options,
     struct imgstream_fb_remote **remote, size_t *width, size_t *height);
 void imgstream_fb_remote_close(struct imgstream_fb_remote *remote);
+int imgstream_fb_remote_shutdown_connection(struct imgstream_fb_remote *remote);
 int imgstream_fb_remote_clear(struct imgstream_fb_remote *remote,
     const unsigned char *rgb);
 ssize_t imgstream_fb_remote_read(struct imgstream_fb_remote *remote,
