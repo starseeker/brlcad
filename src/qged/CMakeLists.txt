@@ -377,6 +377,7 @@ set(
   fonts/Inconsolata.otf
   main.cpp
   test_qged_obol_fbserv.cpp
+  test_qged_autoview_progressive.json
   test_qged_event_script.json
   test_qged_measure_ui.cmake
   test_qged_measure_ui.json

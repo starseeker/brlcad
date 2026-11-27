@@ -112,20 +112,6 @@ _autoview_named_database_bounds(struct ged *gedp, int argc,
 }
 
 static int
-_autoview_bobol_database_bounds(struct ged *gedp, vect_t *min, vect_t *max,
-	int allow_member_bounds)
-{
-    int empty = 1;
-    /* Never ray-prepare database members on the caller/UI thread merely to
-     * frame a progressive scene.  Cold large BoTs can spend tens of seconds
-     * in rt_obj_bounds/rt_gettree here.  The draw provider publishes cheap
-     * per-leaf bounds and the progressive autoview follower reframes when
-     * those arrive. */
-    return ged_draw_obol_scene_database_autoview_bounds(gedp, min, max,
-	&empty, allow_member_bounds) && !empty;
-}
-
-static int
 _autoview_semantic_draw_bounds(struct ged *gedp,
 	struct ged_view_context *view_ctx, vect_t *min, vect_t *max)
 {
@@ -174,30 +160,8 @@ _autoview_semantic_draw_bounds(struct ged *gedp,
 }
 
 static int
-_autoview_obol_database_scene(
-	struct ged *gedp,
-	struct ged_view_context *view_ctx,
-	fastf_t factor,
-	int all_view_objs,
-	int allow_member_bounds)
-{
-    if (all_view_objs)
-	return 0;
-
-    vect_t min, max;
-    if (!_autoview_bobol_database_bounds(gedp, &min, &max,
-	    allow_member_bounds) &&
-	!_autoview_semantic_draw_bounds(gedp, view_ctx, &min, &max))
-	return 0;
-
-    bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
-	    factor, min, max);
-    return 1;
-}
-
-static int
-_autoview_bobol_view_scene(struct ged_view_context *view_ctx,
-	fastf_t factor)
+_autoview_bobol_view_bounds(struct ged_view_context *view_ctx,
+	point_t min, point_t max)
 {
     BObolViewController *controller = ged_bobol_view_controller(view_ctx);
     if (!controller || !controller->getViewport() ||
@@ -213,12 +177,52 @@ _autoview_bobol_view_scene(struct ged_view_context *view_ctx,
 
     const SbVec3f bmin = bounds.getMin();
     const SbVec3f bmax = bounds.getMax();
-    vect_t min, max;
-    VSET(min, bmin[0], bmin[1], bmin[2]);
-    VSET(max, bmax[0], bmax[1], bmax[2]);
-    bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
-	factor, min, max);
+    VSET(min, bmin[X], bmin[Y], bmin[Z]);
+    VSET(max, bmax[X], bmax[Y], bmax[Z]);
     return 1;
+}
+
+struct autoview_request {
+    struct ged *gedp;
+    struct ged_view_context *view_ctx;
+    fastf_t factor;
+    bool named_objects;
+    int all_view_objs;
+    point_t min;
+    point_t max;
+};
+
+static int
+_autoview_on_owner(void *data)
+{
+    autoview_request &request = *static_cast<autoview_request *>(data);
+    if (!request.named_objects) {
+	if (request.all_view_objs) {
+	    if (!_autoview_bobol_view_bounds(request.view_ctx, request.min,
+		    request.max))
+		return BRLCAD_OK;
+	} else {
+	    /* A progressive provider owns the fit until it publishes final
+	     * bounds or the user moves the camera.  Let it use the bounds it
+	     * already has before considering expensive database fallback. */
+	    if (ged_draw_obol_progressive_autoview_follow(request.gedp,
+		    request.view_ctx, request.factor))
+		return BRLCAD_OK;
+
+	    /* A null presentation still needs finite database bounds to
+	     * initialize the camera for callers such as rtwizard. */
+	    int empty = 1;
+	    if ((!ged_draw_obol_scene_database_autoview_bounds(request.gedp,
+			&request.min, &request.max, &empty, 1) || empty) &&
+		!_autoview_semantic_draw_bounds(request.gedp, request.view_ctx,
+		    &request.min, &request.max))
+		return BRLCAD_OK;
+	}
+    }
+
+    bv_autoview_bounds(bv_context_view((struct bv_context *)request.view_ctx),
+	request.factor, request.min, request.max);
+    return BRLCAD_OK;
 }
 
 /*
@@ -302,40 +306,18 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
     if (scale > 0.0)
 	factor = 1.0 / scale;
 
-    if (argc > 0) {
-	/* Frame only the named objects.  Bound them directly from the
-	 * database (they need not be displayed). */
-	point_t min, max;
-	if (!_autoview_named_database_bounds(gedp, argc, argv, min, max)) {
-	    bu_vls_printf(gedp->ged_result_str,
-		"Unable to determine finite autoview bounds for the requested objects");
-	    return BRLCAD_ERROR;
-	}
-	bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
-		factor, min, max);
-    } else {
-	if (all_view_objs)
-	    (void)_autoview_bobol_view_scene(view_ctx, factor);
-	else if (!ged_draw_obol_progressive_autoview_follow(gedp, view_ctx,
-		factor))
-	    /* No progressive provider can fulfill this request (notably the
-	     * null presentation used by rtwizard).  In that case explicit
-	     * autoview must synchronously obtain finite database-member bounds;
-	     * returning success with the untouched sentinel camera produces NaN
-	     * eye-model values.  First-draw transactions retain their separate
-	     * cheap/progressive path and do not pay this fallback cost. */
-	    (void)_autoview_obol_database_scene(gedp, view_ctx, factor, 0, 1);
-	/*
-	 * A deferred Obol root publishes monotonic partial coverage before its
-	 * exact whole-target bound.  If a progressive source accepts the request,
-	 * it owns an immediate finite fit and throttled refits as that source union
-	 * grows; exact/terminal coverage retires the follow operation.  A user pan
-	 * or zoom cancels it.  A settled/non-progressive scene follows the ordinary
-	 * immediate path.
-	 */
+    autoview_request request = {gedp, view_ctx, factor, argc > 0,
+	all_view_objs, VINIT_ZERO, VINIT_ZERO};
+    if (request.named_objects && !_autoview_named_database_bounds(gedp,
+		argc, argv, request.min, request.max)) {
+	bu_vls_printf(gedp->ged_result_str,
+	    "Unable to determine finite autoview bounds for the requested objects");
+	return BRLCAD_ERROR;
     }
 
-    return BRLCAD_OK;
+    /* Hosts can execute GED commands on a worker.  The retained scene and
+     * progressive provider share camera state with the view's owner thread. */
+    return ged_exec_owner_invoke(gedp, _autoview_on_owner, &request);
 }
 
 // Local Variables:
