@@ -35,7 +35,11 @@
 #include "bu/log.h"
 #include "bu/opt.h"
 #include "bn/spm.h"
-#include "dm.h"
+
+
+enum {
+    RGB_CHANNEL_COUNT = 3
+};
 
 
 int
@@ -53,7 +57,7 @@ main(int argc, char **argv)
     if (!bu_opt_scan_int_range(argv[2], &size, 1, INT_MAX, "size")) {
 	return 1;
     }
-    mp = bn_spm_init(size, sizeof(RGBpixel));
+    mp = bn_spm_init(size, RGB_CHANNEL_COUNT * sizeof(unsigned char));
     bn_spm_pix_load(mp, argv[1], size, size);
     bn_spm_save(mp, "-");
 
