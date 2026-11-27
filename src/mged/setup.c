@@ -760,7 +760,9 @@ mged_setup(struct mged_state *s)
 
     s->gedp = ged_create();
     s->gedp->ged_fbs->fbs_interp = s->interp;
-    tclcad_configure_ipc_handlers(s->gedp->ged_fbs);
+    tclcad_fbserv_set_transport(s->gedp->ged_fbs);
+
+    (void)ged_exec_owner_dispatch_set(s->gedp, mged_ged_owner_dispatch, s);
     s->gedp->ged_output_handler = mged_output_handler;
     s->gedp->ged_refresh_clientdata = (void *)s;
     s->gedp->ged_refresh_handler = mged_refresh_handler;

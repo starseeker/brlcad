@@ -214,8 +214,12 @@ mged_run_on_gui_thread(struct mged_state *s, mged_gui_callback_t callback,
     event->event.proc = gui_thread_proc;
     event->request = &request;
 
+    /* The worker is synchronously blocked on this request.  Put it ahead of
+     * self-renewing Tk render and progressive-timer events; queueing at the
+     * tail can starve command completion while those events keep producing
+     * more work. */
     Tcl_ThreadQueueEvent(s->gui_thread_id, reinterpret_cast<Tcl_Event *>(event),
-	TCL_QUEUE_TAIL);
+	TCL_QUEUE_HEAD);
     Tcl_ThreadAlert(s->gui_thread_id);
 
     std::unique_lock<std::mutex> lock(request.mutex);
@@ -261,6 +265,32 @@ mged_terminal_columns(struct mged_state *s)
     ged_set_terminal_columns(s->gedp, columns > 0 ? (size_t)columns : 0);
 }
 
+
+struct MgedGedOwnerRequest {
+    ged_exec_owner_task_t task;
+    void *task_data;
+    int result;
+};
+
+static void
+mged_ged_owner_task(void *data)
+{
+    MgedGedOwnerRequest *request = static_cast<MgedGedOwnerRequest *>(data);
+    request->result = request->task(request->task_data);
+}
+
+extern "C" int
+mged_ged_owner_dispatch(void *client_data, ged_exec_owner_task_t task,
+	void *task_data)
+{
+    struct mged_state *s = static_cast<struct mged_state *>(client_data);
+    if (!s || !task)
+	return 0;
+    MgedGedOwnerRequest request = {task, task_data, 0};
+    mged_run_on_gui_thread(s, mged_ged_owner_task, &request);
+    return request.result;
+}
+
 /* Internal C++ async helper.
  *
  * In GUI (non-classic, interactive) mode: runs 'func' in a std::thread while
@@ -304,6 +334,12 @@ run_ged_async(struct mged_state *s, std::function<int()> func)
     Tcl_Obj *saved_result = Tcl_GetObjResult(s->interp);
     Tcl_IncrRefCount(saved_result);
     Tcl_ResetResult(s->interp);
+    struct ged_view_context *foreground_view = ged_view_active_ctx(s->gedp);
+    bobol_display_endpoint_t *foreground_endpoint = foreground_view ?
+	ged_view_context_obol_endpoint_get(foreground_view) : NULL;
+    const int foreground_deferred = foreground_endpoint ?
+	bobol_display_endpoint_foreground_activity_begin(
+	    foreground_endpoint) : 0;
     Tcl_ThreadId main_tid = Tcl_GetCurrentThread();
     std::atomic<bool> done{false};
     std::atomic<int> result{0};
@@ -343,6 +379,12 @@ run_ged_async(struct mged_state *s, std::function<int()> func)
 
     worker.join();
 
+    struct ged_view_context *current_view = ged_view_active_ctx(s->gedp);
+    if (foreground_deferred && current_view &&
+	ged_view_context_obol_endpoint_get(current_view) == foreground_endpoint)
+	(void)bobol_display_endpoint_foreground_activity_end(
+	    foreground_endpoint);
+
     /* Restore the caller's SIGINT */
     (void)signal(SIGINT, prev_sigint);
 
@@ -373,6 +415,7 @@ mged_request_command_interrupt(struct mged_state *s)
 
     AsyncCommandState *command_state = active_command_state(s);
     command_state->interrupt_requested.store(true, std::memory_order_release);
+    (void)ged_exec_cancel_request(s->gedp);
     return 1;
 }
 
@@ -384,7 +427,8 @@ mged_command_interrupted(struct mged_state *s)
 	return 0;
 
     AsyncCommandState *command_state = active_command_state(s);
-    return command_state->interrupt_requested.load(std::memory_order_acquire) ? 1 : 0;
+    return (command_state->interrupt_requested.load(std::memory_order_acquire) ||
+	ged_exec_cancel_requested(s->gedp)) ? 1 : 0;
 }
 
 
@@ -590,6 +634,8 @@ mged_search_exec_ged(struct mged_state *s, Tcl_Interp *interp, int argc,
 	return TCL_ERROR;
     return (ret == BRLCAD_OK) ? TCL_OK : TCL_ERROR;
 }
+
+
 int
 mged_ged_draw_async(struct mged_state *s, int argc, const char *argv[])
 {
@@ -607,8 +653,6 @@ mged_ged_draw_async(struct mged_state *s, int argc, const char *argv[])
     bu_free(draw_argv, "MGED draw arguments");
     return ret;
 }
-
-
 
 
 /* Tcl command "_mged_ged_exec" registered inside the search interpreter.

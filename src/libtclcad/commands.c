@@ -1450,7 +1450,7 @@ to_open_tcl(ClientData UNUSED(clientData),
 	ged_event_disable(gedp);
     gedp->ged_interp = (void *)interp;
     gedp->ged_fbs->fbs_interp = interp;
-    tclcad_configure_ipc_handlers(gedp->ged_fbs);
+    tclcad_fbserv_set_transport(gedp->ged_fbs);
 
     disable_events = Tcl_GetVar(interp, "tclcad_disable_events",
 	    TCL_GLOBAL_ONLY);

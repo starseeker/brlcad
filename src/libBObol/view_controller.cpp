@@ -993,6 +993,9 @@ BObolLodControlTraceState::BObolLodControlTraceState(void) :
     submissionDeltaEntryCount(0),
     structuralRepairFrontierCount(0),
     structuralRepairCoverageCostReservation(0),
+    structuralProjectionVisibleCount(0),
+    structuralUnresolvedOccurrenceCount(0),
+    structuralSuccessorBlockerMask(0),
     submissionPassMissingMeshBudgetBlockedCount(0),
     lastSubmissionVisitedMeshCount(0),
     lastSubmissionSubmittedTaskCount(0),
@@ -1003,6 +1006,15 @@ BObolLodControlTraceState::BObolLodControlTraceState(void) :
     interactionActive(FALSE),
     structuralRepairTerminalProxy(FALSE),
     structuralRepairPointRelaxation(FALSE),
+    structuralOccurrenceCoverageExact(FALSE),
+    structuralProjectionExact(FALSE),
+    structuralPopulationSettled(FALSE),
+    structuralCompleteVisibleCountValid(FALSE),
+    structuralMeshFirstSceneSafe(FALSE),
+    structuralPointAggregationOwner(FALSE),
+    structuralPointPolicyExhausted(FALSE),
+    structuralExternalProducersSettled(FALSE),
+    structuralSuccessorBaseReady(FALSE),
     submissionPassAdmittedWork(FALSE),
     submissionPassCutAdvanced(FALSE),
     submissionPassRefinementPending(FALSE),
@@ -1073,6 +1085,12 @@ controller_lod_control_trace_state_equal(
 	    right.structuralRepairFrontierCount &&
 	left.structuralRepairCoverageCostReservation ==
 	    right.structuralRepairCoverageCostReservation &&
+	left.structuralProjectionVisibleCount ==
+	    right.structuralProjectionVisibleCount &&
+	left.structuralUnresolvedOccurrenceCount ==
+	    right.structuralUnresolvedOccurrenceCount &&
+	left.structuralSuccessorBlockerMask ==
+	    right.structuralSuccessorBlockerMask &&
 	left.submissionPassMissingMeshBudgetBlockedCount ==
 	    right.submissionPassMissingMeshBudgetBlockedCount &&
 	left.lastSubmissionVisitedMeshCount ==
@@ -1090,6 +1108,23 @@ controller_lod_control_trace_state_equal(
 	    right.structuralRepairTerminalProxy &&
 	left.structuralRepairPointRelaxation ==
 	    right.structuralRepairPointRelaxation &&
+	left.structuralOccurrenceCoverageExact ==
+	    right.structuralOccurrenceCoverageExact &&
+	left.structuralProjectionExact == right.structuralProjectionExact &&
+	left.structuralPopulationSettled ==
+	    right.structuralPopulationSettled &&
+	left.structuralCompleteVisibleCountValid ==
+	    right.structuralCompleteVisibleCountValid &&
+	left.structuralMeshFirstSceneSafe ==
+	    right.structuralMeshFirstSceneSafe &&
+	left.structuralPointAggregationOwner ==
+	    right.structuralPointAggregationOwner &&
+	left.structuralPointPolicyExhausted ==
+	    right.structuralPointPolicyExhausted &&
+	left.structuralExternalProducersSettled ==
+	    right.structuralExternalProducersSettled &&
+	left.structuralSuccessorBaseReady ==
+	    right.structuralSuccessorBaseReady &&
 	left.submissionPassAdmittedWork ==
 	    right.submissionPassAdmittedWork &&
 	left.submissionPassCutAdvanced == right.submissionPassCutAdvanced &&
@@ -3909,6 +3944,14 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		   static_cast<long long>(retainedAllocationElapsed));
     }
     SbBool boundedScenePass = FALSE;
+    /* The time allowance belongs to the complete controller pump, not to
+     * each database source.  Giving every source a fresh allowance allowed
+     * a multi-source scene to hold the owner thread for tens of milliseconds
+     * even though every individual action honored its local deadline. */
+    const uint64_t submissionPassTimeLimitMicroseconds =
+	this->d->forceTerminalLodRefinement ? 0 :
+	(this->d->lodInteractionSession.active() ? 3000 : 8000);
+    const int64_t submissionPassStarted = bu_gettime();
     if (!this->d->lodInteractionSession.active() &&
 	this->d->lodRetainedViewContinuity.visibilityCensusDeferred()) {
 	/* The motion fast path may have advanced the source cursor to its end
@@ -3921,6 +3964,12 @@ BObolViewController::submitLodRequests(BObolLodService *service,
     }
     for (size_t i = this->d->lodSubmissionSourceIndex;
 	 i < sources.size();) {
+	if (submissionPassTimeLimitMicroseconds) {
+	    const int64_t elapsed = bu_gettime() - submissionPassStarted;
+	    if (elapsed >= 0 && static_cast<uint64_t>(elapsed) >=
+		    submissionPassTimeLimitMicroseconds)
+		break;
+	}
 	const size_t capacity = service->availableResultTaskCapacity();
 	if (!capacity) {
 	    break;
@@ -4203,10 +4252,8 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		this->d->lodRetainedAdmissionQualityEvidence.
 		    maximumNormalizedError());
 	action.setSubmissionTaskLimit(capacity);
-	/* Planning and request construction execute on the host thread.  Keep
-	 * their per-pump slice below a frame even when a nominal 2k window has
-	 * become expensive due to large retained maps.  Deterministic/offline
-	 * callers may explicitly remove this interactive deadline. */
+	/* Planning and request construction execute on the host thread.  Give
+	 * this source only the remainder of the pump-wide allowance. */
 	/* The Qt host deliberately spaces ordinary progressive pumps by one
 	 * 16 ms event-loop interval.  Applying the same 3 ms planning slice to a
 	 * quiet many-leaf view leaves the worker pool empty for most of that
@@ -4220,10 +4267,17 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	 * result reservations, scene budget, and presentation deadline remain the
 	 * independent authorities.  Offline callers continue to request an
 	 * unbounded deterministic slice explicitly. */
-	const uint64_t submissionTimeLimitMicroseconds =
-	    this->d->forceTerminalLodRefinement ? 0 :
-	    (this->d->lodInteractionSession.active() ? 3000 : 8000);
-	action.setSubmissionTimeLimit(submissionTimeLimitMicroseconds);
+	uint64_t sourceSubmissionTimeLimitMicroseconds = 0;
+	if (submissionPassTimeLimitMicroseconds) {
+	    const int64_t elapsed = bu_gettime() - submissionPassStarted;
+	    const uint64_t consumed = elapsed > 0 ?
+		static_cast<uint64_t>(elapsed) : 0;
+	    sourceSubmissionTimeLimitMicroseconds =
+		consumed < submissionPassTimeLimitMicroseconds ?
+		submissionPassTimeLimitMicroseconds - consumed : 1;
+	}
+	action.setSubmissionTimeLimit(
+	    sourceSubmissionTimeLimitMicroseconds);
 	/* Never make a complete many-leaf projection/sort one GUI operation.
 	 * Initial mesh coverage has no user-visible ordering contract; consume
 	 * compact-index order in bounded waves and project each occurrence
@@ -4552,7 +4606,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		action.hasDeferredCompactEntries() ? 1 : 0,
 		action.getCompactEntryNext(),
 		static_cast<unsigned long long>(
-		    submissionTimeLimitMicroseconds),
+		    sourceSubmissionTimeLimitMicroseconds),
 		this->d->forceTerminalLodRefinement ? 1 : 0);
 	if (action.getOneOverBudgetRefinementUsed())
 	    this->d->lodDiscretePopulationTrialPermit.consume();
@@ -7854,6 +7908,115 @@ BObolViewController::captureLodControlTraceState(void) const
 	this->d->lodStructuralRepair.frontierCount();
     state.structuralRepairCoverageCostReservation =
 	this->d->lodStructuralRepair.coverageCostReservation();
+    const BObolViewLodState *viewLodState = this->d->viewAttachment ?
+	this->d->viewAttachment->getViewLodState() : NULL;
+    size_t subpixelOccurrences = 0;
+    size_t structuralBoxes = 0;
+    const bool exactOccurrenceCoverage = viewLodState &&
+	viewLodState->lastCadPresentationOccurrenceCoverage(
+	    subpixelOccurrences, structuralBoxes);
+    const size_t terminalFailures = viewLodState ?
+	viewLodState->cadOccurrenceTerminalFailureCount() : 0;
+    const size_t unresolvedStructuralCount =
+	structuralBoxes > terminalFailures ?
+	    structuralBoxes - terminalFailures : 0;
+    BObolViewLodState::CadStructuralProjectionHistogram projection;
+    const bool exactStructuralProjection = viewLodState &&
+	viewLodState->lastCadStructuralProjectionHistogram(projection);
+    const bool externalProducersSettled =
+	this->d->lodAvailabilityLedger.providerPendingCount() == 0;
+    const std::vector<SoBRLDatabaseSource *> structuralSources =
+	controller_render_database_source_roots(this);
+    const bool structuralPopulationSettled =
+	controller_lod_structural_population_settled(
+	    structuralSources, externalProducersSettled);
+    const bool meshFirstSceneSafe =
+	controller_lod_mesh_first_scene_safe(structuralSources);
+    const size_t maximumFirstWaveOccurrences =
+	BObolLodAdmissionPlanner::structuralFirstWaveOccurrenceLimit(
+	    this->d->lodAdmissionEvidence.capacity().currentBudget());
+    const bool pointAggregationOwnsStructuralFrontier =
+	!meshFirstSceneSafe &&
+	BObolLodAdmissionPlanner::pointAggregationApplicable(
+	    exactStructuralProjection ? projection.visibleCount : 0) &&
+	this->d->structuralPointAggregationRequired(
+	    maximumFirstWaveOccurrences) &&
+	maximumFirstWaveOccurrences != SIZE_MAX;
+    const size_t unaggregatableStructuralCount =
+	exactStructuralProjection ?
+	    BObolLodAdmissionPlanner::unaggregatableStructuralCount(
+		projection.cumulativeCount, projection.visibleCount) : 0;
+    const bool pointPolicyExhausted = BObolLodAdmissionPlanner::
+	pointPolicyExhaustedForStructuralFrontier(
+	    BObolLodAdmissionPlanner::pointAtMaximumPixelThreshold(
+		this->d->lodPresentationPointProxyPixelThreshold),
+	    pointAggregationOwnsStructuralFrontier,
+	    exactStructuralProjection, unresolvedStructuralCount,
+	    unaggregatableStructuralCount);
+    const BObolLodGenerationWorkStatus generationWork = this->d->lodService ?
+	this->d->lodService->generationWorkStatus(
+	    this->d->lodActiveGeneration) : BObolLodGenerationWorkStatus();
+    const bool unresolvedStructuralPresentation =
+	exactOccurrenceCoverage && unresolvedStructuralCount > 0;
+    const bool structuralResidencyAvailable =
+	BObolLodAvailabilityScheduler::structuralRepairMayOwn(
+	    this->d->lodAvailabilityLedger.residentGrowthPending(),
+	    this->d->lodAvailabilityLedger.residencyDrainActive());
+    uint64_t structuralBlockers = 0;
+    if (!unresolvedStructuralPresentation)
+	structuralBlockers |= BOBOL_LOD_STRUCTURAL_SUCCESSOR_NO_FRONTIER;
+    if (!exactStructuralProjection)
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_PROJECTION_INEXACT;
+    if (!this->d->lodAutoSubmit)
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_AUTO_SUBMIT_DISABLED;
+    if (!this->d->lodService)
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_SERVICE_UNAVAILABLE;
+    if (this->d->lodInteractionSession.active())
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_INTERACTION_ACTIVE;
+    if (!this->d->lodCoveragePolicy.hasCompleteVisibleCount())
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_CENSUS_INCOMPLETE;
+    if (this->d->lodSubmissionPass.active())
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_SUBMISSION_ACTIVE;
+    if (this->d->lodPresentationTransaction.barrierPending())
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_PRESENTATION_BARRIER;
+    if (this->d->lodPointQualityPhase.triangleRecoveryPending())
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_TRIANGLE_RECOVERY;
+    if (!structuralResidencyAvailable)
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_RESIDENCY_BUSY;
+    if (!structuralPopulationSettled)
+	structuralBlockers |=
+	    BOBOL_LOD_STRUCTURAL_SUCCESSOR_POPULATION_UNSETTLED;
+    if (generationWork.hasResultWork())
+	structuralBlockers |= BOBOL_LOD_STRUCTURAL_SUCCESSOR_RESULT_WORK;
+    state.structuralProjectionVisibleCount = projection.visibleCount;
+    state.structuralUnresolvedOccurrenceCount = unresolvedStructuralCount;
+    state.structuralSuccessorBlockerMask = structuralBlockers;
+    state.structuralOccurrenceCoverageExact =
+	exactOccurrenceCoverage ? TRUE : FALSE;
+    state.structuralProjectionExact =
+	exactStructuralProjection ? TRUE : FALSE;
+    state.structuralPopulationSettled =
+	structuralPopulationSettled ? TRUE : FALSE;
+    state.structuralCompleteVisibleCountValid =
+	this->d->lodCoveragePolicy.hasCompleteVisibleCount() ? TRUE : FALSE;
+    state.structuralMeshFirstSceneSafe = meshFirstSceneSafe ? TRUE : FALSE;
+    state.structuralPointAggregationOwner =
+	pointAggregationOwnsStructuralFrontier ? TRUE : FALSE;
+    state.structuralPointPolicyExhausted =
+	pointPolicyExhausted ? TRUE : FALSE;
+    state.structuralExternalProducersSettled =
+	externalProducersSettled ? TRUE : FALSE;
+    state.structuralSuccessorBaseReady =
+	structuralBlockers == 0 ? TRUE : FALSE;
     state.submissionPassMissingMeshBudgetBlockedCount =
 	this->d->lodRetainedPass.missingMeshBudgetBlockedCount();
     state.lastSubmissionVisitedMeshCount =
@@ -7889,7 +8052,8 @@ void
 BObolViewController::recordLodControlTransition(
     BObolLodControlTransitionEvent event,
     const BObolLodControlTraceState &before,
-    const BObolLodControlTraceState &after, SbBool force)
+    const BObolLodControlTraceState &after, SbBool force,
+    uint64_t durationMicroseconds)
 {
     if (!this->d->lodControlTransitionActive() ||
 	(!force && controller_lod_control_trace_state_equal(before, after)))
@@ -7902,7 +8066,8 @@ BObolViewController::recordLodControlTransition(
     record.before = before;
     record.after = after;
     if (this->d->lodTelemetry)
-	this->d->lodTelemetry->recordTransition(*this, record);
+	this->d->lodTelemetry->recordTransition(*this, record,
+	    durationMicroseconds);
     if (!this->d->lodControlTransitionJournalEnabled)
 	return;
     if (this->d->lodControlTransitionRecords.size() >=
@@ -7932,6 +8097,7 @@ BObolViewController::beginLodControlTransition(
 	BObolLodControlTransitionFrame frame;
 	frame.token = bobol_nonzero_identity_take(
 	    this->d->lodControlTransitionNextToken);
+	frame.startedMicroseconds = bu_gettime();
 	frame.suppressed = TRUE;
 	frame.state = state;
 	this->d->lodControlTransitionFrames.push_back(frame);
@@ -7956,6 +8122,7 @@ BObolViewController::beginLodControlTransition(
     BObolLodControlTransitionFrame frame;
     frame.token = bobol_nonzero_identity_take(
 	this->d->lodControlTransitionNextToken);
+    frame.startedMicroseconds = bu_gettime();
     frame.event = event;
     frame.ownerEvent = ownerEvent;
     frame.state = state;
@@ -7989,7 +8156,13 @@ BObolViewController::endLodControlTransition(uint64_t token)
 	this->captureLodControlTraceState();
     const BObolLodControlTransitionEvent event = frame.ownerEvent ?
 	controller_lod_control_owner_event(frame.state, state) : frame.event;
-    this->recordLodControlTransition(event, frame.state, state);
+    const int64_t completedMicroseconds = bu_gettime();
+    const uint64_t durationMicroseconds =
+	completedMicroseconds >= frame.startedMicroseconds ?
+	static_cast<uint64_t>(completedMicroseconds -
+	    frame.startedMicroseconds) : 0;
+    this->recordLodControlTransition(event, frame.state, state, FALSE,
+	durationMicroseconds);
     this->d->lodControlTransitionFrames.pop_back();
     if (this->d->lodControlTransitionFrames.empty()) {
 	this->d->lodControlTransitionEndpoint = state;
