@@ -19,192 +19,39 @@
  */
 /** @addtogroup libstruct fb */
 /** @{ */
-/** @file ./libfb/asize.c
+/** @file libdm/asize.c
  *
- *  Image file AutoSizing code.
+ * Legacy framebuffer image-sizing compatibility functions.
  *
  */
 /** @} */
 
 #include "common.h"
 
-#include <stdio.h>
-#include <math.h>
-#include <sys/stat.h>
-#include <string.h>
-
 #include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
-/* This table does not need to include any square sizes */
-struct sizes {
-    size_t	width;		/* image width in pixels */
-    size_t	height;		/* image height in pixels */
-};
-struct sizes fb_common_sizes[] = {
-    {  160,  120 },		/* quarter 640x480 */
-    {  192,  128 },		/* Kodak Photo-CD, level 1, Base/16 */
-    {  320,  200 },		/* PC screen format */
-    {  320,  240 },		/* half 640x480 */
-    {  384,  256 },		/* Kodak Photo-CD, level 2, Base/4 */
-    {  640,  512 },		/* half 1280x1024 */
-    {  640,  400 },		/* PC screen format */
-    {  640,	 480 },		/* Common video format */
-    {  640,	 485 },		/* Common video format, most correct */
-    {  640,	 486 },		/* Common video format */
-    {  720,	 485 },		/* Abekas video format, most correct */
-    {  720,	 486 },		/* Abekas video format */
-    {  768,  512 },		/* Kodak Photo-CD, level 3, Base */
-    { 1024,	 768 },		/* SGI-3D screen size */
-    { 1152,  900 },		/* Sun screen size */
-    { 1280,  960 },		/* twice 640x480 */
-    { 1280,	1024 },		/* SGI-4D screen size */
-    { 1440,  972 },		/* double Abekas video format */
-    { 1536, 1024 },		/* Kodak Photo-CD, level 4, 4*Base */
-    { 1600, 1200 },		/* Digital camera */
-    { 1600, 1280 },		/* Large monitor */
-    { 3072, 2048 },		/* Kodak Photo-CD, level 5, 16*Base */
-    { 3200, 4000 },		/* 8x10 inches, 400 dpi */
-    { 3400, 4400 },		/* 8.5x11 inches, 400 dpi */
-    { 4700, 3300 },		/* A4 size, 11.75x8.25 inches, 400 dpi */
-    {    0,	   0 }
-};
-
-
-/*
- *  If the file name contains size information encoded in it,
- *  then that size is returned, even if it differs from the actual
- *  file dimensions.  (It might have been truncated).
- *  Otherwise, the actual file size is passed to fb_common_image_size()
- *  to see if this is a plausible image size.
- *
- *  Returns -
- *	0	size unknown
- *	1	width and height returned
- */
 int
-fb_common_file_size(size_t *widthp, size_t *heightp, const char *filename, int pixel_size)
-/* pointer to returned width */
-/* pointer to returned height */
-/* image file to stat */
-/* bytes per pixel */
+fb_common_file_size(size_t *width, size_t *height, const char *filename,
+	int bytes_per_pixel)
 {
-    struct	stat	sbuf;
-    size_t	size;
-    register const char	*cp;
-
-    *widthp = *heightp = 0;		/* sanity */
-
-    if (pixel_size <= 0) {
-	return 0;
-    }
-
-    if (filename == NULL || *filename == '\0') {
-	return 0;
-    }
-
-    /* Skip over directory names, if any */
-    cp = strchr(filename, '/');
-    if (cp) {
-	cp++;			/* skip over slash */
-    } else {
-	cp = filename;		/* no slash */
-    }
-
-    if (fb_common_name_size(widthp, heightp, cp))
-	return 1;
-
-    if (stat(filename, &sbuf) < 0)
-	return	0;
-
-    size = (size_t)(sbuf.st_size / pixel_size);
-
-    return fb_common_image_size(widthp, heightp, size);
+    return imgstream_image_file_size(width, height, filename,
+	bytes_per_pixel);
 }
 
 
-/*
- *  Given the number of pixels in an image file, along with a name for the
- *  image (possibly the filename), attempt to determine the
- *  the width and height of the image.
- *
- *  Returns -
- *	0	size unknown
- *	1	width and height returned
- */
-
 int
-fb_common_name_size(size_t *widthp, size_t *heightp, const char *name)
-/* pointer to returned width */
-/* pointer to returned height */
-/* name to parse */
+fb_common_name_size(size_t *width, size_t *height, const char *name)
 {
-    register const char *cp = name;
-    unsigned long w;
-    unsigned long h;
-
-    /* File name may have several minus signs in it.  Try repeatedly */
-    while (*cp) {
-	cp = strchr(cp, '-');		/* Find a minus sign */
-	if (cp == NULL) break;
-	if (sscanf(cp, "-w%lu-n%lu", &w, &h) == 2) {
-	    // Sanity
-	    if (w > LONG_MAX || h > LONG_MAX) {
-		continue;
-	    }
-	    *widthp = w;
-	    *heightp = h;
-	    return 1;
-	}
-	cp++;				/* skip over the minus */
-    }
-
-    /* If we got here, we didn't see the answer in the name. */
-    return 0;
+    return imgstream_image_name_size(width, height, name);
 }
 
 
-/*
- *  Given the number of pixels in an image file,
- *  if this is a "common" image size,
- *  return the width and height of the image.
- *
- *  Returns -
- *	0	size unknown
- *	1	width and height returned
- */
 int
-fb_common_image_size(size_t *widthp, size_t *heightp, size_t npixels)
-/* pointer to returned width */
-/* pointer to returned height */
-/* Number of pixels */
+fb_common_image_size(size_t *width, size_t *height, size_t pixel_count)
 {
-    struct sizes *sp;
-    size_t root;
-
-    if (npixels <= 0)
-	return	0;
-
-    sp = fb_common_sizes;
-    while (sp->width != 0) {
-	if (npixels == sp->width * sp->height) {
-	    *widthp = sp->width;
-	    *heightp = sp->height;
-	    return	1;
-	}
-	sp++;
-    }
-
-    /* If the size is a perfect square, then use that. */
-    root = (size_t)(sqrt((double)npixels)+0.999);
-    if (root*root == npixels) {
-	*widthp = root;
-	*heightp = root;
-	return	1;
-    }
-
-    /* Nope, we are clueless. */
-    return	0;
+    return imgstream_image_size(width, height, pixel_count);
 }
 
 

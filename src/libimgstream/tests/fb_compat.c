@@ -941,6 +941,43 @@ test_image_io(void)
 
 
 static int
+test_image_sizing(void)
+{
+    size_t width = 0;
+    size_t height = 0;
+
+    CHECK(imgstream_image_name_size(&width, &height,
+	"fixture-w640-n480.pix") == 1 && width == 640 && height == 480,
+	"parsed dimensions from an image name");
+    CHECK(imgstream_image_size(&width, &height, 640 * 480) == 1 &&
+	width == 640 && height == 480,
+	"recognized a conventional image size");
+    CHECK(imgstream_image_size(&width, &height, 17 * 17) == 1 &&
+	width == 17 && height == 17,
+	"recognized a square image size");
+    CHECK(imgstream_image_size(&width, &height, 17 * 19) == 0,
+	"rejected an unknown rectangular image size");
+    CHECK(imgstream_image_name_size(NULL, &height, "fixture-w1-n1.pix") == 0 &&
+	imgstream_image_size(&width, NULL, 1) == 0,
+	"rejected null image-size outputs");
+
+    char path[MAXPATHLEN] = {0};
+    FILE *fixture = bu_temp_file(path, sizeof(path));
+    CHECK(fixture != NULL, "created image-size fixture");
+    unsigned char pixels[48] = {0};
+    CHECK(fwrite(pixels, 1, sizeof(pixels), fixture) == sizeof(pixels) &&
+	fflush(fixture) == 0,
+	"wrote image-size fixture");
+    CHECK(imgstream_image_file_size(&width, &height, path, 3) == 1 &&
+	width == 4 && height == 4,
+	"derived dimensions from an image file");
+    fclose(fixture);
+    bu_file_delete(path);
+    return 0;
+}
+
+
+static int
 test_defaults(void)
 {
     imgstream_fb_t *fb = imgstream_fb_open(NULL, 0, 0);
@@ -979,6 +1016,8 @@ main(int ac, char **av)
     if (test_diagnostic_compat_stream())
 	return 1;
     if (test_image_io())
+	return 1;
+    if (test_image_sizing())
 	return 1;
     if (test_defaults())
 	return 1;
