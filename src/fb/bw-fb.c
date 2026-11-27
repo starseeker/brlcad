@@ -51,6 +51,7 @@
 #include "bu/log.h"
 #include "vmath.h"
 #include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 int skipbytes(int fd, b_off_t num);
@@ -217,7 +218,7 @@ main(int argc, char **argv)
     /* autosize input? */
     if (fileinput && autosize) {
 	size_t w, h;
-	if (fb_common_file_size(&w, &h, file_name, 1)) {
+	if (imgstream_image_file_size(&w, &h, file_name, 1)) {
 	    file_width = w;
 	    file_height = h;
 	} else {

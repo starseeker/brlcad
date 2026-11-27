@@ -53,6 +53,7 @@
 #include "./include/private.h"
 #include "icv.h"
 #include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 struct fb *fb_get(void)
@@ -638,7 +639,7 @@ fb_read_fd(struct fb *ifp, int fd, int file_width, int file_height, int file_xof
     /* autosize input? */
     if (fileinput && autosize) {
 	size_t w, h;
-	if (fb_common_file_size(&w, &h, file_name, 3)) {
+	if (imgstream_image_file_size(&w, &h, file_name, 3)) {
 	    file_width = w;
 	    file_height = h;
 	} else {

@@ -44,6 +44,7 @@
 #include "bu/str.h"
 #include "../libdm/include/private.h"
 #include "dm.h"
+#include "imgstream/fb_compat.h"
 #include "tclcad.h"
 #include "./tclcad_private.h"
 #include "./view/view.h"
@@ -934,7 +935,7 @@ fb_cmd_common_file_size(ClientData UNUSED(clientData), Tcl_Interp *interp,
     if (argc == 3)
 	pixel_size = atoi(argv[2]);
 
-    if (fb_common_file_size(&width, &height, argv[1], pixel_size) > 0) {
+    if (imgstream_image_file_size(&width, &height, argv[1], pixel_size) > 0) {
 	struct bu_vls result = BU_VLS_INIT_ZERO;
 	bu_vls_printf(&result, "%lu %lu", (unsigned long)width,
 		(unsigned long)height);

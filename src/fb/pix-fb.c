@@ -51,6 +51,7 @@
 #include "bu/snooze.h"
 #include "vmath.h"
 #include "dm.h"
+#include "imgstream/fb_compat.h"
 
 #include "pkg.h"
 
@@ -246,7 +247,7 @@ main(int argc, char **argv)
     /* autosize input? */
     if (fileinput && autosize) {
 	size_t w, h;
-	if (fb_common_file_size(&w, &h, file_name, 3)) {
+	if (imgstream_image_file_size(&w, &h, file_name, 3)) {
 	    file_width = w;
 	    file_height = h;
 	} else {
