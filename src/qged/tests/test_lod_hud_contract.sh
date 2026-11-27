@@ -73,7 +73,7 @@ run_case insufficient_accent '.samples |= .[:1]' fail
 run_case missing_image '.samples[1].checkpoint += ".missing"' fail
 run_case pending_unpresented_card '.samples =
     [(.samples[1] | .checkpoint |= sub("visible"; "hidden") |
-        .render_requested = true)] + .samples' '60 pixels'
+        .render_requested = true), .samples[1]]' '60 pixels'
 run_case only_pending_card '.samples[].render_requested = true' 'SKIP:'
 run_case incomplete_frame '.samples[].cad_aggregate_work_exact = false' 'SKIP:'
 run_case missing_frame_state 'del(.samples[1].render_requested)' fail
