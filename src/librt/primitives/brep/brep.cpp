@@ -3390,9 +3390,8 @@ brep_indexed_face_arrays_free(int **faces, vect_t **normals, point_t **points)
 
 static int
 brep_certified_indexed_face_arrays(int **faces, int *face_count,
-	                           point_t **points, int *point_count,
-	                           const ON_Brep *brep,
-	                           const struct bg_tess_tol *ttol)
+    point_t **points, int *point_count, const ON_Brep *brep,
+    const struct bg_tess_tol *ttol, brep_cdt_cancel_func_t cancel, void *data)
 {
     static const long max_face_time_ms = 5000;
     fastf_t *vertices = NULL;
@@ -3406,7 +3405,12 @@ brep_certified_indexed_face_arrays(int **faces, int *face_count,
 
     ON_Brep_CDT_Tol_Set(state, ttol);
     ON_Brep_CDT_Face_Time_Limit_Set(state, max_face_time_ms);
+    ON_Brep_CDT_Cancel_Set(state, cancel, data);
     int tessellation_result = ON_Brep_CDT_Tessellate(state, 0, NULL);
+    if (cancel && cancel(data)) {
+	ON_Brep_CDT_Destroy(state);
+	return BRLCAD_ERROR;
+    }
     if (tessellation_result != 0) {
 	struct brep_cdt_repair_settings settings =
 	    BREP_CDT_REPAIR_SETTINGS_INIT;
@@ -3528,6 +3532,17 @@ rt_brep_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
 			 const struct bn_tol *tol,
 			 const struct bv_view_info *UNUSED(info))
 {
+    return rt_brep_indexed_face_set_cancellable(face_set, ip, ttol, tol,
+	NULL, NULL);
+}
+
+
+int
+rt_brep_indexed_face_set_cancellable(
+    struct rt_primitive_indexed_face_set *face_set,
+    struct rt_db_internal *ip, const struct bg_tess_tol *ttol,
+    const struct bn_tol *tol, brep_cdt_cancel_func_t cancel, void *data)
+{
     int *faces = NULL;
     int face_count = 0;
     vect_t *corner_normals = NULL;
@@ -3548,13 +3563,16 @@ rt_brep_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
     struct brep_cdt_fast_report fast_report = {};
     brep_cdt_fast_options_default(&fast_options);
     fast_options.allow_partial = 0;
-    ret = brep_cdt_fast_ex(&faces, &face_count, &corner_normals, &points,
-	&point_count, bi->brep, -1, ttol, tol, &fast_options, &fast_report);
+    ret = brep_cdt_fast_ex_cancellable(&faces, &face_count, &corner_normals,
+	&points, &point_count, bi->brep, -1, ttol, tol, &fast_options,
+	&fast_report, cancel, data);
+    if (ret == BREP_CDT_FAST_CANCELLED)
+	return BRLCAD_ERROR;
     if (ret != BREP_CDT_FAST_OK || fast_report.failed_faces > 0 ||
 	fast_report.boundary_envelope_incomplete_faces > 0) {
 	brep_indexed_face_arrays_free(&faces, &corner_normals, &points);
 	ret = brep_certified_indexed_face_arrays(&faces, &face_count, &points,
-	    &point_count, bi->brep, ttol);
+	    &point_count, bi->brep, ttol, cancel, data);
 	if (ret != BRLCAD_OK)
 	    return BRLCAD_ERROR;
     }
@@ -3565,7 +3583,8 @@ rt_brep_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
     }
 
 
-    if (!brep_indexed_faces_cover_source(ip, ttol, tol, faces, face_count,
+    if ((cancel && cancel(data)) ||
+	!brep_indexed_faces_cover_source(ip, ttol, tol, faces, face_count,
 	    (const point_t *)points, point_count)) {
 	brep_indexed_face_arrays_free(&faces, &corner_normals, &points);
 	return BRLCAD_ERROR;

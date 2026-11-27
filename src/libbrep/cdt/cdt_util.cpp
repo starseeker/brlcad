@@ -627,6 +627,8 @@ ON_Brep_CDT_Create(void *bv, const char *objname)
     cdt->ovlp_max_len = -1;
     cdt->max_face_time_ms = 0;
     cdt->face_deadline = 0;
+    cdt->cancel = NULL;
+    cdt->cancel_data = NULL;
 
     cdt->w3dpnts = new std::vector<ON_3dPoint *>;
     cdt->w3dnorms = new std::vector<ON_3dPoint *>;
@@ -971,6 +973,16 @@ ON_Brep_CDT_Face_Time_Limit_Set(struct ON_Brep_CDT_State *s,
 	return;
     s->max_face_time_ms = std::max(0L, max_time_ms);
     s->face_deadline = 0;
+}
+
+void
+ON_Brep_CDT_Cancel_Set(struct ON_Brep_CDT_State *s,
+	brep_cdt_cancel_func_t cancel, void *data)
+{
+    if (!s)
+	return;
+    s->cancel = cancel;
+    s->cancel_data = data;
 }
 
 void

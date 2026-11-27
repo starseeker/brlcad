@@ -3415,6 +3415,9 @@ cdt_mesh_t::folded_boundary_segments()
 bool
 cdt_mesh_t::repair_incorrect_normal_edges()
 {
+    const auto *state = static_cast<const ON_Brep_CDT_State *>(p_cdt);
+    if (cdt_cancelled(state))
+	return false;
     if (m_face_charts.empty() || self_intersections(NULL, 1))
 	return false;
     boundary_edges_update();
@@ -3474,6 +3477,11 @@ cdt_mesh_t::repair_incorrect_normal_edges()
     const size_t flip_limit = 4 * folded.size() + 32;
     size_t flip_count = 0;
     while (!folded.empty() && flip_count < flip_limit) {
+	if (cdt_cancelled(state)) {
+	    saved_triangles.restore();
+	    tris_2d = saved_triangles_2d;
+	    return false;
+	}
 	bool changed = false;
 	for (const triangle_t &folded_triangle : folded) {
 	    if (!tri_active(folded_triangle.ind))
@@ -6132,6 +6140,7 @@ install_chart_triangles(cdt_mesh_t &mesh,
 	cdt_face_chart *charts, const std::vector<size_t> &component_ends,
 	std::string &failure)
 {
+    const auto *state = static_cast<const ON_Brep_CDT_State *>(mesh.p_cdt);
     std::vector<triangle_t> mapped_triangles;
     mapped_triangles.reserve(native_triangles.size());
     for (const triangle_t &native : native_triangles) {
@@ -6153,6 +6162,8 @@ install_chart_triangles(cdt_mesh_t &mesh,
     size_t reverse_count = 0;
     size_t component = 0;
     for (size_t i = 0; i < mapped_triangles.size(); ++i) {
+	if (cdt_cancelled(state))
+	    return false;
 	while (i >= component_ends[component])
 	    ++component;
 	const triangle_t &triangle = mapped_triangles[i];

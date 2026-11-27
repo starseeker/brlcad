@@ -268,6 +268,7 @@ std::shared_ptr<BObolStagedSourceMesh>
 bobol_database_brep_staged_mesh_variant(
 	struct db_i *dbip, const char *name,
 	const struct bg_tess_tol *ttol, uint64_t contentKey,
-	uint32_t sourceRevision, BObolSourceMeshRequest &request);
+	uint32_t sourceRevision, BObolSourceMeshRequest &request,
+	int (*cancel)(void *), void *cancelData);
 
 #endif /* LIBBOBOL_DATABASE_SOURCE_REALIZATION_H */

@@ -64,6 +64,7 @@
 #include "rt/display_bounds.h"
 #include "rt/eval_wireframe.h"
 #include "rt/primitives/annot.h"
+#include "rt/primitives/brep.h"
 #include "rt/tree.h"
 #include "rt/vlist.h"
 #include "rt/view.h"
@@ -4045,13 +4046,20 @@ local_bounds_from_internal(struct rt_db_internal *intern, SbBox3f &bounds)
     return bounds.isEmpty() ? FALSE : TRUE;
 }
 
+static int
+source_stream_cancelled(void *data)
+{
+    return static_cast<BObolCompactOccurrenceStream *>(data)->isCancelled();
+}
+
 /* Obtain a representation-independent, Boolean-aware bound for one database
  * path without constructing raytracing regions or acceleration structures.
  * This remains detached-worker work: primitive fallback plotting and nested
  * combination imports do not belong on the GUI publication path. */
 static SbBool
 source_bounds_from_database_path(SoBRLDatabaseSource *source,
-	const char *path, SbBox3f &bounds)
+	const char *path, SbBox3f &bounds,
+	BObolCompactOccurrenceStream *stream = nullptr)
 {
     bounds.makeEmpty();
     struct db_i *dbip = source ? source->getDatabase() : NULL;
@@ -4062,7 +4070,8 @@ source_bounds_from_database_path(SoBRLDatabaseSource *source,
     point_t bmax;
     struct bu_vls messages = BU_VLS_INIT_ZERO;
     const char *paths[1] = {path};
-    const int ret = rt_display_bounds(&messages, dbip, 1, paths, bmin, bmax);
+    const int ret = rt_display_bounds_cancellable(&messages, dbip, 1, paths,
+	bmin, bmax, stream ? source_stream_cancelled : nullptr, stream);
     bu_vls_free(&messages);
     if (ret != BRLCAD_OK || !point_bbox_valid(bmin, bmax))
 	return FALSE;
@@ -5174,7 +5183,8 @@ static std::shared_ptr<BObolStagedSourceMesh>
 cad_staged_mesh_from_primitive_face_set(
     struct db_i *dbip, struct directory *dp, struct rt_db_internal *intern,
     const struct bg_tess_tol *ttol, const struct bn_tol *tol,
-    uint32_t sourceRevision, BObolSourceMeshRequest &request)
+    uint32_t sourceRevision, BObolSourceMeshRequest &request,
+    int (*cancel)(void *) = nullptr, void *cancelData = nullptr)
 {
     request.clear();
     if (!dbip || !dp || !internal_payload_magic_valid(intern) ||
@@ -5184,8 +5194,15 @@ cad_staged_mesh_from_primitive_face_set(
     struct rt_primitive_indexed_face_set faceSet;
     struct bv_view_info viewInfo = BV_VIEW_INFO_INIT;
     memset(&faceSet, 0, sizeof(faceSet));
-    if (intern->idb_meth->ft_indexed_face_set(&faceSet, intern, ttol, tol,
-	    &viewInfo) != BRLCAD_OK) {
+    int result;
+    if (cancel && intern->idb_type == ID_BREP) {
+	result = rt_brep_indexed_face_set_cancellable(&faceSet, intern, ttol, tol,
+	    cancel, cancelData);
+    } else {
+	result = intern->idb_meth->ft_indexed_face_set(&faceSet, intern, ttol, tol,
+	    &viewInfo);
+    }
+    if (result != BRLCAD_OK || (cancel && cancel(cancelData))) {
 	primitive_indexed_face_set_free(&faceSet);
 	return std::shared_ptr<BObolStagedSourceMesh>();
     }
@@ -5263,10 +5280,11 @@ std::shared_ptr<BObolStagedSourceMesh>
 bobol_database_brep_staged_mesh_variant(
     struct db_i *dbip, const char *name, const struct bg_tess_tol *ttol,
     uint64_t contentKey, uint32_t sourceRevision,
-    BObolSourceMeshRequest &request)
+    BObolSourceMeshRequest &request, int (*cancel)(void *), void *cancelData)
 {
     request.clear();
-    if (!dbip || !name || !name[0] || !ttol || !contentKey)
+    if (!dbip || !name || !name[0] || !ttol || !contentKey ||
+	(cancel && cancel(cancelData)))
 	return std::shared_ptr<BObolStagedSourceMesh>();
     struct directory *dp = db_lookup(dbip, name, LOOKUP_QUIET);
     if (!dp || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BREP)
@@ -5278,7 +5296,8 @@ bobol_database_brep_staged_mesh_variant(
     const struct bn_tol tol = BN_TOL_INIT_TOL;
     std::shared_ptr<BObolStagedSourceMesh> staged =
 	cad_staged_mesh_from_primitive_face_set(
-	    dbip, dp, &intern, ttol, &tol, sourceRevision, request);
+	    dbip, dp, &intern, ttol, &tol, sourceRevision, request,
+	    cancel, cancelData);
     rt_db_free_internal(&intern);
     if (!staged)
 	return staged;
@@ -7052,7 +7071,10 @@ realize_direct_leaf_mesh_compact(
 		    std::shared_ptr<BObolStagedSourceMesh> staged =
 			cad_staged_mesh_from_primitive_face_set(
 			    dbip, dp, &validInternal.local, &ttol, &tol,
-			    revision, sourceMeshRequest);
+			    revision, sourceMeshRequest,
+			    stream ? source_stream_cancelled : nullptr, stream);
+		    if (stream && stream->isCancelled())
+			return 0;
 		    if (staged) {
 			sourceMeshRequest.meshAssetPath = fullPath.c_str();
 			sourceMeshRequest.meshAssetName = dp->d_namep;
@@ -10440,7 +10462,7 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
  * compact_index_replace_entry_geometry. */
 static bool
 compact_index_merge_source_contract(BObolCompactInstanceIndex &index,
-	size_t entryIdx, const BObolCompactOccurrence &occurrence)
+    size_t entryIdx, const BObolCompactOccurrence &occurrence)
 {
     if (entryIdx >= index.entries.size())
 	return false;
@@ -10466,16 +10488,9 @@ compact_index_merge_source_contract(BObolCompactInstanceIndex &index,
     }
     if (!changed)
 	return false;
-    /* Source semantics become authoritative with the request, but the
-     * currently drawn arrays, proxy transform, placement, part, and runtime
-     * visibility/selection state remain untouched.  The unresolved-LoD role
-     * is nevertheless an occurrence presentation property: it must reach the
-     * retained assembly so convergence cannot mistake this box for authored
-     * geometry.  Advance the existing sparse record revision and let Obol's
-     * instance-attribute journal patch the one flag without rebuilding the
-     * shared part or frame plan. */
-    entry.geometryRevision =
-	compact_next_revision(entry.geometryRevision);
+    /* The request can change projected mesh bounds even when the displayed
+     * part and its placement stay the same. Invalidate LoD planning. */
+    entry.geometryRevision = compact_next_revision(entry.geometryRevision);
     entry.shapeSummary.shapeKind = occurrence.summary.shapeKind;
     entry.shapeSummary.sourceType = occurrence.summary.sourceType;
     entry.shapeSummary.sourceId = occurrence.summary.sourceId;
@@ -10484,6 +10499,7 @@ compact_index_merge_source_contract(BObolCompactInstanceIndex &index,
     previous.~BObolCompactInstanceEntry();
     new (&previous) BObolCompactInstanceEntry(std::move(entry));
     compact_index_count_entry(index, previous, 1);
+    /* Publish a changed unresolved-LoD role even when the box is shared. */
     if (entryIdx < index.instances.size())
 	index.instances[entryIdx].record.lodStructuralProxy =
 	    previous.geometry && previous.geometry->structuralProxy &&
@@ -10544,6 +10560,8 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
     bool overviewArrived = false;
     std::vector<size_t> changedEntries;
     changedEntries.reserve(occurrences.size());
+    std::vector<size_t> presentationEntries;
+    presentationEntries.reserve(occurrences.size());
     const bool denyPartialMerge = occurrences.size() > 1 &&
 	bobol_transaction_fault_requested(
 	    BObolTransactionFaultPoint::SOURCE_STREAM_PARTIAL_MERGE_AFTER_COMPLETION);
@@ -10562,8 +10580,10 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
 	    this->d->compactOverviewState =
 		BObolCompactOccurrenceRegistryState::OverviewState::RetirementPending;
 	this->d->compactOccurrenceRegistry = TRUE;
-	this->markCompiledAssemblyDirty();
-	this->markCadBatchDirty(changedEntries);
+	if (!presentationEntries.empty()) {
+	    this->markCompiledAssemblyDirty();
+	    this->markCadBatchDirty(presentationEntries);
+	}
 	this->markDisplayMeshLodDirty(changedEntries,
 	    index.entries.size() > firstNew ? TRUE : FALSE);
 	if (mergedSourceContract) {
@@ -10573,7 +10593,7 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
 	    this->d->displayMeshLodContractInputsRevision =
 		this->inputsRevision.getValue();
 	}
-	if (committed)
+	if (committed && !presentationEntries.empty())
 	    committed(context);
 	SbBox3f bounds;
 	if (!this->hasExactSourceBounds() &&
@@ -10620,17 +10640,32 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
 		if (newTier < oldTier ||
 		(newTier == oldTier && !richerDataContract))
 		    continue;
-		const bool replaceGeometry = evolvingOverview ||
-		authoritativeGeometry;
+		/* Tessellation can make a mesh request available without
+		 * changing the box already on screen. Keep its presented
+		 * projection usable while other leaves are being prepared. */
+		const bool preservePresentation = !wasOverview && !isOverview &&
+		    newTier == oldTier && !existing.sourceMeshRequestValid &&
+		    occurrence.sourceMeshRequestValid && existing.geometry &&
+		    existing.geometry == occurrence.geometry &&
+		    existing.geometry->structuralProxy && existing.lodBacked &&
+		    occurrence.lodBacked &&
+		    existing.viewDependentCsgGeometry ==
+			occurrence.viewDependentCsgGeometry &&
+		    existing.geometryTransform == occurrence.geometryTransform &&
+		    existing.placementTransform == occurrence.localTransform;
+		const bool replaceGeometry = !preservePresentation &&
+		    (evolvingOverview || authoritativeGeometry);
 		const bool merged = newTier == oldTier && !replaceGeometry ?
-		compact_index_merge_source_contract(index, found->second,
-		    occurrence) :
-		compact_index_replace_entry_geometry(this, index,
-		    found->second, occurrence, *this->d);
+		    compact_index_merge_source_contract(index, found->second,
+			occurrence) :
+		    compact_index_replace_entry_geometry(this, index,
+			found->second, occurrence, *this->d);
 		if (merged) {
 		    overviewArrived = overviewArrived || isOverview;
 		    changed++;
 		    changedEntries.push_back(found->second);
+		    if (!preservePresentation)
+			presentationEntries.push_back(found->second);
 		    if (occurrence.sourceMeshRequestValid)
 		        mergedSourceContract = true;
 		}
@@ -10648,6 +10683,7 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
 	    overviewArrived = overviewArrived || isOverview;
 	    changed++;
 	    changedEntries.push_back(index.entries.size() - 1);
+	    presentationEntries.push_back(index.entries.size() - 1);
 	    if (occurrence.sourceMeshRequestValid)
 		mergedSourceContract = true;
 	}
@@ -14089,7 +14125,24 @@ struct compact_coverage_asset {
 struct compact_coverage_work_item {
     compact_coverage_asset *asset = NULL;
     compact_coverage_occurrence occurrence;
+    double projectedAreaUpperBound = 0.0;
 };
+
+/* The detached producer has no current camera. Source-space box face area
+ * still ranks prominent occurrences ahead of traversal-order detail without
+ * tying the preparation queue to a camera that can move while it runs. */
+static double
+compact_coverage_detail_priority(const SbBox3f &bounds)
+{
+    if (bounds.isEmpty())
+	return 0.0;
+    const SbVec3f size = bounds.getSize();
+    const double x = size[0];
+    const double y = size[1];
+    const double z = size[2];
+    const double area = x * y + y * z + z * x;
+    return std::isfinite(area) ? area : 0.0;
+}
 
 /* Amortize the producer/consumer mutex without delaying useful feedback by
  * more than a tiny fraction of one frame.  Discovery order is not a rendering
@@ -15138,6 +15191,9 @@ compact_coverage_seed_warm_terminal_work(
 	compact_coverage_work_item item;
 	item.asset = asset;
 	item.occurrence = std::move(occurrence);
+	item.projectedAreaUpperBound = compact_coverage_detail_priority(
+	    database_source_transform_bounds(record.bounds,
+		item.occurrence.localTransform));
 	stagedWork.push_back(std::move(item));
     }
 
@@ -15509,8 +15565,11 @@ compact_stream_publish_parallel_coverage(
 			database_source_transform_bounds(
 			    asset.coverageBounds,
 			    item.occurrence.localTransform);
-		    if (!occurrenceBounds.isEmpty())
+		    if (!occurrenceBounds.isEmpty()) {
 			aggregateBounds.extendBy(occurrenceBounds);
+			item.projectedAreaUpperBound =
+			    compact_coverage_detail_priority(occurrenceBounds);
+		    }
 		    const int64_t now = bu_gettime();
 		    if (!aggregateBounds.isEmpty() &&
 			(lastOverviewPublication == 0 ||
@@ -15689,8 +15748,9 @@ compact_stream_publish_parallel_coverage(
 		std::shared_ptr<BObolStagedSourceMesh> staged =
 		    cad_staged_mesh_from_primitive_face_set(
 			source->getDatabase(), asset.dp, &intern, &ttol, &tol,
-			revision, asset.sourceMeshRequest);
-		if (staged) {
+			revision, asset.sourceMeshRequest, source_stream_cancelled,
+			stream);
+		if (staged && !stream->isCancelled()) {
 		    asset.realizedSourceType = "brep";
 		    asset.sourceMeshRequest.meshAssetPath =
 			asset.assetPath.c_str();
@@ -16152,7 +16212,7 @@ compact_stream_publish_parallel_coverage(
 	if (!terminalBoundsExact) {
 	    SbBox3f semanticBounds;
 	    if (source_bounds_from_database_path(source, treeName,
-		    semanticBounds)) {
+		    semanticBounds, stream)) {
 		terminalBounds = semanticBounds;
 		terminalBoundsExact = true;
 	    }
@@ -16173,6 +16233,8 @@ compact_stream_publish_parallel_coverage(
 	    stream->setCoverageBoundsComplete(true);
 	}
     }
+    if (stream->isCancelled())
+	return -1;
     const int64_t coverageCompleted = bu_gettime();
     if (getenv("BOBOL_DRAW_TIMING"))
 	bu_log("[obol-timing] coverage bounds: %.1f ms; %zu occurrences, "
@@ -16186,6 +16248,11 @@ compact_stream_publish_parallel_coverage(
      * complete visual coverage and an exact target extent are available,
      * reuse the same bounded worker count to import the source arrays needed
      * by PoP and enrich each standing leaf in place. */
+    std::stable_sort(collect.detailWork.begin(), collect.detailWork.end(),
+	[](const compact_coverage_work_item &a,
+	    const compact_coverage_work_item &b) {
+	    return a.projectedAreaUpperBound > b.projectedAreaUpperBound;
+	});
     workers.clear();
     BObolParallelBudgetLease detailBudget;
     const size_t detailWorkerCount =

@@ -4878,12 +4878,15 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    this->requestLodCapacityRender("lod-point-prefetch-publication");
 	}
     } else if (completedStructuralRepair) {
-	if (completedMissingMeshBudgetBlockedCount == 0 &&
+	if (retainedProviderInventorySettled &&
+	    completedMissingMeshBudgetBlockedCount == 0 &&
 	    !completedTerminalProxyRepair) {
 	    /* Structural first-wave thresholds bound provider admission; they are
 	     * not renderer-unsafe timing samples.  Once every selected fallback has
 	     * acquired a mesh, discard that startup bracket so completed mesh
-	     * frames alone decide how far the point population may relax.  A
+	     * frames alone decide how far the point population may relax.
+	     * A batch of ready meshes can finish while other boxes still wait
+	     * for the provider, so keep the bracket until preparation settles. A
 	     * terminal-proxy pass preserves its point cut: resetting it would expose
 	     * the smaller structural occurrences which that same capacity witness
 	     * deliberately left in the aggregate channel. */

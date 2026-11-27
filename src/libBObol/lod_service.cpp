@@ -5135,6 +5135,7 @@ struct BObolColdMeshPreviewContext {
     uint32_t publishedSourceEntryIndex = UINT32_MAX;
     SbBool spatialLeafProducer = FALSE;
     SbBool spatialCoverageAdmitted = FALSE;
+    std::atomic<bool> cancelled {false};
     std::shared_ptr<BObolLodProducerProgressRecord> progress;
 };
 
@@ -5233,9 +5234,10 @@ lod_use_limited_spatial_layers(BObolLodResult &result,
 static int
 lod_cold_mesh_preview_cancelled(void *callbackData)
 {
-    const BObolColdMeshPreviewContext *context =
-	static_cast<const BObolColdMeshPreviewContext *>(callbackData);
+    auto *context = static_cast<BObolColdMeshPreviewContext *>(callbackData);
     if (!context || !context->serviceState || !context->generation)
+	return 1;
+    if (context->cancelled.load(std::memory_order_relaxed))
 	return 1;
     /* This callback also runs below resident.mutex.  Missing one cancellation
      * observation is safe and bounded by the producer's next callback; a
@@ -5243,11 +5245,11 @@ lod_cold_mesh_preview_cancelled(void *callbackData)
      * producer and its owner-thread progress pump. */
     std::unique_lock<std::mutex> lock(
 	context->serviceState->mutex, std::try_to_lock);
-    if (!lock.owns_lock())
-	return 0;
-    return context->serviceState->stopping ||
+    if (lock.owns_lock() && (context->serviceState->stopping ||
 	lod_producer_cancelled_unlocked(context->serviceState,
-	    context->generation, context->request) ? 1 : 0;
+	    context->generation, context->request)))
+	context->cancelled.store(true, std::memory_order_relaxed);
+    return context->cancelled.load(std::memory_order_relaxed);
 }
 
 static void
@@ -5879,12 +5881,16 @@ BObolLodService::realizeResidentMeshLod(
 	    ttol.rel = std::max(0.0, provider.brepTessellationRelTol);
 	    ttol.norm = std::max(0.0, provider.brepTessellationNormTol);
 	    BObolSourceMeshRequest generatedRequest;
+	    const auto cancel = previewContext.generation ?
+		lod_cold_mesh_preview_cancelled : nullptr;
 	    std::shared_ptr<BObolStagedSourceMesh> generated =
 		bobol_database_brep_staged_mesh_variant(
 		    dbip, name, &ttol,
 		    provider.meshAssetContentHash,
-		    request.sourceRevision.value(), generatedRequest);
-	    if (generated && generated->isValid() &&
+		    request.sourceRevision.value(), generatedRequest,
+		    cancel, &previewContext);
+	    const bool cancelled = cancel && cancel(&previewContext);
+	    if (!cancelled && generated && generated->isValid() &&
 		bobol_mesh_lod_cache_store_mesh_variant(
 		    dbip, name, generated->points,
 		    generated->pointCount, generated->normals,
@@ -5905,7 +5911,12 @@ BObolLodService::realizeResidentMeshLod(
 		       generated ? generated->faceCount : 0,
 		       static_cast<double>(bu_gettime() - variantStarted) /
 			   1000.0,
-		       resident->lod ? "ready" : "failed");
+		       cancelled ? "cancelled" :
+		       (resident->lod ? "ready" : "failed"));
+	    if (cancelled)
+		return lod_provider_status_result(request,
+		    BOBOL_LOD_PROVIDER_CANCELLED,
+		    "BREP variant tessellation cancelled");
 	    if (producerProgress)
 		producerProgress->publish(
 		    BOBOL_LOD_PRODUCER_STAGE_SOURCE_PREPARATION, 1, 1);
