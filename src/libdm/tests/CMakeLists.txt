@@ -34,6 +34,9 @@ brlcad_addexec(test_fb_standard_stream test_fb_standard_stream.c "libdm;libbu" T
 brlcad_add_test(NAME dm_fb_standard_stream COMMAND test_fb_standard_stream)
 
 brlcad_addexec(test_fb_disk_fd test_fb_disk_fd.c "libdm;libbu" TEST)
+
+brlcad_addexec(test_fb_imgstream_adapter test_fb_imgstream_adapter.c "libdm;libbu" TEST)
+brlcad_add_test(NAME dm_fb_imgstream_adapter COMMAND test_fb_imgstream_adapter)
 brlcad_add_test(NAME dm_fb_disk_fd COMMAND test_fb_disk_fd)
 
 cmakefiles(CMakeLists.txt)

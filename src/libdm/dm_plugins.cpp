@@ -429,6 +429,15 @@ fb_standard_stream_path(const char *path)
 }
 
 
+static const struct fb *
+fb_interface_for_open(const struct fb *backend, const char *file)
+{
+    if (backend == &memory_interface && BU_STR_EQUAL(file, "/dev/mem"))
+	return &imgstream_memory_interface;
+    return backend;
+}
+
+
 struct fb *
 fb_open(const char *file, int width, int height)
 {
@@ -473,7 +482,7 @@ fb_open(const char *file, int width, int height)
 		    b = device;
 		    continue;
 		}
-		const struct fb *f = f_it->second;
+		const struct fb *f = fb_interface_for_open(f_it->second, b);
 		*ifp->i = *(f->i);          /* struct copy */
 		file = ifp->i->if_name;
 		goto found_interface;
@@ -501,7 +510,7 @@ fb_open(const char *file, int width, int height)
 	}
     }
     if (f_it != fmb->end()) {
-	const struct fb *f = f_it->second;
+	const struct fb *f = fb_interface_for_open(f_it->second, file);
 	*ifp->i = *(f->i);        /* struct copy */
 	goto found_interface;
     }

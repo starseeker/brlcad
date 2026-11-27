@@ -21,6 +21,7 @@ set(
   fbserv.c
   grid.c
   if_disk.c
+  if_imgstream.c
   if_mem.c
   if_remote.c
   if_stack.c
