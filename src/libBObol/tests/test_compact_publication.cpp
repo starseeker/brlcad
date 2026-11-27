@@ -2262,8 +2262,11 @@ struct CachedObserver {
     bool incoherent = false, throwing = false;
 };
 
+static constexpr size_t publicationSuiteShardCount = 8;
+
 static void
-check_cached_publication(const char *onlyScenario = nullptr)
+check_cached_publication(const char *onlyScenario = nullptr,
+    std::optional<size_t> shard = std::nullopt)
 {
     ExternalPrimitiveInputs primitives;
     const CachedScenario scenarios[] = {
@@ -2283,8 +2286,13 @@ check_cached_publication(const char *onlyScenario = nullptr)
 	{"cached-missing-object", false, false, CachedInvocation::Action, "missing.s", true}
     };
     bool matched = false;
+    size_t ordinal = 0;
     for (const auto &scenario : scenarios) {
-	if (onlyScenario && std::string(onlyScenario) != scenario.name) continue;
+	const size_t scenarioShard = ordinal++ % publicationSuiteShardCount;
+	if (shard && scenarioShard != *shard)
+	    continue;
+	if (onlyScenario && std::string_view(onlyScenario) != scenario.name)
+	    continue;
 	matched = true;
 	CachedFixture reference(scenario, primitives.database.get());
 	require(reference.publish() == !scenario.fails(), "cached reference outcome");
@@ -33864,10 +33872,9 @@ int main(int argc, char **argv)
 	    {"graph-destruction", check_graph_destruction}
 	};
 	const std::string_view requested = argc > 1 ? argv[1] : "";
-	constexpr size_t instrumentedSuiteShardCount = 8;
 	std::optional<size_t> sourceSuiteShard;
 	std::optional<size_t> stateSuiteShard;
-	for (size_t shard = 0; shard < instrumentedSuiteShardCount; ++shard) {
+	for (size_t shard = 0; shard < publicationSuiteShardCount; ++shard) {
 	    if (requested == "source-suite-" + std::to_string(shard))
 		sourceSuiteShard = shard;
 	    if (requested == "state-suite-" + std::to_string(shard))
@@ -33878,9 +33885,9 @@ int main(int argc, char **argv)
 		(requested == "source-suite" && group == Group::Source) ||
 		(requested == "state-suite" && group == Group::State) ||
 		(sourceSuiteShard && group == Group::Source &&
-		 ordinal % instrumentedSuiteShardCount == *sourceSuiteShard) ||
+		 ordinal % publicationSuiteShardCount == *sourceSuiteShard) ||
 		(stateSuiteShard && group == Group::State &&
-		 ordinal % instrumentedSuiteShardCount == *stateSuiteShard);
+		 ordinal % publicationSuiteShardCount == *stateSuiteShard);
 	};
 	bool matched = false;
 	if (argc > 1 && std::string(argv[1]).find("cached-") == 0 && std::string(argv[1]) != "cached-publication" && std::string(argv[1]) != "cached-compiled") {
@@ -33892,11 +33899,20 @@ int main(int argc, char **argv)
 	for (const DirectCheck &check : checks) {
 	    const size_t ordinal = check.group == Group::Source ?
 		sourceOrdinal++ : stateOrdinal++;
+	    if (sourceSuiteShard && std::string_view(check.name) == "cached-publication")
+		continue;
 	    if (selected(check.name, check.group, ordinal)) {
 		std::printf("RUN publication-check %s\n", check.name);
 		check.run();
 		matched = true;
 	    }
+	}
+	/* The cached group contains expensive evaluated-geometry scenarios.
+	 * Spread them across the source shards while preserving their suite
+	 * coverage and the exhaustive mode of explicitly named scenarios. */
+	if (sourceSuiteShard) {
+	    check_cached_publication(nullptr, sourceSuiteShard);
+	    matched = true;
 	}
 	for (const Scenario &scenario : scenarios) {
 	    if (!selected(scenario.name, Group::Source, sourceOrdinal++))
