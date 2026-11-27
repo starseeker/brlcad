@@ -3785,6 +3785,7 @@ BObolLodRequest::clear(void)
     viewRevision = 0;
     policyRevision = 0;
     visualEmphasis = 0;
+    submissionReason = BOBOL_LOD_SUBMISSION_UNSPECIFIED;
     drawMode = BOBOL_LOD_DRAW_UNKNOWN;
     normalStyle = BOBOL_LOD_NORMAL_AUTHORED;
     normalCreaseAngle = 60.0f;

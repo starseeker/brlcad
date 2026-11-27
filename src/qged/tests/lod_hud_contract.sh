@@ -11,20 +11,15 @@ jq_executable="$1"
 identify_executable="$2"
 convert_executable="$3"
 report="$4"
-minimum_fill_pixels=100
+minimum_accent_pixels=40
 idle_phase=0
-crop_width=40
-crop_top=20
-crop_bottom=80
+crop_width=450
+crop_height=42
 
 # A checkpoint reads presented pixels, while telemetry describes current
-# retained features. An interrupted traversal may retire its render latch while
-# a bounded recovery is pending, so exact CAD work and an empty latch do not
-# identify the displayed HUD. Authenticate its feature revision against the
-# completed framebuffer before applying the captured-geometry visibility floor.
-# Interior rows exclude fractional endpoints without assuming GL rounding.
-samples=$("$jq_executable" -r --argjson minimum "$minimum_fill_pixels" \
-    --argjson idle "$idle_phase" '
+# retained features.  Authenticate the feature revision against the completed
+# framebuffer before checking the card pixels.
+samples=$("$jq_executable" -r --argjson idle "$idle_phase" '
     .samples[] |
         select((.checkpoint? // "") != "" and
             ((.presented_cad_faces // 0) > 0 or
@@ -35,7 +30,7 @@ samples=$("$jq_executable" -r --argjson minimum "$minimum_fill_pixels" \
             (.view_lod_policy // 0) != 0 and
             (.view_lod_mesh_enabled == true or
                 .view_lod_csg_enabled == true)) as $terminal_error |
-        select(.lod_progress_fill_present == true or $terminal_error) |
+        select(.lod_progress_card_present == true or $terminal_error) |
         if (.render_requested | type) != "boolean" or
             (.cad_aggregate_work_exact | type) != "boolean" then
             error("HUD checkpoint has no valid presentation state")
@@ -55,31 +50,19 @@ samples=$("$jq_executable" -r --argjson minimum "$minimum_fill_pixels" \
         else . end |
         select(.presented_feature_revision == .feature_presentation_revision) |
         if $terminal_error and
-            (.lod_progress_fill_present != true or
-             .lod_progress_label_present != true or
-             (.lod_progress_label_text | startswith("View incomplete")) != true or
-             .lod_progress_fill_color != [255, 90, 80] or
-             .lod_progress_track_present != true or
-             .lod_progress_track_minimum_y != .lod_progress_track_maximum_y or
-             .lod_progress_fill_maximum_y != .lod_progress_track_maximum_y) then
-            error("Terminal error HUD has no complete red fill and error label")
+            (.lod_progress_card_present != true or
+             (.lod_progress_card_title |
+                startswith("Geometry preparation failed")) != true or
+             .lod_progress_card_color != [255, 89, 79] or
+             .lod_progress_card_terminal != true or
+             .lod_progress_card_ready != false) then
+            error("Terminal error HUD has no red failure card")
         else . end |
-        if (.lod_progress_fill_minimum_y | type) != "number" or
-            (.lod_progress_fill_maximum_y | type) != "number" or
-            (.lod_progress_fill_line_width | type) != "number" or
-            .lod_progress_fill_maximum_y < .lod_progress_fill_minimum_y or
-            .lod_progress_fill_line_width <= 0 then
-            error("HUD fill has invalid geometry")
-        else . end |
-        ((.lod_progress_fill_maximum_y | floor) -
-            (.lod_progress_fill_minimum_y | ceil)) as $interior_rows |
-        select($interior_rows * (.lod_progress_fill_line_width | floor) >=
-            $minimum) |
         .checkpoint
 ' "$report")
 
 if test -z "$samples"; then
-    echo "SKIP: no current HUD checkpoint with $minimum_fill_pixels interior fill pixels"
+    echo "SKIP: no current LoD card checkpoint"
     exit 0
 fi
 
@@ -98,25 +81,20 @@ printf '%s\n' "$samples" | while IFS= read -r sample; do
             exit 1
             ;;
     esac
-    if test "$width" -le "$crop_width" ||
-        test "$height" -le "$((crop_top + crop_bottom))"; then
+    if test "$width" -le "$crop_width" || test "$height" -le "$crop_height"; then
         echo "LoD HUD checkpoint is too small: $dimensions" >&2
         exit 1
     fi
 
-    # Keep the established visibility floor and phase-color tolerance.  A missing
-    # fill behind its gray track must fail even when diagnostic progress advances.
-    crop_height=$((height - crop_top - crop_bottom))
-    fill_pixels=$("$convert_executable" "$sample" \
-        -crop "${crop_width}x${crop_height}+$((width - crop_width))+$crop_top" \
-        -fuzz 20% -fill white -opaque '#60dcff' \
-        -opaque '#70eb87' -opaque '#ffcd48' -opaque '#ffaa40' \
-        -opaque '#ff5a50' \
+    accent_pixels=$("$convert_executable" "$sample" \
+        -crop "${crop_width}x${crop_height}+$((width - crop_width))+$((height - crop_height))" \
+        -fuzz 20% -fill white -opaque '#61bfff' \
+        -opaque '#70eb87' -opaque '#ffbf47' -opaque '#ff594f' \
         -fill black +opaque white -format '%[fx:mean*w*h]' info:)
-    if ! awk -v pixels="$fill_pixels" -v minimum="$minimum_fill_pixels" \
+    if ! awk -v pixels="$accent_pixels" -v minimum="$minimum_accent_pixels" \
         'BEGIN { exit !(pixels ~ /^[0-9]+([.][0-9]+)?$/ && pixels + 0 >= minimum) }'; then
-        echo "LoD convergence HUD track has no visible progress fill ($fill_pixels pixels): $sample" >&2
+        echo "LoD status card has no visible accent ($accent_pixels pixels): $sample" >&2
         exit 1
     fi
-    echo "LoD HUD visible fill: $fill_pixels pixels in $sample"
+    echo "LoD HUD visible accent: $accent_pixels pixels in $sample"
 done

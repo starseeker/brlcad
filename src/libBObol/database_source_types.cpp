@@ -290,6 +290,17 @@ BObolExternalAnnotation::BObolExternalAnnotation(void) :
 {
 }
 
+BObolCompactWireSegment::BObolCompactWireSegment(void) :
+    start(0.0f, 0.0f, 0.0f),
+    end(0.0f, 0.0f, 0.0f),
+    color(0.8f, 0.8f, 0.8f),
+    transparency(0.0f),
+    lineWidth(1.0f),
+    linePattern(0xffffu),
+    linePatternFactor(1u)
+{
+}
+
 BObolDatabaseSourceDisplayPatch::BObolDatabaseSourceDisplayPatch(void) :
     visibleValid(FALSE),
     visible(TRUE),

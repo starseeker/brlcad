@@ -36,7 +36,6 @@
 #include <atomic>
 #include <climits>
 #include <chrono>
-#include <cmath>
 #include <cstring>
 #include <exception>
 #include <optional>
@@ -57,6 +56,7 @@
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BGrid.h"
 #include "BObol/BHUDLabelOverlay.h"
+#include "BObol/BLodProgressOverlay.h"
 #include "BObol/BLineLayerOverlay.h"
 #include "BObol/BViewController.h"
 #include "BObol/BViewLod.h"
@@ -564,7 +564,8 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
      * present the previous progress indicator and merely queue a corrective
      * second frame. */
     if (recordPresentationTiming)
-	(void)qgcanvas_sync_obol_lod_progress(s);
+	(void)qgcanvas_sync_obol_lod_progress(s,
+	    s.obol->isRenderRequested() != FALSE);
     /* Endpoint-owned image producers, including the retained librt engine,
      * publish completed worker frames through this host-thread hook.  The Qt
      * canvases render directly instead of using
@@ -859,6 +860,9 @@ qgcanvas_bind_obol_controller(QgCanvasState &s, QWidget *w,
     s.owns_obol = false;
     s.obol_paint_initialized = false;
     s.faceplate_sync_initialized = false;
+    s.lod_progress_last_state = BObolLodProgressDisplayStatus();
+    s.lod_progress_last_publish =
+	std::chrono::steady_clock::time_point();
     /* A completed image belongs to its controller/scene identity.  Never
      * preserve pixels from the previous endpoint through a borrowed-controller
      * replacement. */
@@ -892,6 +896,7 @@ qgcanvas_obol_node_has_drawable_content(SoNode *node)
     if (node->isOfType(SoBRLDatabaseSource::getClassTypeId()) ||
 	node->isOfType(SoBRLLineLayerOverlay::getClassTypeId()) ||
 	node->isOfType(SoBRLHUDLabelOverlay::getClassTypeId()) ||
+	node->isOfType(SoBRLLodProgressOverlay::getClassTypeId()) ||
 	node->isOfType(SoBRLGrid::getClassTypeId()) ||
 	node->isOfType(SoBRLAxes::getClassTypeId()) ||
 	node->isOfType(SoBRLADC::getClassTypeId()))
@@ -1094,13 +1099,11 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
 }
 
 /**
- * Publish the retained LoD progress faceplate on state transitions and at a
- * bounded cadence while work is active.  This helper is deliberately usable
- * both immediately before a presentation and after its timing feedback.  The
- * pre-render call may publish a periodic progress sample into a frame which
- * is already required.  The post-render call must permit state transitions
- * only: a periodic HUD mutation there would request its own next frame and
- * make a slow software renderer repaint continuously without new geometry.
+ * Synchronize LoD progress on state transitions and at a bounded cadence
+ * while work is active.  This helper is deliberately usable both immediately
+ * before a presentation and after its timing feedback.  The post-render call
+ * must permit state transitions only: a periodic retained HUD mutation there
+ * would request its own next frame.
  */
 static inline bool
 qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
@@ -1135,9 +1138,13 @@ qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
     s.lod_progress_last_publish = now;
     struct ged_view_context *view_ctx = ged_view_context_from_bv(s.v);
     struct ged *gedp = ged_view_context_owner(view_ctx);
-    if (gedp)
+    int progressVisible = 1;
+    const bool retained = gedp &&
+	(!ged_view_lod_progress_visible_get(&progressVisible, view_ctx) ||
+	 progressVisible);
+    if (retained)
 	(void)ged_view_lod_progress_sync(gedp, view_ctx);
-    return true;
+    return retained;
 }
 
 /* Publish the interaction transition synchronously with the input event.

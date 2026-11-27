@@ -29,6 +29,20 @@ __BEGIN_DECLS
 
 struct imgstream_fb;
 
+/** Read whether the retained progressive-LoD indicator is visible. */
+GED_EXPORT int
+ged_view_lod_progress_visible_get(int *visible,
+	const struct ged_view_context *view);
+
+/**
+ * Select whether one hosted view publishes progressive-LoD presentation.
+ *
+ * Disabling presentation atomically removes only the retained LoD records.
+ * Other faceplate features are unaffected.
+ */
+GED_EXPORT int
+ged_view_lod_progress_visible_set(struct ged_view_context *view, int visible);
+
 /** Ensure the hosted view has a GED-owned display attachment. */
 GED_EXPORT int
 ged_view_context_display_endpoint_ensure(struct ged_view_context *view);

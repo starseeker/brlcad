@@ -95,6 +95,18 @@ public:
 	    activeCutPreserved && richerResidentPrefix;
     }
 
+    /* Renderer-page preparation can republish an unchanged immutable mesh
+     * high-water mark.  That repairs presentation, but it does not make any
+     * new resident population available and must not restart the scene-wide
+     * resident-growth transaction.  A first publication or a replacement
+     * asset has no comparable retained high-water mark. */
+    static bool residentAvailabilityAdvanced(bool retainedPayload,
+	bool sameAsset, int retainedResidentCut, int incomingResidentCut)
+    {
+	return !retainedPayload || !sameAsset ||
+	    incomingResidentCut > retainedResidentCut;
+    }
+
     /* A capacity candidate may request an immutable suffix in order to make
      * its selected occurrence cut drawable.  The arriving suffix belongs to
      * that already active allocation transaction; labeling it as independent
@@ -102,9 +114,15 @@ public:
      * result delivery still needs the resident-growth drain and scene-wide
      * reallocation below. */
     static bool needsIndependentResidentGrowth(bool richerResidentPrefix,
-	bool capacityCandidatePending)
+	bool capacityCandidatePending, bool viewLocalDrawPopulation)
     {
-	return richerResidentPrefix && !capacityCandidatePending;
+	/* A spatial result with an empty required-page set may advance the
+	 * shared asset's high-water mark, but it adds no drawable population to
+	 * this occurrence.  Treating that zero-page terminal result as an
+	 * independent growth edge repeatedly reallocates an already complete
+	 * culled presentation. */
+	return richerResidentPrefix && viewLocalDrawPopulation &&
+	    !capacityCandidatePending;
     }
 
     /* A residency-drain result may leave the existing framebuffer untouched,
@@ -436,17 +454,17 @@ public:
 
     /* A slow completed presentation normally yields one render-duration
      * cooldown so new input can preempt the next immutable-prefix request.
-     * A scene-wide capacity transaction is different: its allocation already
-     * bounds the complete candidate, its provider requests jump directly to
-     * the selected quiet cuts, and its result-publication transaction supplies
-     * the independent frame cadence.  Cooling that producer after every
-     * partial frame starves the worker queue on many-leaf wire scenes and
-     * turns a finite allocation into one small cache wave per expensive
-     * render. */
+     * A bounded successor which already owns its cadence is different.  A
+     * capacity allocation jumps directly to selected quiet cuts and result
+     * publication supplies its frame cadence; an occurrence-handoff
+     * allocation must promptly reconcile the retained population before its
+     * temporary global ceiling can be retired.  Cooling either successor
+     * after every partial frame serializes finite work behind the frame which
+     * enabled it. */
     static int64_t refinementCooldownMicroseconds(
-	uint64_t observedRenderNanoseconds, bool capacityOwnsSuccessor)
+	uint64_t observedRenderNanoseconds, bool successorOwnsCadence)
     {
-	if (capacityOwnsSuccessor ||
+	if (successorOwnsCadence ||
 	    observedRenderNanoseconds <= responsiveFrameNanoseconds())
 	    return 0;
 	const uint64_t observedMicroseconds =

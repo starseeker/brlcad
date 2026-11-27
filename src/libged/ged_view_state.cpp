@@ -69,6 +69,7 @@ struct ged_view_host_record {
 	gedp(NULL),
 	display_endpoint(NULL),
 	owns_display_endpoint(0),
+	lod_progress_visible(1),
 	callbacks(NULL),
 	update_callback(NULL),
 	update_callback_data(NULL),
@@ -82,6 +83,7 @@ struct ged_view_host_record {
     struct ged *gedp;
     bobol_display_endpoint_t *display_endpoint;
     int owns_display_endpoint;
+    int lod_progress_visible;
     struct bu_ptbl *callbacks;
     ged_view_context_update_callback_t update_callback;
     void *update_callback_data;
@@ -325,6 +327,21 @@ ged_view_context_host_attach(struct ged *gedp, struct ged_view_context *view_ctx
 	return 0;
 
     (void)ged_view_host_record_create(gedp, view_ctx);
+    return 1;
+}
+
+extern "C" GED_EXPORT int
+ged_view_context_host_thread_claim(struct ged_view_context *view_ctx)
+{
+    struct ged_view_host_record *record =
+	ged_view_host_record_find(view_ctx);
+    if (!record)
+	return 0;
+
+    /* This is an explicit serialized handoff, not a relaxed cross-thread
+     * access check.  Hosts such as gsh create their GED state before starting
+     * the blocking input thread which subsequently owns all view mutation. */
+    record->owner_thread = std::this_thread::get_id();
     return 1;
 }
 
@@ -858,6 +875,45 @@ ged_view_context_display_endpoint_ensure(struct ged_view_context *view_ctx)
 	return 1;
     return ged_draw_obol_render_endpoint_ensure_for_view(record->gedp,
 	view_ctx, 1);
+}
+
+extern "C" GED_EXPORT int
+ged_view_lod_progress_visible_get(int *visible,
+	const struct ged_view_context *view_ctx)
+{
+    const struct ged_view_host_record *record =
+	ged_view_host_record_find(view_ctx);
+    if (!visible || !record)
+	return 0;
+    *visible = record->lod_progress_visible;
+    return 1;
+}
+
+extern "C" GED_EXPORT int
+ged_view_lod_progress_visible_set(struct ged_view_context *view_ctx,
+	int visible)
+{
+    struct ged_view_host_record *record =
+	ged_view_host_record_find(view_ctx);
+    if (!record || (visible != 0 && visible != 1))
+	return 0;
+    if (record->lod_progress_visible == visible)
+	return 1;
+
+    const int previous = record->lod_progress_visible;
+    record->lod_progress_visible = visible;
+    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
+    if (!record->gedp || !controller)
+	return 1;
+
+    /* The narrow synchronizer publishes or removes the retained card without
+     * rebuilding unrelated faceplate elements. */
+    if (ged_view_lod_progress_sync(record->gedp, view_ctx) == BRLCAD_OK)
+	return 1;
+
+    record->lod_progress_visible = previous;
+    (void)ged_view_lod_progress_sync(record->gedp, view_ctx);
+    return 0;
 }
 
 /* These adapters own GED view policy even before a display endpoint exists.

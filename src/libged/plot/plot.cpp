@@ -36,12 +36,8 @@
 #include "bv.h"
 #include "rt/view.h"
 
-#include "BObol/BExportAction.h"
-#include "BObol/BViewController.h"
-#include <Inventor/SoViewport.h>
-
 #include "../ged_private.h"
-#include "../ged_bobol_private.hpp"
+#include "../ged_scene_record_api_private.h"
 #include "../ged_obol_output_private.hpp"
 
 #if defined(HAVE_POPEN) && !defined(HAVE_DECL_POPEN) && !defined(popen)
@@ -75,24 +71,45 @@ plot_color_component(float value)
     return static_cast<int>(value * 255.0f + 0.5f);
 }
 
-static void
-plot_line(const SoBRLExportAction::LineRecord &line, struct plot_data *pd)
-{
-    if (!pd)
-	return;
+struct plot_record_data {
+    struct plot_data *pd;
+    const struct ged_draw_view_db_object_record *record;
+};
 
-    point_t a = {line.a[0], line.a[1], line.a[2]};
-    point_t b = {line.b[0], line.b[1], line.b[2]};
+static int
+plot_record_segment(const struct ged_draw_view_styled_segment *segment,
+	void *client_data)
+{
+    struct plot_record_data *record_data =
+	(struct plot_record_data *)client_data;
+    if (!segment || !record_data || !record_data->pd ||
+	!record_data->record)
+	return 0;
+
+    struct plot_data *pd = record_data->pd;
+    const struct ged_draw_view_db_object_record *record =
+	record_data->record;
+    point_t a;
+    point_t b;
+    MAT4X3PNT(a, record->model_mat, segment->start);
+    MAT4X3PNT(b, record->model_mat, segment->end);
+
+    constexpr float byte_to_unit = 1.0f / 255.0f;
     const int red = plot_color_component(ged_obol_output_composite_channel(
-	line.color[0], 1.0f, line.transparency));
+	segment->style.color[0] * byte_to_unit, 1.0f,
+	segment->style.transparency));
     const int green = plot_color_component(ged_obol_output_composite_channel(
-	line.color[1], 1.0f, line.transparency));
+	segment->style.color[1] * byte_to_unit, 1.0f,
+	segment->style.transparency));
     const int blue = plot_color_component(ged_obol_output_composite_channel(
-	line.color[2], 1.0f, line.transparency));
-    const char *lineMode = ged_obol_plot_line_mode(line.linePattern);
+	segment->style.color[2] * byte_to_unit, 1.0f,
+	segment->style.transparency));
+    const char *lineMode = ged_obol_plot_line_mode(
+	segment->style.line_pattern);
 
     if (BU_STR_EQUAL(lineMode, "invisible"))
-	return;
+	return 1;
+
     if (!BU_STR_EQUAL(pd->lineMode, lineMode)) {
 	pl_linmod(pd->fp, lineMode);
 	pd->lineMode = lineMode;
@@ -102,7 +119,7 @@ plot_line(const SoBRLExportAction::LineRecord &line, struct plot_data *pd)
 	pl_color(pd->fp, red, green, blue);
 	pdv_3move(pd->fp, a);
 	pdv_3cont(pd->fp, b);
-	return;
+	return 1;
     }
 
     vect_t start;
@@ -110,7 +127,7 @@ plot_line(const SoBRLExportAction::LineRecord &line, struct plot_data *pd)
     MAT4X3PNT(start, pd->model2view, a);
     MAT4X3PNT(fin, pd->model2view, b);
     if (bg_ray_vclip(start, fin, pd->clipmin, pd->clipmax) == 0)
-	return;
+	return 1;
 
     if (pd->Three_D) {
 	pl_color(pd->fp, red, green, blue);
@@ -128,31 +145,35 @@ plot_line(const SoBRLExportAction::LineRecord &line, struct plot_data *pd)
 		(int)(fin[X] * RT_VIEW_MAX),
 		(int)(fin[Y] * RT_VIEW_MAX));
     }
+    return 1;
+}
+
+static int
+plot_record(const struct ged_draw_view_db_object_record *record,
+	void *client_data)
+{
+    struct plot_data *pd = (struct plot_data *)client_data;
+    if (!record || !pd)
+	return 0;
+
+    struct plot_record_data record_data = {pd, record};
+    (void)ged_draw_view_db_object_record_foreach_styled_segment(record,
+	plot_record_segment, &record_data);
+    return 1;
 }
 
 static void
 plot_visible_lines(struct ged_view_context *view_ctx, struct plot_data *pd)
 {
-    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
-    if (!controller || !controller->getViewport() ||
-	!controller->getViewport()->getRoot())
+    if (!view_ctx || !pd)
 	return;
-
-    SoBRLExportAction export_action;
-    export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
-    export_action.applyViewport(*controller->getViewport());
-
-    std::vector<SoBRLExportAction::ObjectRecord> records;
-    export_action.collectObjectRecords(records,
-	SoBRLExportAction::QUERY_VISIBLE_ONLY);
-    for (const SoBRLExportAction::ObjectRecord &record : records) {
-	for (int line_index : record.lineIndices)
-	    plot_line(export_action.getLine(line_index), pd);
-    }
+    (void)ged_draw_view_context_prepare_export_payload(view_ctx);
+    ged_draw_foreach_visible_view_record(view_ctx, plot_record, pd);
 }
 
 void
-dl_plot(struct ged_view_context *view_ctx, FILE *fp, mat_t model2view, int floating, mat_t center, fastf_t scale, int Three_D, int Z_clip)
+dl_plot(struct ged_view_context *view_ctx, FILE *fp, mat_t model2view,
+	int floating, mat_t center, fastf_t scale, int Three_D, int Z_clip)
 {
     struct plot_data pd;
 
@@ -305,7 +326,8 @@ ged_plot_core(struct ged *gedp, int argc, const char *argv[])
     bv_model2view_get(model2view, view);
     bv_center_mat_get(center, view);
     scale = bv_scale_get(view);
-    dl_plot(view_ctx, fp, model2view, floating, center, scale, Three_D, Z_clip);
+    dl_plot(view_ctx, fp, model2view, floating, center, scale, Three_D,
+	Z_clip);
 
     if (is_pipe)
 	(void)pclose(fp);

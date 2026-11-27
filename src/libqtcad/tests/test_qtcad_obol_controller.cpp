@@ -45,6 +45,8 @@
 #include <QPainter>
 #include <QWheelEvent>
 
+#include <algorithm>
+#include <cmath>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -99,6 +101,25 @@ lit_pixel_count(const QImage &image)
 	}
     }
     return count;
+}
+
+static bool
+same_pixels_below_lod_overlay(const QImage &left, const QImage &right)
+{
+    if (left.size() != right.size() || left.format() != right.format())
+	return false;
+
+    /* The native progress panel is deliberately outside the retained CAD
+     * framebuffer contract.  Compare the unaffected portion of the canvas
+     * when proving that an interrupted traversal retained its predecessor. */
+    static constexpr int overlayLogicalHeight = 96;
+    const int overlayPixelHeight = std::min(left.height(),
+	static_cast<int>(std::ceil(overlayLogicalHeight *
+	    std::max(left.devicePixelRatio(), right.devicePixelRatio()))));
+    return left.copy(0, overlayPixelHeight, left.width(),
+	left.height() - overlayPixelHeight) ==
+	right.copy(0, overlayPixelHeight, right.width(),
+	    right.height() - overlayPixelHeight);
 }
 
 static BObolFeatureHandle
@@ -752,8 +773,8 @@ main(int argc, char **argv)
 		controller->isLodPresentationCapacityRelevant() ? 1 : 0);
 	FAIL("QgSW deadline interruption should schedule a coherent successor");
 	}
-    if (paintTarget != deadlineBaseline)
-	FAIL("QgSW deadline interruption should preserve the last completed frame");
+    if (!same_pixels_below_lod_overlay(paintTarget, deadlineBaseline))
+	FAIL("QgSW deadline interruption should preserve the retained CAD frame");
     uint64_t swInterruptedFeatures = 0;
     controller->clearRenderRequest();
     if (!view.canvasBase()->get_presented_feature_revision(swInterruptedFeatures) ||
@@ -764,6 +785,25 @@ main(int argc, char **argv)
     static_cast<QgSW *>(swWidget)->get_presented_frame_image(interruptedReadback);
     if (interruptedReadback != deadlineBaselineReadback)
 	FAIL("QgSW interrupted readback should preserve Qt image orientation");
+
+    /* The native LoD panel may animate over the immutable framebuffer.  Its
+     * repaint must neither enter Coin/OSMesa nor manufacture a semantic
+     * render request. */
+    const uint64_t overlayOnlyCompletion =
+	controller->getRenderCompletionSerial();
+    const uint64_t overlayOnlyRequest = controller->getRenderRequestSerial();
+    paintTarget.fill(0);
+    QPainter overlayOnlyPainter(&paintTarget);
+    view.render(&overlayOnlyPainter);
+    overlayOnlyPainter.end();
+    if (controller->getRenderCompletionSerial() != overlayOnlyCompletion ||
+	controller->getRenderRequestSerial() != overlayOnlyRequest ||
+	controller->isRenderRequested())
+	FAIL("QgSW LoD overlay repaint should not render the retained scene");
+    if (!same_pixels_below_lod_overlay(paintTarget, deadlineBaseline))
+	FAIL("QgSW LoD overlay repaint should preserve retained CAD pixels");
+    if (paintTarget == deadlineBaseline)
+	FAIL("QgSW active LoD overlay should decorate the retained CAD frame");
 
     /* A completed frame from the old viewport is not a valid resize
      * fallback.  Force the first traversal at a distinct size to abort and
@@ -1235,14 +1275,27 @@ main(int argc, char **argv)
 		FAIL("QgGL deadline interruption should schedule a coherent successor");
 		}
 	    if (glDeadlineBaseline.isNull() ||
-		glDeadlineInterrupted != glDeadlineBaseline)
-		FAIL("QgGL deadline interruption should preserve the last completed framebuffer");
+		!same_pixels_below_lod_overlay(
+		    glDeadlineInterrupted, glDeadlineBaseline))
+		FAIL("QgGL deadline interruption should preserve the retained CAD framebuffer");
 	    uint64_t glInterruptedFeatures = 0;
 	    paintController->clearRenderRequest();
 	    if (!glCanvas.get_presented_feature_revision(glInterruptedFeatures) ||
 		glInterruptedFeatures != glBaselineFeatures ||
 		glInterruptedFeatures == paintController->features().presentationRevision())
 		FAIL("QgGL interrupted pixels must retain their old feature identity after request retirement");
+	    const uint64_t glOverlayOnlyCompletion =
+		paintController->getRenderCompletionSerial();
+	    const uint64_t glOverlayOnlyRequest =
+		paintController->getRenderRequestSerial();
+	    glCanvas.makeCurrent();
+	    glCanvas.runPaintGLForTest();
+	    glCanvas.doneCurrent();
+	    if (paintController->getRenderCompletionSerial() !=
+		    glOverlayOnlyCompletion ||
+		paintController->getRenderRequestSerial() !=
+		    glOverlayOnlyRequest || paintController->isRenderRequested())
+		FAIL("QgGL LoD overlay repaint should not render the retained scene");
 	    paintRoot->removeChild(glDeadlineNode);
 	    paintRoot->removeChild(paintRoot->getNumChildren() - 1);
 	    paintController->setPresentationFrameDeadlines(

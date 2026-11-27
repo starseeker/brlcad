@@ -74,6 +74,20 @@ ged_view_feature_metadata_default(void)
     return metadata;
 }
 
+/** Initialize a caller-owned primitive-metadata entry. */
+GED_EXPORT extern void
+ged_view_feature_primitive_metadata_init(
+    struct ged_view_feature_primitive_metadata *metadata);
+
+/** Return an initialized primitive-metadata entry. */
+GED_HEADER_INLINE struct ged_view_feature_primitive_metadata
+ged_view_feature_primitive_metadata_default(void)
+{
+    struct ged_view_feature_primitive_metadata metadata;
+    ged_view_feature_primitive_metadata_init(&metadata);
+    return metadata;
+}
+
 /** Begin an owner-scoped staged feature batch for @p view_ctx. */
 GED_EXPORT extern struct ged_view_feature_batch *
 ged_view_feature_batch_begin(
@@ -226,6 +240,20 @@ ged_view_feature_batch_primitive_metadata_replace(
     int primitive,
     const struct ged_view_feature_metadata *metadata,
     size_t metadata_count);
+
+/**
+ * Replace the complete primitive-metadata set in one staged operation.
+ *
+ * Primitive indices must be non-negative and unique.  All entries and strings
+ * are copied before this function returns; entries with no metadata clear no
+ * state and are omitted from the retained set.
+ */
+GED_EXPORT extern int
+ged_view_feature_batch_primitive_metadata_replace_all(
+    struct ged_view_feature_batch *batch,
+    const char *name,
+    const struct ged_view_feature_primitive_metadata *metadata,
+    size_t primitive_count);
 
 /** Publish the staged changes in order and destroy @p batch. */
 GED_EXPORT extern int

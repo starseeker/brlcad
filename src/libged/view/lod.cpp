@@ -153,6 +153,64 @@ lod_cache_command(struct ged *gedp, int argc, const char **argv)
     return BRLCAD_ERROR;
 }
 
+static void
+lod_print_memory_usage(struct bu_vls *result,
+    BObolViewController *controller, BObolLodService *service,
+    const BObolLodConvergenceStatus *sample)
+{
+    if (!result || !controller || !service)
+	return;
+
+    BObolLodConvergenceStatus current;
+    if (!sample) {
+	controller->getLodConvergenceStatus(current);
+	sample = &current;
+    }
+    const BObolLodResidentCapacityStatus capacity =
+	service->residentCapacityStatus();
+    bu_vls_printf(result,
+	"resident_mesh_asset_count: %zu\n"
+	"resident_mesh_bytes: %zu\n"
+	"stable_resident_mesh_bytes: %zu\n"
+	"reserved_resident_growth_bytes: %zu\n"
+	"occupied_resident_mesh_bytes: %zu\n"
+	"active_working_set_bytes: %zu\n"
+	"peak_working_set_bytes: %zu\n"
+	"working_set_limit_bytes: %zu\n",
+	service->residentMeshAssetCountForDiagnostics(),
+	service->residentMeshBytesForDiagnostics(),
+	capacity.stableResidentBytes,
+	capacity.reservedGrowthBytes,
+	capacity.occupiedBytes(),
+	service->activeWorkingSetBytesForDiagnostics(),
+	service->peakWorkingSetBytesForDiagnostics(),
+	service->getWorkingSetLimit());
+    bu_vls_printf(result,
+	"resident_mesh_cache_loads: %llu\n"
+	"resident_mesh_hits: %llu\n"
+	"resident_mesh_compactions: %llu\n"
+	"resident_mesh_evictions: %llu\n",
+	static_cast<unsigned long long>(
+	    service->residentMeshCacheLoadCountForDiagnostics()),
+	static_cast<unsigned long long>(
+	    service->residentMeshHitCountForDiagnostics()),
+	static_cast<unsigned long long>(
+	    service->residentMeshCompactionCountForDiagnostics()),
+	static_cast<unsigned long long>(
+	    service->residentMeshEvictionCountForDiagnostics()));
+    bu_vls_printf(result,
+	"gpu_tracked_buffer_bytes: %zu\n"
+	"gpu_triangle_atlas_allocated_bytes: %zu\n"
+	"gpu_triangle_atlas_live_bytes: %zu\n"
+	"gpu_triangle_atlas_capacity_bytes: %zu\n"
+	"gpu_pressure_proxy_count: %zu\n",
+	sample->gpuTrackedBufferBytes,
+	sample->gpuTriangleAtlasAllocatedBytes,
+	sample->gpuTriangleAtlasLiveBytes,
+	sample->gpuTriangleAtlasConfiguredCapacityBytes,
+	sample->gpuPressureProxyCount);
+}
+
 int
 _view_cmd_lod(void *bs, int argc, const char **argv)
 {
@@ -452,6 +510,8 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	    "maximum_available_percent: %g\n",
 	    service->getResidentMeshLimit(),
 	    service->getMaximumResidentMeshAvailableMemoryPercent());
+	lod_print_memory_usage(gedp->ged_result_str,
+	    view_controller, service, NULL);
 	return BRLCAD_OK;
     }
 
@@ -466,6 +526,10 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	    const BObolLodServiceWorkStatus work = service ?
 		service->workStatus() :
 		BObolLodServiceWorkStatus();
+	    BObolLodConvergenceStatus convergence;
+	    view_controller->getLodConvergenceStatus(convergence);
+	    const BObolHostWorkSnapshot host_work =
+		view_controller->getHostWorkSnapshot();
 	    const SbString &diagnostics = view_controller->getLastLodDiagnostics();
 	    bu_vls_printf(gedp->ged_result_str, "attached: 1\n");
 	    bu_vls_printf(gedp->ged_result_str, "running: %d\n",
@@ -478,6 +542,18 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		view_controller->hasPendingLodResults() ? 1 : 0);
 	    bu_vls_printf(gedp->ged_result_str, "progressive_pending: %d\n",
 		view_controller->hasProgressiveWorkPending() ? 1 : 0);
+	    bu_vls_printf(gedp->ged_result_str,
+		"host_work: pump=%d render=%d claimed=%d flags=0x%x\n",
+		host_work.pumpPending() ? 1 : 0,
+		host_work.renderPending() ? 1 : 0,
+		host_work.frameClaimed() ? 1 : 0,
+		static_cast<unsigned int>(host_work.flags));
+	    bu_vls_printf(gedp->ged_result_str,
+		"control: facts=0x%x obligations=0x%x owner=%d violations=0x%x\n",
+		static_cast<unsigned int>(convergence.controlFactMask),
+		static_cast<unsigned int>(convergence.controlObligationMask),
+		convergence.controlOwner,
+		static_cast<unsigned int>(convergence.controlViolationMask));
 	    bu_vls_printf(gedp->ged_result_str, "workers: %zu\n",
 		view_controller->getManagedLodWorkerCount());
 	    bu_vls_printf(gedp->ged_result_str,
@@ -502,6 +578,8 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		bu_vls_printf(gedp->ged_result_str,
 		    "resident_memory_limit_bytes: %zu\n",
 		    service->getResidentMeshLimit());
+		lod_print_memory_usage(gedp->ged_result_str,
+		    view_controller, service, &convergence);
 	    }
 	    bu_vls_printf(gedp->ged_result_str,
 		"active_scene_faces: %zu\n",

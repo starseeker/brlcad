@@ -7,6 +7,7 @@
 
 #include "common.h"
 
+#include "BObol/BLodRealization.h"
 #include "cad_publication_private.h"
 #include "transaction_fault_private.h"
 
@@ -14,8 +15,10 @@
 
 #include <Obol/cad/CadSceneValidation.h>
 #include <Obol/cad/CadSceneReplacement.h>
+#include <Obol/cad/CadGeometry.h>
 #include <Obol/cad/SoCADAssembly.h>
 
+#include <limits>
 #include <utility>
 
 namespace {
@@ -145,6 +148,41 @@ bobol_cad_build_geometry_with_optional_proxy(
 {
     return build_geometry(std::move(geometry), operation,
 	Obol::CadAggregateProxyPolicy::DiscardInvalid);
+}
+
+BObolLodCounts
+bobol_cad_geometry_counts(const Obol::PartGeometry &geometry)
+{
+    const auto add = [](uint64_t left, uint64_t right) {
+	return right > UINT64_MAX - left ? UINT64_MAX : left + right;
+    };
+    const auto multiply = [](uint64_t value, uint64_t scale) {
+	return value && scale > UINT64_MAX / value ?
+	    UINT64_MAX : value * scale;
+    };
+
+    BObolLodCounts counts;
+    if (geometry.shaded) {
+	counts.faceCount = geometry.shaded->indices.size() / 3u;
+	counts.pointCount = geometry.shaded->positions.size();
+	counts.normalCount = geometry.shaded->normals.size();
+    }
+    if (geometry.wire) {
+	uint64_t segments = geometry.wire->segmentCount();
+	for (const Obol::WirePolyline &polyline : geometry.wire->polylines) {
+	    if (polyline.points.size() >= 2u)
+		segments = add(segments, polyline.points.size() - 1u);
+	}
+	counts.lineCount = segments;
+	/* Obol's exact work census charges two submitted positions per line,
+	 * including the expanded segments of a polyline. */
+	counts.pointCount = add(counts.pointCount, multiply(segments, 2u));
+    }
+    if (geometry.points)
+	counts.pointCount = add(
+	    counts.pointCount, geometry.points->positions.size());
+    counts.originalPointCount = counts.pointCount;
+    return counts;
 }
 
 bool

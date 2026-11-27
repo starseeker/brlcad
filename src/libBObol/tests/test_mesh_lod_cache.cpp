@@ -40,6 +40,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -133,6 +134,7 @@ struct mesh_lod_chunk_test_data {
 struct mesh_lod_preview_test_data {
     size_t calls = 0;
     size_t coverageCalls = 0;
+    size_t meshPrefixCalls = 0;
     size_t faces = 0;
     size_t points = 0;
     int minCut = -1;
@@ -140,9 +142,11 @@ struct mesh_lod_preview_test_data {
     int residentCut = -1;
     bool valid = false;
     bool coverageValid = false;
+    bool meshPrefixValid = false;
     bool coverageBoundsRecorded = false;
     point_t coverageMinimum = VINIT_ZERO;
     point_t coverageMaximum = VINIT_ZERO;
+    std::vector<int> kinds;
 };
 
 struct mesh_lod_spatial_page_test_data {
@@ -157,6 +161,47 @@ struct mesh_lod_cancellation_test_data {
     size_t polls = 0;
     size_t cancelAfter = 0;
 };
+
+struct mesh_lod_progress_test_data {
+    std::mutex mutex;
+    uint32_t stageMask = 0;
+    uint32_t completedStageMask = 0;
+    bool incrementalHashing = false;
+    bool incrementalCoverage = false;
+    uint64_t classificationFirstPassUnits = 0;
+    bool incrementalClassification = false;
+    bool valid = true;
+};
+
+static void
+mesh_lod_progress_test_callback(int stage, uint64_t completed,
+	uint64_t total, void *callbackData)
+{
+    mesh_lod_progress_test_data *test =
+	static_cast<mesh_lod_progress_test_data *>(callbackData);
+    if (!test)
+	return;
+    std::lock_guard<std::mutex> lock(test->mutex);
+    if (stage <= BOBOL_LOD_PRODUCER_STAGE_NONE ||
+	stage >= BOBOL_LOD_PRODUCER_STAGE_COUNT ||
+	(total && completed > total)) {
+	test->valid = false;
+	return;
+    }
+    const uint32_t bit = 1u << (stage - 1);
+    test->stageMask |= bit;
+    if (stage == BOBOL_LOD_PRODUCER_STAGE_SOURCE_HASHING &&
+	completed > 0 && completed < total)
+	test->incrementalHashing = true;
+    if (stage == BOBOL_LOD_PRODUCER_STAGE_COVERAGE_PREVIEW &&
+	completed > 0 && completed < total)
+	test->incrementalCoverage = true;
+    if (stage == BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION &&
+	completed > 0 && completed < test->classificationFirstPassUnits)
+	test->incrementalClassification = true;
+    if (total && completed == total)
+	test->completedStageMask |= bit;
+}
 
 static int
 mesh_lod_cancellation_test_callback(void *callbackData)
@@ -180,6 +225,7 @@ mesh_lod_preview_test_callback(int previewKind, unsigned long long cacheKey,
     if (!test)
 	return;
     ++test->calls;
+    test->kinds.push_back(previewKind);
     test->faces = data ? data->face_count : 0;
     test->points = data ? data->point_count : 0;
     test->minCut = hierarchy ? hierarchy->min_cut : -1;
@@ -209,6 +255,9 @@ mesh_lod_preview_test_callback(int previewKind, unsigned long long cacheKey,
 	    VMOVE(test->coverageMaximum, data->bmax);
 	    test->coverageBoundsRecorded = true;
 	}
+    } else if (previewKind == BOBOL_MESH_LOD_PREVIEW_MESH_PREFIX) {
+	++test->meshPrefixCalls;
+	test->meshPrefixValid = test->meshPrefixValid || valid;
     }
 }
 
@@ -1064,6 +1113,86 @@ main(int argc, char *argv[])
     }
 
     {
+	/* Explicit preview policy must not add an unnecessary scan or callback
+	 * for a source which already fits in one canonical chunk. */
+	struct directory *dp = db_lookup(dbip, degenerateBotObjname, LOOKUP_QUIET);
+	struct rt_db_internal intern;
+	struct BObolMeshLod *small = NULL;
+	struct BObolMeshLodPreviewRequest request =
+	    BOBOL_MESH_LOD_PREVIEW_REQUEST_INIT;
+	mesh_lod_preview_test_data preview;
+	RT_DB_INTERNAL_INIT(&intern);
+	request.coverage_preview = 1;
+	if (bobol_mesh_lod_cache_invalidate(
+		dbip, degenerateBotObjname, &cacheStatus) != BRLCAD_OK ||
+	    !dp || rt_db_get_internal(&intern, dp, dbip, NULL) < 0 ||
+	    intern.idb_type != ID_BOT || !intern.idb_ptr ||
+	    !(small = bobol_mesh_lod_cache_refresh_open(
+		dbip, degenerateBotObjname,
+		static_cast<const struct rt_bot_internal *>(intern.idb_ptr),
+		&cacheStatus, &request, mesh_lod_preview_test_callback,
+		&preview)) || preview.calls != 0) {
+	    printf("FAIL: small native BoT emitted a coverage preview\n");
+	    if (small)
+		bobol_mesh_lod_destroy(small);
+	    if (intern.idb_ptr)
+		rt_db_free_internal(&intern);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(small);
+	rt_db_free_internal(&intern);
+    }
+
+    {
+	/* A superseding view must be able to stop a native coverage scan before
+	 * either preview or durable cache publication.  Supplying known bounds
+	 * makes the third poll occur inside coverage sampling, rather than in the
+	 * canonical bounds scan. */
+	struct directory *dp = db_lookup(dbip, objname, LOOKUP_QUIET);
+	struct rt_db_internal intern;
+	struct BObolMeshLod *cancelled = NULL;
+	struct BObolMeshLodCacheStatus cancelledStatus =
+	    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+	struct BObolMeshLodPreviewRequest request =
+	    BOBOL_MESH_LOD_PREVIEW_REQUEST_INIT;
+	mesh_lod_preview_test_data preview;
+	mesh_lod_progress_test_data progress;
+	mesh_lod_cancellation_test_data cancellation;
+	cancellation.cancelAfter = 3;
+	request.coverage_preview = 1;
+	request.coverage_bounds_valid = 1;
+	VSET(request.coverage_bmin, 0.0, 0.0, 0.0);
+	VSET(request.coverage_bmax,
+	    static_cast<fastf_t>(grid), static_cast<fastf_t>(grid), 0.1);
+	request.cancellation_callback = mesh_lod_cancellation_test_callback;
+	request.cancellation_data = &cancellation;
+	request.progress_callback = mesh_lod_progress_test_callback;
+	request.progress_data = &progress;
+	RT_DB_INTERNAL_INIT(&intern);
+	if (!dp || rt_db_get_internal(&intern, dp, dbip, NULL) < 0 ||
+	    intern.idb_type != ID_BOT || !intern.idb_ptr ||
+	    (cancelled = bobol_mesh_lod_cache_refresh_open(
+		dbip, objname,
+		static_cast<const struct rt_bot_internal *>(intern.idb_ptr),
+		&cancelledStatus, &request, mesh_lod_preview_test_callback,
+		&preview)) || preview.calls != 0 ||
+	    cancellation.polls < cancellation.cancelAfter ||
+	    !(progress.stageMask &
+		(1u << (BOBOL_LOD_PRODUCER_STAGE_COVERAGE_PREVIEW - 1))) ||
+	    cancelledStatus.has_cached_payload) {
+	    printf("FAIL: native coverage preview cancellation\n");
+	    if (cancelled)
+		bobol_mesh_lod_destroy(cancelled);
+	    if (intern.idb_ptr)
+		rt_db_free_internal(&intern);
+	    ret = 1;
+	    goto cleanup;
+	}
+	rt_db_free_internal(&intern);
+    }
+
+    {
 	/* Cold database coverage has already paid to import a potentially huge
 	 * BoT in order to publish its leaf bounds.  Cache generation must be able
 	 * to consume that caller-owned internal directly without taking
@@ -1075,9 +1204,29 @@ main(int argc, char *argv[])
 	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
 	struct BObolMeshLodData openedData;
 	mesh_lod_preview_test_data previewData;
+	mesh_lod_progress_test_data progressData;
+	progressData.classificationFirstPassUnits =
+	    static_cast<uint64_t>(faceCount);
 	struct BObolMeshLodPreviewRequest previewRequest =
 	    BOBOL_MESH_LOD_PREVIEW_REQUEST_INIT;
 	previewRequest.requested_cut = BOBOL_MESH_LOD_CUT_COUNT_MAX - 1;
+	previewRequest.coverage_preview = 1;
+	/* Exercise recovery from discovery bounds which raced a source edit. */
+	previewRequest.coverage_bounds_valid = 1;
+	VSET(previewRequest.coverage_bmin,
+	    100000.0, 100000.0, 100000.0);
+	VSET(previewRequest.coverage_bmax,
+	    100001.0, 100001.0, 100001.0);
+	previewRequest.progress_callback = mesh_lod_progress_test_callback;
+	previewRequest.progress_data = &progressData;
+	const uint32_t requiredProgressStages =
+	    (1u << (BOBOL_LOD_PRODUCER_STAGE_COVERAGE_PREVIEW - 1)) |
+	    (1u << (BOBOL_LOD_PRODUCER_STAGE_SOURCE_HASHING - 1)) |
+	    (1u << (BOBOL_LOD_PRODUCER_STAGE_CACHE_LOOKUP - 1)) |
+	    (1u << (BOBOL_LOD_PRODUCER_STAGE_BOUNDS_ANALYSIS - 1)) |
+	    (1u << (BOBOL_LOD_PRODUCER_STAGE_FACE_CLASSIFICATION - 1)) |
+	    (1u << (BOBOL_LOD_PRODUCER_STAGE_PREFIX_MATERIALIZATION - 1)) |
+	    (1u << (BOBOL_LOD_PRODUCER_STAGE_CACHE_PERSISTENCE - 1));
 	RT_DB_INTERNAL_INIT(&intern);
 	if (!dp || rt_db_get_internal(&intern, dp, dbip, NULL) < 0 ||
 	    intern.idb_type != ID_BOT || !intern.idb_ptr ||
@@ -1087,8 +1236,24 @@ main(int argc, char *argv[])
 		&cacheStatus, &previewRequest,
 		mesh_lod_preview_test_callback,
 		&previewData)) ||
-	    previewData.calls != 1 || !previewData.valid ||
+	    previewData.calls != 2 || previewData.coverageCalls != 1 ||
+	    previewData.meshPrefixCalls != 1 || !previewData.valid ||
+	    !previewData.coverageValid || !previewData.meshPrefixValid ||
+	    previewData.kinds != std::vector<int>{
+		BOBOL_MESH_LOD_PREVIEW_COVERAGE_POINTS,
+		BOBOL_MESH_LOD_PREVIEW_MESH_PREFIX} ||
+	    !previewData.coverageBoundsRecorded ||
+	    previewData.coverageMinimum[X] >= 1000.0 ||
+	    previewData.coverageMaximum[X] >= 1000.0 ||
 	    previewData.residentCut <= previewData.minCut ||
+	    !progressData.valid ||
+	    (progressData.stageMask & requiredProgressStages) !=
+		requiredProgressStages ||
+	    (progressData.completedStageMask & requiredProgressStages) !=
+		requiredProgressStages ||
+	    !progressData.incrementalHashing ||
+	    !progressData.incrementalCoverage ||
+	    !progressData.incrementalClassification ||
 	    !cacheStatus.directory_found || !cacheStatus.is_bot ||
 	    !cacheStatus.has_cache_key || !cacheStatus.has_cached_payload ||
 	    cacheStatus.stale_cache_entry ||
@@ -1099,7 +1264,10 @@ main(int argc, char *argv[])
 		openedHierarchy.min_cut ||
 	    !bobol_mesh_lod_data_get(opened, &openedData) ||
 	    !openedData.face_count || !openedData.point_count) {
-	    printf("FAIL: mesh lod staged BoT open refresh status\n");
+	    printf("FAIL: mesh lod staged BoT open refresh status "
+		   "progress=%#x completed=%#x required=%#x\n",
+		   progressData.stageMask, progressData.completedStageMask,
+		   requiredProgressStages);
 	    if (opened)
 		bobol_mesh_lod_destroy(opened);
 	    if (intern.idb_ptr)

@@ -134,8 +134,10 @@ qg_quad_attach_endpoint(struct ged *gedp, QgView *view)
 	return 0;
     struct ged_view_context *view_ctx =
 	ged_view_context_from_bv(view->viewContext());
-    return ged_view_context_obol_endpoint_set(view_ctx,
-	view->displayEndpoint(), 0);
+    if (!ged_view_context_obol_endpoint_set(view_ctx,
+	    view->displayEndpoint(), 0))
+	return 0;
+    return 1;
 }
 
 /**

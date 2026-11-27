@@ -37,6 +37,7 @@
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgObolWindowHost.h"
 #include "bv.h"
+#include "ged/display.h"
 #include "ged/view.h"
 
 extern "C" {

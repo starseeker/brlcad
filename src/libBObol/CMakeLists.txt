@@ -38,13 +38,17 @@ set(
   input.cpp
   init.cpp
   line_layer_overlay.cpp
+  lod_progress_overlay.cpp
   lod_admission_policy_private.h
   lod_control_private.h
   lod_capacity_policy_private.h
   lod_coordinator_private.h
+  lod_coverage_preview.cpp
+  lod_coverage_preview_private.h
   lod_delivery_policy_private.h
   lod_presentation_policy_private.h
   lod_population_identity_private.h
+  lod_progress_diagnostics_private.h
   lod_progress_estimator_private.h
   lod_quiet_successor_private.h
   lod_result_authentication_private.h
@@ -52,6 +56,8 @@ set(
   lod_source_evidence.cpp
   lod_static_quality.cpp
   lod_source_evidence_private.h
+  lod_telemetry.cpp
+  lod_telemetry_private.h
   lod_terminal_quality_private.h
   lod_visual_importance_private.h
   lod_view_policy_private.h
@@ -73,6 +79,8 @@ set(
   mesh_residency_action.cpp
   mesh_shape.cpp
   navigation_gizmo.cpp
+  parallel_budget_private.cpp
+  parallel_budget_private.h
   pick_detail.cpp
   performance.cpp
   realize_action.cpp
@@ -125,6 +133,7 @@ set_source_files_properties(
   source_realization.cpp
   lod_source_evidence.cpp
   lod_static_quality.cpp
+  lod_telemetry.cpp
   view_controller.cpp
   view_controller_host.cpp
   view_controller_lighting.cpp
@@ -136,7 +145,14 @@ set_source_files_properties(
   PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON
 )
 
-find_package(Obol 2.0 CONFIG REQUIRED)
+# Bundled packages are copied into the BRL-CAD build tree before this
+# directory is configured.  Neither that staging prefix nor the bext install
+# tree is necessarily on CMAKE_PREFIX_PATH, so give config-mode lookup the
+# same roots used by the external-dependency machinery.
+find_package(
+  Obol 2.0 CONFIG REQUIRED
+  HINTS "${CMAKE_BINARY_DIR}" "${BRLCAD_EXT_INSTALL_DIR}"
+)
 set(BOBOL_OPENGL_INCLUDE_DIRS)
 if(OPENGL_INCLUDE_DIR_GL)
   list(APPEND BOBOL_OPENGL_INCLUDE_DIRS ${OPENGL_INCLUDE_DIR_GL})
@@ -149,6 +165,13 @@ brlcad_addlib(libBObol "${LIBBOBOL_SRCS}" "" "${BOBOL_LOCAL_INCLUDE_DIRS}"
   PUBLIC_LIBS "librt;libimgstream;libbv;libbg;libbu;Obol::Obol;Threads::Threads"
   ALL_CXX
 )
+
+# Public callback types use C++17 noexcept function types.  Propagate that
+# language requirement to build-tree and installed-package consumers.
+target_compile_features(libBObol PUBLIC cxx_std_17)
+if(TARGET libBObol-static)
+  target_compile_features(libBObol-static PUBLIC cxx_std_17)
+endif(TARGET libBObol-static)
 
 # Windows SDK headers otherwise define min and max macros which corrupt the
 # standard-library calls used throughout libBObol.
@@ -245,13 +268,17 @@ cmakefiles(
   input.cpp
   init.cpp
   line_layer_overlay.cpp
+  lod_progress_overlay.cpp
   lod_admission_policy_private.h
   lod_control_private.h
   lod_capacity_policy_private.h
   lod_coordinator_private.h
+  lod_coverage_preview.cpp
+  lod_coverage_preview_private.h
   lod_delivery_policy_private.h
   lod_presentation_policy_private.h
   lod_population_identity_private.h
+  lod_progress_diagnostics_private.h
   lod_progress_estimator_private.h
   lod_presentation_policy.cpp
   lod_admission_policy.cpp
@@ -261,6 +288,8 @@ cmakefiles(
   lod_source_evidence.cpp
   lod_static_quality.cpp
   lod_source_evidence_private.h
+  lod_telemetry.cpp
+  lod_telemetry_private.h
   lod_terminal_quality_private.h
   lod_visual_importance_private.h
   lod_view_policy_private.h
@@ -277,6 +306,8 @@ cmakefiles(
   mesh_residency_action.cpp
   mesh_shape.cpp
   navigation_gizmo.cpp
+  parallel_budget_private.cpp
+  parallel_budget_private.h
   pick_detail.cpp
   performance.cpp
   performance_private.h

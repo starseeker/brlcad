@@ -733,6 +733,16 @@ public:
     SbBool replacePrimitiveMetadata(BObolFeatureHandle handle,
 	int32_t primitiveIndex,
 	const std::vector<BObolFeatureMetadata> &metadata);
+    /**
+     * Replace the complete primitive-metadata set with one retained edit.
+     *
+     * Primitive indices must be non-negative and unique.  Entries with no
+     * metadata are omitted.  This is the bounded publication path for large
+     * diagnostic layers; repeatedly replacing individual entries would copy
+     * the growing feature record once per primitive.
+     */
+    SbBool replacePrimitiveMetadata(BObolFeatureHandle handle,
+	std::vector<BObolFeaturePrimitiveMetadata> metadata);
     SbBool primitiveMetadata(BObolFeatureHandle handle,
 	int32_t primitiveIndex,
 	std::vector<BObolFeatureMetadata> &metadataOut) const;
