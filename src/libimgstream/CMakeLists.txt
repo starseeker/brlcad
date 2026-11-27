@@ -4,6 +4,10 @@ set(
   fb_io.c
   fb_remote.c
   fbserv_auth.c
+  fbserv_framebuffer.c
+  fbserv_pkg.c
+  fbserv_server.c
+  fbserv_state.c
   image_size.c
   stream.c
 )

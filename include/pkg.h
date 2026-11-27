@@ -133,6 +133,7 @@ struct pkg_conn {
     char pkc_addr_env[160];    /**< @brief PKG_ADDR=... env string for child spawn */
     int  pkc_tx_kind;          /**< @brief transport kind: 0=socket/TCP, 1=pipe pair */
     int  pkc_listen_fd;        /**< @brief listening socket fd for lazy TCP accept */
+    int  pkc_would_block;      /**< @brief last read returned EAGAIN or EWOULDBLOCK */
     int  pkc_owns_fd;          /**< @brief !0 if pkg_close() closes the socket fd */
 };
 #define PKC_NULL	((struct pkg_conn *)0)
@@ -531,6 +532,11 @@ PKG_EXPORT extern int pkg_conn_poll(const struct pkg_conn *pc);
 struct pkg_listener;
 typedef struct pkg_listener pkg_listener_t;
 
+/**
+ * Open a listener.  For TCP, iface_or_null is NULL for all IPv4 interfaces
+ * or an IPv4 address/"localhost" to constrain the bind.  Local IPC address
+ * forms ignore the interface argument.
+ */
 PKG_EXPORT extern pkg_listener_t *pkg_listen(const char *service,
 					     const char *iface_or_null,
 					     int backlog,

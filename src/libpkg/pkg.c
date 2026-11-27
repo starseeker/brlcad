@@ -181,7 +181,6 @@ static char _pkg_errbuf[MAX_PKG_ERRBUF_SIZE] = {0};
 static FILE *_pkg_debug = (FILE*)NULL;
 
 /* Forward declarations for internal functions used by the Listener API */
-static int pkg_permserver(const char *service, const char *protocol, int backlog, void (*errlog)(const char *msg));
 static struct pkg_conn *
 pkg_getclient(int fd, const struct pkg_switch *switchp, void (*errlog)(const char *msg), int nodelay);
 
@@ -479,6 +478,7 @@ _pkg_makeconn(int fd, const struct pkg_switch *switchp, void (*errlog)(const cha
     pc->pkc_incur = pc->pkc_inend = 0;
     pc->pkc_tx_kind   = (fd == PKG_STDIO_MODE) ? 1 : 0;
     pc->pkc_listen_fd = -1;
+    pc->pkc_would_block = 0;
     pc->pkc_owns_fd   = 1;
     pc->pkc_addr[0]   = '\0';
     pc->pkc_addr_env[0] = '\0';
@@ -868,6 +868,23 @@ pkg_open(const char *host, const char *service, const char *protocol, const char
 }
 
 
+static int
+_pkg_numeric_service(const char *service, unsigned short *port)
+{
+    char *end = NULL;
+    long value;
+
+    if (!service || !service[0] || !port)
+	return 0;
+    errno = 0;
+    value = strtol(service, &end, 10);
+    if (errno || !end || *end != '\0' || value < 0 || value > 65535)
+	return 0;
+    *port = (unsigned short)value;
+    return 1;
+}
+
+
 /**
  * This is a private implementation function.
  */
@@ -875,6 +892,7 @@ static int
 _pkg_permserver_impl(struct in_addr iface, const char *service, const char *protocol, int backlog, void (*errlog)(const char *msg))
 {
     struct servent *sp;
+    unsigned short numeric_port = 0;
 #ifdef HAVE_WINSOCK_H
     SOCKET pkg_listenfd;
     SOCKADDR_IN saServer;
@@ -916,8 +934,8 @@ _pkg_permserver_impl(struct in_addr iface, const char *service, const char *prot
 
     memset((char *)&saServer, 0, sizeof(saServer));
 
-    if (atoi(service) > 0) {
-	saServer.sin_port = htons((unsigned short)atoi(service));
+    if (_pkg_numeric_service(service, &numeric_port)) {
+	saServer.sin_port = htons(numeric_port);
     } else {
 	if ((sp = getservbyname(service, "tcp")) == NULL) {
 	    snprintf(_pkg_errbuf, MAX_PKG_ERRBUF_SIZE,
@@ -1005,8 +1023,8 @@ _pkg_permserver_impl(struct in_addr iface, const char *service, const char *prot
     }
 #  endif /* HAVE_SYS_UN_H */
     /* Determine port for service */
-    if (atoi(service) > 0) {
-	sinme.sin_port = htons((unsigned short)atoi(service));
+    if (_pkg_numeric_service(service, &numeric_port)) {
+	sinme.sin_port = htons(numeric_port);
     } else {
 	if ((sp = getservbyname(service, "tcp")) == NULL) {
 	    snprintf(_pkg_errbuf, MAX_PKG_ERRBUF_SIZE,
@@ -1067,15 +1085,6 @@ _pkg_permserver_impl(struct in_addr iface, const char *service, const char *prot
     }
     return pkg_listenfd;
 #endif /* HAVE_WINSOCK_H */
-}
-
-
-static int
-pkg_permserver(const char *service, const char *protocol, int backlog, void (*errlog)(const char *msg))
-{
-    struct in_addr iface;
-    iface.s_addr = INADDR_ANY;
-    return _pkg_permserver_impl(iface, service, protocol, backlog, errlog);
 }
 
 
@@ -2258,6 +2267,8 @@ pkg_suckin(struct pkg_conn *pc)
 	avail = (size_t)pc->pkc_inlen - (size_t)pc->pkc_inend;
     }
 
+    pc->pkc_would_block = 0;
+
     /* Take as much as the system will give us, up to buffer size */
     got = (int)_pkg_io_read(pc, &pc->pkc_inbuf[pc->pkc_inend], avail);
     if (got <= 0) {
@@ -2273,6 +2284,15 @@ pkg_suckin(struct pkg_conn *pc)
 	    goto out;
 	}
 #ifndef HAVE_WINSOCK_H
+	if (errno == EAGAIN
+#ifdef EWOULDBLOCK
+	    || errno == EWOULDBLOCK
+#endif
+	    ) {
+	    pc->pkc_would_block = 1;
+	    ret = 0;
+	    goto out;
+	}
 	_pkg_perror(pc->pkc_errlog, "pkg_suckin: read");
 	snprintf(_pkg_errbuf, MAX_PKG_ERRBUF_SIZE, "pkg_suckin: read(%d, %p, %ld) ret=%d inbuf=%p, inend=%d\n",
 		 pc->pkc_fd, (void *)(&pc->pkc_inbuf[pc->pkc_inend]), (long)avail,
@@ -2281,6 +2301,12 @@ pkg_suckin(struct pkg_conn *pc)
 	    (pc->pkc_errlog)(_pkg_errbuf);
 	} else {
 	    fprintf(stderr, "%s", _pkg_errbuf);
+	}
+#else
+	if (WSAGetLastError() == WSAEWOULDBLOCK) {
+	    pc->pkc_would_block = 1;
+	    ret = 0;
+	    goto out;
 	}
 #endif
 	ret = -1;
@@ -2326,14 +2352,29 @@ pkg_listen(const char *service, const char *iface_or_null, int backlog, pkg_errl
     int lfd;
     struct pkg_listener *L;
     const char *listen_service = service;
+    struct in_addr iface;
     int kind = 0;
     int port = -1;
 #ifdef _WIN32
     HANDLE pipe_h = INVALID_HANDLE_VALUE;
 #endif
 
-    /* iface_or_null is ignored for now - binds to INADDR_ANY */
-    (void)iface_or_null;
+    iface.s_addr = htonl(INADDR_ANY);
+    if (iface_or_null && iface_or_null[0]) {
+	if (strcmp(iface_or_null, "localhost") == 0)
+	    iface.s_addr = inet_addr("127.0.0.1");
+	else {
+	    iface.s_addr = inet_addr(iface_or_null);
+	    if (iface.s_addr == inet_addr("255.255.255.255")) {
+		if (!errlog)
+		    errlog = _pkg_errlog;
+		snprintf(_pkg_errbuf, MAX_PKG_ERRBUF_SIZE,
+		    "pkg_listen: invalid IPv4 interface '%s'\n", iface_or_null);
+		errlog(_pkg_errbuf);
+		return NULL;
+	    }
+	}
+    }
 
 #ifdef _WIN32
     if (service && strncmp(service, "npipe:", 6) == 0) {
@@ -2352,7 +2393,7 @@ pkg_listen(const char *service, const char *iface_or_null, int backlog, pkg_errl
     if (service && strncmp(service, "unix:", 5) == 0)
 	listen_service = service + 5;
 
-    lfd = pkg_permserver(listen_service, "tcp", backlog, errlog);
+    lfd = _pkg_permserver_impl(iface, listen_service, "tcp", backlog, errlog);
     if (lfd < 0) return NULL;
 
     {
