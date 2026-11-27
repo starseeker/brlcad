@@ -1010,9 +1010,15 @@ test_process_ipc_inheritance(const char *executable)
     fbs_close_ipc_child(&fbs);
     TEST("IPC child process starts", process != nullptr);
 
+    // The framebuffer server makes its end nonblocking for event-loop use.
+    const int inheritance_timeout_ms = 1000;
+    pkg_mux_t *mux = pkg_mux_create();
+    bool ready = process && mux && pkg_mux_add_conn(mux, parent) == 0 &&
+        pkg_mux_wait(mux, inheritance_timeout_ms) > 0;
     char message[sizeof(expected)] = {0};
-    ssize_t received = process ? ipc_fd_read(pkg_get_read_fd(parent), message,
+    ssize_t received = ready ? ipc_fd_read(pkg_get_read_fd(parent), message,
         strlen(expected)) : -1;
+    pkg_mux_destroy(mux);
     TEST("IPC child process writes inherited channel",
         received == (ssize_t)strlen(expected));
     TEST("IPC child process payload matches",

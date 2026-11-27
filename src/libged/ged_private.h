@@ -295,11 +295,10 @@ void ged_db_index_destroy(struct ged_db_index *index);
 void ged_db_index_database_set_private(struct ged *gedp, struct db_i *dbip);
 struct ged_event_service *ged_event_service_create(struct ged *gedp);
 void ged_event_service_destroy(struct ged_event_service *state);
+GED_EXPORT void ged_event_database_close_private(struct ged *gedp);
 struct ged_selection_state *ged_selection_state_create(struct ged *gedp);
 void ged_selection_state_destroy(struct ged_selection_state *state);
 void ged_selection_database_reset_private(struct ged *gedp);
-void ged_dbi_state_create_private(struct ged *gedp);
-void ged_dbi_state_destroy_private(struct ged *gedp);
 int ged_selection_present_private(struct ged *gedp);
 
 #ifndef FALSE
@@ -501,6 +500,8 @@ GED_EXPORT extern int _ged_run_rt(
 	void *end_clbk_data,
 	const struct bu_process_create_info *create_info);
 
+GED_EXPORT extern int _ged_enable_framebuffer_underlay(struct ged *gedp,
+	struct ged_view_context *view_ctx);
 GED_EXPORT extern int _ged_open_fbs_ipc(
 	struct ged *gedp,
 	struct bu_process_create_info *create_info,

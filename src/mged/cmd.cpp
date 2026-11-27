@@ -48,6 +48,7 @@
 #endif
 #include "bio.h"
 #include "bresource.h"
+#include "libtermio.h"
 
 
 #include "vmath.h"
@@ -317,6 +318,8 @@ run_ged_async(struct mged_state *s, std::function<int()> func)
 	bu_log("mged: refusing re-entrant GED command execution\n");
 	return BRLCAD_ERROR;
     }
+
+    mged_terminal_columns(s);
 
     AsyncCommandState command_state;
 
@@ -1774,30 +1777,6 @@ cmd_ged_display_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc
 	return TCL_OK;
 
     return TCL_ERROR;
-}
-
-
-int
-cmd_ged_fb_render_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *argv[])
-{
-    struct cmdtab *ctp = (struct cmdtab *)clientData;
-    MGED_CK_CMD(ctp);
-    struct mged_state *s = ctp->s;
-
-    if (s->gedp == GED_NULL)
-	return TCL_OK;
-    struct bview *view = s->gedp->ged_gvp ? s->gedp->ged_gvp : view_state->vs_gvp;
-    if (view && !mged_variables->mv_fb)
-	view->gv_s->gv_fb_mode = 0;
-
-    int ret = cmd_ged_dm_wrapper(clientData, interpreter, argc, argv);
-    if (ret == TCL_OK && view && view->gv_s->gv_fb_mode && !mged_variables->mv_fb) {
-	mged_variables->mv_fb = 1;
-	DMP_dirty = 1;
-	dm_set_dirty(DMP, 1);
-    }
-
-    return ret;
 }
 
 

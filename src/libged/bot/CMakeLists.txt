@@ -15,6 +15,7 @@ set(
   bot_face_sort.c
   bot_flip.c
   bot_flood_exterior.cpp
+  bot_fuse.cpp
   bot_merge.c
   bot_openvdb.cpp
   bot_smooth.c

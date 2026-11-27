@@ -86,6 +86,7 @@ struct ged_db_index_tree_leaf {
 
 struct ged_db_index {
     struct ged *gedp = nullptr;
+    struct db_i *dbip = nullptr;
     uint64_t revision = 0;
     /* Change notification and index dirtiness are deliberately separate.
      * Clients consume pending_flags to update their own derived state, while
@@ -100,6 +101,7 @@ struct ged_db_index {
     std::unordered_map<std::string, ged_db_index_id> names;
     std::unordered_map<ged_db_index_id, std::string> removed_names;
     bool tops_cache_valid = false;
+    bool reference_counts_current = false;
     std::vector<ged_db_index_id> standard_tops_cache;
     std::vector<ged_db_index_id> cyclic_tops_cache;
 };
@@ -216,17 +218,16 @@ ged_db_index_record_find(struct ged_db_index *index,
 			 ged_db_index_id id,
 			 struct ged_db_index_record *record)
 {
-    if (!index || !id || !record)
-	return 0;
-
-    auto record_it = index->records.find(id);
-    if (record_it == index->records.end()) {
-	ged_db_index_record_clear(record);
-	return 0;
+    if (index && id && record) {
+	auto record_it = index->records.find(id);
+	if (record_it != index->records.end()) {
+	    ged_db_index_record_fill(index, record_it->second, record);
+	    return record->valid ? 1 : 0;
+	}
     }
 
-    ged_db_index_record_fill(index, record_it->second, record);
-    return record->valid ? 1 : 0;
+    ged_db_index_record_clear(record);
+    return 0;
 }
 
 
@@ -482,20 +483,43 @@ ged_db_index_add_removed_names(struct ged_db_index *index)
 }
 
 
-static int
-ged_db_index_rebuild(struct ged_db_index *index)
+static void
+ged_db_index_clear_snapshot(struct ged_db_index *index)
 {
-    if (!index || !index->gedp || !index->gedp->dbip)
-	return 0;
-
     index->records.clear();
     index->children.clear();
     index->child_names.clear();
     index->parents.clear();
     index->names.clear();
     index->tops_cache_valid = false;
+    index->reference_counts_current = false;
     index->standard_tops_cache.clear();
     index->cyclic_tops_cache.clear();
+}
+
+
+void
+ged_db_index_database_set_private(struct ged *gedp, struct db_i *dbip)
+{
+    struct ged_db_index *index = ged_db_index_state(gedp);
+    if (!index || index->dbip == dbip)
+	return;
+
+    ged_db_index_clear_snapshot(index);
+    index->removed_names.clear();
+    index->dbip = dbip;
+    index->needs_rebuild = 1;
+    index->pending_flags = 0;
+}
+
+
+static int
+ged_db_index_rebuild(struct ged_db_index *index)
+{
+    if (!index || !index->gedp || !index->gedp->dbip)
+	return 0;
+
+    ged_db_index_clear_snapshot(index);
 
     struct directory *dp = RT_DIR_NULL;
     FOR_ALL_DIRECTORY_START(dp, index->gedp->dbip) {
@@ -524,14 +548,9 @@ ged_db_index_adopt_discovery(struct ged *gedp,
     if (!index || !gedp || !gedp->dbip || !hierarchy)
 	return 0;
 
-    index->records.clear();
-    index->children.clear();
-    index->child_names.clear();
-    index->parents.clear();
-    index->names.clear();
-    index->tops_cache_valid = false;
-    index->standard_tops_cache.clear();
-    index->cyclic_tops_cache.clear();
+    ged_db_index_database_set_private(gedp, gedp->dbip);
+    ged_db_index_clear_snapshot(index);
+    index->reference_counts_current = true;
 
     const size_t arc_count = rt_db_hierarchy_arc_count(hierarchy);
     index->records.reserve(arc_count + 1);
@@ -603,10 +622,12 @@ static struct ged_db_index *
 ged_db_index_ready(struct ged *gedp)
 {
     struct ged_db_index *index = ged_db_index_state(gedp);
-    if (!index)
+    if (!index || !gedp->dbip)
 	return nullptr;
-    if (!index->revision || index->needs_rebuild)
-	ged_db_index_rebuild(index);
+
+    ged_db_index_database_set_private(gedp, gedp->dbip);
+    if (index->needs_rebuild && !ged_db_index_rebuild(index))
+	return nullptr;
     return index;
 }
 
@@ -748,28 +769,18 @@ ged_db_index_standard_tops(struct ged_db_index *index)
     if (!index || !index->gedp || !index->gedp->dbip)
 	return tops;
 
-    /*
-     * The index already owns the complete visible parent relation.  Calling
-     * db_update_nref() and db_ls(DB_LS_TOPS) here walked every combination
-     * again each time a client performed the customary count-then-fill pair
-     * of queries.  On a large vehicle this duplicated the hierarchy work
-     * done by ged_db_index_rebuild() and blocked qged's GUI thread during
-     * startup.
-     *
-     * Only canonical records backed by a live directory can be top-level.
-     * Instance aliases and remembered removed names are intentionally
-     * excluded.  Cyclic objects have parents and are added separately by the
-     * include_cyclic path below.
-     */
+    // Native reference counts include sketch and data dependencies that
+    // do not appear as combination children.  Cache tops for this revision.
+    if (!index->reference_counts_current) {
+	db_update_nref(index->gedp->dbip);
+	index->reference_counts_current = true;
+    }
     std::vector<std::pair<std::string, ged_db_index_id>> named_tops;
     named_tops.reserve(index->records.size());
     for (const auto &entry : index->records) {
 	const ged_db_index_record_native &record = entry.second;
 	if (!record.valid || !record.dp || record.is_instance ||
-	    record.id != record.object_id)
-	    continue;
-	auto parent_it = index->parents.find(record.object_id);
-	if (parent_it != index->parents.end() && !parent_it->second.empty())
+	    record.id != record.object_id || record.dp->d_nref)
 	    continue;
 	named_tops.emplace_back(record.name, record.id);
     }
@@ -1066,15 +1077,10 @@ ged_db_index_available(struct ged *gedp)
 unsigned long long
 ged_db_index_refresh(struct ged *gedp)
 {
-    struct ged_db_index *index = ged_db_index_state(gedp);
+    struct ged_db_index *index = ged_db_index_ready(gedp);
     if (!index)
 	return 0;
 
-
-    if ((!index->revision || index->needs_rebuild) &&
-	!ged_db_index_rebuild(index))
-	return 0;
-    index->needs_rebuild = 0;
     index->pending_flags = 0;
     return index->revision;
 }
@@ -1084,16 +1090,10 @@ unsigned long long
 ged_db_index_refresh_flags(struct ged *gedp)
 {
     struct ged_db_index *index = ged_db_index_state(gedp);
-    if (!index)
+    if (!index || !index->pending_flags || !ged_db_index_ready(gedp))
 	return 0;
 
-    unsigned long long flags = index->pending_flags;
-    if (!flags)
-	return 0;
-
-    if (index->needs_rebuild && !ged_db_index_rebuild(index))
-	return 0;
-    index->needs_rebuild = 0;
+    const unsigned long long flags = index->pending_flags;
     index->pending_flags = 0;
     return flags;
 }
@@ -1173,18 +1173,10 @@ ged_db_index_note_object_name_change(struct ged *gedp,
 
 
 int
-ged_db_index_record_get(struct ged *gedp,
-			ged_db_index_id id,
+ged_db_index_record_get(struct ged *gedp, ged_db_index_id id,
 			struct ged_db_index_record *record)
 {
-    struct ged_db_index *index = ged_db_index_ready(gedp);
-    if (ged_db_index_record_find(index, id, record))
-	return 1;
-
-    if (index && ged_db_index_rebuild(index))
-	return ged_db_index_record_find(index, id, record);
-
-    return 0;
+    return ged_db_index_record_find(ged_db_index_ready(gedp), id, record);
 }
 
 
@@ -1230,12 +1222,7 @@ ged_db_index_child_count(struct ged *gedp, ged_db_index_id parent_id)
     if (!index || !parent_id)
 	return 0;
 
-    auto record_it = index->records.find(parent_id);
-    if (record_it == index->records.end() && ged_db_index_rebuild(index))
-	record_it = index->records.find(parent_id);
-    if (record_it != index->records.end())
-	parent_id = record_it->second.object_id;
-
+    parent_id = ged_db_index_canonical_object_id(index, parent_id);
     auto child_it = index->children.find(parent_id);
     return (child_it != index->children.end()) ? child_it->second.size() : 0;
 }
@@ -1252,16 +1239,8 @@ ged_db_index_child_at(struct ged *gedp,
     if (!index || !parent_id || !child)
 	return 0;
 
-    auto parent_it = index->records.find(parent_id);
-    if (parent_it == index->records.end() && ged_db_index_rebuild(index))
-	parent_it = index->records.find(parent_id);
-    if (parent_it != index->records.end())
-	parent_id = parent_it->second.object_id;
-
+    parent_id = ged_db_index_canonical_object_id(index, parent_id);
     auto child_it = index->children.find(parent_id);
-    if ((child_it == index->children.end() || row >= child_it->second.size()) &&
-	ged_db_index_rebuild(index))
-	child_it = index->children.find(parent_id);
     if (child_it == index->children.end() || row >= child_it->second.size())
 	return 0;
 
@@ -1283,19 +1262,7 @@ ged_db_index_object_use_count(struct ged *gedp, ged_db_index_id object_id)
 
     object_id = ged_db_index_canonical_object_id(index, object_id);
     auto use_it = index->parents.find(object_id);
-    if (use_it != index->parents.end())
-	return use_it->second.size();
-    if (index->records.find(object_id) != index->records.end())
-	return 0;
-
-    if (ged_db_index_rebuild(index)) {
-	object_id = ged_db_index_canonical_object_id(index, object_id);
-	use_it = index->parents.find(object_id);
-	if (use_it != index->parents.end())
-	    return use_it->second.size();
-    }
-
-    return 0;
+    return (use_it != index->parents.end()) ? use_it->second.size() : 0;
 }
 
 
@@ -1312,14 +1279,6 @@ ged_db_index_object_use_at(struct ged *gedp,
 
     object_id = ged_db_index_canonical_object_id(index, object_id);
     auto use_it = index->parents.find(object_id);
-    if (use_it == index->parents.end() &&
-	index->records.find(object_id) != index->records.end())
-	return 0;
-    if ((use_it == index->parents.end() || row >= use_it->second.size()) &&
-	ged_db_index_rebuild(index)) {
-	object_id = ged_db_index_canonical_object_id(index, object_id);
-	use_it = index->parents.find(object_id);
-    }
     if (use_it == index->parents.end() || row >= use_it->second.size())
 	return 0;
 
@@ -1345,21 +1304,7 @@ ged_db_index_affected_path_count(struct ged *gedp,
     if (!index || !object_id)
 	return 0;
 
-    std::vector<std::vector<ged_db_index_id>> paths =
-	ged_db_index_affected_paths(index, object_id, max_depth);
-    if (!paths.empty())
-	return paths.size();
-
-    if (index->records.find(ged_db_index_canonical_object_id(index,
-			    object_id)) != index->records.end())
-	return 0;
-
-    if (ged_db_index_rebuild(index)) {
-	paths = ged_db_index_affected_paths(index, object_id, max_depth);
-	return paths.size();
-    }
-
-    return 0;
+    return ged_db_index_affected_paths(index, object_id, max_depth).size();
 }
 
 
@@ -1377,12 +1322,6 @@ ged_db_index_affected_path_at(struct ged *gedp,
 
     std::vector<std::vector<ged_db_index_id>> paths =
 	ged_db_index_affected_paths(index, object_id, max_depth);
-    if (row >= paths.size() &&
-	index->records.find(ged_db_index_canonical_object_id(index,
-			    object_id)) == index->records.end() &&
-	ged_db_index_rebuild(index)) {
-	paths = ged_db_index_affected_paths(index, object_id, max_depth);
-    }
     if (row >= paths.size())
 	return 0;
 
@@ -1400,12 +1339,7 @@ ged_db_index_valid_id(struct ged *gedp, ged_db_index_id id)
     struct ged_db_index *index = ged_db_index_ready(gedp);
     if (!index || !id)
 	return 0;
-    if (index->records.find(id) != index->records.end())
-	return 1;
-    if (ged_db_index_rebuild(index) &&
-	index->records.find(id) != index->records.end())
-	return 1;
-    return 0;
+    return index->records.find(id) != index->records.end();
 }
 
 
@@ -1473,14 +1407,8 @@ ged_db_index_path_resolve(struct ged *gedp,
 			  ged_db_index_id *ids,
 			  size_t capacity)
 {
-    struct ged_db_index *index = ged_db_index_ready(gedp);
-    size_t ret = ged_db_index_path_resolve_native(index, path, ids, capacity);
-    if (ret || !index)
-	return ret;
-
-    if (!ged_db_index_rebuild(index))
-	return 0;
-    return ged_db_index_path_resolve_native(index, path, ids, capacity);
+    return ged_db_index_path_resolve_native(ged_db_index_ready(gedp),
+	path, ids, capacity);
 }
 
 

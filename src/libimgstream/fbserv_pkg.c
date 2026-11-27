@@ -40,6 +40,20 @@ fbserv_pkg_missing_handler(struct pkg_conn *pcp, char *buf)
 }
 
 
+/* Image-stream TLS starts before the framebuffer protocol. */
+static void
+fbserv_pkg_refuse_tls(struct pkg_conn *pcp, char *buf)
+{
+    if (pcp && pcp->pkc_server_data) {
+	struct fbserv_client *client = (struct fbserv_client *)pcp->pkc_server_data;
+	const char unsupported = 0;
+	(void)pkg_send(FBSERV_MSG_FBTLS, &unsupported, sizeof(unsupported), pcp);
+	client->fbsc_pending_drop = 1;
+    }
+    free(buf);
+}
+
+
 #define FBSERV_HANDLER(_handlers, _name) \
     ((_handlers) && (_handlers)->_name ? (_handlers)->_name : fbserv_pkg_missing_handler)
 
@@ -132,7 +146,9 @@ fbserv_pkg_switch_init(struct pkg_switch *pswitch,
     fbserv_pkg_switch_set(&pswitch[30],
 	FBSERV_MSG_FBSETCURSOR + FBSERV_MSG_NORETURN,
 	FBSERV_HANDLER(handlers, setcursor), "Set Cursor Shape");
-    fbserv_pkg_switch_set(&pswitch[31], 0, NULL, NULL);
+    fbserv_pkg_switch_set(&pswitch[31], FBSERV_MSG_FBTLS,
+	fbserv_pkg_refuse_tls, "TLS Capability");
+    fbserv_pkg_switch_set(&pswitch[32], 0, NULL, NULL);
 
     return BRLCAD_OK;
 }

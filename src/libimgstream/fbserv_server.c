@@ -251,31 +251,13 @@ fbs_drop_client(struct fbserv_obj *fbsp, int sub)
 	 * TCP close handler. */
 	if (fbsp->fbs_clients[sub].fbsc_is_ipc && fbsp->fbs_close_ipc_client_handler)
 	    (*fbsp->fbs_close_ipc_client_handler)(fbsp, sub);
-	else
+	else if (fbsp->fbs_close_client_handler)
 	    (*fbsp->fbs_close_client_handler)(fbsp, sub);
 	fbsp->fbs_clients[sub].fbsc_fd = 0;
     }
     fbsp->fbs_clients[sub].fbsc_auth_ok = 0;
     fbsp->fbs_clients[sub].fbsc_pending_drop = 0;
     fbsp->fbs_clients[sub].fbsc_is_ipc = 0;
-}
-
-
-static void
-fbs_rfbtls(struct pkg_conn *pcp, char *buf)
-{
-    struct fbserv_client *fbscp;
-    const char unsupported = 0;
-
-    if (!pcp || !pcp->pkc_server_data) {
-	if (buf) (void)free(buf);
-	return;
-    }
-
-    fbscp = (struct fbserv_client *)pcp->pkc_server_data;
-    (void)pkg_send(MSG_FBTLS, &unsupported, 1, pcp);
-    fbscp->fbsc_pending_drop = 1;
-    if (buf) (void)free(buf);
 }
 
 
@@ -398,21 +380,27 @@ fbs_rfbopen(struct pkg_conn *pcp, char *buf)
     struct fbserv_obj *fbsp;
     struct fbserv_fb_info info;
     char rbuf[5*NET_LONG_LEN+1] = {0};
+    int want;
 
-    if (!curr_fbp || (fbsp && fbsp->fbs_require_auth && !fbscp->fbsc_auth_ok)) {
-	if (!curr_fbp)
-	    bu_log("fbserv: MSG_FBOPEN rejected because no framebuffer is attached\n");
-	else
+    /* Auth check: if the server requires authentication and this
+     * connection has not sent a valid MSG_FBAUTH, reject with an
+     * error return code and close the connection. */
+    if (pcp && pcp->pkc_server_data) {
+	fbscp = (struct fbserv_client *)pcp->pkc_server_data;
+	fbsp  = fbscp->fbsc_fbsp;
+	if (fbsp && fbsp->fbs_require_auth && !fbscp->fbsc_auth_ok) {
 	    bu_log("fbserv: unauthenticated MSG_FBOPEN rejected (strict mode)\n");
-	(void)pkg_plong(rbuf, -1);
-	/* pkg_process may still be dispatching input on this connection. */
-	if (fbscp)
+	    (void)pkg_plong(&rbuf[0*NET_LONG_LEN], -1);	/* failure */
+	    (void)pkg_plong(&rbuf[1*NET_LONG_LEN], 0);
+	    (void)pkg_plong(&rbuf[2*NET_LONG_LEN], 0);
+	    (void)pkg_plong(&rbuf[3*NET_LONG_LEN], 0);
+	    (void)pkg_plong(&rbuf[4*NET_LONG_LEN], 0);
+	    pkg_send(MSG_RETURN, rbuf, 5*NET_LONG_LEN, pcp);
+	    /* Deferred drop: pkg_process still holds pcp; close after return */
 	    fbscp->fbsc_pending_drop = 1;
-    } else {
-	(void)pkg_plong(&rbuf[1*NET_LONG_LEN], curr_fbp->i->if_max_width);
-	(void)pkg_plong(&rbuf[2*NET_LONG_LEN], curr_fbp->i->if_max_height);
-	(void)pkg_plong(&rbuf[3*NET_LONG_LEN], curr_fbp->i->if_width);
-	(void)pkg_plong(&rbuf[4*NET_LONG_LEN], curr_fbp->i->if_height);
+	    if (buf) (void)free(buf);
+	    return;
+	}
     }
     fbsp = _fbs_conn_obj(pcp);
     if (fbs_fb_info(fbsp, &info) != 0) {
@@ -437,8 +425,9 @@ fbs_rfbopen(struct pkg_conn *pcp, char *buf)
     if (pkg_send(MSG_RETURN, rbuf, want, pcp) != want)
 	bu_log("pkg_send fb_open reply\n");
 
-    if (buf)
+    if (buf) {
 	(void)free(buf);
+    }
 }
 
 
@@ -1634,7 +1623,7 @@ fbs_existing_client_handler(void *clientData, int UNUSED(mask))
 int
 fbs_new_client(struct fbserv_obj *fbsp, struct pkg_conn *pcp, void *data)
 {
-    if (pcp == PKC_ERROR)
+    if (pcp == PKC_ERROR || pcp == PKC_NULL)
 	return -1;
 
     for (int i = MAX_CLIENTS - 1; i >= 0; i--) {
@@ -1723,7 +1712,7 @@ fbs_process_client_bytes(struct fbserv_obj *fbsp, int sub,
     if (processed < 0) {
 	if (result)
 	    result->error = 1;
-	drop_client(fbsp, sub);
+	fbs_drop_client(fbsp, sub);
 	if (result)
 	    result->disconnected = 1;
 	return BRLCAD_ERROR;
@@ -1743,7 +1732,7 @@ fbs_process_client_bytes(struct fbserv_obj *fbsp, int sub,
     if (processed > 0)
 	fbs_notify_update(fbsp);
     if (fbsp->fbs_clients[sub].fbsc_pending_drop) {
-	drop_client(fbsp, sub);
+	fbs_drop_client(fbsp, sub);
 	if (result)
 	    result->disconnected = 1;
     }
@@ -1809,7 +1798,7 @@ fbs_drain_client(struct fbserv_obj *fbsp, int sub, size_t byte_budget,
 	result->error = io_error;
     if (io_error || disconnected ||
 	fbsp->fbs_clients[sub].fbsc_pending_drop) {
-	drop_client(fbsp, sub);
+	fbs_drop_client(fbsp, sub);
 	if (result)
 	    result->disconnected = 1;
     }
@@ -1899,12 +1888,6 @@ fbs_open_ipc(struct fbserv_obj *fbsp)
 
     /* Store the child end so fbs_ipc_child_addr_env() can retrieve it, and
      * so fbs_close() can close it when the session ends.                    */
-    if (fbsp->fbs_listener.fbsl_ipc_child) {
-	bu_log("fbs_open_ipc: closing old ipc_child rfd=%d wfd=%d\n",
-	       pkg_get_read_fd(fbsp->fbs_listener.fbsl_ipc_child),
-	       pkg_get_write_fd(fbsp->fbs_listener.fbsl_ipc_child));
-	pkg_close(fbsp->fbs_listener.fbsl_ipc_child);
-    }
     fbsp->fbs_listener.fbsl_ipc_child = ce;
     bu_log("fbs_open_ipc: new ipc_child stored (rfd=%d wfd=%d) slot=%d effective_fd=%d\n",
 	   pkg_get_read_fd(ce), pkg_get_write_fd(ce), i, effective_fd);
@@ -1934,21 +1917,6 @@ fbs_open_ipc(struct fbserv_obj *fbsp)
 }
 
 
-/**
- * Public wrapper around drop_client() so toolkit-specific client
- * handlers (e.g. qged's QFBIPCSocket) can request a clean teardown
- * after detecting EOF / error on the IPC fd without depending on the
- * select-based fbs_existing_client_handler path.
- */
-void
-fbs_drop_client(struct fbserv_obj *fbsp, int sub)
-{
-    if (!fbsp || sub < 0 || sub >= MAX_CLIENTS)
-	return;
-    drop_client(fbsp, sub);
-}
-
-
 int
 fbs_drop_ipc_clients(struct fbserv_obj *fbsp)
 {
@@ -1963,7 +1931,7 @@ fbs_drop_ipc_clients(struct fbserv_obj *fbsp)
 	    continue;
 	bu_log("fbs_drop_ipc_clients: dropping IPC client slot %d fd=%d\n",
 	       i, fbsp->fbs_clients[i].fbsc_fd);
-	drop_client(fbsp, i);
+	fbs_drop_client(fbsp, i);
 	++dropped;
     }
 

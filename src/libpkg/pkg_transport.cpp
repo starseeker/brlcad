@@ -599,9 +599,8 @@ pkg_addr_is_ipc_listener(const char *addr)
 int
 pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
 {
-    static std::atomic<unsigned long> counter(0);
+    static std::atomic<unsigned long> counter{0};
     const char *hint = (name_hint && name_hint[0]) ? name_hint : "brlcad-pkg";
-    const unsigned long sequence = counter.fetch_add(1, std::memory_order_relaxed);
 #ifndef _WIN32
     const char *tmpdir = getenv("TMPDIR");
     time_t now = time(NULL);
@@ -613,15 +612,11 @@ pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
     if (!tmpdir || tmpdir[0] == '\0')
 	tmpdir = "/tmp";
 
-    need = snprintf(addr, len, "fifo:%s/%s-%ld-%lld-%lu",
-		    tmpdir, hint, (long)getpid(), (long long)now, sequence);
-    if (need >= 0 && (size_t)need < len)
-	return 0;
-
 #  if defined(HAVE_SYS_UN_H)
 #  if defined(__linux__)
     need = snprintf(addr, len, "unix-abstract:%s-%ld-%lld-%lu",
-		    hint, (long)getpid(), (long long)now, sequence);
+		    hint, (long)getpid(), (long long)now,
+		    counter.fetch_add(1, std::memory_order_relaxed));
     if (need >= 0 && (size_t)need < len &&
 	    strlen(addr + 14) < sizeof(((struct sockaddr_un *)0)->sun_path) - 1)
 	return 0;
@@ -638,7 +633,8 @@ pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
     if (strlen(addr + 5) >= sizeof(((struct sockaddr_un *)0)->sun_path)) {
 	if (strcmp(tmpdir, "/tmp") != 0) {
 	    need = snprintf(addr, len, "unix:/tmp/%s-%ld-%lld-%lu.sock",
-			    hint, (long)getpid(), (long long)now, sequence);
+			    hint, (long)getpid(), (long long)now,
+			    counter.fetch_add(1, std::memory_order_relaxed));
 	    if (need < 0 || (size_t)need >= len ||
 		    strlen(addr + 5) >= sizeof(((struct sockaddr_un *)0)->sun_path)) {
 		addr[0] = '\0';
@@ -676,7 +672,8 @@ pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
 
     need = snprintf(addr, len, "npipe:\\\\.\\pipe\\%s-%lu-%lld-%lu",
 		    safe_hint, (unsigned long)GetCurrentProcessId(),
-		    (long long)now, sequence);
+		    (long long)now,
+		    counter.fetch_add(1, std::memory_order_relaxed));
     if (need < 0 || (size_t)need >= len) {
 	addr[0] = '\0';
 	return -1;

@@ -30,11 +30,26 @@ FAIL=0
 VERBOSE="${VERBOSE:-0}"
 SKIP=77
 
-pass() { PASS=$((PASS+1)); [ "$VERBOSE" = "1" ] && echo "PASS: $1"; }
+pass() { PASS=$((PASS+1)); if [ "$VERBOSE" = "1" ]; then echo "PASS: $1"; fi; }
 fail() { FAIL=$((FAIL+1)); echo "FAIL: $1"; }
 check() {
     label="$1"; cond="$2"
     if eval "test $cond" 2>/dev/null; then pass "$label"; else fail "$label"; fi
+}
+
+# Obol can create small X11 helper windows before the Qt window appears.
+visible_window() {
+    xdotool search --onlyvisible --pid "$QGED_PID" 2>/dev/null |
+	while read -r candidate; do
+	    [ "$candidate" = "${2:-}" ] && continue
+	    if xdotool getwindowgeometry --shell "$candidate" 2>/dev/null |
+		awk -F= -v minimum="$1" '$1 == "WIDTH" { w = $2 }
+		    $1 == "HEIGHT" { h = $2 }
+		    END { exit !(w > minimum && h > minimum) }'; then
+		echo "$candidate"
+		break
+	    fi
+	done
 }
 
 TMPDIR_TEST=$(mktemp -d /tmp/test_qged_ert.XXXXXX)
@@ -115,7 +130,7 @@ QGED_PID=$!
 qged_ready=0
 WIN=""
 for i in $(seq 1 150); do
-    WIN=$(xdotool search --pid "$QGED_PID" 2>/dev/null | head -1)
+    WIN=$(visible_window 200)
     if [ -n "$WIN" ]; then
         qged_ready=1; break
     fi
@@ -209,17 +224,10 @@ if [ "$HAVE_XDOTOOL" -eq 1 ]; then
     xdotool mousemove --window "$WIN" 18 11 2>/dev/null || true
     xdotool click 1 2>/dev/null || true
     sleep 0.2
-    # The File menu's height varies with the Qt theme and display DPI.  Find
-    # its transient window and select the center of its last item (Exit)
-    # instead of relying on a fixed main-window coordinate.
-    MENU_WIN=""
-    for w in $(xdotool search --onlyvisible --pid "$QGED_PID" 2>/dev/null); do
-	[ "$w" = "$WIN" ] && continue
-	MENU_WIN="$w"
-	break
-    done
+    MENU_WIN=$(visible_window 20 "$WIN")
     if [ -n "$MENU_WIN" ]; then
 	eval "$(xdotool getwindowgeometry --shell "$MENU_WIN" 2>/dev/null)"
+	# Exit is the last action in the File menu.
 	xdotool mousemove --window "$MENU_WIN" "$((WIDTH / 2))" \
 	    "$((HEIGHT - HEIGHT / 10))" 2>/dev/null || true
 	xdotool click 1 2>/dev/null || true

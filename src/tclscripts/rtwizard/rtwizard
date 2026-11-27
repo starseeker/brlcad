@@ -77,6 +77,27 @@ namespace eval RtWizard {
 	    }
 	}
 
+	if {[dict exists $render_settings _port] &&
+	    [string match "ipc:*" [dict get $render_settings _port]] &&
+	    (![dict exists $render_settings _output_file] ||
+	     [dict get $render_settings _output_file] eq "")} {
+	    # The preview endpoint belongs to this process. Use a child to
+	    # consume the inherited handles without closing the owner's copies.
+	    set channel [file tempfile preview rtwizard-preview.pix]
+	    close $channel
+	    try {
+		set target [dict get $render_settings _port]
+		dict unset render_settings _port
+		dict set render_settings _output_file $preview
+		::brlcad::rtwizard render $type $render_settings
+		exec [file join [bu_dir bin] pix-fb] -F $target \
+		    -w [dict get $render_settings _w] \
+		    -n [dict get $render_settings _n] $preview
+	    } finally {
+		file delete -- $preview
+	    }
+	    return
+	}
 	return [::brlcad::rtwizard render $type $render_settings]
     }
 }

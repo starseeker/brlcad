@@ -16,6 +16,7 @@ if(TARGET libtclcad)
     APPEND
     RTWIZARD_TARGET_DEPS
     tkpng
+    pix-fb
     TclIndexBld
   )
   set(RTWIZARD_HAVE_TCL 1)

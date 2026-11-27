@@ -42,7 +42,7 @@ processing explicitly.
 *-a* _host_, *--attach* _host_::
 Specifies an Obol endpoint host to attach when starting _MGED_.
 +
-Without specifying this option, _MGED_ starts with the `nu` no-window shell.
+An interactive classic session prompts for a host when this option is omitted. A headless session attaches a host only when this option is specified.
 +
 The graphical host is `tkobol`; `nu` starts without a graphical endpoint.
 

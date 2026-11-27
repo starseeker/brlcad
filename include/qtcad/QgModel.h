@@ -520,6 +520,7 @@ private:
 	void itemIndexInsertSubtree(QgItem *item);
 	void itemIndexRemoveSubtree(QgItem *item);
 	void invalidateItemPathHashes(QgItem *item);
+	void clearHierarchyItems();
 	void itemIndexClear();
 	void itemIndexRebuild();
 	bool itemIsIndexed(QgItem *item) const;

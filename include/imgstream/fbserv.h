@@ -89,6 +89,7 @@ __BEGIN_DECLS
 #define FBSERV_MSG_FBBWREADRECT  32 /**< @brief NEW in Release 4.6 */
 #define FBSERV_MSG_FBBWWRITERECT 33 /**< @brief NEW in Release 4.6 */
 #define FBSERV_MSG_FBAUTH        34 /**< @brief Session token authentication */
+#define FBSERV_MSG_FBTLS         35 /**< @brief TLS capability negotiation */
 #define FBSERV_MSG_NORETURN      100
 
 #ifndef MSG_FBOPEN
@@ -175,6 +176,9 @@ __BEGIN_DECLS
 #ifndef MSG_FBAUTH
 #  define MSG_FBAUTH FBSERV_MSG_FBAUTH
 #endif
+#ifndef MSG_FBTLS
+#  define MSG_FBTLS FBSERV_MSG_FBTLS
+#endif
 #ifndef MSG_NORETURN
 #  define MSG_NORETURN FBSERV_MSG_NORETURN
 #endif
@@ -225,7 +229,7 @@ enum fbserv_network_policy {
 #  define FBSERV_OBJ_NULL (struct fbserv_obj *)NULL
 #endif
 
-#define FBSERV_PKG_SWITCH_COUNT 32
+#define FBSERV_PKG_SWITCH_COUNT 33
 #define FBSERV_FRAMEBUFFER_UNHANDLED (-2)
 
 struct bu_vls;
@@ -655,6 +659,12 @@ IMGSTREAM_EXPORT void fbs_drop_client(struct fbserv_obj *fbsp, int sub);
 IMGSTREAM_EXPORT int fbs_drop_ipc_clients(struct fbserv_obj *fbsp);
 IMGSTREAM_EXPORT int fbs_open_ipc(struct fbserv_obj *fbsp);
 IMGSTREAM_EXPORT const char *fbs_ipc_child_addr_env(struct fbserv_obj *fbsp);
+/** Copy up to two unique child descriptors for an inherited IPC connection. */
+IMGSTREAM_EXPORT size_t fbs_ipc_child_fds(struct fbserv_obj *fbsp, int fds[2]);
+/** Release the parent's copy of the child endpoint after launching the client. */
+IMGSTREAM_EXPORT void fbs_close_ipc_child(struct fbserv_obj *fbsp);
+/** Generate a NUL-terminated token in a buffer of at least FBSERV_AUTH_TOKEN_LEN + 1 bytes. */
+IMGSTREAM_EXPORT int fbs_create_token(char *token, size_t token_size);
 IMGSTREAM_EXPORT const char *fbs_generate_token(struct fbserv_obj *fbsp);
 
 __END_DECLS

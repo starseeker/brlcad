@@ -174,8 +174,6 @@ ged_close(struct ged *gedp)
     /* Children and their callbacks must quiesce before either displayed
      * resources or the database they reference are dismantled. */
     ged_subprocesses_terminate(gedp);
-    ged_edit_sessions_close_private(gedp);
-    ged_dbi_state_destroy_private(gedp);
 
     /* Edit sessions retain path directory pointers and a database-backed
      * librt edit context.  Invalidate them while both the database and scene
@@ -192,7 +190,7 @@ ged_close(struct ged *gedp)
 	ged_exec_zap(gedp, 1, (const char **)av);
     }
 
-    ged_event_librt_callbacks_disable(gedp);
+    ged_event_database_close_private(gedp);
 
     /* Give an alternative renderer its final owner-lifecycle callback before
      * database directory pointers become invalid.  ged_free retains an
@@ -406,23 +404,17 @@ ged_free(struct ged *gedp)
     if (!gedp)
 	return;
 
+    /* Cancel retained edits while their scopes and view state still exist. */
     ged_edit_sessions_close_private(gedp);
-    ged_dbi_state_destroy_private(gedp);
 
     bu_vls_free(&gedp->go_name);
 
-	/* Framebuffer bridge teardown can remove retained nodes and request a
-	 * frame, so release it before the endpoint-backed view state. */
+    /* Framebuffer bridge teardown can remove retained nodes and request a
+     * frame, so release it before the endpoint-backed view state. */
     if (gedp->ged_fbs) {
-	    ged_obol_fbserv_release(gedp);
-	    BU_PUT(gedp->ged_fbs, struct fbserv_obj);
-	}
-
-    /* Cancel path-scoped edits while their retained edit scopes, view state,
-     * backend, and draw registry are all still valid.  Committing an
-     * unfinished edit implicitly during application/database close would be
-     * surprising, so shutdown always cancels. */
-    ged_edit_sessions_close_private(gedp);
+	ged_obol_fbserv_release(gedp);
+	BU_PUT(gedp->ged_fbs, struct fbserv_obj);
+    }
 
     /* Alternative scene adapters borrow their client data until detach.
      * Release that contract while the semantic scene and all view resources

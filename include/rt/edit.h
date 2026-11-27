@@ -458,6 +458,24 @@ rt_edit_create(struct db_full_path *dfp, struct db_i *dbip, struct bn_tol *, con
 RT_EXPORT extern void
 rt_edit_destroy(struct rt_edit *s);
 
+RT_EXPORT extern void
+rt_edit_knobs_reset(struct rt_edit_knobs *k, int category);
+
+RT_EXPORT extern unsigned long long
+rt_edit_knobs_hash(struct rt_edit_knobs *k, struct bu_data_hash_state *state);
+
+RT_EXPORT extern void
+rt_edit_view_init(struct rt_edit_view *v);
+
+RT_EXPORT extern void
+rt_edit_view_from_context(struct rt_edit_view *v, const void *view_ctx);
+
+RT_EXPORT extern void
+rt_edit_set_view(struct rt_edit *s, const struct rt_edit_view *v);
+
+RT_EXPORT extern struct rt_edit *
+rt_edit_create_context(struct db_full_path *dfp, struct db_i *dbip,
+	struct bn_tol *tol, const void *view_ctx);
 RT_EXPORT extern int
 rt_edit_comb_instance_matrix_get(struct rt_edit *s, const char *name,
 	int instance, mat_t matrix);

@@ -469,66 +469,21 @@ view_scroll_display(fastf_t *f, struct scroll_item *mptr,
  *									*
  ************************************************************************/
 
-static struct scroll_item *
-faceplate_slider_item(struct mged_state *s, size_t row, int *group)
-{
-    for (*group = 0; scroll_array[*group]; (*group)++) {
-        struct scroll_item *item;
-        for (item = scroll_array[*group]; item->scroll_string[0]; item++) {
-            if (!row) return item;
-            row--;
-        }
-    }
-    return NULL;
-}
-
-static int
-faceplate_slider_get(void *data, size_t row, struct dm_faceplate_item *result)
-{
-    struct mged_state *s = (struct mged_state *)data;
-    int group, editing = 0;
-    struct scroll_item *item = faceplate_slider_item(s, row, &group);
-    if (!item) return 0;
-    result->label = item->scroll_string;
-    result->value = 0;
-    if (group) {
-        second_menu_scroll_display(&result->value, item, s);
-    } else {
-        if (mged_variables->mv_transform == 'e' &&
-            (EDIT_ROTATE || EDIT_TRAN || EDIT_SCALE))
-            editing = edit_scroll_display(&result->value, item, s);
-        if (!editing) view_scroll_display(&result->value, item, s);
-    }
-    VMOVE(result->color, editing ? color_scheme->cs_slider_text1 : color_scheme->cs_slider_text2);
-    return 1;
-}
-
-static void
-faceplate_slider_select(void *data, size_t row, fastf_t value, int activate)
-{
-    struct mged_state *s = (struct mged_state *)data;
-    int group;
-    struct scroll_item *item = faceplate_slider_item(s, row, &group);
-    if (activate && item && item->scroll_func) item->scroll_func(item, value);
-}
-
-static void
-faceplate_slider_controls(struct mged_state *s, struct dm_faceplate_controls *controls)
-{
-    dm_faceplate_controls_init(controls, DM_FACEPLATE_SLIDER);
-    controls->top = GED2PM1(scroll_top);
-    controls->dead_zone = SL_TOL;
-    controls->data = s;
-    controls->item = faceplate_slider_get;
-    controls->select = faceplate_slider_select;
-    controls->line_width = mged_variables->mv_linewidth;
-    VMOVE(controls->line_color, color_scheme->cs_slider_line);
-}
-
+/*
+ * The parameter is the Y pixel address of the starting
+ * screen Y to be used, and the return value is the last screen Y
+ * position used.
+ */
 int
 scroll_display(struct mged_state *s, struct mged_hud_builder *hud, int y_top)
 {
-    struct dm_faceplate_controls controls;
+    int y;
+    struct scroll_item *mptr;
+    struct scroll_item **m;
+    int xpos;
+    int second_menu = -1;
+    fastf_t f = 0;
+
     scroll_top = y_top;
     y = y_top;
 
@@ -588,6 +543,15 @@ scroll_display(struct mged_state *s, struct mged_hud_builder *hud, int y_top)
     return y;
 }
 
+
+/*
+ * Called with Y coordinate of pen in menu area.
+ *
+ * Returns:
+ * 1 if menu claims these pen coordinates,
+ * 0 if pen is BELOW scroll
+ * -1 if pen is ABOVE scroll (error)
+ */
 int
 scroll_select(struct mged_state *s, int pen_x, int pen_y, int do_func)
 {
