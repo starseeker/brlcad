@@ -1966,8 +1966,10 @@ exercise_brep_lod_contract(struct db_i *dbip)
 	}
     }
     wireRoot->unref();
-    if (!wireValid)
+    if (!wireValid) {
+	fprintf(stderr, "BREP LoD contract failed during wire realization\n");
 	return 0;
+    }
 
     const auto realizeShaded = [dbip](float relativeTolerance,
 	uint32_t revision, uint64_t *cacheKey,
@@ -2013,11 +2015,15 @@ exercise_brep_lod_contract(struct db_i *dbip)
     if (!realizeShaded(0.15f, 411, &coarseKey, &coarseRequest) ||
 	!coarseKey ||
 	!realizeShaded(0.05f, 412, &fineKey, NULL) || !fineKey ||
-	coarseKey == fineKey)
+	coarseKey == fineKey) {
+	fprintf(stderr, "BREP LoD contract failed during shaded realization\n");
 	return 0;
+    }
     if (fabs(coarseRequest.meshAssetTessellationRelTol - 0.15) >
-	1.0e-6)
+	1.0e-6) {
+	fprintf(stderr, "BREP LoD contract lost the coarse tolerance\n");
 	return 0;
+    }
 
     struct BObolMeshLod *coarseVariant =
 	bobol_mesh_lod_get_cached_prefix(dbip, coarseKey);
@@ -2028,8 +2034,10 @@ exercise_brep_lod_contract(struct db_i *dbip)
 	bobol_mesh_lod_destroy(coarseVariant);
     if (fineVariant)
 	bobol_mesh_lod_destroy(fineVariant);
-    if (!variantsCoexist)
+    if (!variantsCoexist) {
+	fprintf(stderr, "BREP LoD contract did not retain sibling variants\n");
 	return 0;
+    }
 
     /* A mixed manifest can have captured this BREP while it was still a
      * structural box even though the detached producer subsequently finished
@@ -2043,8 +2051,10 @@ exercise_brep_lod_contract(struct db_i *dbip)
 	    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
 	if (bobol_mesh_lod_cache_status(dbip, "brep.s", &beforeWarm) !=
 		BRLCAD_OK || !beforeWarm.has_cached_payload ||
-	    beforeWarm.cache_key != fineKey)
+	    beforeWarm.cache_key != fineKey) {
+	    fprintf(stderr, "BREP LoD contract cache did not retain the fine variant\n");
 	    return 0;
+	}
 
 	SoBRLDatabaseSource *warmSource = new SoBRLDatabaseSource;
 	warmSource->ref();
@@ -2100,8 +2110,10 @@ exercise_brep_lod_contract(struct db_i *dbip)
 	    afterStatus && afterWarm.has_cached_payload &&
 	    afterWarm.cache_key == fineKey;
 	warmSource->unref();
-	if (!warmRecovered)
+	if (!warmRecovered) {
+	    fprintf(stderr, "BREP LoD contract warm recovery failed\n");
 	    return 0;
+	}
     }
 
     /* The content-addressed BREP hierarchy outlives the separate structural
@@ -2136,13 +2148,17 @@ exercise_brep_lod_contract(struct db_i *dbip)
 	    recoveredCachedBrep &&
 	    coldCensusStream.stagedSourceByteCount() == 0;
 	coldCensusSource->unref();
-	if (!coldCensusRecovered)
+	if (!coldCensusRecovered) {
+	    fprintf(stderr, "BREP LoD contract cold census recovery failed\n");
 	    return 0;
+	}
     }
 
     BObolLodService service;
-    if (!service.start(1, TRUE))
+    if (!service.start(1, TRUE)) {
+	fprintf(stderr, "BREP LoD contract service startup failed\n");
 	return 0;
+    }
     BObolMeshLodProvider provider;
     provider.service = &service;
     provider.setDatabase(dbip);
@@ -2163,6 +2179,7 @@ exercise_brep_lod_contract(struct db_i *dbip)
     if (result.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 	!result.geometry.isValid() || !result.mesh.isValid() ||
 	result.counts.faceCount == 0 || result.counts.pointCount == 0) {
+	fprintf(stderr, "BREP LoD contract cached provider lookup failed\n");
 	service.stop();
 	return 0;
 	}
@@ -2205,6 +2222,8 @@ exercise_brep_lod_contract(struct db_i *dbip)
     if (fineVariant)
 	bobol_mesh_lod_destroy(fineVariant);
     service.stop();
+    if (!adaptiveValid)
+	fprintf(stderr, "BREP LoD contract adaptive variant generation failed\n");
     return adaptiveValid;
 }
 

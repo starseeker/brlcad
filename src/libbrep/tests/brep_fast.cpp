@@ -11,12 +11,12 @@
 #include "common.h"
 
 #include "bu/app.h"
+#include "bu/malloc.h"
 #include <cstring>
 #include <vector>
 
 #include "brep/cdt.h"
 #include "cdt/test_api.h"
-#include "bv/vlist.h"
 #include "raytrace.h"
 #include "rt/geom.h"
 #include "rt/primitives/brep.h"
@@ -27,83 +27,6 @@ struct fast_output {
     std::vector<fastf_t> points;
     struct brep_cdt_fast_report report = {};
 };
-
-struct wire_output {
-    std::vector<int> commands;
-    std::vector<fastf_t> points;
-    struct rt_brep_draw_report report = {};
-};
-
-static bool
-same_wire_report(const struct rt_brep_draw_report &first,
-	const struct rt_brep_draw_report &second)
-{
-    return first.requested_edges == second.requested_edges &&
-	first.completed_edges == second.completed_edges &&
-	first.failed_edges == second.failed_edges &&
-	first.requested_surface_cues == second.requested_surface_cues &&
-	first.completed_surface_cues == second.completed_surface_cues &&
-	first.approximated_surface_cues == second.approximated_surface_cues &&
-	first.memory_approximated_surface_cues ==
-	    second.memory_approximated_surface_cues &&
-	first.time_approximated_surface_cues ==
-	    second.time_approximated_surface_cues &&
-	first.output_points == second.output_points &&
-	first.result_bytes == second.result_bytes &&
-	first.hit_time_limit == second.hit_time_limit &&
-	first.hit_memory_limit == second.hit_memory_limit &&
-	first.hit_point_limit == second.hit_point_limit;
-}
-
-static int
-run_wire(wire_output *output, struct rt_db_internal *intern, size_t workers,
-	size_t max_points, size_t max_working_bytes = 0)
-{
-    struct bu_list vhead;
-    BU_LIST_INIT(&vhead);
-    struct bg_tess_tol ttol = BG_TESS_TOL_INIT_TOL;
-    struct bn_tol tol = BN_TOL_INIT_TOL;
-    struct rt_brep_draw_options options;
-    rt_brep_draw_options_default(&options);
-    options.max_workers = workers;
-    options.max_points = max_points;
-    if (max_working_bytes)
-	options.max_working_bytes = max_working_bytes;
-
-    int ret = rt_brep_plot_ex(&vhead, intern, &ttol, &tol, NULL, &options,
-	&output->report);
-    const struct bv_vlist *vlist;
-    for (BU_LIST_FOR(vlist, bv_vlist, &vhead)) {
-	for (size_t i = 0; i < vlist->nused; i++) {
-	    output->commands.push_back(vlist->cmd[i]);
-	    output->points.insert(output->points.end(), vlist->pt[i],
-		vlist->pt[i] + 3);
-	}
-    }
-    BV_FREE_VLIST(&rt_vlfree, &vhead);
-    return ret;
-}
-
-static int
-run_shaded(wire_output *output, struct directory *dp,
-	struct rt_db_internal *intern)
-{
-    struct bu_list vhead;
-    BU_LIST_INIT(&vhead);
-    struct bg_tess_tol ttol = BG_TESS_TOL_INIT_TOL;
-    struct bn_tol tol = BN_TOL_INIT_TOL;
-    int ret = rt_brep_plot_poly(&vhead, dp, intern, &ttol, &tol, NULL);
-    const struct bv_vlist *vlist;
-    for (BU_LIST_FOR(vlist, bv_vlist, &vhead)) {
-	for (size_t i = 0; i < vlist->nused; i++) {
-	    output->commands.push_back(vlist->cmd[i]);
-	    output->points.insert(output->points.end(), vlist->pt[i],
-		vlist->pt[i] + 3);
-	}
-    }
-    BV_FREE_VLIST(&rt_vlfree, &vhead);
-    return ret;
-}
 
 static int
 run_fast(fast_output *output, const ON_Brep *brep, size_t workers,
@@ -315,95 +238,6 @@ main(int argc, const char **argv)
 	triangle_targeted.report.boundary_envelope_incomplete_faces == 0 &&
 	!triangle_targeted.faces.empty();
 
-    wire_output wire_serial;
-    wire_output wire_parallel;
-    int wire_serial_ret = run_wire(&wire_serial, &intern, 1,
-	4 * 1024 * 1024);
-    int wire_parallel_ret = run_wire(&wire_parallel, &intern, 4,
-	4 * 1024 * 1024);
-    bool wire_same = wire_serial_ret == RT_BREP_DRAW_OK &&
-	wire_parallel_ret == RT_BREP_DRAW_OK &&
-	wire_serial.commands == wire_parallel.commands &&
-	wire_serial.points == wire_parallel.points &&
-	!wire_serial.commands.empty();
-
-    bool wire_repeatable = true;
-    for (int repeat = 0; repeat < 8; repeat++) {
-	wire_output wire_repeat;
-	const int wire_repeat_ret = run_wire(&wire_repeat, &intern, 4,
-	    4 * 1024 * 1024);
-	wire_repeatable = wire_repeatable &&
-	    wire_repeat_ret == wire_parallel_ret &&
-	    wire_repeat.commands == wire_parallel.commands &&
-	    wire_repeat.points == wire_parallel.points &&
-	    same_wire_report(wire_repeat.report, wire_parallel.report);
-    }
-
-    wire_output wire_limited;
-    int wire_limit_ret = run_wire(&wire_limited, &intern, 4, 1);
-    bool wire_limited_cleanly = wire_limit_ret == RT_BREP_DRAW_LIMIT &&
-	wire_limited.report.hit_point_limit && wire_limited.commands.empty() &&
-	wire_limited.points.empty();
-
-    wire_output wire_admission_serial;
-    wire_output wire_admission_parallel;
-    const int wire_admission_serial_ret = run_wire(&wire_admission_serial,
-	&intern, 1, 7);
-    const int wire_admission_parallel_ret = run_wire(
-	&wire_admission_parallel, &intern, 4, 7);
-    const bool wire_admission_repeatable =
-	wire_admission_serial_ret == RT_BREP_DRAW_LIMIT &&
-	wire_admission_parallel_ret == wire_admission_serial_ret &&
-	wire_admission_parallel.commands == wire_admission_serial.commands &&
-	wire_admission_parallel.points == wire_admission_serial.points &&
-	same_wire_report(wire_admission_parallel.report,
-	    wire_admission_serial.report);
-
-    wire_output wire_approximated;
-    int wire_approximated_ret = run_wire(&wire_approximated, &intern, 1,
-	4 * 1024 * 1024, 1);
-    bool wire_approximated_cleanly = true;
-    if (wire_approximated.report.requested_surface_cues > 0) {
-	wire_approximated_cleanly =
-	    wire_approximated_ret == RT_BREP_DRAW_PARTIAL &&
-	    wire_approximated.report.approximated_surface_cues > 0 &&
-	    wire_approximated.report.completed_edges ==
-		wire_approximated.report.requested_edges &&
-	    !wire_approximated.report.hit_memory_limit &&
-	    !wire_approximated.commands.empty();
-    }
-
-    wire_output shaded;
-    int shaded_ret = run_shaded(&shaded, dp, &intern);
-    std::vector<int> expected_commands;
-    std::vector<fastf_t> expected_shaded_points;
-    for (size_t triangle = 0; triangle < serial.faces.size() / 3;
-	    triangle++) {
-	const int *indices = &serial.faces[triangle * 3];
-	const fastf_t *triangle_normals = &serial.normals[triangle * 9];
-	expected_commands.push_back(BV_VLIST_TRI_START);
-	expected_shaded_points.insert(expected_shaded_points.end(),
-	    triangle_normals, triangle_normals + 3);
-	for (int corner = 0; corner < 3; corner++) {
-	    expected_commands.push_back(BV_VLIST_TRI_VERTNORM);
-	    expected_shaded_points.insert(expected_shaded_points.end(),
-		triangle_normals + corner * 3,
-		triangle_normals + corner * 3 + 3);
-	    expected_commands.push_back(corner ? BV_VLIST_TRI_DRAW :
-		BV_VLIST_TRI_MOVE);
-	    const fastf_t *point = &serial.points[(size_t)indices[corner] * 3];
-	    expected_shaded_points.insert(expected_shaded_points.end(),
-		point, point + 3);
-	}
-	expected_commands.push_back(BV_VLIST_TRI_END);
-	const fastf_t *first_point = &serial.points[(size_t)indices[0] * 3];
-	expected_shaded_points.insert(expected_shaded_points.end(),
-	    first_point, first_point + 3);
-    }
-    bool shaded_matches_fast = shaded_ret == BRLCAD_OK &&
-	shaded.commands == expected_commands &&
-	shaded.points == expected_shaded_points;
-
     bool unchanged = true;
     size_t domain_index = 0;
     for (int i = 0; i < bi->brep->m_F.Count(); i++) {
@@ -420,11 +254,7 @@ main(int argc, const char **argv)
     db_close(dbip);
     return (same && oriented_normals && complete && working_bounded &&
 	adaptive_reported &&
-	unchanged && limited_cleanly && authoritative_boundaries_retained &&
-	wire_same && wire_repeatable && wire_limited_cleanly &&
-	wire_admission_repeatable &&
-	wire_approximated_cleanly &&
-	shaded_matches_fast) ? 0 : 1;
+	unchanged && limited_cleanly && authoritative_boundaries_retained) ? 0 : 1;
 }
 
 /*

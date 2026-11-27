@@ -835,7 +835,8 @@ rt_edit_knob_cmd_process(
 	const struct rt_edit_view *v, const char *cmd, fastf_t f,
 	char origin, int incr_flag, void *u_data)
 {
-    if (!s || !rvec || !do_rot || !tvec || !do_tran || !do_sca || !cmd)
+    if (!s || !rvec || !do_rot || !tvec || !do_tran || !do_sca || !cmd ||
+	!cmd[0] || !std::isfinite(f))
 	return BRLCAD_ERROR;
 
     if (v)
