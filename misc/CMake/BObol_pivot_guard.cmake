@@ -1082,17 +1082,17 @@ function(_bobol_guard_check_rtwizard_host_boundary)
   _bobol_guard_forbid_regexes("src/tclscripts/rtwizard/lib/FbPage.itk"
     "${_rtwizard_fb_page}"
     [[/dev/(oglsp|wglsp)]])
-  string(REGEX MATCH [[exec.*fbserv.*-A.*\/dev\/mem]]
-    _rtwizard_memory_fbserv "${_rtwizard_fb_page}")
-  string(FIND "${_rtwizard_fb_page}" [[FBSERV_TOKEN]]
-    _rtwizard_token_idx)
-  string(FIND "${_rtwizard_fb_page}" [[pane_listen $pane ipc]]
-    _rtwizard_obol_ipc_idx)
-  if(NOT _rtwizard_memory_fbserv OR _rtwizard_token_idx EQUAL -1 OR
-     _rtwizard_obol_ipc_idx EQUAL -1)
-    _bobol_guard_fail(
-      "rtwizard fixed-size preview must use a token-isolated Obol fbserv surface")
-  endif()
+  foreach(_pane_ipc_step
+      [=[set pane [$::mgedObj gedCmd pane]]=]
+      [[gedCmd pane_set_fb_mode $pane]]
+      [=[set address [$::mgedObj gedCmd pane_listen $pane ipc]]=]
+      [[return "ipc:$address"]])
+    string(FIND "${_rtwizard_fb_page}" "${_pane_ipc_step}" _rtwizard_pane_ipc_idx)
+    if(_rtwizard_pane_ipc_idx EQUAL -1)
+      _bobol_guard_fail(
+        "rtwizard must open and return the active Obol pane IPC framebuffer endpoint (missing ${_pane_ipc_step})")
+    endif()
+  endforeach()
 endfunction()
 
 function(_bobol_guard_check_ged_framebuffer_image_ownership)
