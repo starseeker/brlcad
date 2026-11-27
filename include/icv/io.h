@@ -53,6 +53,22 @@ __BEGIN_DECLS
 ICV_EXPORT extern icv_image_t *icv_create(size_t width, size_t height, ICV_COLOR_SPACE color_space);
 
 /**
+ * Allocate an image with an explicit channel count.
+ *
+ * The channel count must match the color space: one or two channels
+ * for grayscale, or three or four channels for RGB.  The additional
+ * channel, when present, is alpha.
+ *
+ * @param width Width of the image to be created
+ * @param height Height of the image to be created
+ * @param color_space Color space of the image (RGB, grayscale)
+ * @param channels Number of color and alpha channels
+ * @return Image structure with allocated space and zeroed data array, or
+ * NULL if the arguments are invalid or allocation fails.
+ */
+ICV_EXPORT extern icv_image_t *icv_create_with_channels(size_t width, size_t height, ICV_COLOR_SPACE color_space, size_t channels);
+
+/**
  * This function zeroes all the data entries of an image
  * @param bif Image Structure
  */
