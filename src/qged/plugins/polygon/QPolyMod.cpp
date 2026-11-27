@@ -250,6 +250,10 @@ QPolyMod::QPolyMod()
 
 QPolyMod::~QPolyMod()
 {
+    delete puf;
+    delete psf;
+    delete ppf;
+    delete pmf;
 }
 
 struct ged *

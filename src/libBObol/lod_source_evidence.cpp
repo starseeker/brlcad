@@ -8,7 +8,14 @@
 #include "common.h"
 #include "lod_source_evidence_private.h"
 
+#include <algorithm>
 #include <utility>
+
+namespace {
+
+constexpr size_t PERFORMANCE_EPOCH_RETAINED_DIVISOR = 2;
+
+}
 
 bool
 BObolLodSourceSnapshot::sameIdentity(const BObolLodSourceSnapshot &other) const
@@ -81,6 +88,36 @@ bool
 BObolLodSourceSnapshotSet::samePlanningInputs(const Sources &other) const
 {
     return this->sameInventories(other) && this->sameVisibilityInputs(other);
+}
+
+bool
+BObolLodSourceSnapshotSet::startsNewPerformanceEpoch(
+    const Sources &previous) const
+{
+    const Sources &current = this->sources();
+    if (current.empty() || previous.empty())
+	return current.empty() != previous.empty();
+
+    size_t unchangedCount = 0;
+    std::vector<bool> matched(previous.size(), false);
+    for (const BObolLodSourceSnapshot &source : current) {
+	for (size_t i = 0; i < previous.size(); ++i) {
+	    if (!matched[i] && source.sameIdentity(previous[i])) {
+		matched[i] = true;
+		unchangedCount++;
+		break;
+	    }
+	}
+    }
+
+    const size_t largerCount = std::max(current.size(), previous.size());
+    /* Preserve calibration only when at least half of the larger source set
+     * survives unchanged.  Exact render cost still adapts ordinary complexity
+     * changes; this threshold detects a different workload composition. */
+    const size_t minimumUnchangedCount =
+	largerCount / PERFORMANCE_EPOCH_RETAINED_DIVISOR +
+	largerCount % PERFORMANCE_EPOCH_RETAINED_DIVISOR;
+    return unchangedCount < minimumUnchangedCount;
 }
 
 std::optional<BObolLodAdmissionRevisionDomain>
